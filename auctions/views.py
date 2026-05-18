@@ -9483,7 +9483,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False, enable_club_page=True)
+        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
         context["location_message"] = "Set your location to see clubs near you"
         latitude_cookie = self.request.COOKIES.get("latitude")
         longitude_cookie = self.request.COOKIES.get("longitude")
@@ -13644,6 +13644,10 @@ class DiscordInteractionsView(View):
                     datetime.combine(member.membership_last_paid, datetime.min.time(), date_tz.utc).timestamp()
                 )
                 lines.append(f"Last paid: <t:{paid_ts}:D>")
+
+        if club.enable_club_page:
+            current_site = Site.objects.get_current()
+            lines.append(f"\n[View your membership](https://{current_site.domain}{member.member_page_url})")
 
         return _discord_ephemeral("\n".join(lines))
 

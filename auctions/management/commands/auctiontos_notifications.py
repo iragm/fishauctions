@@ -208,7 +208,7 @@ class Command(BaseCommand):
                     "club": member.club,
                     "domain": current_site.domain,
                     "navbar_brand": settings.NAVBAR_BRAND,
-                    "renew_link": f"https://{current_site.domain}/clubs/{member.club.slug}/?user={member.uuid}",
+                    "renew_link": f"https://{current_site.domain}{member.member_page_url}",
                     "member": member,
                 },
             )

@@ -471,6 +471,12 @@ class ClubMemberHTMxTable(tables.Table):
                     label,
                 )
                 break
+        if record.discord_username:
+            result += format_html(
+                " <span class='badge bg-secondary' title='Discord account linked'>"
+                "<i class='bi bi-discord me-1'></i>{}</span>",
+                record.discord_username,
+            )
         return result
 
     def render_actions(self, value, record):
@@ -485,7 +491,7 @@ class ClubMemberHTMxTable(tables.Table):
                 '<li><a class="dropdown-item" href="javascript:void(0)"'
                 ' hx-get="{}" hx-target="#modals-here"'
                 ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                '<i class="bi bi-shield-lock me-1"></i>Roles</a></li>'
+                '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
                 "<li><hr class='dropdown-divider'></li>",
                 perms_url,
             )
@@ -523,15 +529,26 @@ class ClubMemberHTMxTable(tables.Table):
                 confirm_delete_url,
             )
 
+        django_admin_item = format_html("")
+        if self.request and getattr(self.request.user, "is_staff", False):
+            admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
+            django_admin_item = format_html(
+                "<li><hr class='dropdown-divider'></li>"
+                '<li><a class="dropdown-item" href="{}" target="_blank">'
+                '<i class="bi bi-wrench me-1"></i>Django admin</a></li>',
+                admin_url,
+            )
+
         return format_html(
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
             edit_items,
+            django_admin_item,
         )
 
     class Meta:

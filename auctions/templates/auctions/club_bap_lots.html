@@ -19,11 +19,14 @@
 </div>
 
 <div class="d-flex align-items-center gap-2 mt-2 mb-2">
+  <form id="filter-form" class="flex-grow-1" method="get">
+    {% crispy filter.form %}
+  </form>
   <span class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-filter"></i> Filters
     </button>
-    <div class="dropdown-menu" style="min-width:12rem">
+    <div class="dropdown-menu dropdown-menu-end" style="min-width:12rem">
       <label class="dropdown-item">
         <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending approval
       </label>
@@ -32,9 +35,6 @@
       </label>
     </div>
   </span>
-  <form id="filter-form" class="flex-grow-1" method="get">
-    {% crispy filter.form %}
-  </form>
 </div>
 
 <div class="table-container"

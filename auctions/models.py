@@ -596,7 +596,7 @@ class Club(models.Model):
     enable_club_page = models.BooleanField(
         default=False,
         verbose_name="Enable public club page",
-        help_text="When enabled, this club will appear on the club map and have a public detail page.",
+        help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
     )
     enable_breeder_award_program = models.BooleanField(
         default=False,
@@ -918,6 +918,13 @@ class ClubMember(ContactRecord):
     def display_name(self):
         """Name for display — always non-empty."""
         return str(self)
+
+    @property
+    def member_page_url(self):
+        """Relative URL for this member's club detail page with their UUID pre-filled."""
+        from django.urls import reverse
+
+        return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"?user={self.uuid}"
 
     @property
     def membership_expiration_date(self):

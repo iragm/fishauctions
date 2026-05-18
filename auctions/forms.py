@@ -3694,7 +3694,7 @@ class ClubMemberPermissionsForm(forms.ModelForm):
     def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
         labels = {
-            "permission_admin": "Club admin — can do everything",
+            "permission_admin": "Club admin — can do everything, including assigning permissions to other members",
             "permission_edit_club": "Edit club settings — club setup, Discord, API keys, payment settings, and membership settings",
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
