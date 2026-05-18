@@ -1848,7 +1848,6 @@ class AuctionEditForm(forms.ModelForm):
             "date_end",
             "lot_submission_start_date",
             "lot_submission_end_date",
-            "sealed_bid",
             "promote_this_auction",
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
@@ -1866,7 +1865,6 @@ class AuctionEditForm(forms.ModelForm):
             "force_donation_threshold",
             "require_phone_number",
             "tax",
-            "advanced_lot_adding",
             "online_bidding",
             "date_online_bidding_ends",
             "date_online_bidding_starts",
@@ -1930,7 +1928,6 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
-            self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
             # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
