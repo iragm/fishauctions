@@ -12839,6 +12839,66 @@ class MergeAuctionTOSTests(StandardTestCase):
         # Response should not be a redirect
         self.assertNotEqual(response.status_code, 302)
 
+    def test_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the name is already in this auction"""
+        self.client.login(username="admin_user", password="testpassword")
+        self.online_tos.name = "Duplicate Test User"
+        self.online_tos.bidder_number = "123"
+        self.online_tos.save()
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": self.online_tos.name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["name_tooltip"],
+            f"There's already a user in this auction named {self.online_tos.name} "
+            f"(bidder number: {self.online_tos.bidder_number})",
+        )
+
+    def test_duplicate_name_autofill_searches_clubs_with_manage_membership_permission(self):
+        """AuctionTOS autofill should search auctions from clubs where the user can manage members"""
+        self.client.login(username="admin_user", password="testpassword")
+        club = Club.objects.create(name="Autofill Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, permission_add_edit=True)
+        club_auction = Auction.objects.create(
+            created_by=self.user,
+            club=club,
+            title="Club Managed Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Club Managed User",
+            email="club-managed@example.com",
+            bidder_number="777",
+        )
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": "Club Managed User"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "club-managed@example.com")
+        self.assertEqual(response.json()["id_bidder_number"], "")
+
+    def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
+        """The add-user modal should render JS that shows duplicate-name warnings inline"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function setFieldNote(fieldId, message)")
+        self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+
 
 class AuctionTOSMergeViewTests(StandardTestCase):
     def setUp(self):
@@ -14425,6 +14485,94 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
+
+    def test_club_member_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the member is already in this club"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
+
+    def test_club_member_autofill_searches_clubs_with_manage_auctions_permission(self):
+        """Club member autofill should search auctions from clubs the user can manage auctions for"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Other Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        club_auction = Auction.objects.create(
+            created_by=self.other_user,
+            club=other_club,
+            title="Other Club Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="other club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Searchable Member",
+            email="searchable@example.com",
+            phone_number="555-0100",
+            address="123 Fish St",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Searchable", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "searchable@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0100")
+        self.assertEqual(response.json()["id_address"], "123 Fish St")
+
+    def test_club_member_autofill_uses_managed_club_members_without_auction_history(self):
+        """Club member autofill should use manageable club members even without auction history"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Member Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        ClubMember.objects.create(
+            club=other_club,
+            first_name="Managed",
+            last_name="Member",
+            email="managed-member@example.com",
+            phone_number="555-0111",
+            address="456 Club Rd",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Managed", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "managed-member@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0111")
+        self.assertEqual(response.json()["id_address"], "456 Club Rd")
+
+    def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
+        """The club-member modal should render JS that shows duplicate-name warnings inline"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function cmHasAutocompleteData(response)")
+        self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
+        self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
 
     def test_merge_member_review_updates_kept_member_before_delete(self):
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
