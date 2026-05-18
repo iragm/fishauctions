@@ -21,7 +21,7 @@ from django.utils import timezone
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 from .filters import LotAdminFilter
-from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
+from .forms import AuctionEditForm, ChangeUsernameForm, ClubMembershipSettingsForm, CreateLotForm
 from .models import (
     Auction,
     AuctionDropdown,
@@ -15766,3 +15766,44 @@ class ClubMembershipInvoiceTests(TestCase):
         url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+
+class ClubMembershipSettingsFormPaymentUserTests(TestCase):
+    """Confirm that the payment_user dropdown only includes members with admin or edit_club permission."""
+
+    def setUp(self):
+        from .models import SquareSeller
+
+        self.club = Club.objects.create(name="Test Club", enable_membership=True)
+
+        # Helper to create a User + ClubMember with specified permissions
+        def _make_member(username, **perms):
+            user = User.objects.create_user(username=username, password="pw")
+            ClubMember.objects.create(club=self.club, user=user, **perms)
+            return user
+
+        self.admin_user = _make_member("admin_u", permission_admin=True)
+        self.edit_club_user = _make_member("edit_club_u", permission_edit_club=True)
+        self.manage_auctions_user = _make_member("manage_auctions_u", permission_manage_auctions=True)
+        self.plain_member = _make_member("plain_u")
+
+        # Give each user a Square account so they are payment-eligible
+        for user in [self.admin_user, self.edit_club_user, self.manage_auctions_user, self.plain_member]:
+            SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
+
+    def _get_payment_user_ids(self):
+        form = ClubMembershipSettingsForm(instance=self.club)
+        return set(form.fields["payment_user"].queryset.values_list("id", flat=True))
+
+    def test_admin_user_included(self):
+        self.assertIn(self.admin_user.pk, self._get_payment_user_ids())
+
+    def test_edit_club_user_included(self):
+        self.assertIn(self.edit_club_user.pk, self._get_payment_user_ids())
+
+    def test_manage_auctions_only_user_excluded(self):
+        """A member with only permission_manage_auctions should not appear in the payment_user choices."""
+        self.assertNotIn(self.manage_auctions_user.pk, self._get_payment_user_ids())
+
+    def test_plain_member_excluded(self):
+        self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())

@@ -12645,20 +12645,6 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
-        club = self.club
-        if club.enable_membership and club.allow_integrated_payments:
-            admin_user_ids = (
-                club.members.filter(is_deleted=False)
-                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
-                .exclude(user__isnull=True)
-                .values_list("user_id", flat=True)
-            )
-            context["show_payment_banner"] = (
-                not PayPalSeller.objects.filter(user_id__in=admin_user_ids).exists()
-                and not SquareSeller.objects.filter(user_id__in=admin_user_ids).exists()
-            )
-        else:
-            context["show_payment_banner"] = False
         return context
 
     def form_valid(self, form):

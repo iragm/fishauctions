@@ -22,6 +22,7 @@ from django.forms import (
 )
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -3434,6 +3435,7 @@ class ClubEditForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["enable_membership"].label = "Membership and payments"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.layout = Layout(
@@ -3457,6 +3459,24 @@ class ClubEditForm(forms.ModelForm):
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
 
 
+class _PaymentUserChoiceField(forms.ModelChoiceField):
+    """ModelChoiceField that appends the connected payment accounts to each user label."""
+
+    def __init__(self, *args, paypal_ids=None, square_ids=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.paypal_ids = paypal_ids or set()
+        self.square_ids = square_ids or set()
+
+    def label_from_instance(self, obj):
+        accounts = []
+        if obj.pk in self.paypal_ids:
+            accounts.append("PayPal")
+        if obj.pk in self.square_ids:
+            accounts.append("Square")
+        suffix = f" ({', '.join(accounts)})" if accounts else ""
+        return f"{obj.username}{suffix}"
+
+
 class ClubMembershipSettingsForm(forms.ModelForm):
     """Form for club admins to configure membership and payment settings."""
 
@@ -3476,7 +3496,6 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 "Rolling: memberships expire one year from the payment date."
             ),
             "membership_annual_fee": "Leave blank if free.",
-            "payment_user": "Membership payments are sent to this user's payment account.",
             "allow_integrated_payments": "Accept membership dues directly through the site.",
         }
 
@@ -3487,8 +3506,8 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.layout = Layout(
             "membership_system",
             "membership_annual_fee",
-            "payment_user",
             "allow_integrated_payments",
+            "payment_user",
             "send_membership_expiration_reminders",
             "contact_email",
         )
@@ -3497,7 +3516,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         if club and club.pk:
             admin_user_ids = (
                 club.members.filter(is_deleted=False)
-                .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
                 .exclude(user__isnull=True)
                 .values_list("user_id", flat=True)
             )
@@ -3512,9 +3531,25 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 eligible_ids.update(
                     User.objects.filter(is_superuser=True, id__in=admin_user_ids).values_list("id", flat=True)
                 )
-            self.fields["payment_user"].queryset = User.objects.filter(id__in=eligible_ids).order_by("username")
+            payment_user_qs = User.objects.filter(id__in=eligible_ids).order_by("username")
         else:
-            self.fields["payment_user"].queryset = User.objects.none()
+            paypal_user_ids = set()
+            square_user_ids = set()
+            payment_user_qs = User.objects.none()
+        payment_help = mark_safe(
+            "Payments are sent to this user's connected account. "
+            f'You can connect <a href="{reverse("paypal_connect")}">PayPal</a> or '
+            f'<a href="{reverse("square_connect")}">Square</a> to take payments '
+            "(if enabled for the current user)."
+        )
+        self.fields["payment_user"] = _PaymentUserChoiceField(
+            queryset=payment_user_qs,
+            paypal_ids=paypal_user_ids,
+            square_ids=square_user_ids,
+            required=False,
+            label="Payments go to",
+            help_text=payment_help,
+        )
 
 
 class ClubBapSettingsForm(forms.ModelForm):
