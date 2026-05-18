@@ -12674,16 +12674,13 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
-        invoice, _ = Invoice.objects.get_or_create(
+        invoice = Invoice.objects.filter(
             club=self.club,
             buyer=self.request.user,
             renewal_processed=False,
-            defaults={
-                "status": "UNPAID",
-                "renewal_needed": True,
-            },
-        )
-        if invoice.status == "PAID":
+            status="UNPAID",
+        ).first()
+        if invoice is None:
             invoice = Invoice.objects.create(
                 club=self.club,
                 buyer=self.request.user,

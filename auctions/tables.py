@@ -474,12 +474,15 @@ class ClubMemberHTMxTable(tables.Table):
         return result
 
     _SOURCE_LABELS = {
-        "joined": "Navbar brand",
         "discord": "Discord",
         "manually_added": "Manual",
     }
 
     def render_source(self, value, record):
+        if value == "joined":
+            from django.conf import settings
+
+            return getattr(settings, "NAVBAR_BRAND", "Website")
         return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
