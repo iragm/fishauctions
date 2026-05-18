@@ -1,0 +1,37 @@
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-calendar-check me-1"></i>Renew membership — {{ member }}</h5>
+      </div>
+      <div class="modal-body">
+        {% if member.membership_last_paid %}
+        <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+        <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"N j, Y" }}</p>
+        {% else %}
+        <p class="text-muted small mb-3">No payment on record.</p>
+        {% endif %}
+        <p class="mb-0">New expiration will be: <strong>{{ new_expiration|date:"N j, Y" }}</strong></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-primary"
+          hx-post="{{ renew_url }}"
+          hx-target="#modals-here">
+          <i class="bi bi-check-lg me-1"></i>Renew
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function closeModal() {
+  var container = document.getElementById("modals-here");
+  var backdrop = document.getElementById("modal-backdrop");
+  var modal = document.getElementById("modal");
+  if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
+  if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
+  setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
+}
+</script>

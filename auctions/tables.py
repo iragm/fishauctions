@@ -501,7 +501,8 @@ class ClubMemberHTMxTable(tables.Table):
 
         edit_items = format_html("")
         if self.can_add_edit:
-            renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+            renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+            set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
             confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
             merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
             email_item = format_html("")
@@ -517,8 +518,12 @@ class ClubMemberHTMxTable(tables.Table):
                     icon_class,
                 )
             edit_items = format_html(
+                '<li><a class="dropdown-item" href="#"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
                 '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
+                '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
                 '<li><a class="dropdown-item" href="{}">'
                 '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
                 "{}"
@@ -526,7 +531,8 @@ class ClubMemberHTMxTable(tables.Table):
                 '<li><a class="dropdown-item text-danger" href="#"'
                 ' hx-get="{}" hx-target="#modals-here">'
                 '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
-                renew_url,
+                renew_confirm_url,
+                set_expiry_url,
                 merge_url,
                 email_item,
                 confirm_delete_url,

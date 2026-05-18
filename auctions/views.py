@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
 from decimal import Decimal, InvalidOperation
@@ -12520,22 +12521,43 @@ class ClubMemberRenewView(APIView):
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, pk):
+    def _get_member(self, pk, request):
         try:
             member = ClubMember.objects.get(pk=pk)
         except ClubMember.DoesNotExist:
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
+        return member
+
+    def _new_expiration(self, member, today):
+        """Preview what expiration date will result from renewing today."""
+        club = member.club
+        if club.membership_system == "january_first":
+            return date_type(today.year + 1, 1, 1)
+        return today + timedelta(days=365)
+
+    def get(self, request, pk):
+        member = self._get_member(pk, request)
+        today = timezone.now().date()
+        context = {
+            "member": member,
+            "new_expiration": self._new_expiration(member, today),
+            "renew_url": reverse("club_member_renew", kwargs={"pk": pk}),
+        }
+        return render(request, "auctions/club_member_renew_confirm.html", context)
+
+    def post(self, request, pk):
+        member = self._get_member(pk, request)
         member.membership_last_paid = timezone.now().date()
-        member.save(update_fields=["membership_last_paid"])
+        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
-        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+        return HttpResponse("<script>location.reload();</script>", status=200)
 
 
 class ClubMemberDeleteView(APIView):
@@ -12590,7 +12612,7 @@ class ClubMemberConfirmView(APIView):
 
 
 class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
-    """Dedicated page for renewing a club member's membership."""
+    """Set a club member's membership_last_paid date directly (advanced / manual override)."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -12599,16 +12621,14 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def _get_member(self, pk):
-        member = get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
-        return member
+        return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
     def get(self, request, slug, pk):
         member = self._get_member(pk)
-        default_date = timezone.now().date()
         context = {
             "club": self.club,
             "member": member,
-            "default_date": default_date,
+            "default_date": member.membership_last_paid or timezone.now().date(),
         }
         return render(request, "auctions/club_member_renew_page.html", context)
 
@@ -12620,7 +12640,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         except (ValueError, TypeError):
             paid_date = timezone.now().date()
         member.membership_last_paid = paid_date
-        member.save(update_fields=["membership_last_paid"])
+        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,

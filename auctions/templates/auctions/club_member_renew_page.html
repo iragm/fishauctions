@@ -1,17 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Renew Membership — {{ member }}{% endblock %}
+{% block title %}Set Expiration Date — {{ member }}{% endblock %}
 
 {% block content %}
-<h3><i class="bi bi-calendar-check"></i> Renew Membership</h3>
+<h3><i class="bi bi-calendar-range"></i> Set Expiration Date</h3>
 <p class="text-muted">Club: <strong>{{ club.name }}</strong></p>
 
 <div class="card mb-4" style="max-width: 480px;">
   <div class="card-body">
     <h5 class="card-title">{{ member }}</h5>
     {% if member.membership_last_paid %}
-    <p class="text-muted small">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+    <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"N j, Y" }}</p>
     {% else %}
-    <p class="text-muted small">No payment on record.</p>
+    <p class="text-muted small mb-3">No payment on record.</p>
     {% endif %}
 
     <form method="post">
@@ -22,10 +23,11 @@
           value="{{ default_date|date:'Y-m-d' }}" required>
         <div class="form-text">
           {% if club.membership_system == "rolling" %}
-          Rolling annual membership — set to today to renew for one year from this date.
+          Rolling annual membership: expiration is set to exactly one year after this date.
           {% else %}
-          January 1st renewal — set to today to mark as paid for the current membership year.
+          January 1st renewal: expiration is set to January 1st of the year following this payment date.
           {% endif %}
+          This field directly sets the payment date on record — use <em>Renew</em> from the member list for a one-click renewal to today.
         </div>
       </div>
       <div class="d-flex gap-2">

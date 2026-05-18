@@ -995,13 +995,26 @@ class ClubMember(ContactRecord):
     def save(self, *args, **kwargs):
         previous_membership_last_paid = None
         previous_email = None
+        previous_reminder_due = None
         if self.pk:
-            prev = ClubMember.objects.filter(pk=self.pk).values("membership_last_paid", "email").first()
+            prev = ClubMember.objects.filter(pk=self.pk).values(
+                "membership_last_paid", "email", "membership_expiration_reminder_due"
+            ).first()
             if prev:
                 previous_membership_last_paid = prev["membership_last_paid"]
                 previous_email = prev["email"]
+                previous_reminder_due = prev["membership_expiration_reminder_due"]
         if self.membership_last_paid != previous_membership_last_paid:
-            self.membership_expiration_reminder_due = self.calculate_membership_expiration_reminder_due()
+            new_reminder = self.calculate_membership_expiration_reminder_due()
+            if new_reminder is not None:
+                # If the recalculated reminder would fire sooner than the previous one
+                # (or the previous reminder was already sent/cleared), enforce a 30-day
+                # minimum from now so the email cannot be triggered again immediately.
+                if previous_reminder_due is None or new_reminder < previous_reminder_due:
+                    min_reminder = timezone.now() + datetime.timedelta(days=30)
+                    if new_reminder < min_reminder:
+                        new_reminder = min_reminder
+            self.membership_expiration_reminder_due = new_reminder
         # Inherit email_address_status from another known record, same as AuctionTOS pattern
         if self.email and self.email != previous_email:
             self.email_address_status = "UNKNOWN"
