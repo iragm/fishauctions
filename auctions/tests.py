@@ -4266,8 +4266,8 @@ class AuctionEditViewTests(StandardTestCase):
             "minimum_bid": "",
             # use_categories intentionally omitted — it should not be touched by AuctionEditForm
         }
-        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=True)
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(response.status_code, 302)
         self.online_auction.refresh_from_db()
         self.assertTrue(
             self.online_auction.use_categories,
