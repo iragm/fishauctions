@@ -4263,11 +4263,11 @@ class AuctionEditViewTests(StandardTestCase):
             "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
-            "minimum_bid": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
             # use_categories intentionally omitted — it should not be touched by AuctionEditForm
         }
         response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
         self.online_auction.refresh_from_db()
         self.assertTrue(
             self.online_auction.use_categories,
@@ -4296,11 +4296,11 @@ class AuctionEditViewTests(StandardTestCase):
             "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
-            "minimum_bid": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
             # sealed_bid intentionally omitted — it should not be touched by AuctionEditForm
         }
-        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=True)
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
         self.online_auction.refresh_from_db()
         self.assertTrue(
             self.online_auction.sealed_bid,
@@ -4330,11 +4330,12 @@ class AuctionEditViewTests(StandardTestCase):
             # and the field is nullable, so it is not required in POST data.
             "invoice_rounding": str(self.in_person_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
-            "minimum_bid": "",
+            "minimum_bid": str(self.in_person_auction.minimum_bid),
+            "use_seller_dash_lot_numbering": self.in_person_auction.use_seller_dash_lot_numbering,
             # advanced_lot_adding intentionally omitted — it should not be touched by AuctionEditForm
         }
-        response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=True)
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
         self.in_person_auction.refresh_from_db()
         self.assertTrue(
             self.in_person_auction.advanced_lot_adding,
