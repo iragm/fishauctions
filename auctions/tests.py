@@ -12725,6 +12725,66 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertNotEqual(response.status_code, 302)
 
 
+class AuctionTOSMergeViewTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.login(username="admin_user", password="testpassword")
+        # Use update() here so the kept record starts linked to a user before the merge flow edits its email.
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(
+            name="Kept User",
+            email="kept@example.com",
+            manually_added=False,
+            user=self.user,
+        )
+        self.online_tos.refresh_from_db()
+        self.source_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Source User",
+            email="source@example.com",
+            phone_number="5551112222",
+            address="111 Source St",
+        )
+
+    def test_merge_flow_renders_review_then_updates_kept_user(self):
+        url = reverse("auctiontosdelete", kwargs={"pk": self.source_tos.pk}) + "?action=merge"
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "target": str(self.online_tos.pk),
+                "auction": self.online_auction.pk,
+                "exclude_auctiontos": self.source_tos.pk,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This will delete")
+        self.assertContains(response, "Kept User")
+
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "step": "review",
+                "target": str(self.online_tos.pk),
+                "name": "Merged Winner",
+                "email": "updated@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+                "pickup_location": self.location.pk,
+            },
+        )
+        self.assertRedirects(response, reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.name, "Merged Winner")
+        self.assertEqual(self.online_tos.email, "updated@example.com")
+        self.assertEqual(self.online_tos.phone_number, "5553334444")
+        self.assertEqual(self.online_tos.address, "222 Updated Ave")
+        self.assertIsNone(self.online_tos.user)
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+
+
 class LotImageManagementTests(StandardTestCase):
     """Tests for the image management features added in the image management update"""
 
@@ -14250,6 +14310,52 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
+
+    def test_merge_member_review_updates_kept_member_before_delete(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.permission_view = True
+        owner_member.save()
+        source = ClubMember.objects.create(
+            club=self.club,
+            first_name="Source",
+            last_name="Member",
+            email="source@example.com",
+            phone_number="5551112222",
+            address="111 Source St",
+            permission_export=True,
+            membership_last_paid=timezone.now().date(),
+        )
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
+
+        response = self.client.post(url, {"target": self.member.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This will delete")
+        self.assertContains(response, "Jane Doe")
+
+        response = self.client.post(
+            url,
+            {
+                "step": "review",
+                "target": self.member.pk,
+                "first_name": "Merged",
+                "last_name": "Member",
+                "email": "merged@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+            },
+        )
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.member.refresh_from_db()
+        source.refresh_from_db()
+        self.assertTrue(source.is_deleted)
+        self.assertEqual(self.member.first_name, "Merged")
+        self.assertEqual(self.member.email, "merged@example.com")
+        self.assertEqual(self.member.phone_number, "5553334444")
+        self.assertEqual(self.member.address, "222 Updated Ave")
+        self.assertTrue(self.member.permission_export)
+        self.assertEqual(self.member.membership_last_paid, timezone.now().date())
 
 
 class ClubAPITests(TestCase):

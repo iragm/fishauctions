@@ -122,6 +122,8 @@ from .forms import (
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
+    AuctionTOSMergeReviewForm,
+    AuctionTOSMergeTargetForm,
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
@@ -129,6 +131,8 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubMemberAdminForm,
+    ClubMemberMergeReviewForm,
+    ClubMemberMergeTargetForm,
     ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
     CreateAuctionForm,
@@ -5447,6 +5451,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
     """Delete AuctionTOSs"""
 
     template_name = "auctions/auctiontos_confirm_delete.html"
+    merge_template_name = "auctions/contact_merge.html"
     form_class = DeleteAuctionTOS
     model = AuctionTOS
 
@@ -5472,7 +5477,128 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         context["modal_title"] = f"Delete {self.auctiontos.name}"
         return context
 
+    def _is_merge_action(self):
+        return self.request.GET.get("action") == "merge" or self.request.POST.get("action") == "merge"
+
+    def _merge_success_url(self):
+        return reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
+
+    def _merge_label(self, auctiontos):
+        return f"{auctiontos.name} (bidder #{auctiontos.bidder_number})"
+
+    @staticmethod
+    def _is_merge_empty(value):
+        return value in (None, "")
+
+    def _get_review_initial(self, source, target, form_class):
+        form = form_class(instance=target, auction=self.auction)
+        initial = {}
+        for field_name in form.fields:
+            target_value = getattr(target, field_name, None)
+            source_value = getattr(source, field_name, None)
+            if self._is_merge_empty(target_value) and not self._is_merge_empty(source_value):
+                initial[field_name] = source_value.pk if hasattr(source_value, "pk") else source_value
+        return initial
+
+    @staticmethod
+    def _format_merge_value(value):
+        if value in (None, ""):
+            return "—"
+        return value
+
+    def _build_merge_rows(self, source, target, form):
+        rows = []
+        for field_name, field in form.fields.items():
+            rows.append(
+                {
+                    "label": field.label,
+                    "source_value": self._format_merge_value(getattr(source, field_name, None)),
+                    "target_value": self._format_merge_value(getattr(target, field_name, None)),
+                }
+            )
+        return rows
+
+    def _render_merge_select(self, request, form):
+        return render(
+            request,
+            self.merge_template_name,
+            {
+                "step": "select",
+                "page_title": f"Merge user — {self.auctiontos.name}",
+                "heading": "Merge user",
+                "subheading": f"Auction: {self.auction}",
+                "selection_form": form,
+                "source_label": self._merge_label(self.auctiontos),
+                "cancel_url": self._merge_success_url(),
+                "action_url": request.get_full_path(),
+                "action_mode": "merge",
+            },
+        )
+
+    def _render_merge_review(self, request, target, form):
+        return render(
+            request,
+            self.merge_template_name,
+            {
+                "step": "review",
+                "page_title": f"Merge user — {self.auctiontos.name}",
+                "heading": "Merge user",
+                "subheading": f"Auction: {self.auction}",
+                "source": self.auctiontos,
+                "target": target,
+                "source_label": self._merge_label(self.auctiontos),
+                "target_label": self._merge_label(target),
+                "review_form": form,
+                "comparison_rows": self._build_merge_rows(self.auctiontos, target, form),
+                "summary_lines": [
+                    f"{self._merge_label(self.auctiontos)} will be deleted.",
+                    f"{self._merge_label(target)} will be kept.",
+                    "Won lots, sold lots, invoice adjustments, and payments will move to the kept user.",
+                ],
+                "target_field_name": "target",
+                "cancel_url": self._merge_success_url(),
+                "action_url": request.get_full_path(),
+                "action_mode": "merge",
+                "save_button_label": f"Save and delete {self.auctiontos.name}",
+            },
+        )
+
+    def _get_merge_target(self, target_pk):
+        return get_object_or_404(AuctionTOS, pk=target_pk, auction=self.auction)
+
+    def get(self, request, *args, **kwargs):
+        if self._is_merge_action():
+            form = AuctionTOSMergeTargetForm(self.auctiontos, self.auction)
+            return self._render_merge_select(request, form)
+        return super().get(request, *args, **kwargs)
+
     def post(self, request, *args, **kwargs):
+        if self._is_merge_action():
+            if request.POST.get("step") == "review":
+                target = self._get_merge_target(request.POST.get("target"))
+                review_form = AuctionTOSMergeReviewForm(request.POST, instance=target, auction=self.auction)
+                if review_form.is_valid():
+                    with transaction.atomic():
+                        target = review_form.save()
+                        target.merge_duplicate(
+                            self.auctiontos,
+                            reason=f"merged by {request.user.username}",
+                            user=request.user,
+                            preserve_missing_fields=False,
+                        )
+                    messages.success(request, f"Merged {self.auctiontos.name} into {target.name}.")
+                    return redirect(self._merge_success_url())
+                return self._render_merge_review(request, target, review_form)
+            selection_form = AuctionTOSMergeTargetForm(self.auctiontos, self.auction, request.POST)
+            if selection_form.is_valid():
+                target = selection_form.cleaned_data["target"]
+                review_form = AuctionTOSMergeReviewForm(
+                    instance=target,
+                    initial=self._get_review_initial(self.auctiontos, target, AuctionTOSMergeReviewForm),
+                    auction=self.auction,
+                )
+                return self._render_merge_review(request, target, review_form)
+            return self._render_merge_select(request, selection_form)
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
@@ -12251,67 +12377,128 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
     def _get_member(self, pk):
         return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
+    @staticmethod
+    def _format_merge_value(value):
+        if value in (None, ""):
+            return "—"
+        return value
+
+    def _build_review_initial(self, source, target):
+        return {
+            field_name: getattr(source, field_name, None)
+            for field_name in ClubMemberMergeReviewForm.Meta.fields
+            if getattr(target, field_name, None) in (None, "") and getattr(source, field_name, None) not in (None, "")
+        }
+
+    def _build_review_context(self, request, source, target, review_form):
+        return {
+            "step": "review",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "source": source,
+            "target": target,
+            "source_label": str(source),
+            "target_label": str(target),
+            "review_form": review_form,
+            "comparison_rows": [
+                {
+                    "label": field.label,
+                    "source_value": self._format_merge_value(getattr(source, name, None)),
+                    "target_value": self._format_merge_value(getattr(target, name, None)),
+                }
+                for name, field in review_form.fields.items()
+            ],
+            "summary_lines": [
+                f"{source} will be deleted.",
+                f"{target} will be kept.",
+                "Permission flags on the deleted member will be kept on the surviving member.",
+                "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
+            ],
+            "target_field_name": "target",
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
+            "save_button_label": f"Save and delete {source}",
+        }
+
     def get(self, request, slug, pk):
         source = self._get_member(pk)
-        others = (
-            ClubMember.objects.filter(club=self.club, is_deleted=False)
-            .exclude(pk=pk)
-            .order_by("last_name", "first_name")
-        )
+        selection_form = ClubMemberMergeTargetForm(self.club, source)
         context = {
-            "club": self.club,
-            "source": source,
-            "others": others,
+            "step": "select",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "selection_form": selection_form,
+            "source_label": str(source),
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
-        return render(request, "auctions/club_member_merge.html", context)
+        return render(request, "auctions/contact_merge.html", context)
 
     def post(self, request, slug, pk):
         source = self._get_member(pk)
-        target_pk = request.POST.get("target")
-        target = get_object_or_404(ClubMember, pk=target_pk, club=self.club, is_deleted=False)
-        if target.pk == source.pk:
-            messages.error(request, "Cannot merge a member with themselves.")
-            return redirect(reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": pk}))
-        # Copy non-empty fields from source to target where target field is empty
-        copy_fields = [
-            "first_name",
-            "last_name",
-            "email",
-            "phone_number",
-            "address",
-            "discord_id",
-            "bap_points",
-            "hap_points",
-            "membership_last_paid",
-        ]
-        for field in copy_fields:
-            source_val = getattr(source, field, None)
-            target_val = getattr(target, field, None)
-            if source_val is not None and not target_val:
-                setattr(target, field, source_val)
-        # Merge permissions — OR the bool fields so target gains any source had
-        for perm_field in [
-            "permission_admin",
-            "permission_view",
-            "permission_export",
-            "permission_add_edit",
-            "permission_edit_club",
-            "permission_manage_auctions",
-            "permission_manage_bap",
-        ]:
-            if getattr(source, perm_field, False):
-                setattr(target, perm_field, True)
-        target.save()
-        source.is_deleted = True
-        source.save(update_fields=["is_deleted"])
-        ClubHistory.objects.create(
-            club=self.club,
-            user=request.user,
-            action=f"Merged member {source} into {target}",
-            applies_to="MEMBERS",
-        )
-        messages.success(request, f"Merged {source} into {target}.")
-        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        if request.POST.get("step") == "review":
+            target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club, is_deleted=False)
+            review_form = ClubMemberMergeReviewForm(request.POST, instance=target)
+            if review_form.is_valid():
+                with transaction.atomic():
+                    target = review_form.save()
+                    update_fields = set(review_form.changed_data)
+                    for field in ["discord_id", "bap_points", "hap_points", "membership_last_paid"]:
+                        source_val = getattr(source, field, None)
+                        target_val = getattr(target, field, None)
+                        if source_val is not None and not target_val:
+                            setattr(target, field, source_val)
+                            update_fields.add(field)
+                    for perm_field in [
+                        "permission_admin",
+                        "permission_view",
+                        "permission_export",
+                        "permission_add_edit",
+                        "permission_edit_club",
+                        "permission_manage_auctions",
+                        "permission_manage_bap",
+                    ]:
+                        if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
+                            setattr(target, perm_field, True)
+                            update_fields.add(perm_field)
+                    if update_fields:
+                        target.save(update_fields=list(update_fields))
+                    source.is_deleted = True
+                    source.save(update_fields=["is_deleted"])
+                    ClubHistory.objects.create(
+                        club=self.club,
+                        user=request.user,
+                        action=f"Merged member {source} into {target}",
+                        applies_to="MEMBERS",
+                    )
+                messages.success(request, f"Merged {source} into {target}.")
+                return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
+        selection_form = ClubMemberMergeTargetForm(self.club, source, request.POST or None)
+        if request.method == "POST" and selection_form.is_valid():
+            target = selection_form.cleaned_data["target"]
+            review_form = ClubMemberMergeReviewForm(
+                instance=target,
+                initial=self._build_review_initial(source, target),
+            )
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
+        context = {
+            "step": "select",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "selection_form": selection_form,
+            "source_label": str(source),
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
+        }
+        return render(request, "auctions/contact_merge.html", context)
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
