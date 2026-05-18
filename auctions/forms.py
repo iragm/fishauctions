@@ -239,7 +239,7 @@ class QuickAddLot(forms.ModelForm):
         apply_price_input_constraints(
             self.fields, ("reserve_price", "buy_now_price"), self.auction.only_whole_dollar_bids
         )
-        if not self.auction.advanced_lot_adding:
+        if not self.auction.use_quantity_field:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
             # self.fields["description"].widget = HiddenInput()
