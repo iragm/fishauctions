@@ -122,6 +122,8 @@ from .forms import (
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
+    AuctionTOSMergeReviewForm,
+    AuctionTOSMergeTargetForm,
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
@@ -129,6 +131,8 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubMemberAdminForm,
+    ClubMemberMergeReviewForm,
+    ClubMemberMergeTargetForm,
     ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
     ClubMembershipSettingsForm,
@@ -222,6 +226,7 @@ INVOICE_NOTIFICATION_DELAY_SECONDS = 15
 FEEDBACK_TEXT_MAX_LENGTH = 500
 
 logger = logging.getLogger(__name__)
+UNASSIGNED_BIDDER_NUMBER_LABEL = "not assigned"
 
 
 class AdminEmailMixin:
@@ -397,6 +402,32 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     )
 
 
+def club_ids_available_for_contact_autofill(user):
+    """Return club IDs whose member and auction contact data may be used for autofill."""
+    if not user.is_authenticated:
+        return ClubMember.objects.none().values_list("club_id", flat=True)
+
+    return (
+        ClubMember.objects.filter(user=user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True))
+        .values_list("club_id", flat=True)
+    )
+
+
+def auctions_available_for_contact_autofill(user, extra_created_by=None):
+    """Return auctions whose participant history can be used to auto-fill contact details.
+
+    extra_created_by lets callers include auctions created by another user, even if the
+    authenticated user would not otherwise have that auction in their own access scope.
+    """
+    if not user.is_authenticated:
+        return Auction.objects.none()
+
+    club_ids = club_ids_available_for_contact_autofill(user)
+    filters = Q(created_by=user) | Q(auctiontos__is_admin=True, auctiontos__user=user) | Q(club_id__in=club_ids)
+    if extra_created_by:
+        filters |= Q(created_by=extra_created_by)
+    return Auction.objects.filter(filters).distinct()
 def _bap_leaderboard(club, field, current_member):
     """Return a leaderboard list for display on the club detail page.
 
@@ -1677,17 +1708,12 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
         if name and not email and not pk:
-            old_auctions = Auction.objects.filter(
-                Q(created_by=self.auction.created_by)
-                | Q(created_by=self.request.user)
-                | Q(auctiontos__is_admin=True, auctiontos__user=self.request.user)
+            old_auctions = auctions_available_for_contact_autofill(
+                self.request.user, extra_created_by=self.auction.created_by
             )
             qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             old_tos = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
             if old_tos:
-                bidder_number_used_in_this_auction = base_qs.filter(bidder_number=old_tos.bidder_number).first()
-                if not bidder_number_used_in_this_auction:
-                    result["id_bidder_number"] = old_tos.bidder_number
                 result["id_name"] = old_tos.name
                 result["id_email"] = old_tos.email
                 result["id_address"] = old_tos.address
@@ -1699,7 +1725,11 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         if name:
             existing_tos_in_this_auction = AuctionTOSFilter.generic(self, base_qs, name, match_names_only=True).first()
             if existing_tos_in_this_auction:
-                result["name_tooltip"] = f"{existing_tos_in_this_auction.name} is already in this auction"
+                existing_bidder_number = existing_tos_in_this_auction.bidder_number or UNASSIGNED_BIDDER_NUMBER_LABEL
+                result["name_tooltip"] = (
+                    f"There's already a user in this auction named {existing_tos_in_this_auction.name} "
+                    f"(bidder number: {existing_bidder_number})"
+                )
             else:
                 logger.info("no user found in older auctions with name %s", name)
         if email:
@@ -5597,6 +5627,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
     """Delete AuctionTOSs"""
 
     template_name = "auctions/auctiontos_confirm_delete.html"
+    merge_template_name = "auctions/contact_merge.html"
     form_class = DeleteAuctionTOS
     model = AuctionTOS
 
@@ -5622,7 +5653,128 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         context["modal_title"] = f"Delete {self.auctiontos.name}"
         return context
 
+    def _is_merge_action(self):
+        return self.request.GET.get("action") == "merge" or self.request.POST.get("action") == "merge"
+
+    def _merge_success_url(self):
+        return reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
+
+    def _merge_label(self, auctiontos):
+        return f"{auctiontos.name} (bidder #{auctiontos.bidder_number})"
+
+    @staticmethod
+    def _is_merge_empty(value):
+        return value in (None, "")
+
+    def _get_review_initial(self, source, target, form_class):
+        form = form_class(instance=target, auction=self.auction)
+        initial = {}
+        for field_name in form.fields:
+            target_value = getattr(target, field_name, None)
+            source_value = getattr(source, field_name, None)
+            if self._is_merge_empty(target_value) and not self._is_merge_empty(source_value):
+                initial[field_name] = source_value.pk if hasattr(source_value, "pk") else source_value
+        return initial
+
+    @staticmethod
+    def _format_merge_value(value):
+        if value in (None, ""):
+            return "—"
+        return value
+
+    def _build_merge_rows(self, source, target, form):
+        rows = []
+        for field_name, field in form.fields.items():
+            rows.append(
+                {
+                    "label": field.label,
+                    "source_value": self._format_merge_value(getattr(source, field_name, None)),
+                    "target_value": self._format_merge_value(getattr(target, field_name, None)),
+                }
+            )
+        return rows
+
+    def _render_merge_select(self, request, form):
+        return render(
+            request,
+            self.merge_template_name,
+            {
+                "step": "select",
+                "page_title": f"Merge user — {self.auctiontos.name}",
+                "heading": "Merge user",
+                "subheading": f"Auction: {self.auction}",
+                "selection_form": form,
+                "source_label": self._merge_label(self.auctiontos),
+                "cancel_url": self._merge_success_url(),
+                "action_url": request.get_full_path(),
+                "action_mode": "merge",
+            },
+        )
+
+    def _render_merge_review(self, request, target, form):
+        return render(
+            request,
+            self.merge_template_name,
+            {
+                "step": "review",
+                "page_title": f"Merge user — {self.auctiontos.name}",
+                "heading": "Merge user",
+                "subheading": f"Auction: {self.auction}",
+                "source": self.auctiontos,
+                "target": target,
+                "source_label": self._merge_label(self.auctiontos),
+                "target_label": self._merge_label(target),
+                "review_form": form,
+                "comparison_rows": self._build_merge_rows(self.auctiontos, target, form),
+                "summary_lines": [
+                    f"{self._merge_label(self.auctiontos)} will be deleted.",
+                    f"{self._merge_label(target)} will be kept.",
+                    "Won lots, sold lots, invoice adjustments, and payments will move to the kept user.",
+                ],
+                "target_field_name": "target",
+                "cancel_url": self._merge_success_url(),
+                "action_url": request.get_full_path(),
+                "action_mode": "merge",
+                "save_button_label": f"Save and delete {self.auctiontos.name}",
+            },
+        )
+
+    def _get_merge_target(self, target_pk):
+        return get_object_or_404(AuctionTOS, pk=target_pk, auction=self.auction)
+
+    def get(self, request, *args, **kwargs):
+        if self._is_merge_action():
+            form = AuctionTOSMergeTargetForm(self.auctiontos, self.auction)
+            return self._render_merge_select(request, form)
+        return super().get(request, *args, **kwargs)
+
     def post(self, request, *args, **kwargs):
+        if self._is_merge_action():
+            if request.POST.get("step") == "review":
+                target = self._get_merge_target(request.POST.get("target"))
+                review_form = AuctionTOSMergeReviewForm(request.POST, instance=target, auction=self.auction)
+                if review_form.is_valid():
+                    with transaction.atomic():
+                        target = review_form.save()
+                        target.merge_duplicate(
+                            self.auctiontos,
+                            reason=f"merged by {request.user.username}",
+                            user=request.user,
+                            preserve_missing_fields=False,
+                        )
+                    messages.success(request, f"Merged {self.auctiontos.name} into {target.name}.")
+                    return redirect(self._merge_success_url())
+                return self._render_merge_review(request, target, review_form)
+            selection_form = AuctionTOSMergeTargetForm(self.auctiontos, self.auction, request.POST)
+            if selection_form.is_valid():
+                target = selection_form.cleaned_data["target"]
+                review_form = AuctionTOSMergeReviewForm(
+                    instance=target,
+                    initial=self._get_review_initial(self.auctiontos, target, AuctionTOSMergeReviewForm),
+                    auction=self.auction,
+                )
+                return self._render_merge_review(request, target, review_form)
+            return self._render_merge_select(request, selection_form)
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
@@ -5775,8 +5927,8 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         feedback = document.createElement("div");
         feedback.id = "id_name_feedback";
         feedback.className = "valid-feedback d-block cursor-pointer";
-        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>Click to use " + \
-            response.id_email + "</button>";
+        var buttonText = response.id_email ? "Click to use " + response.id_email : "Click to fill in details";
+        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>" + buttonText + "</button>";
         var autocomplete = response;
         document.getElementById('id_name').parentNode.appendChild(feedback);
 
@@ -5806,35 +5958,33 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
 
     }
 
-
-    function showTooltip(element, message) {
-        var el = element;
-
-        // Destroy existing tooltip (if any)
-        if (el._tooltipInstance) {
-            el._tooltipInstance.dispose();
-        }
-
-        // Set tooltip attributes
-        el.setAttribute("data-bs-toggle", "tooltip");
-        el.setAttribute("data-bs-placement", "right");
-        el.setAttribute("title", message);
-
-        // Initialize and show Bootstrap tooltip
-        el._tooltipInstance = new bootstrap.Tooltip(el);
-        el._tooltipInstance.show();
+    function hasAutocompleteData(response) {
+        return !!(response.id_email || response.id_address || response.id_phone_number || response.id_memo);
     }
 
-    function hideTooltip(element) {
-        if (element._tooltipInstance) {
-            element._tooltipInstance.dispose();
-            element._tooltipInstance = null;
+
+    function setFieldNote(fieldId, message) {
+        var field = document.getElementById(fieldId);
+        if (!field) return;
+
+        var noteId = fieldId + "_note";
+        var note = document.getElementById(noteId);
+        if (note) {
+            note.remove();
         }
+
+        if (!message) {
+            return;
+        }
+
+        note = document.createElement("div");
+        note.id = noteId;
+        note.className = "text-warning small mt-1";
+        note.textContent = message;
+        field.parentNode.appendChild(note);
     }
 
     function validateField() {
-        var nameInput = document.getElementById("id_name");
-
         var data = {
             pk: pk,
             name: $("#id_name").val(),
@@ -5849,12 +5999,13 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             headers: { "X-CSRFToken": csrf_token },
             success: function (response) {
                 if (response.name_tooltip) {
-                    showTooltip(nameInput, response.name_tooltip);
+                    setFieldNote("id_name", response.name_tooltip);
                     showAutocomplete(response, true)
-                } else if (response.id_email) {
+                } else if (hasAutocompleteData(response)) {
+                    setFieldNote("id_name", "");
                     showAutocomplete(response)
                 } else {
-                    hideTooltip(nameInput);
+                    setFieldNote("id_name", "");
                     showAutocomplete(response, true)
                 }
                 if (response.email_tooltip) {
@@ -12038,24 +12189,35 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         if pk:
             base_qs = base_qs.exclude(pk=pk)
-        # Auto-fill from AuctionTOS records when name typed without email
+        # Auto-fill from manageable club members or auction histories when name typed without email.
         if (first_name or last_name) and not email and not pk:
-            # Look through AuctionTOS from auctions the requesting user created or is admin in,
-            # exactly like AuctionTOSValidation's auto-fill behaviour.
-            old_auctions = Auction.objects.filter(
-                Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
-            )
-            tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             full_name = f"{first_name} {last_name}".strip()
-            old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
-            if old_tos:
-                # Split the single AuctionTOS name field into first/last
-                parts = old_tos.name.strip().split(" ", 1)
-                result["id_first_name"] = parts[0]
-                result["id_last_name"] = parts[1] if len(parts) > 1 else ""
-                result["id_email"] = old_tos.email
-                result["id_phone_number"] = old_tos.phone_number or ""
-                result["id_address"] = old_tos.address or ""
+            member_match = (
+                ClubMember.objects.filter(
+                    club_id__in=club_ids_available_for_contact_autofill(request.user), is_deleted=False
+                )
+                .filter(first_name__iexact=first_name, last_name__iexact=last_name)
+                .order_by("-createdon")
+                .first()
+            )
+            if member_match:
+                result["id_first_name"] = member_match.first_name
+                result["id_last_name"] = member_match.last_name
+                result["id_email"] = member_match.email or ""
+                result["id_phone_number"] = member_match.phone_number or ""
+                result["id_address"] = member_match.address or ""
+            else:
+                old_auctions = auctions_available_for_contact_autofill(request.user)
+                tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+                old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+                if old_tos:
+                    # Split the single AuctionTOS name field into first/last
+                    parts = old_tos.name.strip().split(" ", 1)
+                    result["id_first_name"] = parts[0]
+                    result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                    result["id_email"] = old_tos.email
+                    result["id_phone_number"] = old_tos.phone_number or ""
+                    result["id_address"] = old_tos.address or ""
         # Duplicate name check within this club
         if first_name or last_name:
             dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
@@ -12142,7 +12304,7 @@ function cmShowAutocomplete(response, remove) {{
     btn.role = "button";
     btn.className = "btn btn-sm btn-info";
     btn.id = "autocompleteMemberForm";
-    btn.textContent = "Click to fill in " + response.id_email;
+    btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
     feedback.appendChild(btn);
     var autocomplete = response;
     document.getElementById('id_first_name').parentNode.appendChild(feedback);
@@ -12161,24 +12323,25 @@ function cmShowAutocomplete(response, remove) {{
     link.focus();
 }}
 
-function cmShowTooltip(element, message) {{
-    if (element._tooltipInstance) element._tooltipInstance.dispose();
-    element.setAttribute("data-bs-toggle", "tooltip");
-    element.setAttribute("data-bs-placement", "right");
-    element.setAttribute("title", message);
-    element._tooltipInstance = new bootstrap.Tooltip(element);
-    element._tooltipInstance.show();
+function cmHasAutocompleteData(response) {{
+    return !!(response.id_email || response.id_phone_number || response.id_address || response.id_last_name);
 }}
 
-function cmHideTooltip(element) {{
-    if (element._tooltipInstance) {{
-        element._tooltipInstance.dispose();
-        element._tooltipInstance = null;
-    }}
+function cmSetFieldNote(fieldId, message) {{
+    var field = document.getElementById(fieldId);
+    if (!field) return;
+    var noteId = fieldId + "_note";
+    var note = document.getElementById(noteId);
+    if (note) note.remove();
+    if (!message) return;
+    note = document.createElement("div");
+    note.id = noteId;
+    note.className = "text-warning small mt-1";
+    note.textContent = message;
+    field.parentNode.appendChild(note);
 }}
 
 function cmValidateField() {{
-    var firstNameInput = document.getElementById("id_first_name");
     var data = {{
         pk: member_pk,
         first_name: $("#id_first_name").val(),
@@ -12192,13 +12355,13 @@ function cmValidateField() {{
         headers: {{ "X-CSRFToken": clubmember_csrf_token }},
         success: function(response) {{
             if (response.name_tooltip) {{
-                cmShowTooltip(firstNameInput, response.name_tooltip);
+                cmSetFieldNote("id_first_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
-            }} else if (response.id_email) {{
+            }} else if (cmHasAutocompleteData(response)) {{
                 cmShowAutocomplete(response);
-                cmHideTooltip(firstNameInput);
+                cmSetFieldNote("id_first_name", "");
             }} else {{
-                cmHideTooltip(firstNameInput);
+                cmSetFieldNote("id_first_name", "");
                 cmShowAutocomplete(response, true);
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
@@ -12519,67 +12682,128 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
     def _get_member(self, pk):
         return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
+    @staticmethod
+    def _format_merge_value(value):
+        if value in (None, ""):
+            return "—"
+        return value
+
+    def _build_review_initial(self, source, target):
+        return {
+            field_name: getattr(source, field_name, None)
+            for field_name in ClubMemberMergeReviewForm.Meta.fields
+            if getattr(target, field_name, None) in (None, "") and getattr(source, field_name, None) not in (None, "")
+        }
+
+    def _build_review_context(self, request, source, target, review_form):
+        return {
+            "step": "review",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "source": source,
+            "target": target,
+            "source_label": str(source),
+            "target_label": str(target),
+            "review_form": review_form,
+            "comparison_rows": [
+                {
+                    "label": field.label,
+                    "source_value": self._format_merge_value(getattr(source, name, None)),
+                    "target_value": self._format_merge_value(getattr(target, name, None)),
+                }
+                for name, field in review_form.fields.items()
+            ],
+            "summary_lines": [
+                f"{source} will be deleted.",
+                f"{target} will be kept.",
+                "Permission flags on the deleted member will be kept on the surviving member.",
+                "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
+            ],
+            "target_field_name": "target",
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
+            "save_button_label": f"Save and delete {source}",
+        }
+
     def get(self, request, slug, pk):
         source = self._get_member(pk)
-        others = (
-            ClubMember.objects.filter(club=self.club, is_deleted=False)
-            .exclude(pk=pk)
-            .order_by("last_name", "first_name")
-        )
+        selection_form = ClubMemberMergeTargetForm(self.club, source)
         context = {
-            "club": self.club,
-            "source": source,
-            "others": others,
+            "step": "select",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "selection_form": selection_form,
+            "source_label": str(source),
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
-        return render(request, "auctions/club_member_merge.html", context)
+        return render(request, "auctions/contact_merge.html", context)
 
     def post(self, request, slug, pk):
         source = self._get_member(pk)
-        target_pk = request.POST.get("target")
-        target = get_object_or_404(ClubMember, pk=target_pk, club=self.club, is_deleted=False)
-        if target.pk == source.pk:
-            messages.error(request, "Cannot merge a member with themselves.")
-            return redirect(reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": pk}))
-        # Copy non-empty fields from source to target where target field is empty
-        copy_fields = [
-            "first_name",
-            "last_name",
-            "email",
-            "phone_number",
-            "address",
-            "discord_id",
-            "bap_points",
-            "hap_points",
-            "membership_last_paid",
-        ]
-        for field in copy_fields:
-            source_val = getattr(source, field, None)
-            target_val = getattr(target, field, None)
-            if source_val is not None and not target_val:
-                setattr(target, field, source_val)
-        # Merge permissions — OR the bool fields so target gains any source had
-        for perm_field in [
-            "permission_admin",
-            "permission_view",
-            "permission_export",
-            "permission_add_edit",
-            "permission_edit_club",
-            "permission_manage_auctions",
-            "permission_manage_bap",
-        ]:
-            if getattr(source, perm_field, False):
-                setattr(target, perm_field, True)
-        target.save()
-        source.is_deleted = True
-        source.save(update_fields=["is_deleted"])
-        ClubHistory.objects.create(
-            club=self.club,
-            user=request.user,
-            action=f"Merged member {source} into {target}",
-            applies_to="MEMBERS",
-        )
-        messages.success(request, f"Merged {source} into {target}.")
-        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        if request.POST.get("step") == "review":
+            target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club, is_deleted=False)
+            review_form = ClubMemberMergeReviewForm(request.POST, instance=target)
+            if review_form.is_valid():
+                with transaction.atomic():
+                    target = review_form.save()
+                    update_fields = set(review_form.changed_data)
+                    for field in ["discord_id", "bap_points", "hap_points", "membership_last_paid"]:
+                        source_val = getattr(source, field, None)
+                        target_val = getattr(target, field, None)
+                        if source_val is not None and not target_val:
+                            setattr(target, field, source_val)
+                            update_fields.add(field)
+                    for perm_field in [
+                        "permission_admin",
+                        "permission_view",
+                        "permission_export",
+                        "permission_add_edit",
+                        "permission_edit_club",
+                        "permission_manage_auctions",
+                        "permission_manage_bap",
+                    ]:
+                        if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
+                            setattr(target, perm_field, True)
+                            update_fields.add(perm_field)
+                    if update_fields:
+                        target.save(update_fields=list(update_fields))
+                    source.is_deleted = True
+                    source.save(update_fields=["is_deleted"])
+                    ClubHistory.objects.create(
+                        club=self.club,
+                        user=request.user,
+                        action=f"Merged member {source} into {target}",
+                        applies_to="MEMBERS",
+                    )
+                messages.success(request, f"Merged {source} into {target}.")
+                return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
+        selection_form = ClubMemberMergeTargetForm(self.club, source, request.POST or None)
+        if request.method == "POST" and selection_form.is_valid():
+            target = selection_form.cleaned_data["target"]
+            review_form = ClubMemberMergeReviewForm(
+                instance=target,
+                initial=self._build_review_initial(source, target),
+            )
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
+        context = {
+            "step": "select",
+            "page_title": f"Merge member — {source}",
+            "heading": "Merge member",
+            "subheading": f"Club: {self.club.name}",
+            "selection_form": selection_form,
+            "source_label": str(source),
+            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
+        }
+        return render(request, "auctions/contact_merge.html", context)
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):

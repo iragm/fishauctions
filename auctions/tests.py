@@ -6,6 +6,7 @@ import hmac
 import io
 import json
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from django import forms
@@ -4241,8 +4242,123 @@ class AuctionEditViewTests(StandardTestCase):
         response = self.client.get(self.online_auction.get_edit_url())
         assert response.status_code == 200
 
+    def test_auction_edit_preserves_use_categories(self):
+        """Saving AuctionEditForm should not reset use_categories to False"""
+        self.online_auction.use_categories = True
+        self.online_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.online_auction.summernote_description or "",
+            "lot_entry_fee": str(self.online_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.online_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.online_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.online_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.online_auction.alternative_split_label or "",
+            "tax": str(self.online_auction.tax or "0"),
+            "online_bidding": self.online_auction.online_bidding,
+            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(self.online_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
+            # use_categories intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.online_auction.refresh_from_db()
+        self.assertTrue(
+            self.online_auction.use_categories,
+            "use_categories was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
+    def test_auction_edit_preserves_sealed_bid(self):
+        """Saving AuctionEditForm should not reset sealed_bid to False"""
+        self.online_auction.sealed_bid = True
+        self.online_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.online_auction.summernote_description or "",
+            "lot_entry_fee": str(self.online_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.online_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.online_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.online_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.online_auction.alternative_split_label or "",
+            "tax": str(self.online_auction.tax or "0"),
+            "online_bidding": self.online_auction.online_bidding,
+            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(self.online_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
+            # sealed_bid intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.online_auction.refresh_from_db()
+        self.assertTrue(
+            self.online_auction.sealed_bid,
+            "sealed_bid was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
+    def test_auction_edit_preserves_advanced_lot_adding(self):
+        """Saving AuctionEditForm should not reset advanced_lot_adding to False"""
+        self.in_person_auction.advanced_lot_adding = True
+        self.in_person_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.in_person_auction.summernote_description or "",
+            "lot_entry_fee": str(self.in_person_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.in_person_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.in_person_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.in_person_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.in_person_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.in_person_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.in_person_auction.alternative_split_label or "",
+            "tax": str(self.in_person_auction.tax or "0"),
+            "online_bidding": self.in_person_auction.online_bidding,
+            "date_start": self.in_person_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            # date_end is omitted intentionally: for offline auctions the form sets date_end to HiddenInput
+            # and the field is nullable, so it is not required in POST data.
+            "invoice_rounding": str(self.in_person_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.in_person_auction.minimum_bid),
+            "use_seller_dash_lot_numbering": self.in_person_auction.use_seller_dash_lot_numbering,
+            # advanced_lot_adding intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.in_person_auction.refresh_from_db()
+        self.assertTrue(
+            self.in_person_auction.advanced_lot_adding,
+            "advanced_lot_adding was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
 
 class AuctionCustomFieldsViewTests(StandardTestCase):
+    """Test auction edit custom field behavior"""
+
     def _custom_fields_data(self, use_custom_dropdown=False):
         data = {
             "custom_field_1": self.online_auction.custom_field_1,
@@ -10347,6 +10463,45 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         self.assertLessEqual(annotated_lot.your_cut, 0)
         self.assertEqual(annotated_lot.club_cut, 0)
 
+    def test_auction_save_removes_disallowed_summernote_content(self):
+        """Auction Summernote HTML should strip images and scripts before saving."""
+        self.online_auction.summernote_description = (
+            '<p onclick="alert(1)" onmouseover="alert(1)">Rules</p>'
+            '<script>alert(1)</script><img src="/bad.png"><a href="javascript:alert(1)">Link</a>'
+            '<a href="https://example.com">Safe</a>'
+        )
+        self.online_auction.save()
+        self.online_auction.refresh_from_db()
+
+        self.assertEqual(
+            self.online_auction.summernote_description,
+            '<p>Rules</p><a>Link</a><a href="https://example.com">Safe</a>',
+        )
+
+    def test_lot_save_removes_disallowed_summernote_content(self):
+        """Lot Summernote HTML should strip images and scripts before saving."""
+        self.lot.summernote_description = '<p>Fish</p><img src="https://example.com/fish.png"><script>bad()</script>'
+        self.lot.save()
+        self.lot.refresh_from_db()
+
+        self.assertEqual(self.lot.summernote_description, "<p>Fish</p>")
+
+    def test_club_save_removes_disallowed_summernote_content(self):
+        """Club Summernote HTML should strip images and scripts before saving."""
+        club = Club.objects.create(
+            name="Sanitized Club",
+            description='<p>About us</p><img src="/logo.png"><script>alert(1)</script>',
+        )
+        club.refresh_from_db()
+
+        self.assertEqual(club.description, "<p>About us</p>")
+
+    def test_club_save_allows_empty_description(self):
+        """Club save should keep empty Summernote content empty."""
+        club = Club.objects.create(name="Empty Club", description="")
+
+        self.assertEqual(club.description, "")
+
     def test_add_price_info_donation_lot(self):
         """Test add_price_info for donation lots"""
         from auctions.models import add_price_info
@@ -10604,6 +10759,54 @@ class FormsUtilityTestCase(TestCase):
         long_html = "x" * 1000
         result = clean_summernote(long_html, max_length=50)
         self.assertLessEqual(len(result), 50)
+
+    def test_clean_summernote_none_returns_empty_string(self):
+        """Test clean_summernote safely normalizes None values."""
+        from auctions.forms import clean_summernote
+
+        result = clean_summernote(None)
+
+        self.assertEqual(result, "")
+
+    def test_clean_summernote_removes_disallowed_tags(self):
+        """Test clean_summernote strips script and image tags."""
+        from auctions.forms import clean_summernote
+
+        html = (
+            "<p>Allowed</p><img src='/bad.png'><script>alert(1)</script>"
+            "<iframe src='https://example.com'></iframe><embed src='/test.swf'><object data='/test'></object>"
+        )
+        result = clean_summernote(html)
+
+        self.assertEqual(result, "<p>Allowed</p>")
+
+    def test_clean_summernote_removes_scriptable_attributes(self):
+        """Test clean_summernote strips dangerous attributes from allowed tags."""
+        from auctions.forms import clean_summernote
+
+        html = (
+            '<p onclick="alert(1)" onerror="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
+            '<a href="vbscript:msgbox(1)">VB</a><a href="data:text/html;base64,PHNjcmlwdD4=">Data</a>'
+            '<a href="java\nscript:alert(1)">Obfuscated</a>'
+            '<a href="https://example.com">Safe</a>'
+        )
+        result = clean_summernote(html)
+
+        self.assertEqual(
+            result,
+            '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a>Obfuscated</a><a href="https://example.com">Safe</a>',
+        )
+
+    def test_summernote_widget_includes_upload_url_in_rendered_html(self):
+        """Summernote widget should include upload URL and drag-drop disabling in rendered HTML."""
+        from django.urls import reverse
+        from django_summernote.widgets import SummernoteWidget
+
+        upload_url = reverse("django_summernote-upload_attachment")
+        html = SummernoteWidget().render("description", "", attrs={"id": "id_description"})
+
+        self.assertIn(upload_url, html)
+        self.assertIn('"disableDragAndDrop": true', html)
 
 
 class TemplateTagsTestCase(TestCase):
@@ -12744,6 +12947,126 @@ class MergeAuctionTOSTests(StandardTestCase):
         # Response should not be a redirect
         self.assertNotEqual(response.status_code, 302)
 
+    def test_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the name is already in this auction"""
+        self.client.login(username="admin_user", password="testpassword")
+        self.online_tos.name = "Duplicate Test User"
+        self.online_tos.bidder_number = "123"
+        self.online_tos.save()
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": self.online_tos.name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["name_tooltip"],
+            f"There's already a user in this auction named {self.online_tos.name} "
+            f"(bidder number: {self.online_tos.bidder_number})",
+        )
+
+    def test_duplicate_name_autofill_searches_clubs_with_manage_membership_permission(self):
+        """AuctionTOS autofill should search auctions from clubs where the user can manage members"""
+        self.client.login(username="admin_user", password="testpassword")
+        club = Club.objects.create(name="Autofill Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, permission_add_edit=True)
+        club_auction = Auction.objects.create(
+            created_by=self.user,
+            club=club,
+            title="Club Managed Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Club Managed User",
+            email="club-managed@example.com",
+            bidder_number="777",
+        )
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": "Club Managed User"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "club-managed@example.com")
+        self.assertEqual(response.json()["id_bidder_number"], "")
+
+    def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
+        """The add-user modal should render JS that shows duplicate-name warnings inline"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function setFieldNote(fieldId, message)")
+        self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+
+
+class AuctionTOSMergeViewTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.login(username="admin_user", password="testpassword")
+        # Use update() here so the kept record starts linked to a user before the merge flow edits its email.
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(
+            name="Kept User",
+            email="kept@example.com",
+            manually_added=False,
+            user=self.user,
+        )
+        self.online_tos.refresh_from_db()
+        self.source_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Source User",
+            email="source@example.com",
+            phone_number="5551112222",
+            address="111 Source St",
+        )
+
+    def test_merge_flow_renders_review_then_updates_kept_user(self):
+        url = reverse("auctiontosdelete", kwargs={"pk": self.source_tos.pk}) + "?action=merge"
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "target": str(self.online_tos.pk),
+                "auction": self.online_auction.pk,
+                "exclude_auctiontos": self.source_tos.pk,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This will delete")
+        self.assertContains(response, "Kept User")
+
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "step": "review",
+                "target": str(self.online_tos.pk),
+                "name": "Merged Winner",
+                "email": "updated@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+                "pickup_location": self.location.pk,
+            },
+        )
+        self.assertRedirects(response, reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.name, "Merged Winner")
+        self.assertEqual(self.online_tos.email, "updated@example.com")
+        self.assertEqual(self.online_tos.phone_number, "5553334444")
+        self.assertEqual(self.online_tos.address, "222 Updated Ave")
+        self.assertIsNone(self.online_tos.user)
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+
 
 class LotImageManagementTests(StandardTestCase):
     """Tests for the image management features added in the image management update"""
@@ -14280,6 +14603,140 @@ class ClubMemberUpdateTests(TestCase):
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
 
+    def test_club_member_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the member is already in this club"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
+
+    def test_club_member_autofill_searches_clubs_with_manage_auctions_permission(self):
+        """Club member autofill should search auctions from clubs the user can manage auctions for"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Other Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        club_auction = Auction.objects.create(
+            created_by=self.other_user,
+            club=other_club,
+            title="Other Club Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="other club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Searchable Member",
+            email="searchable@example.com",
+            phone_number="555-0100",
+            address="123 Fish St",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Searchable", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "searchable@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0100")
+        self.assertEqual(response.json()["id_address"], "123 Fish St")
+
+    def test_club_member_autofill_uses_managed_club_members_without_auction_history(self):
+        """Club member autofill should use manageable club members even without auction history"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Member Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        ClubMember.objects.create(
+            club=other_club,
+            first_name="Managed",
+            last_name="Member",
+            email="managed-member@example.com",
+            phone_number="555-0111",
+            address="456 Club Rd",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Managed", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "managed-member@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0111")
+        self.assertEqual(response.json()["id_address"], "456 Club Rd")
+
+    def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
+        """The club-member modal should render JS that shows duplicate-name warnings inline"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function cmHasAutocompleteData(response)")
+        self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
+        self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
+
+    def test_merge_member_review_updates_kept_member_before_delete(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.permission_view = True
+        owner_member.save()
+        source = ClubMember.objects.create(
+            club=self.club,
+            first_name="Source",
+            last_name="Member",
+            email="source@example.com",
+            phone_number="5551112222",
+            address="111 Source St",
+            permission_export=True,
+            membership_last_paid=timezone.now().date(),
+        )
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
+
+        response = self.client.post(url, {"target": self.member.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This will delete")
+        self.assertContains(response, "Jane Doe")
+
+        response = self.client.post(
+            url,
+            {
+                "step": "review",
+                "target": self.member.pk,
+                "first_name": "Merged",
+                "last_name": "Member",
+                "email": "merged@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+            },
+        )
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.member.refresh_from_db()
+        source.refresh_from_db()
+        self.assertTrue(source.is_deleted)
+        self.assertEqual(self.member.first_name, "Merged")
+        self.assertEqual(self.member.email, "merged@example.com")
+        self.assertEqual(self.member.phone_number, "5553334444")
+        self.assertEqual(self.member.address, "222 Updated Ave")
+        self.assertTrue(self.member.permission_export)
+        self.assertEqual(self.member.membership_last_paid, timezone.now().date())
+
 
 class ClubAPITests(TestCase):
     """Tests for the DRF REST API for club members"""
@@ -14336,6 +14793,13 @@ class ParseBoolEnvTests(TestCase):
         # A typo in the env value must fail loudly, not silently default.
         with self.assertRaises(ValueError):
             parse_bool_env("maybe", default=False)
+
+    def test_entrypoint_uses_shared_bool_parser_for_debug(self) -> None:
+        entrypoint = Path(__file__).resolve().parent.parent / "entrypoint.sh"
+        entrypoint_text = entrypoint.read_text(encoding="utf-8")
+
+        self.assertIn("parse_bool_env", entrypoint_text)
+        self.assertNotIn('[ "${DEBUG}" = "True" ]', entrypoint_text)
 
 
 class RequireSecureProdSecretsTests(TestCase):

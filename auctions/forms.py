@@ -46,6 +46,7 @@ from .models import (
     UserBan,
     UserData,
     UserLabelPrefs,
+    sanitize_summernote_html,
 )
 from .validators import validate_username_no_at_symbol
 
@@ -71,6 +72,19 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
         fields[field_name].widget.attrs["step"] = step
 
 
+def add_bootstrap_classes(form):
+    """Apply Bootstrap-friendly classes to visible form widgets."""
+    for field in form.fields.values():
+        if isinstance(field.widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple, forms.RadioSelect)):
+            css_class = "form-check-input"
+        elif isinstance(field.widget, (forms.Select, forms.SelectMultiple)):
+            css_class = "form-select"
+        else:
+            css_class = "form-control"
+        existing_class = field.widget.attrs.get("class", "")
+        field.widget.attrs["class"] = f"{existing_class} {css_class}".strip()
+
+
 def validate_image_url(url):
     """Validate that `url` uses http/https and points to a file with an image extension.
 
@@ -94,6 +108,9 @@ def validate_image_url(url):
 
 def clean_summernote(html, max_length=16383):
     """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
+    html = sanitize_summernote_html(html)
+    if html is None:
+        return ""
     if len(html) > max_length:
         html = re.sub(r"(?!<br\s*/?>)<.*?>", "", html)[:max_length]
     return html
@@ -237,7 +254,7 @@ class QuickAddLot(forms.ModelForm):
         apply_price_input_constraints(
             self.fields, ("reserve_price", "buy_now_price"), self.auction.only_whole_dollar_bids
         )
-        if not self.auction.advanced_lot_adding:
+        if not self.auction.use_quantity_field:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
             # self.fields["description"].widget = HiddenInput()
@@ -732,6 +749,54 @@ class DeleteAuctionTOS(forms.Form):
                 if AuctionTOS.objects.get(pk=merge_with) == self.auctiontos:
                     self.add_error("merge_with", "You can't select the user you're about to delete")
         return cleaned_data
+
+
+class AuctionTOSMergeTargetForm(forms.Form):
+    target = forms.CharField(
+        widget=autocomplete.Select2(
+            url="auctiontos-autocomplete",
+            forward=["auction", "exclude_auctiontos"],
+            attrs={
+                "data-html": True,
+                "data-container-css-class": "",
+            },
+        )
+    )
+    auction = forms.CharField(label="Auction", max_length=100)
+    exclude_auctiontos = forms.IntegerField(required=False)
+
+    def __init__(self, auctiontos, auction, *args, **kwargs):
+        self.auction = auction
+        self.auctiontos = auctiontos
+        super().__init__(*args, **kwargs)
+        self.fields["target"].label = f"Merge {self.auctiontos.name} with"
+        self.fields["auction"].widget = HiddenInput()
+        self.fields["auction"].initial = self.auction.pk
+        self.fields["exclude_auctiontos"].widget = HiddenInput()
+        self.fields["exclude_auctiontos"].initial = self.auctiontos.pk
+
+    def clean_target(self):
+        target_pk = self.cleaned_data["target"]
+        try:
+            target = AuctionTOS.objects.get(pk=target_pk, auction=self.auction)
+        except AuctionTOS.DoesNotExist as exc:
+            msg = "Select a user from this auction to keep"
+            raise forms.ValidationError(msg) from exc
+        if target == self.auctiontos:
+            msg = "You can't select the user you're about to delete"
+            raise forms.ValidationError(msg)
+        return target
+
+
+class AuctionTOSMergeReviewForm(forms.ModelForm):
+    class Meta:
+        model = AuctionTOS
+        fields = ["name", "email", "phone_number", "address", "pickup_location"]
+
+    def __init__(self, *args, auction, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pickup_location"].queryset = auction.location_qs
+        add_bootstrap_classes(self)
 
 
 class EditLot(forms.ModelForm):
@@ -1846,8 +1911,6 @@ class AuctionEditForm(forms.ModelForm):
             "date_end",
             "lot_submission_start_date",
             "lot_submission_end_date",
-            "sealed_bid",
-            "use_categories",
             "promote_this_auction",
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
@@ -1867,7 +1930,6 @@ class AuctionEditForm(forms.ModelForm):
             "force_donation_threshold",
             "require_phone_number",
             "tax",
-            "advanced_lot_adding",
             "online_bidding",
             "date_online_bidding_ends",
             "date_online_bidding_starts",
@@ -1937,7 +1999,6 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
-            self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
             # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
@@ -3717,3 +3778,25 @@ class ClubMemberPermissionsForm(forms.ModelForm):
                 css_class="modal-footer",
             ),
         )
+
+
+class ClubMemberMergeTargetForm(forms.Form):
+    target = forms.ModelChoiceField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
+
+    def __init__(self, club, source, *args, **kwargs):
+        self.club = club
+        self.source = source
+        super().__init__(*args, **kwargs)
+        self.fields["target"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).exclude(pk=source.pk)
+        self.fields["target"].label = f"Merge {self.source} with"
+        add_bootstrap_classes(self)
+
+
+class ClubMemberMergeReviewForm(forms.ModelForm):
+    class Meta:
+        model = ClubMember
+        fields = ["first_name", "last_name", "email", "phone_number", "address"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)

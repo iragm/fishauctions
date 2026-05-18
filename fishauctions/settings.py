@@ -638,6 +638,7 @@ SUMMERNOTE_CONFIG = {
     "summernote": {
         # Change editor size
         "width": "100%",
+        "disableDragAndDrop": True,
         # 'height': '480',
         # https://summernote.org/deep-dive/#custom-toolbar-popover
         "toolbar": [
@@ -673,8 +674,6 @@ SUMMERNOTE_CONFIG = {
     # 'attachment_storage_class': 'my.custom.storage.class.name',
     # Set custom model for attachments (default: 'django_summernote.Attachment')
     # 'attachment_model': 'my.custom.attachment.model',  # must inherit 'django_summernote.AbstractAttachment'
-    # You can completely disable the attachment feature.
-    # 'disable_attachment': True,
     # Set to `False` to return attachment paths in relative URIs.
     # 'attachment_absolute_uri': True,
 }

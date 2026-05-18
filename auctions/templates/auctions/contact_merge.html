@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }}{% endblock %}
+
+{% block extra_js %}
+{% if selection_form %}{{ selection_form.media }}{% endif %}
+{% if review_form %}{{ review_form.media }}{% endif %}
+{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-people"></i> {{ heading }}</h3>
+{% if subheading %}<p class="text-muted">{{ subheading }}</p>{% endif %}
+
+<div class="card mb-4" style="max-width: 900px;">
+  <div class="card-body">
+    <form method="post" action="{{ action_url }}">
+      {% csrf_token %}
+      {% if action_mode %}<input type="hidden" name="action" value="{{ action_mode }}">{% endif %}
+
+      {% if step == "review" %}
+        <input type="hidden" name="step" value="review">
+        <input type="hidden" name="{{ target_field_name|default:'target' }}" value="{{ target.pk }}">
+
+        <div class="alert alert-warning text-dark">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          This will delete <strong>{{ source_label }}</strong> and keep <strong>{{ target_label }}</strong>.
+        </div>
+
+        <div class="table-responsive mb-4">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th scope="col">Field</th>
+                <th scope="col">{{ source_label }}</th>
+                <th scope="col">{{ target_label }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"></th>
+                <td><strong class="text-danger">DELETE</strong></td>
+                <td><strong class="text-success">KEEP</strong></td>
+              </tr>
+              {% for row in comparison_rows %}
+              <tr>
+                <th scope="row">{{ row.label }}</th>
+                <td>{{ row.source_value }}</td>
+                <td>{{ row.target_value }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <h5 class="mb-3">Edit the kept record before deleting {{ source_label }}</h5>
+        {% for hidden in review_form.hidden_fields %}
+          {{ hidden }}
+        {% endfor %}
+        {% for field in review_form.visible_fields %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<div class="form-text">{{ field.help_text|safe }}</div>{% endif %}
+            {% for error in field.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="mb-3">You'll review the exact changes before anything is deleted.</p>
+        {% for hidden in selection_form.hidden_fields %}
+          {{ hidden }}
+        {% endfor %}
+        {% for field in selection_form.visible_fields %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<div class="form-text">{{ field.help_text|safe }}</div>{% endif %}
+            {% for error in field.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% endif %}
+
+      <div class="d-flex gap-2">
+        <a href="{{ cancel_url }}" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+          {% if step == "review" %}
+            {{ save_button_label|default:"Save and merge" }}
+          {% else %}
+            Continue
+          {% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

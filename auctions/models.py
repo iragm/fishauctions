@@ -466,35 +466,76 @@ def guess_category(text):
     return None
 
 
-def remove_html_color_tags(text):
-    """Remove only color-related styles from HTML, preserving all other attributes"""
-    if not text:
-        return text
+def sanitize_summernote_html(text):
+    """Remove disallowed Summernote content while preserving supported formatting."""
+    if text is None:
+        return None
+    if text == "":
+        return ""
 
     soup = BeautifulSoup(text, "html.parser")
+
+    # Block executable, externally embedded, or page-hijacking content.
+    # <style>/<link> enable CSS injection; <base> hijacks relative URLs; <meta> can redirect;
+    # <form> enables phishing overlays (Summernote never generates forms).
+    for tag in soup.find_all(["base", "embed", "form", "iframe", "img", "link", "meta", "object", "script", "style"]):
+        tag.decompose()
+
+    for tag in soup.find_all():
+        for attr_name, attr_value in list(tag.attrs.items()):
+            normalized_attr = attr_name.lower()
+            if normalized_attr.startswith("on"):
+                del tag[attr_name]
+                continue
+            # These are the URI-bearing attributes we allow in Summernote content.
+            if normalized_attr in {"href", "src", "xlink:href"}:
+                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
+                values = attr_value if isinstance(attr_value, list) else [attr_value]
+                if any(
+                    isinstance(value, str)
+                    # Block URI schemes commonly used for script execution or local file access in user HTML,
+                    # even when attackers split the scheme name with ASCII whitespace/control characters.
+                    and re.match(
+                        r"^(?:data|file|javascript|vbscript):",
+                        re.sub(r"[\x00-\x20\x7f]+", "", value),
+                        flags=re.IGNORECASE,
+                    )
+                    for value in values
+                ):
+                    del tag[attr_name]
 
     # Remove 'color' attribute from <font> tags
     for tag in soup.find_all("font"):
         if tag.has_attr("color"):
             del tag["color"]
 
-    # Clean color and background-color from style attributes in <span> and others
+    # Clean style attributes: remove color/background-color (unwanted formatting) and any
+    # property containing url() which could load external resources.
     for tag in soup.find_all(style=True):
-        # Split and filter styles
         styles = tag["style"].split(";")
         cleaned_styles = []
         for style in styles:
             if not style.strip():
                 continue
-            name, *_ = style.split(":", 1)
-            if name.strip().lower() not in {"color", "background-color"}:
-                cleaned_styles.append(style)
+            name, *value_parts = style.split(":", 1)
+            prop = name.strip().lower()
+            value = value_parts[0] if value_parts else ""
+            if prop in {"color", "background-color"}:
+                continue
+            if "url(" in value.lower():
+                continue
+            cleaned_styles.append(style)
         if cleaned_styles:
             tag["style"] = ";".join(cleaned_styles)
         else:
             del tag["style"]
 
     return str(soup)
+
+
+def remove_html_color_tags(text):
+    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
+    return sanitize_summernote_html(text)
 
 
 class BlogPost(models.Model):
@@ -655,6 +696,7 @@ class Club(models.Model):
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
                 kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
+        self.description = sanitize_summernote_html(self.description)
         super().save(*args, **kwargs)
 
 
@@ -1544,7 +1586,7 @@ class Auction(models.Model):
         # if self.date_start.year < 2000:
         #    current_year = timezone.now().year
         #    self.date_start = self.date_start.replace(year=current_year)
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
 
     def find_user(self, name="", email="", exclude_pk=None):
@@ -3420,6 +3462,10 @@ class AuctionTOS(models.Model):
 
         result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
+        merge_url = f"{delete_url}?action=merge"
+        result += (
+            f"<span class='dropdown-item'><a href={merge_url}><i class='bi bi-people me-1'></i>Merge with...</a></span>"
+        )
         result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
         problems_url = reverse(
             "auction_no_show",
@@ -3594,10 +3640,14 @@ class AuctionTOS(models.Model):
         # if you changed the email of this tos, reset the email status
         if not self.name:
             self.name = "Unknown"
-        if self.email and self.pk:
+        if self.pk:
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
-            if saved_tos and saved_tos.email and saved_tos.email != self.email:
+            if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
+                if not self.manually_added:
+                    # Clear the linked account so future auto-matching during auction joins can link this record
+                    # to the correct user for the updated email address.
+                    self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":
             existing_instance = (
@@ -3729,7 +3779,7 @@ class AuctionTOS(models.Model):
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
 
-    def merge_duplicate(self, duplicate, reason="same email", user=None):
+    def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
         preserves any non-empty fields from duplicate that are missing on self,
@@ -3744,16 +3794,17 @@ class AuctionTOS(models.Model):
             raise ValueError(msg)
         # Preserve non-empty fields from duplicate onto self where self has no value.
         # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
-        fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
-        updates = {}
-        for field in fields_to_preserve:
-            self_val = getattr(self, field, None)
-            dup_val = getattr(duplicate, field, None)
-            if (self_val is None or self_val == "") and dup_val:
-                updates[field] = dup_val
-                setattr(self, field, dup_val)
-        if updates:
-            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        if preserve_missing_fields:
+            fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+            updates = {}
+            for field in fields_to_preserve:
+                self_val = getattr(self, field, None)
+                dup_val = getattr(duplicate, field, None)
+                if (self_val is None or self_val == "") and dup_val:
+                    updates[field] = dup_val
+                    setattr(self, field, dup_val)
+            if updates:
+                AuctionTOS.objects.filter(pk=self.pk).update(**updates)
         # Move won lots to self
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
         # Move sold lots to self
@@ -4263,7 +4314,7 @@ class Lot(models.Model):
             and self.winning_price <= self.auction.force_donation_threshold
         ):
             self.donation = True
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         if not self.quantity:
             self.quantity = 1
         super().save(*args, **kwargs)
