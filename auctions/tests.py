@@ -14489,9 +14489,7 @@ class ClubPermissionTests(TestCase):
         self.edit_club_user = User.objects.create_user(
             username="perm_edit_club", password="testpass", email="perm_edit_club@example.com"
         )
-        self.bap_user = User.objects.create_user(
-            username="perm_bap", password="testpass", email="perm_bap@example.com"
-        )
+        self.bap_user = User.objects.create_user(username="perm_bap", password="testpass", email="perm_bap@example.com")
         self.admin_user = User.objects.create_user(
             username="perm_admin", password="testpass", email="perm_admin@example.com"
         )
@@ -14773,7 +14771,9 @@ class ClubPermissionTests(TestCase):
         ]:
             url = reverse(url_name, kwargs=kwargs)
             response = self.client.get(url)
-            self.assertEqual(response.status_code, 200, f"{url_name} should be 200 for admin, got {response.status_code}")
+            self.assertEqual(
+                response.status_code, 200, f"{url_name} should be 200 for admin, got {response.status_code}"
+            )
 
     def test_admin_can_set_member_permissions(self):
         """Only permission_admin members can change other members' permissions"""

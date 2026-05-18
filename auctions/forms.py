@@ -3611,7 +3611,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 connect_parts.append(f'<a href="{reverse("square_connect")}">Square</a>')
             payment_help = mark_safe(
                 "Payments are sent to this user's connected account. "
-                f'You can connect {" or ".join(connect_parts)} to take payments '
+                f"You can connect {' or '.join(connect_parts)} to take payments "
             )
         else:
             payment_help = "Payments are not enabled for your account."

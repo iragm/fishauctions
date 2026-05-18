@@ -169,6 +169,7 @@ from .models import (
     AuctionHistory,
     AuctionIgnore,
     AuctionTOS,
+    BapAward,
     Bid,
     BlogPost,
     Category,
@@ -12977,6 +12978,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return (
             Lot.objects.filter(auction__club=self.club, date_end__gte=cutoff, is_deleted=False)
             .select_related("auctiontos_seller__user", "auction", "species_category")
+            .prefetch_related("bap_award")
             .order_by("-date_end")
         )
 
@@ -13949,7 +13951,7 @@ class DiscordInteractionsView(View):
 
 
 class LotBapPointsView(LoginRequiredMixin, View):
-    """AJAX endpoint to update BAP points awarded for a lot. BAP admins only."""
+    """AJAX endpoint to manually set BAP points for a lot. BAP admins only."""
 
     def post(self, request, pk):
         lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
@@ -13962,10 +13964,36 @@ class LotBapPointsView(LoginRequiredMixin, View):
                 raise ValueError
         except (ValueError, TypeError):
             return HttpResponse(status=400)
+
+        # Resolve seller to ClubMember for the BapAward record
+        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
+        member = None
+        if seller_user:
+            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member and seller_email:
+            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+
+        award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
+        if points > 0 and member:
+            BapAward.objects.update_or_create(
+                lot=lot,
+                defaults={
+                    "club_member": member,
+                    "date": award_date,
+                    "points": points,
+                    "awarded_by": request.user,
+                },
+            )
+        elif points == 0:
+            BapAward.objects.filter(lot=lot).delete()
+
+        # Keep lot fields in sync for eligibility queries and legacy display
         lot.bap_points_awarded = points
         lot.manually_approved = True
         lot.bap_auto_reason = ""
         lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+
         if lot.auctiontos_seller:
             name = lot.auctiontos_seller.name
         elif lot.user:

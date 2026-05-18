@@ -541,7 +541,7 @@ def recalculate_club_bap_points(self, club_pk):
 
     from django.utils import timezone
 
-    from auctions.models import Club, ClubMember, Lot
+    from auctions.models import BapAward, Club, ClubMember
 
     logger.info("BAP recalculation started for club pk=%s", club_pk)
 
@@ -562,28 +562,23 @@ def recalculate_club_bap_points(self, club_pk):
         m.hap_points_ytd = 0
         m.culture_points_ytd = 0
 
-    user_map = {m.user_id: m for m in members if m.user_id}
-    email_map = {m.email.lower(): m for m in members if m.email}
+    member_pk_map = {m.pk: m for m in members}
 
-    lots = Lot.objects.filter(
-        auction__club=club, bap_points_awarded__gt=0, is_deleted=False, banned=False
-    ).select_related("auctiontos_seller__user", "species_category", "auction__club")
+    awards = (
+        BapAward.objects.filter(club_member__club=club)
+        .exclude(lot__is_deleted=True)
+        .exclude(lot__banned=True)
+        .select_related("lot__species_category", "lot__auction__club")
+    )
 
-    for lot in lots:
-        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
-        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
-
-        member = None
-        if seller_user and seller_user.pk in user_map:
-            member = user_map[seller_user.pk]
-        elif seller_email.lower() in email_map:
-            member = email_map[seller_email.lower()]
+    for award in awards:
+        member = member_pk_map.get(award.club_member_id)
         if not member:
             continue
 
-        pts = lot.bap_points_awarded
-        program = lot.bap_placeholder  # "BAP", "HAP", or "Culture"
-        is_ytd = bool(lot.date_end and lot.date_end.year == this_year)
+        pts = award.points
+        program = award.lot.bap_placeholder if award.lot else "BAP"
+        is_ytd = award.date.year == this_year
 
         if program == "Culture":
             member.culture_points += pts

@@ -997,9 +997,11 @@ class ClubMember(ContactRecord):
         previous_email = None
         previous_reminder_due = None
         if self.pk:
-            prev = ClubMember.objects.filter(pk=self.pk).values(
-                "membership_last_paid", "email", "membership_expiration_reminder_due"
-            ).first()
+            prev = (
+                ClubMember.objects.filter(pk=self.pk)
+                .values("membership_last_paid", "email", "membership_expiration_reminder_due")
+                .first()
+            )
             if prev:
                 previous_membership_last_paid = prev["membership_last_paid"]
                 previous_email = prev["email"]
@@ -5074,23 +5076,48 @@ class Lot(models.Model):
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):
-        """Set bap_points_awarded and bap_auto_reason based on club rules. Call after auction ends."""
-        if self.auction and self.auction.club and not self.bap_points_awarded and not self.manually_approved:
-            reason = self.sold_lot_no_bap_reason
-            if reason:
-                self.bap_auto_reason = reason
-                self.bap_points_awarded = 0
-                self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
-                return
-            club = self.auction.club
-            if club.auto_add_points:
-                if club.points_per_lot > 0:
-                    points = club.points_per_lot
-                else:
-                    points = self.species_category.bap_points if self.species_category else 5
-                self.bap_points_awarded = points
-            self.bap_auto_reason = ""
+        """Create a BapAward and sync bap_points_awarded/bap_auto_reason. Call after auction ends."""
+        if not (self.auction and self.auction.club):
+            return
+        # Skip if a BapAward already exists for this lot (auto or manual)
+        if BapAward.objects.filter(lot=self).exists():
+            return
+        reason = self.sold_lot_no_bap_reason
+        if reason:
+            self.bap_auto_reason = reason
+            self.bap_points_awarded = 0
             self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+            return
+        club = self.auction.club
+        if not club.auto_add_points:
+            # Eligible but requires manual approval — clear any stale reason
+            self.bap_auto_reason = ""
+            self.bap_points_awarded = 0
+            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+            return
+        # Determine point value
+        if club.points_per_lot > 0:
+            points = club.points_per_lot
+        else:
+            points = self.species_category.bap_points if self.species_category else 5
+        # Resolve seller to ClubMember
+        seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
+        if not seller_user:
+            return
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member:
+            return
+        award_date = self.date_end.date() if self.date_end else timezone.now().date()
+        BapAward.objects.create(
+            club_member=member,
+            date=award_date,
+            points=points,
+            lot=self,
+            awarded_by=None,  # None = auto-awarded by the system
+        )
+        self.bap_points_awarded = points
+        self.bap_auto_reason = ""
+        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
 
     @property
     def pre_registered(self):
@@ -5787,6 +5814,36 @@ class Lot(models.Model):
     # @property
     # def description_cleaned(self):
     #     return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
+
+
+class BapAward(models.Model):
+    """A record of BAP/HAP/Culture points awarded to a club member for a lot."""
+
+    club_member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="bap_awards")
+    date = models.DateField()
+    points = models.IntegerField()
+    lot = models.OneToOneField(
+        Lot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bap_award",
+    )
+    awarded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bap_awards_given",
+        help_text="The user who manually awarded these points. Null if auto-awarded.",
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.points}pts for {self.club_member} on {self.date}"
 
 
 class Invoice(models.Model):

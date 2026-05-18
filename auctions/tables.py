@@ -653,18 +653,23 @@ class ClubBapLotHTMxTable(tables.Table):
         return "—"
 
     def render_bap_points_awarded(self, value, record):
+        award = getattr(record, "bap_award", None)
+        display_value = award.points if award else (value or "")
         url = reverse("lot_bap_points", kwargs={"pk": record.pk})
         return format_html(
             '<input type="text" value="{}" placeholder="{}" class="form-control form-control-sm d-inline-block"'
             ' style="width:70px;" data-lot-pk="{}" data-url="{}" onchange="saveBapPoints(this)">',
-            value or "",
+            display_value,
             record.bap_placeholder,
             record.pk,
             url,
         )
 
     def render_status(self, value, record):
-        if record.bap_points_awarded:
+        award = getattr(record, "bap_award", None)
+        if award:
+            if award.awarded_by_id is None:
+                return mark_safe('<span class="badge bg-success">Auto-approved</span>')
             return mark_safe('<span class="badge bg-success">Approved</span>')
         if record.manually_approved:
             return mark_safe('<span class="badge bg-secondary">Manually set</span>')

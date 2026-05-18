@@ -15,6 +15,7 @@ from .models import (
     AuctionCampaign,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Bid,
     BlogPost,
     Category,
@@ -763,6 +764,15 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         # make all AuctionHistory model fields readonly in the admin (this is an audit log)
         return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
+
+
+@admin.register(BapAward)
+class BapAwardAdmin(admin.ModelAdmin):
+    list_display = ("club_member", "date", "points", "lot", "awarded_by")
+    list_filter = ("date",)
+    search_fields = ("club_member__first_name", "club_member__last_name", "club_member__email", "notes")
+    ordering = ("-date",)
+    raw_id_fields = ("club_member", "lot", "awarded_by")
 
 
 admin.site.register(PickupLocation, PickupLocationAdmin)
