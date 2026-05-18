@@ -4341,6 +4341,10 @@ class AuctionEditViewTests(StandardTestCase):
             "advanced_lot_adding was reset to False by AuctionEditForm even though it was not included in the form",
         )
 
+
+class AuctionCustomFieldsViewTests(StandardTestCase):
+    """Test auction edit custom field behavior"""
+
     def _custom_fields_data(self, use_custom_dropdown=False):
         data = {
             "custom_field_1": self.online_auction.custom_field_1,
