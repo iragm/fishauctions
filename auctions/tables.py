@@ -518,7 +518,7 @@ class ClubMemberHTMxTable(tables.Table):
                     icon_class,
                 )
             edit_items = format_html(
-                '<li><a class="dropdown-item" href="#"'
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
                 ' hx-get="{}" hx-target="#modals-here"'
                 ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                 '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
@@ -528,8 +528,9 @@ class ClubMemberHTMxTable(tables.Table):
                 '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
                 "{}"
                 '<li><hr class="dropdown-divider"></li>'
-                '<li><a class="dropdown-item text-danger" href="#"'
-                ' hx-get="{}" hx-target="#modals-here">'
+                '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                 '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
                 renew_confirm_url,
                 set_expiry_url,
