@@ -1849,7 +1849,6 @@ class AuctionEditForm(forms.ModelForm):
             "lot_submission_start_date",
             "lot_submission_end_date",
             "sealed_bid",
-            "use_categories",
             "promote_this_auction",
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
