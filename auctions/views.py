@@ -374,7 +374,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             member.membership_last_paid = today
     else:
         member.membership_last_paid = today
-    member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
+    if member.email:
+        member.email_address_status = "VALID"
+    member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due", "email_address_status"])
     InvoicePayment.objects.create(
         invoice=None,
         club_member=member,
@@ -11998,6 +12000,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
+        kwargs["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+        kwargs["can_manage_membership"] = self.user_has_club_permission("permission_add_edit")
         return kwargs
 
 

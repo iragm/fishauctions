@@ -945,12 +945,27 @@ class ClubMember(ContactRecord):
 
     def save(self, *args, **kwargs):
         previous_membership_last_paid = None
+        previous_email = None
         if self.pk:
-            previous_membership_last_paid = (
-                ClubMember.objects.filter(pk=self.pk).values_list("membership_last_paid", flat=True).first()
-            )
+            prev = ClubMember.objects.filter(pk=self.pk).values("membership_last_paid", "email").first()
+            if prev:
+                previous_membership_last_paid = prev["membership_last_paid"]
+                previous_email = prev["email"]
         if self.membership_last_paid != previous_membership_last_paid:
             self.membership_expiration_reminder_due = self.calculate_membership_expiration_reminder_due()
+        # Inherit email_address_status from another known record, same as AuctionTOS pattern
+        if self.email and self.email != previous_email:
+            self.email_address_status = "UNKNOWN"
+        if self.email and self.email_address_status == "UNKNOWN":
+            existing = (
+                ClubMember.objects.exclude(pk=self.pk or 0)
+                .exclude(email_address_status="UNKNOWN")
+                .filter(email=self.email, is_deleted=False)
+                .order_by("-createdon")
+                .first()
+            )
+            if existing:
+                self.email_address_status = existing.email_address_status
         if self.is_deleted:
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:

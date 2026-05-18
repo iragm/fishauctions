@@ -389,6 +389,17 @@ class LotHTMxTableForUsers(tables.Table):
         }
 
 
+_PERMISSION_BADGES = [
+    ("permission_admin", "Admin"),
+    ("permission_edit_club", "Edit club settings"),
+    ("permission_manage_auctions", "Manage auctions"),
+    ("permission_manage_bap", "Award points"),
+    ("permission_export", "Export data"),
+    ("permission_add_edit", "Manage membership"),
+    ("permission_view", "View members"),
+]
+
+
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
     name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
@@ -402,6 +413,18 @@ class ClubMemberHTMxTable(tables.Table):
         accessor="hap_points",
         verbose_name="HAP",
         orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    membership_last_paid = tables.DateColumn(
+        accessor="membership_last_paid",
+        verbose_name="Last paid",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    membership_expiration_date = tables.DateColumn(
+        accessor="membership_expiration_date",
+        verbose_name="Expires",
+        orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     source = tables.Column(
@@ -440,6 +463,14 @@ class ClubMemberHTMxTable(tables.Table):
             )
         if record.email_address_status == "VALID":
             result += format_html("<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>")
+        for field, label in _PERMISSION_BADGES:
+            if getattr(record, field, False):
+                result += format_html(
+                    " <span class='badge bg-danger' title='{}'>{}</span>",
+                    label,
+                    label,
+                )
+                break
         return result
 
     def render_actions(self, value, record):
@@ -506,13 +537,28 @@ class ClubMemberHTMxTable(tables.Table):
     class Meta:
         model = ClubMember
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("name", "bap_points", "hap_points", "source", "actions")
+        fields = (
+            "name",
+            "bap_points",
+            "hap_points",
+            "membership_last_paid",
+            "membership_expiration_date",
+            "source",
+            "actions",
+        )
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
-        super().__init__(*args, **kwargs)
+        can_manage_bap = kwargs.pop("can_manage_bap", False)
+        can_manage_membership = kwargs.pop("can_manage_membership", False)
+        exclude = list(kwargs.pop("exclude", None) or [])
+        if not can_manage_bap:
+            exclude += ["bap_points", "hap_points"]
+        if not can_manage_membership:
+            exclude += ["membership_last_paid", "membership_expiration_date"]
+        super().__init__(*args, exclude=exclude, **kwargs)
 
 
 class ClubHistoryHTMxTable(tables.Table):
