@@ -369,11 +369,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             "email": user.email,
             "source": "membership_payment",
         }
-    member, _ = ClubMember.objects.get_or_create(
-        club=club,
-        user=user,
-        defaults=member_defaults,
-    )
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member:
+        member = ClubMember.objects.create(club=club, user=user, **member_defaults)
     old_paid = member.membership_last_paid
     today = timezone.now().date()
     if club.membership_system == "rolling" and old_paid:
