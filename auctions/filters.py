@@ -1024,7 +1024,7 @@ class ClubMemberFilter(django_filters.FilterSet):
                 status_filter = "current"
             elif token == "expired":
                 status_filter = "expired"
-            elif token in ("joined", "website"):
+            elif token in ("joined", "website", "navbar"):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
                 source_filter = "manually_added"

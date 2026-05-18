@@ -471,13 +471,16 @@ class ClubMemberHTMxTable(tables.Table):
                     label,
                 )
                 break
-        if record.discord_username:
-            result += format_html(
-                " <span class='badge bg-secondary' title='Discord account linked'>"
-                "<i class='bi bi-discord me-1'></i>{}</span>",
-                record.discord_username,
-            )
         return result
+
+    _SOURCE_LABELS = {
+        "joined": "Navbar brand",
+        "discord": "Discord",
+        "manually_added": "Manual",
+    }
+
+    def render_source(self, value, record):
+        return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
         if not self.can_add_edit and not self.can_manage_permissions:

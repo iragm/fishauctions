@@ -20,7 +20,6 @@ from .models import (
     Category,
     Club,
     ClubAPIKey,
-    ClubAPIKeyFieldMap,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -333,6 +332,14 @@ class ClubDiscordRoleInline(admin.TabularInline):
     readonly_fields = ("createdon",)
 
 
+class ClubAPIKeyInline(admin.TabularInline):
+    model = ClubAPIKey
+    extra = 0
+    fields = ("name", "prefix", "is_active", "created_at", "last_used_at")
+    readonly_fields = ("prefix", "created_at", "last_used_at")
+    show_change_link = True
+
+
 class ClubAdmin(admin.ModelAdmin):
     model = Club
     list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
@@ -354,6 +361,7 @@ class ClubAdmin(admin.ModelAdmin):
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
+        ClubAPIKeyInline,
     ]
     actions = [export_to_csv]
 
@@ -787,23 +795,8 @@ class ClubMemberAdmin(admin.ModelAdmin):
     list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
     search_fields = ("first_name", "last_name", "email", "user__email", "user__username")
     list_filter = ("club", "source", "is_deleted")
+    readonly_fields = ("user", "club", "discord_roles", "added_by", "possible_duplicate", "membership_expiration_date")
     actions = [export_to_csv]
-
-
-class ClubDiscordRoleAdmin(admin.ModelAdmin):
-    model = ClubDiscordRole
-    list_display = (
-        "role_name",
-        "role_id",
-        "is_paid_role",
-        "is_unpaid_role",
-        "bap_points_for_role",
-        "hap_points_for_role",
-        "club",
-        "createdon",
-    )
-    list_filter = ("is_paid_role", "is_unpaid_role", "club")
-    search_fields = ("role_name", "role_id", "club__name")
 
 
 class ClubHistoryAdmin(admin.ModelAdmin):
@@ -815,19 +808,4 @@ class ClubHistoryAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ClubMember, ClubMemberAdmin)
-
-admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
-
-
-class ClubAPIKeyFieldMapInline(admin.TabularInline):
-    model = ClubAPIKeyFieldMap
-    extra = 0
-
-
-@admin.register(ClubAPIKey)
-class ClubAPIKeyAdmin(admin.ModelAdmin):
-    list_display = ["name", "club", "prefix", "is_active", "created_at", "last_used_at"]
-    list_filter = ["is_active", "club"]
-    readonly_fields = ["prefix", "key_hash", "created_at", "last_used_at"]
-    inlines = [ClubAPIKeyFieldMapInline]

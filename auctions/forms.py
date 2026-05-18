@@ -3722,6 +3722,8 @@ class ClubMemberAdminForm(forms.ModelForm):
         if read_only:
             for field in self.fields.values():
                 field.disabled = True
+                if hasattr(field.widget, "attrs"):
+                    field.widget.attrs["style"] = "color: inherit; -webkit-text-fill-color: currentColor; opacity: 1;"
             self.helper.layout = Layout(
                 *base_fields,
                 Div(
