@@ -4267,7 +4267,11 @@ class AuctionEditViewTests(StandardTestCase):
             # use_categories intentionally omitted — it should not be touched by AuctionEditForm
         }
         response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
-        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
         self.online_auction.refresh_from_db()
         self.assertTrue(
             self.online_auction.use_categories,
@@ -4300,7 +4304,11 @@ class AuctionEditViewTests(StandardTestCase):
             # sealed_bid intentionally omitted — it should not be touched by AuctionEditForm
         }
         response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
-        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
         self.online_auction.refresh_from_db()
         self.assertTrue(
             self.online_auction.sealed_bid,
@@ -4335,7 +4343,11 @@ class AuctionEditViewTests(StandardTestCase):
             # advanced_lot_adding intentionally omitted — it should not be touched by AuctionEditForm
         }
         response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=False)
-        self.assertEqual(response.status_code, 302, f"Form was not saved: {response.context['form'].errors if response.context else ''}")
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
         self.in_person_auction.refresh_from_db()
         self.assertTrue(
             self.in_person_auction.advanced_lot_adding,
