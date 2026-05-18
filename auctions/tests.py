@@ -14457,6 +14457,357 @@ class ClubViewTests(TestCase):
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
 
 
+class ClubPermissionTests(TestCase):
+    """Verify that each club permission level grants exactly the right access.
+
+    Three user categories are tested for each view:
+    - non_member: authenticated but has no ClubMember record
+    - Various specific-permission members (view_user, add_edit_user, etc.)
+    - admin_user: ClubMember with permission_admin=True (wildcard)
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(
+            name="Permission Test Club",
+            allow_joining=True,
+            enable_club_page=True,
+            enable_breeder_award_program=True,
+        )
+        self.non_member = User.objects.create_user(
+            username="perm_non_member", password="testpass", email="perm_non@example.com"
+        )
+        self.view_user = User.objects.create_user(
+            username="perm_view", password="testpass", email="perm_view@example.com"
+        )
+        self.add_edit_user = User.objects.create_user(
+            username="perm_add_edit", password="testpass", email="perm_add_edit@example.com"
+        )
+        self.export_user = User.objects.create_user(
+            username="perm_export", password="testpass", email="perm_export@example.com"
+        )
+        self.edit_club_user = User.objects.create_user(
+            username="perm_edit_club", password="testpass", email="perm_edit_club@example.com"
+        )
+        self.bap_user = User.objects.create_user(
+            username="perm_bap", password="testpass", email="perm_bap@example.com"
+        )
+        self.admin_user = User.objects.create_user(
+            username="perm_admin", password="testpass", email="perm_admin@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.view_user, first_name="View", permission_view=True)
+        ClubMember.objects.create(
+            club=self.club, user=self.add_edit_user, first_name="AddEdit", permission_add_edit=True
+        )
+        ClubMember.objects.create(club=self.club, user=self.export_user, first_name="Export", permission_export=True)
+        ClubMember.objects.create(
+            club=self.club, user=self.edit_club_user, first_name="EditClub", permission_edit_club=True
+        )
+        ClubMember.objects.create(club=self.club, user=self.bap_user, first_name="Bap", permission_manage_bap=True)
+        ClubMember.objects.create(club=self.club, user=self.admin_user, first_name="Admin", permission_admin=True)
+        self.target_member = ClubMember.objects.create(
+            club=self.club, first_name="Target", last_name="Member", email="target@example.com"
+        )
+
+    def _login(self, user):
+        self.client.login(username=user.username, password="testpass")
+
+    # --- Anonymous access ---
+
+    def test_anonymous_redirected_from_club_admin(self):
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_club_edit(self):
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_club_history(self):
+        url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_renew_page(self):
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_bap_settings(self):
+        url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_bap_lots(self):
+        url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    # --- Non-member access ---
+
+    def test_non_member_blocked_from_club_admin(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_edit(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_history(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_renew_page(self):
+        self._login(self.non_member)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_bap_settings(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_bap_lots(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_member_permissions_view(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_csv_export(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_membership_settings(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_view ---
+
+    def test_view_only_can_access_admin_panel(self):
+        """A view-only member can see the member list"""
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_can_access_history(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_blocked_from_club_edit(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_renew_page(self):
+        self._login(self.view_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_bap_settings(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_csv_export(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_member_permissions_view(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_add_edit implicitly grants permission_view ---
+
+    def test_add_edit_implicitly_can_access_admin_panel(self):
+        """A member with add_edit but not view should still see the admin panel"""
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_edit_can_access_renew_page(self):
+        self._login(self.add_edit_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_edit_blocked_from_club_edit(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_bap_settings(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_csv_export(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_member_permissions_view(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_export ---
+
+    def test_export_can_export_csv(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_export_implicitly_can_access_admin_panel(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_export_blocked_from_club_edit(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_edit_club ---
+
+    def test_edit_club_can_access_club_edit(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_can_access_membership_settings(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_implicitly_can_access_admin_panel(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_blocked_from_bap_settings(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_club_blocked_from_renew_page(self):
+        self._login(self.edit_club_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_club_blocked_from_member_permissions_view(self):
+        """permission_edit_club does not grant permission_admin (needed for permissions view)"""
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_manage_bap ---
+
+    def test_bap_user_can_access_bap_lots(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_can_access_bap_settings(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_implicitly_can_access_admin_panel(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_blocked_from_club_edit(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_user_blocked_from_renew_page(self):
+        self._login(self.bap_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_bap_user_blocked_from_bap_lots(self):
+        """A member with view-only access cannot see BAP lots"""
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_admin (wildcard) ---
+
+    def test_admin_can_access_all_views(self):
+        self._login(self.admin_user)
+        for url_name, kwargs in [
+            ("club_admin", {"slug": self.club.slug}),
+            ("club_edit", {"slug": self.club.slug}),
+            ("club_history", {"slug": self.club.slug}),
+            ("club_membership_settings", {"slug": self.club.slug}),
+            ("club_bap_settings", {"slug": self.club.slug}),
+            ("club_bap_lots", {"slug": self.club.slug}),
+            ("club_member_export", {"slug": self.club.slug}),
+            ("club_member_renew_page", {"slug": self.club.slug, "pk": self.target_member.pk}),
+            ("clubmember_permissions", {"pk": self.target_member.pk}),
+        ]:
+            url = reverse(url_name, kwargs=kwargs)
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, f"{url_name} should be 200 for admin, got {response.status_code}")
+
+    def test_admin_can_set_member_permissions(self):
+        """Only permission_admin members can change other members' permissions"""
+        self._login(self.admin_user)
+        url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_renew_page_updates_membership_date(self):
+        """Admin can renew a membership via the dedicated renew page"""
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.post(url, {"membership_last_paid": "2026-01-15"})
+        self.assertEqual(response.status_code, 302)
+        self.target_member.refresh_from_db()
+        self.assertEqual(str(self.target_member.membership_last_paid), "2026-01-15")
+
+    def test_renew_page_post_non_member_gets_403(self):
+        """Non-member cannot POST to the renew page"""
+        self._login(self.non_member)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.post(url, {"membership_last_paid": "2026-01-15"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_cross_club_renew_page_returns_404(self):
+        """A member from another club cannot renew a member that doesn't belong to their club"""
+        other_club = Club.objects.create(name="Other Club")
+        ClubMember.objects.create(club=other_club, user=self.admin_user, first_name="Admin", permission_admin=True)
+        url = reverse("club_member_renew_page", kwargs={"slug": other_club.slug, "pk": self.target_member.pk})
+        self._login(self.admin_user)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
 class ClubMemberUpdateTests(TestCase):
     """Tests for club member self-service update and CSV import/export"""
 

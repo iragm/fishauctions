@@ -284,6 +284,9 @@ def check_club_permission(user, club, permission_name):
 
     Returns True if the user is a superuser or has the named permission (or permission_admin,
     which acts as a wildcard granting all permissions).
+
+    permission_view is implicitly granted to any member who holds any other permission,
+    since every admin role needs to be able to see the member list.
     """
     if not user.is_authenticated:
         return False
@@ -293,6 +296,8 @@ def check_club_permission(user, club, permission_name):
     if not member:
         return False
     if member.permission_admin:
+        return True
+    if permission_name == "permission_view" and member.has_any_permission:
         return True
     return bool(getattr(member, permission_name, False))
 
@@ -12871,6 +12876,11 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
             return next_url
         return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["current_user"] = self.request.user
+        return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

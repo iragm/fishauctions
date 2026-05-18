@@ -3561,6 +3561,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         }
 
     def __init__(self, *args, **kwargs):
+        current_user = kwargs.pop("current_user", None)
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -3597,12 +3598,23 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             paypal_user_ids = set()
             square_user_ids = set()
             payment_user_qs = User.objects.none()
-        payment_help = mark_safe(
-            "Payments are sent to this user's connected account. "
-            f'You can connect <a href="{reverse("paypal_connect")}">PayPal</a> or '
-            f'<a href="{reverse("square_connect")}">Square</a> to take payments '
-            "(if enabled for the current user)."
+        paypal_available = current_user and (
+            PayPalSeller.objects.filter(user=current_user).exists()
+            or (current_user.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET)
         )
+        square_available = current_user and SquareSeller.objects.filter(user=current_user).exists()
+        if paypal_available or square_available:
+            connect_parts = []
+            if paypal_available:
+                connect_parts.append(f'<a href="{reverse("paypal_connect")}">PayPal</a>')
+            if square_available:
+                connect_parts.append(f'<a href="{reverse("square_connect")}">Square</a>')
+            payment_help = mark_safe(
+                "Payments are sent to this user's connected account. "
+                f'You can connect {" or ".join(connect_parts)} to take payments '
+            )
+        else:
+            payment_help = "Payments are not enabled for your account."
         self.fields["payment_user"] = _PaymentUserChoiceField(
             queryset=payment_user_qs,
             paypal_ids=paypal_user_ids,
