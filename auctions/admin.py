@@ -812,7 +812,6 @@ class ClubMemberAdmin(admin.ModelAdmin):
         "added_by",
         "possible_duplicate",
         "membership_expiration_date",
-        "membership_expiration_reminder_due",
     )
     actions = [export_to_csv]
 

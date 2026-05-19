@@ -344,7 +344,7 @@ def _ensure_invoice_renewal_state(invoice):
         invoice.save(update_fields=["renewal_needed"])
 
 
-def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice"):
+def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
     if not invoice or not invoice.renewal_needed or invoice.renewal_processed:
         return
     club = invoice.club or (invoice.auction.club if invoice.auction else None)
@@ -404,10 +404,18 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     )
     invoice.renewal_processed = True
     invoice.save(update_fields=["renewal_processed"])
+    payer_email = (
+        (invoice.buyer.email if invoice.buyer else None)
+        or (invoice.auctiontos_user.email if invoice.auctiontos_user else None)
+        or ""
+    )
+    id_suffix = f" (ID: {external_id})" if external_id else ""
+    payer_prefix = f"User {payer_email} " if payer_email else ""
+    action = f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{id_suffix}"
     ClubHistory.objects.create(
         club=club,
         user=acting_user,
-        action=f"Renewed membership for {member.display_name} from invoice #{invoice.pk}",
+        action=action,
         applies_to="MEMBERSHIP",
     )
 
@@ -8346,7 +8354,7 @@ class PayPalAPIMixin:
         if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             invoice.status = "PAID"
             invoice.save()
-            _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+            _process_invoice_membership_renewal(invoice, payment_method="PayPal", external_id=payment.external_id)
             if invoice.auction and invoice.auctiontos_user:
                 invoice.auction.create_history(
                     applies_to="INVOICES",
@@ -11876,7 +11884,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
                             invoice.save()
-                            _process_invoice_membership_renewal(invoice, payment_method="Square")
+                            _process_invoice_membership_renewal(
+                                invoice, payment_method="Square", external_id=payment_id
+                            )
 
                             # Send websocket notification for payment completion
                             channel_layer = channels.layers.get_channel_layer()

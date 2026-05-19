@@ -997,7 +997,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, source...",
+                "placeholder": "Filter by name, email, source, expired, expiring, never paid...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1012,7 +1012,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         fields = []
 
     def clubmember_search(self, queryset, name, value):
-        """Support text search including special tokens: discord, current, expired"""
+        """Support text search including special tokens: discord, current, expired, expiring, never paid"""
         tokens = value.lower().split()
         source_filter = None
         status_filter = None
@@ -1024,6 +1024,10 @@ class ClubMemberFilter(django_filters.FilterSet):
                 status_filter = "current"
             elif token == "expired":
                 status_filter = "expired"
+            elif token in ("expiring", "soon"):
+                status_filter = "expiring"
+            elif token in ("never", "unpaid", "never_paid"):
+                status_filter = "never_paid"
             elif token in ("joined", "website", "navbar"):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
@@ -1033,15 +1037,19 @@ class ClubMemberFilter(django_filters.FilterSet):
 
         if source_filter:
             queryset = queryset.filter(source=source_filter)
-        membership_validity_days = 365
-        if status_filter in ("current", "expired"):
-            one_year_ago = timezone.now().date() - datetime.timedelta(days=membership_validity_days)
+        if status_filter:
+            today = timezone.now().date()
             if status_filter == "current":
-                queryset = queryset.filter(membership_last_paid__gte=one_year_ago)
-            else:
+                queryset = queryset.filter(membership_expiration_date__gte=today)
+            elif status_filter == "expired":
                 queryset = queryset.filter(
-                    Q(membership_last_paid__lt=one_year_ago) | Q(membership_last_paid__isnull=True)
+                    Q(membership_expiration_date__lt=today) | Q(membership_expiration_date__isnull=True)
                 )
+            elif status_filter == "expiring":
+                soon = today + datetime.timedelta(days=30)
+                queryset = queryset.filter(membership_expiration_date__gte=today, membership_expiration_date__lte=soon)
+            elif status_filter == "never_paid":
+                queryset = queryset.filter(membership_expiration_date__isnull=True)
 
         text = " ".join(remaining)
         if text:

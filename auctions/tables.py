@@ -421,10 +421,10 @@ class ClubMemberHTMxTable(tables.Table):
         orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    membership_expiration_date = tables.DateColumn(
+    membership_expiration_date = tables.Column(
         accessor="membership_expiration_date",
         verbose_name="Expires",
-        orderable=False,
+        orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     source = tables.Column(
@@ -472,6 +472,23 @@ class ClubMemberHTMxTable(tables.Table):
                 )
                 break
         return result
+
+    def render_membership_expiration_date(self, value):
+        from django.utils import timezone
+
+        if not value:
+            return "—"
+        today = timezone.now().date()
+        formatted = value.strftime("%b %-d, %Y")
+        days_expired = (today - value).days
+        if days_expired > 0:
+            return format_html(
+                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>",
+                formatted,
+                days_expired,
+                "s" if days_expired != 1 else "",
+            )
+        return formatted
 
     _SOURCE_LABELS = {
         "discord": "Discord",
