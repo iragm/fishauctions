@@ -14543,7 +14543,7 @@ class ClubPermissionTests(TestCase):
         self.assertIn("/login", response["Location"])
 
     def test_anonymous_redirected_from_bap_lots(self):
-        url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
+        url = reverse("club_bap", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
@@ -14578,7 +14578,7 @@ class ClubPermissionTests(TestCase):
 
     def test_non_member_blocked_from_bap_lots(self):
         self._login(self.non_member)
-        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        response = self.client.get(reverse("club_bap", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
     def test_non_member_blocked_from_member_permissions_view(self):
@@ -14764,7 +14764,7 @@ class ClubPermissionTests(TestCase):
             ("club_history", {"slug": self.club.slug}),
             ("club_membership_settings", {"slug": self.club.slug}),
             ("club_bap_settings", {"slug": self.club.slug}),
-            ("club_bap_lots", {"slug": self.club.slug}),
+            ("club_bap", {"slug": self.club.slug}),
             ("club_member_export", {"slug": self.club.slug}),
             ("club_member_renew_page", {"slug": self.club.slug, "pk": self.target_member.pk}),
             ("clubmember_permissions", {"pk": self.target_member.pk}),
@@ -15740,55 +15740,6 @@ class ClubBapLotsViewTests(TestCase):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
-
-
-class ClubBapRecalculateViewTests(TestCase):
-    """Tests for ClubBapRecalculateView (POST-only, triggers Celery task scheduling)."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(
-            username="bap_recalc_owner", password="testpass", email="bap_recalc_owner@example.com"
-        )
-        self.club = Club.objects.create(name="BAP Recalc Club", enable_breeder_award_program=True)
-        self.bap_user = User.objects.create_user(
-            username="bap_recalc_user", password="testpass", email="bap_recalc_user@example.com"
-        )
-        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user, permission_manage_bap=True)
-        self.plain_user = User.objects.create_user(
-            username="bap_recalc_plain", password="testpass", email="bap_recalc_plain@example.com"
-        )
-        ClubMember.objects.create(club=self.club, user=self.plain_user)
-        self.url = reverse("club_bap_recalculate", kwargs={"slug": self.club.slug})
-
-    def test_anon_redirected_to_login(self):
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("login", response["Location"])
-
-    def test_plain_member_gets_403(self):
-        self.client.login(username="bap_recalc_plain", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 403)
-
-    def test_bap_disabled_returns_404(self):
-        self.club.enable_breeder_award_program = False
-        self.club.save()
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 404)
-
-    @patch("auctions.tasks.schedule_bap_recalculation")
-    def test_bap_admin_can_trigger_recalculate(self, mock_schedule):
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 302)
-        mock_schedule.assert_called_once_with(self.club.pk)
-
-    @patch("auctions.tasks.schedule_bap_recalculation")
-    def test_redirects_to_bap_lots_after_recalculate(self, mock_schedule):
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertRedirects(response, reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
 
 
 class ClubAPIKeyModelTests(TestCase):

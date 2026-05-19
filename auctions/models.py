@@ -5864,6 +5864,44 @@ class BapAward(models.Model):
         pts = ", ".join(parts) if parts else "0"
         return f"{pts} pts for {self.club_member} on {self.date}"
 
+    @staticmethod
+    def recalculate_member_points(member):
+        """Recalculate and persist all-time and YTD BAP/HAP/CAP totals for a club member."""
+        from django.utils import timezone
+
+        this_year = timezone.now().year
+        awards = BapAward.objects.filter(club_member=member).exclude(lot__is_deleted=True).exclude(lot__banned=True)
+        bap = hap = cap = bap_ytd = hap_ytd = cap_ytd = 0
+        for a in awards:
+            is_ytd = a.date.year == this_year
+            bap += a.points
+            hap += a.hap_points
+            cap += a.cap_points
+            if is_ytd:
+                bap_ytd += a.points
+                hap_ytd += a.hap_points
+                cap_ytd += a.cap_points
+        ClubMember.objects.filter(pk=member.pk).update(
+            bap_points=bap,
+            hap_points=hap,
+            culture_points=cap,
+            bap_points_ytd=bap_ytd,
+            hap_points_ytd=hap_ytd,
+            culture_points_ytd=cap_ytd,
+        )
+        member.refresh_from_db()
+        member.maybe_assign_discord_role()
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        BapAward.recalculate_member_points(self.club_member)
+
+    def delete(self, *args, **kwargs):
+        member = self.club_member
+        result = super().delete(*args, **kwargs)
+        BapAward.recalculate_member_points(member)
+        return result
+
 
 class Invoice(models.Model):
     """

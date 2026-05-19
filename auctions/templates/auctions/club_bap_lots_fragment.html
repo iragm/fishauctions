@@ -1,0 +1,74 @@
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+
+<div class="d-flex align-items-start gap-2 mt-2 mb-2 flex-wrap">
+  <form id="lots-filter-form" class="flex-grow-1" method="get">
+    {% crispy filter.form %}
+  </form>
+  <span class="dropdown mt-1">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-filter"></i> Filters
+    </button>
+    <div class="dropdown-menu dropdown-menu-end" style="min-width:12rem">
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending approval
+      </label>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_approved"> Approved
+      </label>
+    </div>
+  </span>
+</div>
+
+<div id="lots-table-container"
+     hx-get="{% url 'club_bap_lots' club.slug %}"
+     hx-trigger="bapLotListChanged from:body"
+     hx-swap="outerHTML">
+  {% render_table table %}
+</div>
+
+<script>
+(function () {
+  function syncCheckboxesFromQuery() {
+    var val = (document.getElementById('id_query') || {}).value || '';
+    var tokens = val.toLowerCase().split(/\s+/);
+    document.getElementById('checkbox_pending').checked = tokens.indexOf('pending') !== -1;
+    document.getElementById('checkbox_approved').checked = tokens.indexOf('approved') !== -1;
+  }
+
+  function updateQueryKeyword(keyword, add) {
+    var el = document.getElementById('id_query');
+    if (!el) return;
+    var val = el.value;
+    ['pending', 'approved'].forEach(function (kw) {
+      val = val.replace(new RegExp('(^|\\s)' + kw + '(?=\\s|$)', 'g'), ' ');
+    });
+    val = val.trim();
+    if (add) val = (val ? val + ' ' : '') + keyword;
+    el.value = val.trim();
+    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  var qInput = document.getElementById('id_query');
+  if (qInput) {
+    qInput.addEventListener('blur', syncCheckboxesFromQuery);
+    syncCheckboxesFromQuery();
+  }
+
+  var pending = document.getElementById('checkbox_pending');
+  var approved = document.getElementById('checkbox_approved');
+  if (pending) {
+    pending.addEventListener('change', function () {
+      if (this.checked && approved) approved.checked = false;
+      updateQueryKeyword('pending', this.checked);
+    });
+  }
+  if (approved) {
+    approved.addEventListener('change', function () {
+      if (this.checked && pending) pending.checked = false;
+      updateQueryKeyword('approved', this.checked);
+    });
+  }
+})();
+</script>

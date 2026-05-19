@@ -3,7 +3,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionHistory, AuctionTOS, ClubHistory, ClubMember, Lot
+from .models import Auction, AuctionHistory, AuctionTOS, BapAward, ClubHistory, ClubMember, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -659,6 +659,65 @@ class ClubHistoryHTMxTable(tables.Table):
         super().__init__(*args, **kwargs)
 
 
+class BapAwardHTMxTable(tables.Table):
+    """Table of BapAward records for the club BAP awards tab."""
+
+    hide_string = "d-md-table-cell d-none"
+
+    member = tables.Column(accessor="club_member", verbose_name="Member", orderable=True)
+    date = tables.Column(verbose_name="Date", orderable=True)
+    points = tables.Column(verbose_name="BAP", orderable=True)
+    hap_points = tables.Column(verbose_name="HAP", orderable=True)
+    cap_points = tables.Column(verbose_name="CAP", orderable=True)
+    lot_name = tables.Column(accessor="lot", verbose_name="Lot", orderable=False)
+    notes = tables.Column(
+        verbose_name="Notes",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+
+    _MODAL_ATTRS = (
+        'hx-target="#modals-here" hx-trigger="click" '
+        '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"'
+    )
+
+    def _edit_link(self, record, content):
+        url = reverse("bapaward_admin", kwargs={"pk": record.pk})
+        return format_html('<a hx-get="{}" {}>{}</a>', url, mark_safe(self._MODAL_ATTRS), content)
+
+    def render_member(self, value, record):
+        return self._edit_link(record, str(value))
+
+    def render_date(self, value, record):
+        return self._edit_link(record, value.strftime("%b %-d, %Y"))
+
+    def render_lot_name(self, value, record):
+        if value:
+            return format_html('<a href="{}" target="_blank">{}</a>', value.lot_link, value.lot_name)
+        return "—"
+
+    def render_notes(self, value, record):
+        if not value:
+            return "—"
+        if len(value) > 60:
+            return format_html('<span title="{}">{}&hellip;</span>', value, value[:60])
+        return value
+
+    class Meta:
+        model = BapAward
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("member", "date", "points", "hap_points", "cap_points", "lot_name", "notes")
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)
+        if self.club:
+            if not self.club.separate_hap:
+                self.columns.hide("hap_points")
+            if not self.club.separate_cap:
+                self.columns.hide("cap_points")
+
+
 class ClubBapLotHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
 
@@ -671,9 +730,34 @@ class ClubBapLotHTMxTable(tables.Table):
     bap_points_awarded = tables.Column(verbose_name="Points", orderable=True)
     status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
 
+    _MODAL_ATTRS = (
+        'hx-target="#modals-here" hx-trigger="click" '
+        '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"'
+    )
+
+    def _modal_url(self, record):
+        award = getattr(record, "bap_award", None)
+        if award:
+            return reverse("bapaward_admin", kwargs={"pk": award.pk})
+        slug = record.auction.club.slug if record.auction and record.auction.club_id else None
+        if slug:
+            return reverse("bapaward_create", kwargs={"slug": slug}) + f"?lot_pk={record.pk}"
+        return None
+
     def render_lot_name(self, value, record):
-        url = record.lot_link
-        return format_html('<a href="{}" target="_blank">{}</a>', url, value)
+        lot_url = record.lot_link
+        modal_url = self._modal_url(record)
+        if modal_url:
+            return format_html(
+                '<a href="{}" target="_blank">{}</a> '
+                '<a hx-get="{}" {} class="text-secondary ms-1" title="Award points">'
+                '<i class="bi bi-pencil-square"></i></a>',
+                lot_url,
+                value,
+                modal_url,
+                mark_safe(self._MODAL_ATTRS),
+            )
+        return format_html('<a href="{}" target="_blank">{}</a>', lot_url, value)
 
     def render_seller(self, value, record):
         if value:
@@ -692,25 +776,25 @@ class ClubBapLotHTMxTable(tables.Table):
 
     def render_bap_points_awarded(self, value, record):
         award = getattr(record, "bap_award", None)
+        modal_url = self._modal_url(record)
         if award:
             placeholder = record.bap_placeholder
             if placeholder == "HAP":
-                display_value = award.hap_points
+                display = f"{award.hap_points} HAP"
             elif placeholder == "Culture":
-                display_value = award.cap_points
+                display = f"{award.cap_points} CAP"
             else:
-                display_value = award.points
+                display = f"{award.points} BAP"
         else:
-            display_value = value or ""
-        url = reverse("lot_bap_points", kwargs={"pk": record.pk})
-        return format_html(
-            '<input type="text" value="{}" placeholder="{}" class="form-control form-control-sm d-inline-block"'
-            ' style="width:70px;" data-lot-pk="{}" data-url="{}" onchange="saveBapPoints(this)">',
-            display_value,
-            record.bap_placeholder,
-            record.pk,
-            url,
-        )
+            display = record.bap_placeholder
+        if modal_url:
+            return format_html(
+                '<a hx-get="{}" {}>{}</a>',
+                modal_url,
+                mark_safe(self._MODAL_ATTRS),
+                display,
+            )
+        return display
 
     def render_status(self, value, record):
         award = getattr(record, "bap_award", None)

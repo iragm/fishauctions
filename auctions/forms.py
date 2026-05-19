@@ -32,6 +32,7 @@ from .models import (
     Auction,
     AuctionDropdown,
     AuctionTOS,
+    BapAward,
     Bid,
     Category,
     ChatSubscription,
@@ -3670,6 +3671,68 @@ class ClubBapSettingsForm(forms.ModelForm):
             ),
         )
         self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
+
+
+class BapAwardForm(forms.ModelForm):
+    """Form for club BAP admins to create or edit a BapAward record."""
+
+    class Meta:
+        model = BapAward
+        fields = ["club_member", "date", "points", "hap_points", "cap_points", "notes"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "notes": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def __init__(
+        self, *args, post_url=None, delete_url=None, club=None, show_hap=False, show_cap=False, lot=None, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        if club:
+            self.fields["club_member"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).order_by(
+                "last_name", "first_name"
+            )
+        if not self.instance.pk and not self.initial.get("date"):
+            self.fields["date"].initial = timezone.now().date()
+        self.fields["points"].label = "BAP points"
+        self.fields["hap_points"].label = "HAP points"
+        self.fields["cap_points"].label = "CAP points"
+        if not show_hap:
+            del self.fields["hap_points"]
+        if not show_cap:
+            del self.fields["cap_points"]
+
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        layout_fields = list(self.fields.keys())
+        if lot:
+            layout_fields = [
+                HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')
+            ] + layout_fields
+        if delete_url:
+            footer = Div(
+                HTML(
+                    f'<button hx-post="{delete_url}" hx-target="#modals-here" hx-confirm="Delete this award?" type="button" class="btn btn-danger btn-sm">Delete</button>'
+                ),
+                HTML(
+                    '<button type="button" class="btn btn-secondary btn-sm ms-auto" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
+                ),
+                css_class="modal-footer px-0 d-flex",
+            )
+        elif post_url:
+            footer = Div(
+                HTML('<button type="button" class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>'),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
+                ),
+                css_class="modal-footer px-0",
+            )
+        else:
+            footer = None
+        self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
 
 
 class ClubMemberAdminForm(forms.ModelForm):

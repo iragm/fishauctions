@@ -107,6 +107,7 @@ from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
     AuctionTOSFilter,
+    BapAwardFilter,
     ClubBapLotFilter,
     ClubHistoryFilter,
     ClubMemberFilter,
@@ -125,6 +126,7 @@ from .forms import (
     AuctionNoShowForm,
     AuctionTOSMergeReviewForm,
     AuctionTOSMergeTargetForm,
+    BapAwardForm,
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
@@ -210,6 +212,7 @@ from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
     AuctionTOSHTMxTable,
+    BapAwardHTMxTable,
     ClubBapLotHTMxTable,
     ClubHistoryHTMxTable,
     ClubMemberHTMxTable,
@@ -13097,8 +13100,48 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
+class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """Main BAP admin page — awarded points tab."""
+
+    active_tab = "bap"
+    model = BapAward
+    table_class = BapAwardHTMxTable
+    filterset_class = BapAwardFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        if not self.club.enable_breeder_award_program:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return (
+            BapAward.objects.filter(club_member__club=self.club, club_member__is_deleted=False)
+            .select_related("club_member", "lot")
+            .order_by("-date")
+        )
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_bap.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["club"] = self.club
+        return kwargs
+
+
 class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
-    """HTMx table of lots from this club's auctions for BAP admins to review and approve."""
+    """Lots tab of the BAP admin page — all lots sold in this club's auctions."""
 
     active_tab = "bap"
     model = Lot
@@ -13114,24 +13157,24 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        cutoff = timezone.now() - timedelta(days=365)
         return (
-            Lot.objects.filter(auction__club=self.club, date_end__gte=cutoff, is_deleted=False)
-            .select_related("auctiontos_seller__user", "auction", "species_category")
+            Lot.objects.filter(auction__club=self.club, is_deleted=False)
+            .select_related("auctiontos_seller__user", "auction__club", "species_category")
             .prefetch_related("bap_award")
             .order_by("-date_end")
         )
 
     def get_template_names(self):
         if self.request.htmx:
-            return "tables/table_generic.html"
+            hx_target = self.request.headers.get("HX-Target", "")
+            if hx_target == "lots-table-container":
+                return "tables/table_generic.html"
+            return "auctions/club_bap_lots_fragment.html"
         return "auctions/club_bap_lots.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
-        context["last_run"] = self.club.last_bap_recalculation
-        context["next_run"] = self.club.next_bap_recalculation
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -13140,20 +13183,229 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return kwargs
 
 
-class ClubBapRecalculateView(LoginRequiredMixin, ClubViewMixin, View):
-    """POST-only endpoint to trigger a BAP points recalculation Celery task for a club."""
+class BapAwardAdminView(APIView):
+    """HTMX modal for creating or editing a BapAward."""
 
-    def post(self, request, *args, **kwargs):
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_club_and_award(self, request, slug=None, pk=None):
+        if pk:
+            award = get_object_or_404(BapAward, pk=pk)
+            club = award.club_member.club
+        else:
+            award = None
+            club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_manage_bap"):
+            raise PermissionDenied()
+        return club, award
+
+    @staticmethod
+    def _lot_initial(lot, club):
+        initial = {}
+        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
+        member = None
+        if seller_user:
+            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member and seller_email:
+            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+        if member:
+            initial["club_member"] = member
+        if lot.date_end:
+            initial["date"] = lot.date_end.date()
+        points = club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 0)
+        placeholder = lot.bap_placeholder
+        if placeholder == "HAP":
+            initial["hap_points"] = points
+        elif placeholder == "Culture":
+            initial["cap_points"] = points
+        else:
+            initial["points"] = points
+        return initial
+
+    def _build_form(self, request_data=None, *, club, award, lot, post_url, delete_url=None):
+        kwargs = {
+            "post_url": post_url,
+            "delete_url": delete_url,
+            "club": club,
+            "show_hap": club.separate_hap,
+            "show_cap": club.separate_cap,
+            "lot": lot if not award else None,
+        }
+        if request_data is not None:
+            return BapAwardForm(request_data, instance=award, **kwargs)
+        if award:
+            return BapAwardForm(instance=award, **kwargs)
+        return BapAwardForm(initial=self._lot_initial(lot, club) if lot else {}, **kwargs)
+
+    def _build_context(self, club, award, form):
+        title = f"Edit award for {award.club_member}" if award else f"Add points — {club.name}"
+        return {"modal_title": title, "form": form}
+
+    def get(self, request, slug=None, pk=None):
+        club, award = self._get_club_and_award(request, slug=slug, pk=pk)
+        lot = None
+        if not award:
+            lot_pk = request.GET.get("lot_pk")
+            if lot_pk:
+                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        post_url = (
+            reverse("bapaward_admin", kwargs={"pk": award.pk})
+            if award
+            else reverse("bapaward_create", kwargs={"slug": club.slug}) + (f"?lot_pk={lot.pk}" if lot else "")
+        )
+        delete_url = reverse("bapaward_delete", kwargs={"pk": award.pk}) if award else None
+        form = self._build_form(club=club, award=award, lot=lot, post_url=post_url, delete_url=delete_url)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
+
+    def post(self, request, slug=None, pk=None):
+        club, award = self._get_club_and_award(request, slug=slug, pk=pk)
+        lot = None
+        if not award:
+            lot_pk = request.GET.get("lot_pk")
+            if lot_pk:
+                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        post_url = (
+            reverse("bapaward_admin", kwargs={"pk": award.pk})
+            if award
+            else reverse("bapaward_create", kwargs={"slug": club.slug}) + (f"?lot_pk={lot.pk}" if lot else "")
+        )
+        delete_url = reverse("bapaward_delete", kwargs={"pk": award.pk}) if award else None
+        form = self._build_form(request.POST, club=club, award=award, lot=lot, post_url=post_url, delete_url=delete_url)
+        if form.is_valid():
+            award_obj = form.save(commit=False)
+            award_obj.awarded_by = request.user
+            if lot and not award:
+                award_obj.lot = lot
+            award_obj.save()
+            if lot:
+                placeholder = lot.bap_placeholder
+                lot.bap_points_awarded = (
+                    award_obj.hap_points
+                    if placeholder == "HAP"
+                    else (award_obj.cap_points if placeholder == "Culture" else award_obj.points)
+                )
+                lot.manually_approved = True
+                lot.bap_auto_reason = ""
+                lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
+                applies_to="BAP",
+            )
+            return HttpResponse(
+                "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
+                "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+            )
+        return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
+
+
+class BapAwardDeleteView(APIView):
+    """HTMX endpoint to delete a BapAward and trigger table refresh."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        award = get_object_or_404(BapAward, pk=pk)
+        club = award.club_member.club
+        if not check_club_permission(request.user, club, "permission_manage_bap"):
+            raise PermissionDenied()
+        member_name = str(award.club_member)
+        lot = award.lot
+        award.delete()
+        if lot:
+            lot.bap_points_awarded = 0
+            lot.manually_approved = False
+            lot.bap_auto_reason = ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Deleted BAP award for {member_name}",
+            applies_to="BAP",
+        )
+        return HttpResponse(
+            "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
+            "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+        )
+
+
+class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create-only CSV import for BapAward records (never updates or deletes)."""
+
+    def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not self.user_has_club_permission("permission_manage_bap"):
-            return HttpResponse(status=403)
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
         if not self.club.enable_breeder_award_program:
             raise Http404
-        from auctions.tasks import schedule_bap_recalculation
+        return super().dispatch(request, *args, **kwargs)
 
-        schedule_bap_recalculation(self.club.pk)
-        messages.success(request, "Points recalculation scheduled.")
-        return redirect(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file")
+        if not csv_file:
+            messages.error(request, "No file uploaded.")
+            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+        total_added = total_skipped = 0
+        try:
+            reader = csv.DictReader(TextIOWrapper(csv_file, encoding="utf-8-sig", errors="replace"))
+            for row in reader:
+                row_lower = {k.lower().strip(): v.strip() for k, v in row.items() if k}
+                email = row_lower.get("email", "")
+                if not email:
+                    total_skipped += 1
+                    continue
+                member = ClubMember.objects.filter(club=self.club, email__iexact=email, is_deleted=False).first()
+                if not member:
+                    total_skipped += 1
+                    continue
+                bap = self._parse_int(row_lower.get("bap", ""))
+                hap = self._parse_int(row_lower.get("hap", ""))
+                cap = self._parse_int(row_lower.get("cap", ""))
+                if bap == 0 and hap == 0 and cap == 0:
+                    total_skipped += 1
+                    continue
+                notes = row_lower.get("notes", "")
+                award_date = (
+                    CSVContactImportMixin.parse_flexible_date(row_lower.get("date", "")) or timezone.now().date()
+                )
+                BapAward.objects.create(
+                    club_member=member,
+                    date=award_date,
+                    points=bap,
+                    hap_points=hap,
+                    cap_points=cap,
+                    notes=notes[:500] if notes else "",
+                    awarded_by=request.user,
+                )
+                total_added += 1
+        except Exception as e:
+            messages.error(request, f"Error processing CSV: {e}")
+            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+        msg_parts = []
+        if total_added:
+            msg_parts.append(f"{total_added} award(s) added")
+        if total_skipped:
+            msg_parts.append(f"{total_skipped} rows skipped")
+        messages.success(request, ", ".join(msg_parts) or "No awards imported.")
+        if total_added:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"BAP CSV import: {', '.join(msg_parts)}",
+                applies_to="BAP",
+            )
+        return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+
+    @staticmethod
+    def _parse_int(value):
+        try:
+            return max(0, int(value)) if value else 0
+        except (ValueError, TypeError):
+            return 0
 
 
 class ClubMemberIngestAPIView(APIView):
@@ -14194,7 +14446,9 @@ class LotBapPointsView(LoginRequiredMixin, View):
                 },
             )
         elif points == 0:
-            BapAward.objects.filter(lot=lot).delete()
+            existing_award = BapAward.objects.filter(lot=lot).first()
+            if existing_award:
+                existing_award.delete()
 
         # Keep lot fields in sync for eligibility queries and legacy display
         lot.bap_points_awarded = points

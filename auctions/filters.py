@@ -23,6 +23,7 @@ from .models import (
     Auction,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Category,
     ClubHistory,
     ClubMember,
@@ -1096,6 +1097,46 @@ class ClubHistoryFilter(django_filters.FilterSet):
         return self.generic(queryset, value)
 
 
+class BapAwardFilter(django_filters.FilterSet):
+    """Filter for the BAP awarded-points table."""
+
+    query = django_filters.CharFilter(
+        method="filter_query",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by member name, email, lot name, or notes...",
+                "hx-get": "",
+                "hx-target": "#awards-table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
+
+    class Meta:
+        model = BapAward
+        fields = []
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        self.helper.form_id = "awards-filter-form"
+
+    def filter_query(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(
+            Q(club_member__first_name__icontains=value)
+            | Q(club_member__last_name__icontains=value)
+            | Q(club_member__email__icontains=value)
+            | Q(lot__lot_name__icontains=value)
+            | Q(notes__icontains=value)
+        )
+
+
 class ClubBapLotFilter(django_filters.FilterSet):
     """Filter for the BAP lot review table (club admin, permission_manage_bap only).
 
@@ -1110,7 +1151,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
             attrs={
                 "placeholder": "Filter by lot name or seller...",
                 "hx-get": "",
-                "hx-target": "div.table-container",
+                "hx-target": "#lots-table-container",
                 "hx-trigger": "keyup changed delay:300ms",
                 "hx-swap": "outerHTML",
             }

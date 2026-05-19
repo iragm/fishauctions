@@ -573,8 +573,9 @@ urlpatterns = [
         name="club_membership_settings",
     ),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
-    path("clubs/<slug:slug>/bap/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
-    path("clubs/<slug:slug>/bap/recalculate/", views.ClubBapRecalculateView.as_view(), name="club_bap_recalculate"),
+    path("clubs/<slug:slug>/bap/", views.ClubBapView.as_view(), name="club_bap"),
+    path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
+    path("clubs/<slug:slug>/bap/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     # API key management (login-required UI)
     path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
@@ -611,6 +612,9 @@ urlpatterns = [
         name="club_member_confirm",
     ),
     path("api/clubmember/new/<slug:slug>/", views.ClubMemberCreateView.as_view(), name="clubmember_create"),
+    path("api/bapaward/new/<slug:slug>/", views.BapAwardAdminView.as_view(), name="bapaward_create"),
+    path("api/bapaward/<int:pk>/", views.BapAwardAdminView.as_view(), name="bapaward_admin"),
+    path("api/bapaward/<int:pk>/delete/", views.BapAwardDeleteView.as_view(), name="bapaward_delete"),
     path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
     path("clubs/<slug:slug>/admin/merge/<int:pk>/", views.ClubMemberMergeView.as_view(), name="club_member_merge"),
     path(
