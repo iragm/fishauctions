@@ -768,7 +768,7 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
 
 @admin.register(BapAward)
 class BapAwardAdmin(admin.ModelAdmin):
-    list_display = ("club_member", "date", "points", "lot", "awarded_by")
+    list_display = ("club_member", "date", "points", "hap_points", "cap_points", "lot", "awarded_by")
     list_filter = ("date",)
     search_fields = ("club_member__first_name", "club_member__last_name", "club_member__email", "notes")
     ordering = ("-date",)

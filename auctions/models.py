@@ -5111,10 +5111,16 @@ class Lot(models.Model):
         if not member:
             return
         award_date = self.date_end.date() if self.date_end else timezone.now().date()
+        placeholder = self.bap_placeholder
+        bap_pts = points if placeholder == "BAP" else 0
+        hap_pts = points if placeholder == "HAP" else 0
+        cap_pts = points if placeholder == "Culture" else 0
         BapAward.objects.create(
             club_member=member,
             date=award_date,
-            points=points,
+            points=bap_pts,
+            hap_points=hap_pts,
+            cap_points=cap_pts,
             lot=self,
             awarded_by=None,  # None = auto-awarded by the system
         )
@@ -5820,11 +5826,13 @@ class Lot(models.Model):
 
 
 class BapAward(models.Model):
-    """A record of BAP/HAP/Culture points awarded to a club member for a lot."""
+    """A record of BAP/HAP/CAP points awarded to a club member for a lot."""
 
     club_member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="bap_awards")
     date = models.DateField()
-    points = models.IntegerField()
+    points = models.IntegerField(default=0, help_text="BAP points awarded.")
+    hap_points = models.IntegerField(default=0, help_text="HAP points awarded.")
+    cap_points = models.IntegerField(default=0, help_text="CAP (culture) points awarded.")
     lot = models.OneToOneField(
         Lot,
         on_delete=models.SET_NULL,
@@ -5846,7 +5854,15 @@ class BapAward(models.Model):
         ordering = ["-date"]
 
     def __str__(self):
-        return f"{self.points}pts for {self.club_member} on {self.date}"
+        parts = []
+        if self.points:
+            parts.append(f"{self.points} BAP")
+        if self.hap_points:
+            parts.append(f"{self.hap_points} HAP")
+        if self.cap_points:
+            parts.append(f"{self.cap_points} CAP")
+        pts = ", ".join(parts) if parts else "0"
+        return f"{pts} pts for {self.club_member} on {self.date}"
 
 
 class Invoice(models.Model):

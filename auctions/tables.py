@@ -674,7 +674,16 @@ class ClubBapLotHTMxTable(tables.Table):
 
     def render_bap_points_awarded(self, value, record):
         award = getattr(record, "bap_award", None)
-        display_value = award.points if award else (value or "")
+        if award:
+            placeholder = record.bap_placeholder
+            if placeholder == "HAP":
+                display_value = award.hap_points
+            elif placeholder == "Culture":
+                display_value = award.cap_points
+            else:
+                display_value = award.points
+        else:
+            display_value = value or ""
         url = reverse("lot_bap_points", kwargs={"pk": record.pk})
         return format_html(
             '<input type="text" value="{}" placeholder="{}" class="form-control form-control-sm d-inline-block"'

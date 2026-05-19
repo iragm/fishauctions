@@ -13991,12 +13991,18 @@ class LotBapPointsView(LoginRequiredMixin, View):
 
         award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
         if points > 0 and member:
+            placeholder = lot.bap_placeholder
+            bap_pts = points if placeholder == "BAP" else 0
+            hap_pts = points if placeholder == "HAP" else 0
+            cap_pts = points if placeholder == "Culture" else 0
             BapAward.objects.update_or_create(
                 lot=lot,
                 defaults={
                     "club_member": member,
                     "date": award_date,
-                    "points": points,
+                    "points": bap_pts,
+                    "hap_points": hap_pts,
+                    "cap_points": cap_pts,
                     "awarded_by": request.user,
                 },
             )

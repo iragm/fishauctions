@@ -568,7 +568,7 @@ def recalculate_club_bap_points(self, club_pk):
         BapAward.objects.filter(club_member__club=club)
         .exclude(lot__is_deleted=True)
         .exclude(lot__banned=True)
-        .select_related("lot__species_category", "lot__auction__club")
+        .select_related("lot")
     )
 
     for award in awards:
@@ -576,22 +576,20 @@ def recalculate_club_bap_points(self, club_pk):
         if not member:
             continue
 
-        pts = award.points
-        program = award.lot.bap_placeholder if award.lot else "BAP"
         is_ytd = award.date.year == this_year
 
-        if program == "Culture":
-            member.culture_points += pts
+        if award.cap_points:
+            member.culture_points += award.cap_points
             if is_ytd:
-                member.culture_points_ytd += pts
-        elif program == "HAP":
-            member.hap_points += pts
+                member.culture_points_ytd += award.cap_points
+        if award.hap_points:
+            member.hap_points += award.hap_points
             if is_ytd:
-                member.hap_points_ytd += pts
-        else:
-            member.bap_points += pts
+                member.hap_points_ytd += award.hap_points
+        if award.points:
+            member.bap_points += award.points
             if is_ytd:
-                member.bap_points_ytd += pts
+                member.bap_points_ytd += award.points
 
     update_fields = [
         "bap_points",

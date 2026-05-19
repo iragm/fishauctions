@@ -196,6 +196,7 @@ class Command(BaseCommand):
         )
         current_site = Site.objects.get_current()
         for member in membership_reminder_qs:
+            print(member.email)
             fallback_reply_to = settings.DEFAULT_FROM_EMAIL
             if settings.ADMINS:
                 fallback_reply_to = settings.ADMINS[0][1]
