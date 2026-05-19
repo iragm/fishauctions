@@ -427,6 +427,12 @@ class ClubMemberHTMxTable(tables.Table):
         orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
+    createdon = tables.DateColumn(
+        accessor="createdon",
+        verbose_name="Joined",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     source = tables.Column(
         accessor="source",
         verbose_name="Source",
@@ -591,6 +597,7 @@ class ClubMemberHTMxTable(tables.Table):
             "hap_points",
             "membership_last_paid",
             "membership_expiration_date",
+            "createdon",
             "source",
             "actions",
         )
@@ -629,6 +636,9 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def render_name(self, value, record):
         if record.user:
+            name = self._member_names.get(record.user_id)
+            if name:
+                return name
             return record.user.get_full_name() or record.user.username
         return "System"
 
@@ -639,6 +649,13 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)
+        if self.club:
+            self._member_names = {
+                m.user_id: f"{m.first_name} {m.last_name}".strip() or m.email or str(m)
+                for m in ClubMember.objects.filter(club=self.club, is_deleted=False).exclude(user=None)
+            }
+        else:
+            self._member_names = {}
         super().__init__(*args, **kwargs)
 
 

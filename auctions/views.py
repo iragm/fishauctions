@@ -13686,6 +13686,17 @@ def _discord_ephemeral(content):
     )
 
 
+_DISCORD_PERMISSION_MANAGE_GUILD = 1 << 5
+
+
+def _has_discord_manage_guild(data):
+    member_data = data.get("member") or {}
+    try:
+        return bool(int(member_data.get("permissions", "0")) & _DISCORD_PERMISSION_MANAGE_GUILD)
+    except (ValueError, TypeError):
+        return False
+
+
 def _sync_discord_roles(club, bot_token):
     """Fetch roles from Discord and upsert ClubDiscordRole objects.
 
@@ -13928,6 +13939,9 @@ class DiscordInteractionsView(View):
         options = {o["name"]: o["value"] for o in data.get("data", {}).get("options", [])}
         club_uuid = options.get("club_uuid", "").strip()
 
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
         if not guild_id or not club_uuid:
             return _discord_ephemeral("❌ Missing guild ID or club UUID.")
 
@@ -13935,13 +13949,6 @@ class DiscordInteractionsView(View):
             club = Club.objects.get(uuid=club_uuid)
         except (Club.DoesNotExist, ValueError, ValidationError):
             return _discord_ephemeral("❌ This isn't a valid club connection code.")
-
-        # If the club is already connected to a Discord server, require the caller to be
-        # a club member with admin permissions (looked up by their Discord ID).
-        if club.discord_server_id:
-            caller_member = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
-            if not caller_member or not (caller_member.permission_admin or caller_member.permission_edit_club):
-                return _discord_ephemeral("❌ You must be a club admin to reconnect this server.")
 
         # Reject if another club already owns this guild
         if Club.objects.filter(discord_server_id=guild_id).exclude(pk=club.pk).exists():
@@ -13990,16 +13997,15 @@ class DiscordInteractionsView(View):
         user_data = member_data.get("user") or data.get("user") or {}
         caller_discord_id = user_data.get("id", "")
 
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
         if not guild_id or not channel_id:
             return _discord_ephemeral("❌ Missing guild or channel ID.")
 
         club = Club.objects.filter(discord_server_id=guild_id).first()
         if not club:
             return _discord_ephemeral("❌ This server is not connected to a club. Run /connect first.")
-
-        caller = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
-        if not caller or not (caller.permission_admin or caller.permission_manage_auctions):
-            return _discord_ephemeral("❌ You must be a club admin or auction manager to run this command.")
 
         club.auction_channel_id = channel_id
         club.save(update_fields=["auction_channel_id"])
