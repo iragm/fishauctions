@@ -392,6 +392,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             "email_address_status",
         ]
     )
+    member.maybe_assign_discord_role()
     InvoicePayment.objects.create(
         invoice=None,
         club_member=member,
@@ -12575,6 +12576,7 @@ class ClubMemberRenewView(APIView):
         member.save(
             update_fields=["membership_last_paid", "membership_expiration_date", "membership_expiration_reminder_due"]
         )
+        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
@@ -12666,6 +12668,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
         member.membership_expiration_date = expiration_date
         member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
+        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,

@@ -235,9 +235,10 @@ def update_expired_membership_discord_roles(self):
     from django.conf import settings
     from django.contrib.sites.models import Site
     from django.urls import reverse
+    from django.utils import timezone
+    from post_office import mail
 
     from auctions.models import ClubMember, Invoice
-    from post_office import mail
 
     members = (
         ClubMember.objects.filter(
@@ -275,6 +276,7 @@ def update_expired_membership_discord_roles(self):
         # no-login link lets them pay without signing in.
         invoice = Invoice.objects.filter(
             club=club,
+            auction=None,
             auctiontos_user__email__iexact=member.email,
             renewal_processed=False,
             status="UNPAID",
@@ -282,6 +284,7 @@ def update_expired_membership_discord_roles(self):
         if invoice is None and member.user:
             invoice = Invoice.objects.filter(
                 club=club,
+                auction=None,
                 buyer=member.user,
                 renewal_processed=False,
                 status="UNPAID",
