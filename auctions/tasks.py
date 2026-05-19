@@ -292,7 +292,7 @@ def update_expired_membership_discord_roles(self):
         if invoice is None:
             invoice = Invoice.objects.create(
                 club=club,
-                buyer=member.user if member.user else None,
+                buyer=member.user or None,
                 status="UNPAID",
                 renewal_needed=True,
             )
