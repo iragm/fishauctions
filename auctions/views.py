@@ -421,6 +421,24 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     )
 
 
+def _disable_integrated_payments_if_only_method(user, method_label):
+    """If user is the payment_user for any clubs and has no remaining payment methods, disable integrated payments."""
+    has_paypal = PayPalSeller.objects.filter(user=user).exists()
+    has_square = SquareSeller.objects.filter(user=user).exists()
+    if has_paypal or has_square:
+        return
+    affected_clubs = Club.objects.filter(payment_user=user, allow_integrated_payments=True)
+    for club in affected_clubs:
+        club.allow_integrated_payments = False
+        club.save(update_fields=["allow_integrated_payments"])
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Integrated payments disabled: payment account unlinked {method_label}",
+            applies_to="SETTINGS",
+        )
+
+
 def club_ids_available_for_contact_autofill(user):
     """Return club IDs whose member and auction contact data may be used for autofill."""
     if not user.is_authenticated:
@@ -8654,6 +8672,10 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
     def get_object(self, queryset=None):
         return get_object_or_404(PayPalSeller, user=self.request.user)
 
+    def form_valid(self, form):
+        _disable_integrated_payments_if_only_method(self.request.user, "PayPal")
+        return super().form_valid(form)
+
     def get_success_url(self):
         return reverse("paypal_seller")
 
@@ -8893,6 +8915,10 @@ class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):
 
     def get_object(self, queryset=None):
         return get_object_or_404(SquareSeller, user=self.request.user)
+
+    def form_valid(self, form):
+        _disable_integrated_payments_if_only_method(self.request.user, "Square")
+        return super().form_valid(form)
 
     def get_success_url(self):
         return reverse("square_seller")
@@ -11684,6 +11710,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             if merchant_id_in_paypal:
                 seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
             if seller:
+                _disable_integrated_payments_if_only_method(seller.user, "PayPal")
                 seller.delete()
                 logger.info("Revoked selling for merchant_id=%s", merchant_id_in_paypal)
             else:
@@ -11951,6 +11978,7 @@ class SquareWebhookView(SquareAPIMixin, View):
             if merchant_id:
                 square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
+                    _disable_integrated_payments_if_only_method(square_seller.user, "Square")
                     square_seller.delete()
         return HttpResponse(status=200)
 

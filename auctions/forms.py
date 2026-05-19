@@ -3624,6 +3624,19 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             help_text=payment_help,
         )
 
+    def clean(self):
+        cleaned_data = super().clean()
+        allow_integrated = cleaned_data.get("allow_integrated_payments")
+        payment_user = cleaned_data.get("payment_user")
+        if allow_integrated and not payment_user:
+            self.add_error(
+                "payment_user",
+                "No payment method selected, choose an account that payments should go to",
+            )
+        if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
+            self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
+        return cleaned_data
+
 
 class ClubBapSettingsForm(forms.ModelForm):
     """Form for BAP admins to configure Breeder Award Program settings for a club."""
