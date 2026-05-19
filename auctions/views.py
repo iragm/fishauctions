@@ -289,9 +289,6 @@ def check_club_permission(user, club, permission_name):
 
     Returns True if the user is a superuser or has the named permission (or permission_admin,
     which acts as a wildcard granting all permissions).
-
-    permission_view is implicitly granted to any member who holds any other permission,
-    since every admin role needs to be able to see the member list.
     """
     if not user.is_authenticated:
         return False
@@ -301,8 +298,6 @@ def check_club_permission(user, club, permission_name):
     if not member:
         return False
     if member.permission_admin:
-        return True
-    if permission_name == "permission_view" and member.has_any_permission:
         return True
     return bool(getattr(member, permission_name, False))
 
@@ -12696,7 +12691,7 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
 class ClubMemberDeleteView(APIView):
@@ -12773,22 +12768,22 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
-        date_str = request.POST.get("membership_expiration_date", "")
+        date_str = request.POST.get("membership_last_paid", "")
         try:
-            expiration_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+            paid_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
             messages.error(request, "Invalid date.")
             return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
-        member.membership_expiration_date = expiration_date
-        member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
+        member.membership_last_paid = paid_date
+        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
         member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Set membership expiration for {member} to {expiration_date}",
+            action=f"Set membership last paid for {member} to {paid_date}",
             applies_to="MEMBERSHIP",
         )
-        messages.success(request, f"Expiration date set for {member}.")
+        messages.success(request, f"Membership renewed for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
 

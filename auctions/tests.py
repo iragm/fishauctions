@@ -9141,6 +9141,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
             self.fail(f"square_payment_success URL pattern not configured: {e}")
 
 
+@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="")
 class SquareOAuthRevocationTests(StandardTestCase):
     """Tests for Square OAuth authorization revocation handling"""
 
@@ -15550,7 +15551,6 @@ class ClubSettingsViewTests(TestCase):
                 "membership_annual_fee": "20.00",
                 "payment_user": "",
                 "send_membership_expiration_reminders": "on",
-                "allow_integrated_payments": "on",
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -15559,18 +15559,15 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertTrue(self.club.send_membership_expiration_reminders)
-        self.assertTrue(self.club.allow_integrated_payments)
+        self.assertFalse(self.club.allow_integrated_payments)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
 
-    def test_membership_settings_shows_payment_banner_without_connected_accounts(self):
-        self.club.allow_integrated_payments = True
-        self.club.save(update_fields=["allow_integrated_payments"])
+    def test_membership_settings_shows_form_without_connected_accounts(self):
         self.client.login(username="club_settings_editor", password="testpass")
         response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Enable integrated payments")
-        self.assertContains(response, "Connect PayPal")
-        self.assertContains(response, "Connect Square")
+        self.assertContains(response, "Allow integrated payments")
+        self.assertContains(response, "Payments are not enabled for your account.")
 
     def test_plain_member_cannot_access_membership_settings(self):
         self.client.login(username="club_settings_plain", password="testpass")
@@ -16272,9 +16269,22 @@ class ClubMemberManagementViewTests(TestCase):
 
     def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
         self.client.login(username="club_editor", password="testpass")
+        merge_url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})
+        # Step 1: select target — should show review form
+        response = self.client.post(merge_url, {"target": self.target_member.pk})
+        self.assertEqual(response.status_code, 200)
+        # Step 2: confirm merge with reviewed field values
         response = self.client.post(
-            reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.source_member.pk}),
-            {"target": self.target_member.pk},
+            merge_url,
+            {
+                "step": "review",
+                "target": self.target_member.pk,
+                "first_name": "Target",
+                "last_name": "Member",
+                "email": "source@example.com",
+                "phone_number": "555-1111",
+                "address": "",
+            },
         )
         self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.source_member.refresh_from_db()

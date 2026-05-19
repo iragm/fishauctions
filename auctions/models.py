@@ -976,6 +976,12 @@ class ClubMember(ContactRecord):
         if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
             return None
         expiration_date = self.membership_expiration_date
+        if not expiration_date and self.membership_last_paid:
+            paid = self.membership_last_paid
+            if self.club.membership_system == "january_first":
+                expiration_date = datetime.date(paid.year + 1, 1, 1)
+            else:
+                expiration_date = paid + datetime.timedelta(days=365)
         if not expiration_date:
             return None
         reminder_date = expiration_date - datetime.timedelta(days=1)
