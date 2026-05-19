@@ -69,3 +69,13 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Successfully registered /bap command."))
         else:
             self.stderr.write(f"Failed to register /bap: {resp4.status_code} {resp4.text}")
+
+        join_payload = {
+            "name": "join",
+            "description": "Join this club",
+        }
+        resp5 = requests.post(url, headers=headers, json=join_payload, timeout=10)
+        if resp5.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /join command."))
+        else:
+            self.stderr.write(f"Failed to register /join: {resp5.status_code} {resp5.text}")

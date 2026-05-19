@@ -13842,6 +13842,8 @@ class DiscordInteractionsView(View):
                 return self._handle_membership_command(data)
             if command_name == "bap":
                 return self._handle_bap_command(data)
+            if command_name == "join":
+                return self._handle_join_command(data)
             return _discord_ephemeral("❌ Unknown command.")
 
         # Type 5 – Modal submit
@@ -13852,6 +13854,58 @@ class DiscordInteractionsView(View):
             return _discord_ephemeral("Unsupported interaction")
 
         return _discord_ephemeral("Unsupported interaction")
+
+    def _handle_join_command(self, data):
+        guild_id = data.get("guild_id", "")
+        if not guild_id or not Club.objects.filter(discord_server_id=guild_id).exists():
+            return _discord_ephemeral("❌ No club is configured for this Discord server.")
+        return JsonResponse(
+            {
+                "type": _DISCORD_TYPE_MODAL,
+                "data": {
+                    "custom_id": "join_modal",
+                    "title": "Enter your contact information",
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                    "custom_id": "first_name",
+                                    "label": "First name",
+                                    "style": 1,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                    "custom_id": "last_name",
+                                    "label": "Last name",
+                                    "style": 1,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                    "custom_id": "email",
+                                    "label": "Email address",
+                                    "style": 1,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                    ],
+                },
+            }
+        )
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
