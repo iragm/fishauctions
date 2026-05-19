@@ -3240,6 +3240,76 @@ class CSVContactImportMixin:
     MEMO_FIELD_NAMES = ["memo", "note", "notes"]
     FIRST_NAME_FIELD_NAMES = ["first name", "firstname", "first"]
     LAST_NAME_FIELD_NAMES = ["last name", "lastname", "last", "surname"]
+    MEMBERSHIP_LAST_PAID_FIELD_NAMES = [
+        "membership last paid",
+        "membership_last_paid",
+        "last paid",
+        "paid date",
+        "paid",
+    ]
+    MEMBERSHIP_EXPIRATION_FIELD_NAMES = [
+        "membership expiration date",
+        "membership_expiration_date",
+        "expiration date",
+        "expiration",
+        "expires",
+        "membership expires",
+    ]
+    DISCORD_ID_FIELD_NAMES = ["discord id", "discord_id", "discord"]
+    CONTACT_STATUS_FIELD_NAMES = ["contact status", "contact_status", "contact"]
+    DATE_JOINED_FIELD_NAMES = ["date joined", "createdon", "created on", "joined", "join date", "date_joined"]
+
+    # Maps human-readable contact status values (lowercased) to model values
+    CONTACT_STATUS_MAP = {
+        "contact": "contact",
+        "contact normally": "contact",
+        "non_essential": "non_essential",
+        "non essential": "non_essential",
+        "no non-essential emails": "non_essential",
+        "no non essential emails": "non_essential",
+        "do_not_contact": "do_not_contact",
+        "do not contact": "do_not_contact",
+        "dnc": "do_not_contact",
+    }
+
+    @staticmethod
+    def parse_contact_status(value):
+        """Map a CSV contact status value to a model value, or return None if not recognized."""
+        if not value or not value.strip():
+            return None
+        return CSVContactImportMixin.CONTACT_STATUS_MAP.get(value.strip().lower())
+
+    @staticmethod
+    def parse_flexible_date(value):
+        """Parse a date string, supporting incomplete formats: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
+        if not value or not value.strip():
+            return None
+        value = value.strip()
+        if re.match(r"^\d{4}$", value):
+            return date_type(int(value), 1, 1)
+        m = re.match(r"^(\d{4})[-/](\d{1,2})$", value)
+        if m:
+            return date_type(int(m.group(1)), int(m.group(2)), 1)
+        # ISO format: YYYY-MM-DD
+        try:
+            return date_type.fromisoformat(value)
+        except ValueError:
+            pass
+        # US format: MM/DD/YYYY or MM-DD-YYYY
+        m = re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$", value)
+        if m:
+            try:
+                return date_type(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+            except ValueError:
+                pass
+        # YYYY/MM/DD
+        m = re.match(r"^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})$", value)
+        if m:
+            try:
+                return date_type(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                pass
+        return None
 
     @staticmethod
     def extract_csv_field(row, field_name_list, default_response=""):
@@ -13298,7 +13368,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_export"):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
@@ -13333,26 +13403,36 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                 phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
                 address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
                 memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
+                discord_id = self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES)
+                contact_status = self.parse_contact_status(self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES))
+                membership_last_paid = self.parse_flexible_date(
+                    self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)
+                )
+                membership_expiration_date = self.parse_flexible_date(
+                    self.extract_csv_field(row, self.MEMBERSHIP_EXPIRATION_FIELD_NAMES)
+                )
+                date_joined = self.parse_flexible_date(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES))
                 existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
                 if existing:
-                    changed = False
-                    if first_name and existing.first_name != first_name[:100]:
-                        existing.first_name = first_name[:100]
-                        changed = True
-                    if last_name and existing.last_name != last_name[:100]:
-                        existing.last_name = last_name[:100]
-                        changed = True
-                    if phone and existing.phone_number != phone[:20]:
-                        existing.phone_number = phone[:20]
-                        changed = True
-                    if address and existing.address != address[:500]:
-                        existing.address = address[:500]
-                        changed = True
-                    if changed:
-                        existing.save()
-                        total_updated += 1
+                    existing.first_name = first_name[:100] if first_name else existing.first_name
+                    existing.last_name = last_name[:100] if last_name else existing.last_name
+                    existing.phone_number = phone[:20]
+                    existing.address = address[:500]
+                    existing.memo = memo[:500]
+                    if discord_id:
+                        existing.discord_id = discord_id[:100]
+                    if contact_status is not None:
+                        existing.contact_status = contact_status
+                    if membership_last_paid is not None:
+                        existing.membership_last_paid = membership_last_paid
+                    if membership_expiration_date is not None:
+                        existing.membership_expiration_date = membership_expiration_date
+                    existing.save()
+                    if date_joined is not None:
+                        ClubMember.objects.filter(pk=existing.pk).update(createdon=date_joined)
+                    total_updated += 1
                 else:
-                    ClubMember.objects.create(
+                    new_member = ClubMember.objects.create(
                         club=self.club,
                         email=email[:254],
                         first_name=first_name[:100] if first_name else "",
@@ -13360,9 +13440,15 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         phone_number=phone[:20] if phone else "",
                         address=address[:500] if address else "",
                         memo=memo[:500] if memo else "",
+                        discord_id=discord_id[:100] if discord_id else None,
+                        contact_status=contact_status or "contact",
+                        membership_last_paid=membership_last_paid,
+                        membership_expiration_date=membership_expiration_date,
                         source="manually_added",
                         added_by=self.request.user,
                     )
+                    if date_joined is not None:
+                        ClubMember.objects.filter(pk=new_member.pk).update(createdon=date_joined)
                     total_added += 1
 
             msg_parts = []

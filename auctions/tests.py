@@ -14847,7 +14847,7 @@ class ClubMemberUpdateTests(TestCase):
     def test_csv_import_adds_members(self):
         """CSV import creates new club members"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
-        owner_member.permission_add_edit = True
+        owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
@@ -14860,7 +14860,7 @@ class ClubMemberUpdateTests(TestCase):
     def test_csv_import_skips_rows_without_email(self):
         """CSV import skips rows with no email"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
-        owner_member.permission_add_edit = True
+        owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name\n,NoEmail\n"

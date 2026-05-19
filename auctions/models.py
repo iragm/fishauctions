@@ -620,7 +620,7 @@ class Club(models.Model):
     )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
-        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.",
+        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
     )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
@@ -817,7 +817,7 @@ class ClubMember(ContactRecord):
     permission_view = models.BooleanField(
         default=False, help_text="View the member list.  Other permissions implicitly grant this."
     )
-    permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
+    permission_export = models.BooleanField(default=False, help_text="Import and export member data as CSV.")
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
     permission_edit_club = models.BooleanField(
         default=False,
