@@ -227,10 +227,17 @@ def update_expired_membership_discord_roles(self):
     Re-evaluate and update Discord roles for all members whose auto-managed role
     no longer matches what was last assigned (e.g. after membership expiration or renewal).
 
+    Also sends membership expiration reminder emails.
+
     Runs daily. Only members whose computed role differs from last_discord_role_assigned
     will trigger Discord API calls.
     """
-    from auctions.models import ClubMember
+    from django.conf import settings
+    from django.contrib.sites.models import Site
+    from django.urls import reverse
+
+    from auctions.models import ClubMember, Invoice
+    from post_office import mail
 
     members = (
         ClubMember.objects.filter(
@@ -246,6 +253,65 @@ def update_expired_membership_discord_roles(self):
     for member in members:
         if member.discord_role != member.last_discord_role_assigned:
             member.maybe_assign_discord_role()
+
+    # Send membership expiration reminder emails
+    reminder_qs = (
+        ClubMember.objects.filter(
+            is_deleted=False,
+            club__send_membership_expiration_reminders=True,
+            club__membership_annual_fee__gt=0,
+            membership_expiration_date__isnull=False,
+            membership_expiration_reminder_due__lte=timezone.now(),
+            email__isnull=False,
+        )
+        .exclude(email="")
+        .exclude(contact_status="do_not_contact")
+        .select_related("club")
+    )
+    current_site = Site.objects.get_current()
+    for member in reminder_qs:
+        club = member.club
+        # Find or create an unpaid membership invoice for this member so the
+        # no-login link lets them pay without signing in.
+        invoice = Invoice.objects.filter(
+            club=club,
+            auctiontos_user__email__iexact=member.email,
+            renewal_processed=False,
+            status="UNPAID",
+        ).first()
+        if invoice is None and member.user:
+            invoice = Invoice.objects.filter(
+                club=club,
+                buyer=member.user,
+                renewal_processed=False,
+                status="UNPAID",
+            ).first()
+        if invoice is None:
+            invoice = Invoice.objects.create(
+                club=club,
+                buyer=member.user if member.user else None,
+                status="UNPAID",
+                renewal_needed=True,
+            )
+        renew_url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        fallback_reply_to = settings.DEFAULT_FROM_EMAIL
+        if settings.ADMINS:
+            fallback_reply_to = settings.ADMINS[0][1]
+        mail.send(
+            member.email,
+            template="club_membership_expiring",
+            headers={"Reply-to": (club.contact_email or fallback_reply_to)},
+            context={
+                "name": member.display_name,
+                "club": club,
+                "domain": current_site.domain,
+                "navbar_brand": settings.NAVBAR_BRAND,
+                "renew_link": f"https://{current_site.domain}{renew_url}",
+                "member": member,
+            },
+        )
+        member.membership_expiration_reminder_due = None
+        member.save(update_fields=["membership_expiration_reminder_due"])
 
 
 @shared_task(bind=True, ignore_result=True)

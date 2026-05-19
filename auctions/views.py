@@ -7296,8 +7296,6 @@ class InvoiceNoLoginView(InvoiceView):
         if invoice.auctiontos_user:
             invoice.auctiontos_user.email_address_status = "VALID"
             invoice.auctiontos_user.save()
-        if invoice.club and not invoice.auction:
-            return redirect(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
         return super().dispatch(request, *args, **kwargs)
 
 
