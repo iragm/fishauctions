@@ -56,18 +56,27 @@
 <div id="modals-here"></div>
 
 <script>
-// Keep the export URL in sync with the current filter query
+// Keep the URL and export button in sync with the current filter query
 (function () {
   const filterInput = document.querySelector('[name="query"]');
   const exportBtn = document.getElementById('export-btn');
-  if (!filterInput || !exportBtn) return;
-  const baseExportUrl = exportBtn.href.split('?')[0];
-  function updateExportUrl() {
+  if (!filterInput) return;
+  const baseExportUrl = exportBtn ? exportBtn.href.split('?')[0] : null;
+  function syncQueryState() {
     const q = filterInput.value;
-    exportBtn.href = q ? baseExportUrl + '?query=' + encodeURIComponent(q) : baseExportUrl;
+    const newUrl = new URL(window.location);
+    if (q) {
+      newUrl.searchParams.set('query', q);
+    } else {
+      newUrl.searchParams.delete('query');
+    }
+    history.replaceState({}, '', newUrl);
+    if (exportBtn) {
+      exportBtn.href = q ? baseExportUrl + '?query=' + encodeURIComponent(q) : baseExportUrl;
+    }
   }
-  filterInput.addEventListener('input', updateExportUrl);
-  updateExportUrl();
+  filterInput.addEventListener('input', syncQueryState);
+  syncQueryState();
 })();
 </script>
 
