@@ -888,7 +888,7 @@ class EditLot(forms.ModelForm):
                     f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
                 ),
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
@@ -1127,7 +1127,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success">Save</button>'
@@ -1351,7 +1351,7 @@ class AuctionNoShowForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1406,7 +1406,7 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1447,7 +1447,7 @@ class ChangeInvoiceStatusForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1518,7 +1518,7 @@ class LotRefundForm(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(save_button_html),
                 css_class="modal-footer",
@@ -3688,6 +3688,12 @@ class BapAwardForm(forms.ModelForm):
         self, *args, post_url=None, delete_url=None, club=None, show_hap=False, show_cap=False, lot=None, **kwargs
     ):
         super().__init__(*args, **kwargs)
+        club_slug = club.slug if club else ""
+        self.fields["club_member"].widget = autocomplete.ModelSelect2(
+            url="club-member-autocomplete",
+            forward=[autocomplete.forward.Const(club_slug, "club_slug")],
+            attrs={"data-placeholder": "Search for a member…", "data-html": True},
+        )
         if club:
             self.fields["club_member"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).order_by(
                 "last_name", "first_name"
@@ -3705,17 +3711,29 @@ class BapAwardForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
         layout_fields = list(self.fields.keys())
+
+        member_link_html = ""
+        if self.instance.pk and self.instance.club_member_id:
+            from django.urls import reverse as _reverse
+
+            member = self.instance.club_member
+            member_url = _reverse("club_member_admin", kwargs={"pk": member.pk})
+            member_link_html = f'<p class="mb-1"><small>Member: <a href="{member_url}" target="_blank" class="text-primary fw-bold">{member}</a></small></p>'
+
+        prefix_items = []
+        if member_link_html:
+            prefix_items.append(HTML(member_link_html))
         if lot:
-            layout_fields = [
-                HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')
-            ] + layout_fields
+            prefix_items.append(HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>'))
+        if prefix_items:
+            layout_fields = prefix_items + layout_fields
         if delete_url:
             footer = Div(
                 HTML(
                     f'<button hx-post="{delete_url}" hx-target="#modals-here" hx-confirm="Delete this award?" type="button" class="btn btn-danger btn-sm">Delete</button>'
                 ),
                 HTML(
-                    '<button type="button" class="btn btn-secondary btn-sm ms-auto" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary btn-sm ms-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
@@ -3724,7 +3742,7 @@ class BapAwardForm(forms.ModelForm):
             )
         elif post_url:
             footer = Div(
-                HTML('<button type="button" class="btn btn-secondary btn-sm" onclick="closeModal()">Cancel</button>'),
+                HTML('<button type="button" class="btn btn-secondary btn-sm" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
                 ),
@@ -3803,7 +3821,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
+                    HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Close</button>'),
                     css_class="modal-footer",
                 ),
             )
@@ -3812,7 +3830,7 @@ class ClubMemberAdminForm(forms.ModelForm):
                 *base_fields,
                 *discord_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                    HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
                     HTML(
                         f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                     ),
@@ -3861,7 +3879,7 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         self.helper.layout = Layout(
             *self.Meta.fields,
             Div(
-                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                 ),

@@ -53,6 +53,12 @@
   var qInput = document.getElementById('id_query');
   if (qInput) {
     qInput.addEventListener('blur', syncCheckboxesFromQuery);
+    qInput.addEventListener('input', function () {
+      var newUrl = new URL(window.location);
+      if (this.value) newUrl.searchParams.set('query', this.value);
+      else newUrl.searchParams.delete('query');
+      history.replaceState({}, '', newUrl);
+    });
     syncCheckboxesFromQuery();
   }
 

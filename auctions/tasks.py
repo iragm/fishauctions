@@ -20,6 +20,9 @@ STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking 
 STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
 AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off scheduled task
 
+# Constants for BAP recalculation scheduling
+BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
+
 logger = logging.getLogger(__name__)
 
 
@@ -254,6 +257,16 @@ def update_expired_membership_discord_roles(self):
     for member in members:
         if member.discord_role != member.last_discord_role_assigned:
             member.maybe_assign_discord_role()
+
+    # Zero out YTD BAP/HAP/CAP counters at the start of each new year
+    import datetime
+
+    today = datetime.date.today()
+    if today.month == 1 and today.day == 1:
+        ClubMember.objects.filter(
+            is_deleted=False,
+            club__enable_breeder_award_program=True,
+        ).update(bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0)
 
     # Send membership expiration reminder emails
     reminder_qs = (
@@ -523,3 +536,80 @@ def update_auction_stats(self):
             "No auctions need stats update, checking again at %s", fallback_time.strftime("%Y-%m-%d %H:%M:%S %Z")
         )
         schedule_auction_stats_update(fallback_time)
+
+
+def schedule_bap_recalculation(club_pk, run_at):
+    """
+    Schedule a one-off BAP recalculation task for a club.
+
+    If a task already exists for this club:
+    - Same run_at: re-enable it in place (no delete/recreate).
+    - Different run_at: delete the task; delete the ClockedSchedule only if no other
+      task still references it (prevents disrupting sibling club tasks).
+
+    Args:
+        club_pk: Primary key of the Club to recalculate.
+        run_at: datetime when the recalculation should run.
+    """
+    from django.db import transaction
+
+    task_name = f"{BAP_RECALCULATION_TASK_PREFIX}{club_pk}"
+
+    with transaction.atomic():
+        old_task = PeriodicTask.objects.filter(name=task_name).select_related("clocked").first()
+        if old_task:
+            old_schedule = old_task.clocked
+            if old_schedule and old_schedule.clocked_time == run_at:
+                old_task.enabled = True
+                old_task.save(update_fields=["enabled"])
+                return
+            is_shared = old_schedule and PeriodicTask.objects.filter(clocked=old_schedule).count() > 1
+            old_task.delete()
+            if old_schedule and not is_shared:
+                ClockedSchedule.objects.filter(pk=old_schedule.pk).delete()
+
+        schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+        PeriodicTask.objects.create(
+            name=task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=schedule,
+            one_off=True,
+            enabled=True,
+            kwargs=json.dumps({"club_pk": club_pk}),
+        )
+
+
+@shared_task(bind=True, ignore_result=True)
+def recalculate_club_bap_points(self, club_pk):
+    """Recalculate BAP/HAP/CAP point totals for all active members of a club."""
+    from auctions.models import BapAward, Club, ClubMember
+
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    for member in ClubMember.objects.filter(club=club, is_deleted=False):
+        BapAward.recalculate_member_points(member)
+
+
+def bootstrap_bap_recalculation_tasks(run_at):
+    """
+    Schedule BAP recalculation tasks for all eligible clubs on worker startup.
+
+    Only clubs with enable_breeder_award_program=True and next_bap_recalculation
+    set are scheduled. Overdue clubs are scheduled to run at run_at; future clubs
+    are scheduled at their next_bap_recalculation time.
+
+    Args:
+        run_at: datetime representing "now" — overdue clubs use this as their run time.
+    """
+    from auctions.models import Club
+
+    clubs = Club.objects.filter(
+        enable_breeder_award_program=True,
+        next_bap_recalculation__isnull=False,
+    )
+    for club in clubs:
+        if club.next_bap_recalculation <= run_at:
+            schedule_bap_recalculation(club.pk, run_at=run_at)
+        else:
+            schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)

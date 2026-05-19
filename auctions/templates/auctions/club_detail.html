@@ -82,6 +82,11 @@
     <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
   </li>
   {% endif %}
+  {% if my_bap_awards is not None %}
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" type="button" role="tab">My Points</button>
+  </li>
+  {% endif %}
 </ul>
 
 <div class="tab-content" id="clubTabContent">
@@ -150,6 +155,24 @@
     <div id="culture-alltime" style="display:none">
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
     </div>
+  </div>
+  {% endif %}
+
+  {% if my_bap_awards is not None %}
+  {# My Points tab #}
+  <div class="tab-pane fade" id="my-points-tab" role="tabpanel">
+    {% if my_bap_awards %}
+    <ul class="list-group list-group-flush mt-2">
+      {% for award in my_bap_awards %}
+      <li class="list-group-item d-flex gap-3 py-2">
+        <span class="text-muted" style="min-width:6rem">{{ award.date|date:"N j, Y" }}</span>
+        <span>{{ award }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted mt-3">No points recorded yet.</p>
+    {% endif %}
   </div>
   {% endif %}
 

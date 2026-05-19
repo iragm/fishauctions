@@ -745,19 +745,16 @@ class ClubBapLotHTMxTable(tables.Table):
         return None
 
     def render_lot_name(self, value, record):
-        lot_url = record.lot_link
         modal_url = self._modal_url(record)
         if modal_url:
             return format_html(
-                '<a href="{}" target="_blank">{}</a> '
-                '<a hx-get="{}" {} class="text-secondary ms-1" title="Award points">'
-                '<i class="bi bi-pencil-square"></i></a>',
-                lot_url,
+                '{} <a hx-get="{}" {} class="btn btn-sm btn-outline-primary ms-1" title="Set points">'
+                '<i class="bi bi-plus-circle"></i> Set points</a>',
                 value,
                 modal_url,
                 mark_safe(self._MODAL_ATTRS),
             )
-        return format_html('<a href="{}" target="_blank">{}</a>', lot_url, value)
+        return value
 
     def render_seller(self, value, record):
         if value:
@@ -766,7 +763,7 @@ class ClubBapLotHTMxTable(tables.Table):
 
     def render_auction(self, value, record):
         if value:
-            return format_html('<a href="{}" target="_blank">{}</a>', value.get_absolute_url(), str(value))
+            return str(value)
         return "—"
 
     def render_date_end(self, value, record):

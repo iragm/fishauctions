@@ -112,6 +112,20 @@ def start_auction_stats_task(sender, **kwargs):
     schedule_auction_stats_update(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
 
 
+@worker_ready.connect
+def start_bap_recalculation_tasks(sender, **kwargs):
+    """
+    Bootstrap BAP self-scheduling recalculation tasks when the worker is ready.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from auctions.tasks import bootstrap_bap_recalculation_tasks
+
+    bootstrap_bap_recalculation_tasks(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
+
+
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     """Debug task for testing Celery configuration."""

@@ -1,98 +1,63 @@
 {% extends "base.html" %}
 {% load render_table from django_tables2 %}
 {% load crispy_forms_tags %}
-{% block title %}BAP — {{ club.name }}{% endblock %}
+{% block title %}Awarded Points — {{ club.name }}{% endblock %}
 
 {% block content %}
 {% include "club_ribbon.html" %}
 
-<p class="text-muted mb-3"><small>Use this page to manage your club's breeder award program. You can add points for users here, or click on the <strong>Lots</strong> tab to add points from a lot that a user has sold recently.</small></p>
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if can_manage_bap %}
+  <button class="btn btn-sm btn-info"
+    hx-get="{% url 'bapaward_create' club.slug %}"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+    <i class="bi bi-plus-circle"></i> Add points
+  </button>
+  <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportBap" aria-expanded="false">
+    <i class="bi bi-upload"></i> Import CSV
+  </button>
+  {% endif %}
+</div>
 
-<ul class="nav nav-tabs mb-3" id="bapTabs" role="tablist">
-  <li class="nav-item" role="presentation">
-    <button class="nav-link active" id="awards-tab-btn" data-bs-toggle="tab" data-bs-target="#awards-pane" type="button" role="tab">
-      <i class="bi bi-award"></i> Awarded Points
-    </button>
-  </li>
-  <li class="nav-item" role="presentation">
-    <button class="nav-link" id="lots-tab-btn" data-bs-toggle="tab" data-bs-target="#lots-pane" type="button" role="tab">
-      <i class="bi bi-grid"></i> Lots
-    </button>
-  </li>
-</ul>
-
-<div class="tab-content">
-
-  {# ── Awards tab ── #}
-  <div class="tab-pane fade show active" id="awards-pane" role="tabpanel">
-
-    <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
-      {% if can_manage_bap %}
-      <button class="btn btn-sm btn-info"
-        hx-get="{% url 'bapaward_create' club.slug %}"
-        hx-target="#modals-here"
-        hx-trigger="click"
-        _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
-        <i class="bi bi-plus-circle"></i> Add points
-      </button>
-      <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportBap" aria-expanded="false">
-        <i class="bi bi-upload"></i> Import CSV
-      </button>
-      {% endif %}
-    </div>
-
-    {% if can_manage_bap %}
-    <div class="collapse mb-3" id="csvImportBap">
-      <div class="card card-body">
-        <h6>Import points from CSV</h6>
-        <small class="text-muted">Fields: <strong>Email</strong> (required, matches a club member), BAP, HAP, CAP, Date, Notes. Rows create new award records — existing awards are never modified or deleted.</small>
-        <form method="POST" action="{% url 'club_bap_import' club.slug %}" enctype="multipart/form-data" class="mt-2">
-          {% csrf_token %}
-          <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
-          <button type="submit" class="btn btn-primary btn-sm">Upload CSV</button>
-        </form>
-      </div>
-    </div>
-    {% endif %}
-
-    <form id="awards-filter-form" class="col-sm-12 mt-2" method="get">
-      {% crispy filter.form %}
+{% if can_manage_bap %}
+<div class="collapse mb-3" id="csvImportBap">
+  <div class="card card-body">
+    <h6>Import points from CSV</h6>
+    <small class="text-muted">Fields: <strong>Email</strong> (required, matches a club member), BAP, HAP, CAP, Date, Notes. Rows create new award records — existing awards are never modified or deleted.</small>
+    <form method="POST" action="{% url 'club_bap_import' club.slug %}" enctype="multipart/form-data" class="mt-2">
+      {% csrf_token %}
+      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
+      <button type="submit" class="btn btn-primary btn-sm">Upload CSV</button>
     </form>
-
-    <div id="awards-table-container"
-         hx-get=""
-         hx-trigger="bapAwardListChanged from:body"
-         hx-swap="outerHTML">
-      {% render_table table %}
-    </div>
-
   </div>
+</div>
+{% endif %}
 
-  {# ── Lots tab ── #}
-  <div class="tab-pane fade" id="lots-pane" role="tabpanel">
-    <div id="lots-htmx-wrapper" data-lots-url="{% url 'club_bap_lots' club.slug %}">
-      <p class="text-muted mt-3"><small>Loading…</small></p>
-    </div>
-  </div>
+<form id="awards-filter-form" class="col-sm-12 mt-2" method="get">
+  {% crispy filter.form %}
+</form>
 
+<div id="awards-table-container"
+     hx-get=""
+     hx-trigger="bapAwardListChanged from:body"
+     hx-swap="outerHTML">
+  {% render_table table %}
 </div>
 
 <div id="modals-here"></div>
 
 <script>
 (function () {
-  var lotsTabBtn = document.getElementById('lots-tab-btn');
-  var lotsWrapper = document.getElementById('lots-htmx-wrapper');
-  var lotsLoaded = false;
-
-  function loadLotsTab() {
-    if (lotsLoaded || !lotsWrapper) return;
-    lotsLoaded = true;
-    htmx.ajax('GET', lotsWrapper.dataset.lotsUrl, { target: lotsWrapper, swap: 'outerHTML' });
-  }
-
-  if (lotsTabBtn) {
-    lotsTabBtn.addEventListener('shown.bs.tab', loadLotsTab);
+  var qInput = document.getElementById('id_query');
+  if (qInput) {
+    qInput.addEventListener('input', function () {
+      var newUrl = new URL(window.location);
+      if (this.value) newUrl.searchParams.set('query', this.value);
+      else newUrl.searchParams.delete('query');
+      history.replaceState({}, '', newUrl);
+    });
   }
 })();
 </script>

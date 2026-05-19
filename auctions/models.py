@@ -5867,8 +5867,13 @@ class BapAward(models.Model):
             parts.append(f"{self.hap_points} HAP")
         if self.cap_points:
             parts.append(f"{self.cap_points} CAP")
-        pts = ", ".join(parts) if parts else "0"
-        return f"{pts} pts for {self.club_member} on {self.date}"
+        label = "/".join(parts) if parts else "0"
+        result = f"{label} points"
+        if self.lot_id:
+            result += f" for {self.lot}"
+        if self.notes:
+            result += f" ({self.notes})"
+        return result
 
     @staticmethod
     def recalculate_member_points(member):

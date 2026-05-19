@@ -21,6 +21,11 @@ urlpatterns = [
         views.AuctionAutocomplete.as_view(),
         name="auction-autocomplete",
     ),
+    path(
+        "api/club-member-autocomplete/",
+        views.ClubMemberAutocomplete.as_view(),
+        name="club-member-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),

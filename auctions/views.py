@@ -822,6 +822,30 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         return qs.order_by("-name")
 
 
+class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Autocomplete for ClubMember — scoped to a forwarded club slug, BAP admins only."""
+
+    def get_result_label(self, result):
+        email = f" ({result.email})" if result.email else ""
+        return format_html("{}{}", str(result), email)
+
+    def get_queryset(self):
+        slug = self.forwarded.get("club_slug", "")
+        if not slug:
+            return ClubMember.objects.none()
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
+        if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
+            return ClubMember.objects.none()
+        qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("last_name", "first_name")
+        if self.q:
+            qs = qs.filter(
+                Q(first_name__icontains=self.q)
+                | Q(last_name__icontains=self.q)
+                | Q(email__icontains=self.q)
+            )
+        return qs
+
+
 class AuctionAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     """Autocomplete for auctions that the current user is an admin of"""
 
@@ -12158,6 +12182,10 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 _bap_leaderboard(club, "culture_points_ytd", member) if club.separate_cap else []
             )
             context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+            if member:
+                context["my_bap_awards"] = (
+                    BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:30]
+                )
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -13098,7 +13126,7 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """Main BAP admin page — awarded points tab."""
 
-    active_tab = "bap"
+    active_tab = "bap_awards"
     model = BapAward
     table_class = BapAwardHTMxTable
     filterset_class = BapAwardFilter
@@ -13136,9 +13164,9 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterVie
 
 
 class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
-    """Lots tab of the BAP admin page — all lots sold in this club's auctions."""
+    """Pending BAP page — lots from this club's auctions awaiting point assignment."""
 
-    active_tab = "bap"
+    active_tab = "bap_lots"
     model = Lot
     table_class = ClubBapLotHTMxTable
     filterset_class = ClubBapLotFilter
@@ -13153,9 +13181,14 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
 
     def get_queryset(self):
         return (
-            Lot.objects.filter(auction__club=self.club, is_deleted=False)
+            Lot.objects.filter(
+                auction__club=self.club,
+                is_deleted=False,
+                active=False,
+                auctiontos_winner__isnull=False,
+                bap_award__isnull=True,
+            )
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
-            .prefetch_related("bap_award")
             .order_by("-date_end")
         )
 
@@ -14356,7 +14389,7 @@ class DiscordInteractionsView(View):
 
         return _discord_ephemeral("\n".join(lines))
 
-    def _handle_bap_command(self, data):
+    def _handle_bap_command(self, data):  # noqa: C901 (kept intentional)
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
@@ -14395,6 +14428,12 @@ class DiscordInteractionsView(View):
             lines.append(
                 f"Culture: {member.culture_points} pts (#{cap_rank}) — {member.culture_points_ytd} pts this year"
             )
+
+        recent_awards = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:5]
+        if recent_awards:
+            lines.append("\n**Recent awards:**")
+            for award in recent_awards:
+                lines.append(f"• {award.date} — {award}")
 
         return _discord_ephemeral("\n".join(lines))
 

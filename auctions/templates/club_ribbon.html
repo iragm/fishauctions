@@ -16,8 +16,13 @@
   {% endif %}
   {% if view.can_manage_bap and club.enable_breeder_award_program %}
   <li class="nav-item">
-    <a class="nav-link {% if view.active_tab == 'bap' %}active{% endif %}" href="{% url 'club_bap' club.slug %}">
-      <i class="bi bi-award"></i><span class="d-none d-md-inline"> BAP</span>
+    <a class="nav-link {% if view.active_tab == 'bap_awards' %}active{% endif %}" href="{% url 'club_bap' club.slug %}">
+      <i class="bi bi-award"></i><span class="d-none d-md-inline"> Awarded Points</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if view.active_tab == 'bap_lots' %}active{% endif %}" href="{% url 'club_bap_lots' club.slug %}">
+      <i class="bi bi-grid"></i><span class="d-none d-md-inline"> Pending BAP</span>
     </a>
   </li>
   {% endif %}
