@@ -805,7 +805,15 @@ class ClubMemberAdmin(admin.ModelAdmin):
     list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
     search_fields = ("first_name", "last_name", "email", "user__email", "user__username")
     list_filter = ("club", "source", "is_deleted")
-    readonly_fields = ("user", "club", "discord_roles", "added_by", "possible_duplicate", "membership_expiration_date")
+    readonly_fields = (
+        "user",
+        "club",
+        "discord_roles",
+        "added_by",
+        "possible_duplicate",
+        "membership_expiration_date",
+        "membership_expiration_reminder_due",
+    )
     actions = [export_to_csv]
 
 

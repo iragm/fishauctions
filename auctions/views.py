@@ -12076,7 +12076,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         renewal_soon = False
         if membership_expiration_date:
             renewal_soon = membership_expiration_date <= timezone.now().date() + timedelta(days=30)
-        elif member and self.club.membership_annual_fee and not member.membership_last_paid:
+        elif member and self.club.membership_annual_fee and not member.membership_expiration_date:
             renewal_soon = True
         context["show_membership_payment_button"] = bool(
             self.club.enable_club_page
@@ -12789,7 +12789,13 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 with transaction.atomic():
                     target = review_form.save()
                     update_fields = set(review_form.changed_data)
-                    for field in ["discord_id", "bap_points", "hap_points", "membership_last_paid"]:
+                    for field in [
+                        "discord_id",
+                        "bap_points",
+                        "hap_points",
+                        "membership_last_paid",
+                        "membership_expiration_date",
+                    ]:
                         source_val = getattr(source, field, None)
                         target_val = getattr(target, field, None)
                         if source_val is not None and not target_val:
