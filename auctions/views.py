@@ -12655,7 +12655,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             expiration_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
             messages.error(request, "Invalid date.")
-            return redirect(request.path)
+            return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
         member.membership_expiration_date = expiration_date
         member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
         ClubHistory.objects.create(
