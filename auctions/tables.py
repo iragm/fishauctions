@@ -493,6 +493,7 @@ class ClubMemberHTMxTable(tables.Table):
     _SOURCE_LABELS = {
         "discord": "Discord",
         "manually_added": "Manual",
+        "csv": "CSV",
     }
 
     def render_source(self, value, record):

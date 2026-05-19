@@ -11,7 +11,8 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn btn-danger"
-          hx-post="{{ action_url }}">Confirm</button>
+          hx-post="{{ action_url }}"
+          hx-on::after-request="closeModal()">Confirm</button>
       </div>
     </div>
   </div>

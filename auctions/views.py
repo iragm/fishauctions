@@ -12280,8 +12280,14 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
-        kwargs["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
-        kwargs["can_manage_membership"] = self.user_has_club_permission("permission_add_edit")
+        # Column visibility uses direct field checks — permission_admin alone doesn't reveal all columns
+        if self.request.user.is_superuser:
+            kwargs["can_manage_bap"] = True
+            kwargs["can_manage_membership"] = True
+        else:
+            member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+            kwargs["can_manage_bap"] = bool(member and member.permission_manage_bap)
+            kwargs["can_manage_membership"] = bool(member and member.permission_add_edit)
         return kwargs
 
 
@@ -13444,7 +13450,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         contact_status=contact_status or "contact",
                         membership_last_paid=membership_last_paid,
                         membership_expiration_date=membership_expiration_date,
-                        source="manually_added",
+                        source="csv",
                         added_by=self.request.user,
                     )
                     if date_joined is not None:
