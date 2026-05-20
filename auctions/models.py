@@ -5085,31 +5085,33 @@ class Lot(models.Model):
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):
-        """Create a BapAward and sync bap_points_awarded/bap_auto_reason. Call after auction ends."""
+        """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
+
+        Safe to call unconditionally on set_winner — skips silently if no club, or if an award already exists.
+        """
         if not (self.auction and self.auction.club):
             return
         # Skip if a BapAward already exists for this lot (auto or manual)
         if BapAward.objects.filter(lot=self).exists():
             return
-        reason = self.sold_lot_no_bap_reason
-        if reason:
-            self.bap_auto_reason = reason
-            self.bap_points_awarded = 0
-            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
-            return
         club = self.auction.club
-        if not club.auto_add_points:
-            # Eligible but requires manual approval — clear any stale reason
-            self.bap_auto_reason = ""
-            self.bap_points_awarded = 0
-            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+        # Always compute and persist the eligibility reason so the pending table can display it without
+        # falling back to live queries.  Empty string = eligible (no blocking reason).
+        reason = self.sold_lot_no_bap_reason
+        self.bap_auto_reason = reason or ""
+        self.bap_points_awarded = 0
+        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+        if reason:
+            # Ineligible — reason stored above; nothing more to do
             return
-        # Determine point value
+        if not club.auto_add_points:
+            # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
+            return
+        # Eligible + auto_add_points: create the BapAward now
         if club.points_per_lot > 0:
             points = club.points_per_lot
         else:
             points = self.species_category.bap_points if self.species_category else 5
-        # Resolve seller to ClubMember
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         if not seller_user:
             return
@@ -5131,8 +5133,7 @@ class Lot(models.Model):
             awarded_by=None,  # None = auto-awarded by the system
         )
         self.bap_points_awarded = points
-        self.bap_auto_reason = ""
-        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+        self.save(update_fields=["bap_points_awarded"])
 
     @property
     def pre_registered(self):

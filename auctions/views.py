@@ -4962,6 +4962,11 @@ class ViewLot(DetailView):
                 context["bap_eligible_reason"] = reason
                 if reason:
                     context["bap_eligible_reason_display"] = dict(lot.BAP_REASON_CHOICES).get(reason, reason)
+            context["viewer_has_bap"] = viewer_has_bap
+            if viewer_has_bap and lot.sold:
+                club = lot.auction.club
+                context["bap_club"] = club
+                context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
@@ -7329,6 +7334,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         context["viewer_has_bap"] = club is not None and check_club_permission(
             self.request.user, club, "permission_manage_bap"
         )
+        if context["viewer_has_bap"] and club:
+            context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
         return context
 
     def get_success_url(self):
@@ -13192,6 +13199,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
                 is_deleted=False,
                 active=False,
                 auctiontos_winner__isnull=False,
+                i_bred_this_fish=True,
             )
             .filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
@@ -13354,7 +13362,7 @@ class BapAwardDeleteView(APIView):
         if lot:
             lot.bap_points_awarded = 0
             lot.manually_approved = False
-            lot.bap_auto_reason = ""
+            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
             lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
         ClubHistory.objects.create(
             club=club,
@@ -14493,7 +14501,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
                 existing.delete()
             lot.bap_points_awarded = 0
             lot.manually_approved = False
-            lot.bap_auto_reason = ""
+            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
             lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
             return self._render_buttons(request, lot, club)
 
@@ -14503,8 +14511,9 @@ class LotBapPointsView(LoginRequiredMixin, View):
                 existing.delete()
             lot.bap_points_awarded = 0
             lot.manually_approved = True
-            lot.bap_auto_reason = ""
-            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            # Leave bap_auto_reason as-is: it reflects the system's eligibility verdict,
+            # which is still useful to show even when an admin explicitly rejects.
+            lot.save(update_fields=["bap_points_awarded", "manually_approved"])
             ClubHistory.objects.create(
                 club=club,
                 user=request.user,

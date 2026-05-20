@@ -64,6 +64,13 @@
             if (window.__dal__initialize) { window.__dal__initialize(this); }
             else { yl.functions.select2($, this); }
         });
+        // Re-apply dropdownParent so the Select2 dropdown renders inside the modal
+        // and isn't clipped by the modal's overflow.
+        $('[data-autocomplete-light-function=select2].select2-hidden-accessible').each(function() {
+            var $el = $(this);
+            var opts = $.extend({}, $el.data('select2').options.options, { dropdownParent: $('#modal') });
+            $el.select2('destroy').select2(opts);
+        });
         $.fn.select2 && $('.js-services-multiselect').not('.select2-hidden-accessible').select2();
     }, 50);
 })(30);

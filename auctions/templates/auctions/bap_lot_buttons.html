@@ -1,4 +1,4 @@
-{% with award=lot.bap_award_cached %}
+{% with award=lot.bap_award_cached|default:lot.bap_award %}
 <div class="bap-actions d-flex align-items-center flex-wrap gap-1" id="bap-actions-{{ lot.pk }}">
 {% if lot.manually_approved and not award %}
   <span class="badge bg-secondary">Rejected</span>
@@ -7,7 +7,7 @@
     hx-vals='{"action": "undo"}'
     hx-target="#bap-actions-{{ lot.pk }}"
     hx-swap="outerHTML"
-    class="btn btn-sm btn-outline-secondary">Undo</button>
+    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
 {% elif award %}
   {% if award.points %}<span class="badge bg-success">{{ award.points }} BAP</span>{% endif %}
   {% if award.hap_points %}<span class="badge bg-primary">{{ award.hap_points }} HAP</span>{% endif %}
@@ -17,7 +17,7 @@
     hx-vals='{"action": "undo"}'
     hx-target="#bap-actions-{{ lot.pk }}"
     hx-swap="outerHTML"
-    class="btn btn-sm btn-outline-secondary">Undo</button>
+    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
 {% else %}
   {% with placeholder=lot.bap_placeholder %}
   {% if placeholder == "HAP" %}

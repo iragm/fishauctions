@@ -727,17 +727,24 @@ class ClubBapLotHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
 
     lot_name = tables.Column(verbose_name="Lot", orderable=True)
-    seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
+    seller_name = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
     date_end = tables.Column(
         verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
     )
+    bap_reason = tables.Column(accessor="bap_auto_reason", verbose_name="Reason", orderable=False)
     actions = tables.Column(empty_values=(), verbose_name="Actions", orderable=False)
 
     def render_lot_name(self, value, record):
         return value
 
-    def render_seller(self, value, record):
-        return str(value) if value else "—"
+    def render_seller_name(self, value, record):
+        return value.name if value else "—"
+
+    def render_bap_reason(self, value, record):
+        reason = value or record.unsold_lot_no_bap_reason
+        if not reason:
+            return ""
+        return dict(Lot.BAP_REASON_CHOICES).get(reason, reason)
 
     def render_date_end(self, value, record):
         return value.strftime("%b %-d, %Y") if value else "—"
@@ -761,7 +768,7 @@ class ClubBapLotHTMxTable(tables.Table):
     class Meta:
         model = Lot
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("lot_name", "seller", "date_end", "actions")
+        fields = ("lot_name", "seller_name", "date_end", "bap_reason", "actions")
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)

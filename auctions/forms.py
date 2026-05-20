@@ -3715,17 +3715,7 @@ class BapAwardForm(forms.ModelForm):
         self.helper.form_method = "post"
         layout_fields = list(self.fields.keys())
 
-        member_link_html = ""
-        if self.instance.pk and self.instance.club_member_id:
-            from django.urls import reverse as _reverse
-
-            member = self.instance.club_member
-            member_url = _reverse("clubmember_admin", kwargs={"pk": member.pk})
-            member_link_html = f'<p class="mb-1"><small>Member: <a href="{member_url}" target="_blank" class="text-primary fw-bold">{member}</a></small></p>'
-
         prefix_items = []
-        if member_link_html:
-            prefix_items.append(HTML(member_link_html))
         if lot:
             prefix_items.append(
                 HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')

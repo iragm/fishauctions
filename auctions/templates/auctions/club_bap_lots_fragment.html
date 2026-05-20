@@ -19,10 +19,6 @@
       <label class="dropdown-item">
         <input type="checkbox" class="bap_filter" id="checkbox_rejected"> Rejected
       </label>
-      <div class="dropdown-divider"></div>
-      <label class="dropdown-item">
-        <input type="checkbox" class="bap_filter" id="checkbox_breeder"> Checked breeder
-      </label>
     </div>
   </span>
 </div>
@@ -30,14 +26,14 @@
 <div id="lots-table-container"
      hx-get="{% url 'club_bap_lots' club.slug %}"
      hx-trigger="bapLotListChanged from:body"
-     hx-swap="outerHTML">
+     hx-swap="innerHTML">
   {% render_table table %}
 </div>
 
 <script>
 (function () {
   var STATUS_KEYWORDS = ['pending', 'approved', 'rejected'];
-  var ALL_KEYWORDS = STATUS_KEYWORDS.concat(['breeder']);
+  var ALL_KEYWORDS = STATUS_KEYWORDS;
 
   function syncCheckboxesFromQuery() {
     var val = (document.getElementById('id_query') || {}).value || '';
@@ -85,12 +81,5 @@
     });
   });
 
-  // Breeder filter is independent (can combine with status)
-  var breederCb = document.getElementById('checkbox_breeder');
-  if (breederCb) {
-    breederCb.addEventListener('change', function () {
-      updateQueryKeyword('breeder', this.checked, false);
-    });
-  }
 })();
 </script>

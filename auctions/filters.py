@@ -1109,7 +1109,7 @@ class BapAwardFilter(django_filters.FilterSet):
                 "hx-get": "",
                 "hx-target": "#awards-table-container",
                 "hx-trigger": "keyup changed delay:300ms",
-                "hx-swap": "outerHTML",
+                "hx-swap": "innerHTML",
             }
         ),
     )
@@ -1153,7 +1153,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
                 "hx-get": "",
                 "hx-target": "#lots-table-container",
                 "hx-trigger": "keyup changed delay:300ms",
-                "hx-swap": "outerHTML",
+                "hx-swap": "innerHTML",
             }
         ),
     )
@@ -1162,19 +1162,15 @@ class ClubBapLotFilter(django_filters.FilterSet):
         model = Lot
         fields = []
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, data=None, *args, **kwargs):
+        # Seed "pending" when the page loads with no params so django-filter treats the
+        # filterset as bound and actually calls filter_queryset (unbound = no filtering).
+        if not data:
+            data = {"query": "pending"}
+        super().__init__(data, *args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
         self.helper.form_id = "filter-form"
-        if not self.data.get("query"):
-            self.form.initial["query"] = "pending"
-
-    def filter_queryset(self, queryset):
-        # When no query submitted apply the pending default without going through CharField
-        if not self.data.get("query"):
-            return self._apply_query(queryset, "pending")
-        return super().filter_queryset(queryset)
 
     def filter_query(self, queryset, name, value):
         return self._apply_query(queryset, value)
@@ -1183,8 +1179,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
         tokens = value.lower().split()
         status_keywords = {"pending", "approved", "rejected"}
         status = next((t for t in tokens if t in status_keywords), None)
-        breeder_only = "breeder" in tokens
-        search_tokens = [t for t in tokens if t not in status_keywords and t != "breeder"]
+        search_tokens = [t for t in tokens if t not in status_keywords]
         search = " ".join(search_tokens)
 
         if status == "pending":
@@ -1196,9 +1191,6 @@ class ClubBapLotFilter(django_filters.FilterSet):
             # Manually dismissed with no BapAward
             queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
         # no status keyword = show all sold lots (no extra filter)
-
-        if breeder_only:
-            queryset = queryset.filter(i_bred_this_fish=True)
 
         if search:
             queryset = queryset.filter(
