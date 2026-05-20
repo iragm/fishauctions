@@ -14019,20 +14019,29 @@ def _sync_discord_roles(club, bot_token):
     # Build a position lookup by role ID
     position_by_id = {r["id"]: r.get("position", 0) for r in all_roles}
 
-    # Fetch the bot's own guild member to find its highest role position
+    # Fetch the bot's own guild member to find its highest role position.
+    # /members/@me only works with OAuth2 bearer tokens, not bot tokens.
+    # Instead: resolve the bot's user ID first, then fetch its guild member by ID.
     bot_max_position = 0
     try:
-        me_resp = requests.get(
-            f"https://discord.com/api/v10/guilds/{guild_id}/members/@me",
-            headers=headers,
-            timeout=10,
-        )
-        if me_resp.status_code == 200:
-            bot_role_ids = me_resp.json().get("roles", [])
-            if bot_role_ids:
-                bot_max_position = max(position_by_id.get(rid, 0) for rid in bot_role_ids)
+        user_resp = requests.get("https://discord.com/api/v10/users/@me", headers=headers, timeout=10)
+        if user_resp.status_code == 200:
+            bot_user_id = user_resp.json().get("id")
+            if bot_user_id:
+                member_resp = requests.get(
+                    f"https://discord.com/api/v10/guilds/{guild_id}/members/{bot_user_id}",
+                    headers=headers,
+                    timeout=10,
+                )
+                if member_resp.status_code == 200:
+                    bot_role_ids = member_resp.json().get("roles", [])
+                    if bot_role_ids:
+                        bot_max_position = max(position_by_id.get(rid, 0) for rid in bot_role_ids)
+                    logger.info("Discord bot position resolved: user_id=%s bot_max_position=%s", bot_user_id, bot_max_position)
+                else:
+                    logger.warning("Discord guild member fetch failed: status=%s", member_resp.status_code)
         else:
-            logger.warning("Discord @me fetch failed: status=%s", me_resp.status_code)
+            logger.warning("Discord users/@me fetch failed: status=%s", user_resp.status_code)
     except requests.RequestException as exc:
         logger.exception("Error fetching bot's own member record: %s", exc)
 

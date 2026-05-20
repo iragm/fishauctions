@@ -946,16 +946,20 @@ class ClubMember(ContactRecord):
         headers = {"Authorization": f"Bot {bot_token}"}
         base_url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles"
 
-        # Remove all club-managed roles that are not the target
+        # Remove all club-managed roles that are not the target (skip unmanageable ones)
         for club_role in self.club.discord_roles.all():
+            if not club_role.bot_can_manage:
+                continue
             if role is None or club_role.pk != role.pk:
                 try:
                     _requests.delete(f"{base_url}/{club_role.role_id}", headers=headers, timeout=10)
                 except Exception:
                     pass
 
-        # Assign the target role (if any)
+        # Assign the target role (if any); bail if the bot can't manage it
         if role:
+            if not role.bot_can_manage:
+                return
             try:
                 _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
             except Exception:
