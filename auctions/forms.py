@@ -13,7 +13,6 @@ from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
-from dal import forward as dal_forward
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -3677,6 +3676,8 @@ class ClubBapSettingsForm(forms.ModelForm):
 class BapAwardForm(forms.ModelForm):
     """Form for club BAP admins to create or edit a BapAward record."""
 
+    club_slug = forms.CharField(widget=forms.HiddenInput(), required=False)
+
     class Meta:
         model = BapAward
         fields = ["club_member", "date", "points", "hap_points", "cap_points", "notes"]
@@ -3690,9 +3691,10 @@ class BapAwardForm(forms.ModelForm):
     ):
         super().__init__(*args, **kwargs)
         club_slug = club.slug if club else ""
+        self.fields["club_slug"].initial = club_slug
         self.fields["club_member"].widget = autocomplete.ModelSelect2(
             url="club-member-autocomplete",
-            forward=[dal_forward.Const(club_slug, "club_slug")],
+            forward=["club_slug"],
             attrs={"data-placeholder": "Search for a member…", "data-html": True},
         )
         if club:

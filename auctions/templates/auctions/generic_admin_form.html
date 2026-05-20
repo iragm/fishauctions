@@ -36,12 +36,24 @@
 </script>
 <script>
 (function tryInit(retries) {
-    // Wait for DAL (yl) and select2 (jQuery.fn.select2) to be available from form.media async scripts
+    // Wait for select2.full.js (jQuery.fn.select2) and autocomplete_light.min.js (yl) to load.
+    // These are fetched asynchronously by HTMX even though they have no async attribute.
     if (typeof yl === 'undefined' || typeof jQuery === 'undefined' || !jQuery.fn.select2) {
         if (retries > 0) setTimeout(function() { tryInit(retries - 1); }, 100);
         return;
     }
-    // Trigger DAL's load-time initialization if it hasn't run yet
+    // select2.min.js registers yl.functions.select2 via a 'dal-init-function' event listener.
+    // Dispatch the event now so it registers (harmless if already registered, guard prevents double-dispatch).
+    if (!yl.functions || !yl.functions.select2) {
+        document.dispatchEvent(new CustomEvent('dal-init-function'));
+    }
+    // If yl.functions.select2 is still missing, select2.min.js hasn't finished loading — retry.
+    if (!yl.functions || !yl.functions.select2) {
+        if (retries > 0) setTimeout(function() { tryInit(retries - 1); }, 100);
+        return;
+    }
+    // Trigger DAL's load-time initialization (sets window.__dal__initialize, MutationObserver, etc.)
+    // This callback never auto-fires for dynamically injected scripts since window.load already fired.
     if (!window.__dal__initialize) {
         window.dispatchEvent(new Event('load'));
     }
@@ -50,7 +62,7 @@
         var $ = (window.django && django.jQuery) || jQuery;
         $('[data-autocomplete-light-function=select2]').not('.select2-hidden-accessible').each(function() {
             if (window.__dal__initialize) { window.__dal__initialize(this); }
-            else if (yl.functions && yl.functions.select2) { yl.functions.select2($, this); }
+            else { yl.functions.select2($, this); }
         });
         $.fn.select2 && $('.js-services-multiselect').not('.select2-hidden-accessible').select2();
     }, 50);

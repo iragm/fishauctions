@@ -13178,6 +13178,14 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
+        matching_member = ClubMember.objects.filter(
+            club=self.club,
+            is_deleted=False,
+        ).filter(
+            Q(user=OuterRef("auctiontos_seller__user"))
+            | Q(user=OuterRef("user"))
+            | Q(email__iexact=OuterRef("auctiontos_seller__email"))
+        )
         return (
             Lot.objects.filter(
                 auction__club=self.club,
@@ -13185,6 +13193,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
                 active=False,
                 auctiontos_winner__isnull=False,
             )
+            .filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
             .prefetch_related("bap_award")
             .order_by("-date_end")
@@ -14540,7 +14549,6 @@ class LotBapPointsView(LoginRequiredMixin, View):
                 action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {self._seller_name(lot)} for {lot.lot_name}",
                 applies_to="BAP",
             )
-        # If no points or member not found, leave lot in pending state (don't set manually_approved)
         return self._render_buttons(request, lot, club)
 
 
