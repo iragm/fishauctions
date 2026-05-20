@@ -14077,53 +14077,7 @@ class DiscordInteractionsView(View):
         if interaction_type == _DISCORD_TYPE_COMPONENT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_button":
-                return JsonResponse(
-                    {
-                        "type": _DISCORD_TYPE_MODAL,
-                        "data": {
-                            "custom_id": "join_modal",
-                            "title": "Enter your contact information",
-                            "components": [
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "first_name",
-                                            "label": "First name",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "last_name",
-                                            "label": "Last name",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "email",
-                                            "label": "Email address",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                            ],
-                        },
-                    }
-                )
+                return self._join_modal_response()
             return _discord_ephemeral("Unsupported interaction")
 
         # Type 2 – Application command (slash command)
@@ -14150,10 +14104,8 @@ class DiscordInteractionsView(View):
 
         return _discord_ephemeral("Unsupported interaction")
 
-    def _handle_join_command(self, data):
-        guild_id = data.get("guild_id", "")
-        if not guild_id or not Club.objects.filter(discord_server_id=guild_id).exists():
-            return _discord_ephemeral("❌ No club is configured for this Discord server.")
+    def _join_modal_response(self):
+        """Return a Discord modal response for joining the club."""
         return JsonResponse(
             {
                 "type": _DISCORD_TYPE_MODAL,
@@ -14201,6 +14153,12 @@ class DiscordInteractionsView(View):
                 },
             }
         )
+
+    def _handle_join_command(self, data):
+        guild_id = data.get("guild_id", "")
+        if not guild_id or not Club.objects.filter(discord_server_id=guild_id).exists():
+            return _discord_ephemeral("❌ No club is configured for this Discord server.")
+        return self._join_modal_response()
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
@@ -14382,7 +14340,7 @@ class DiscordInteractionsView(View):
 
         member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
         if not member:
-            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+            return self._join_modal_response()
 
         lines = [f"**{club.name}** — Your membership"]
         lines.append(f"Member since: {member.createdon.strftime('%B %d, %Y')}")
@@ -14422,7 +14380,7 @@ class DiscordInteractionsView(View):
 
         member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
         if not member:
-            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+            return self._join_modal_response()
 
         lines = [f"**{club.name}** — Your points"]
 
