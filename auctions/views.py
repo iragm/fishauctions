@@ -839,9 +839,7 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("last_name", "first_name")
         if self.q:
             qs = qs.filter(
-                Q(first_name__icontains=self.q)
-                | Q(last_name__icontains=self.q)
-                | Q(email__icontains=self.q)
+                Q(first_name__icontains=self.q) | Q(last_name__icontains=self.q) | Q(email__icontains=self.q)
             )
         return qs
 
@@ -12183,9 +12181,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             )
             context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
             if member:
-                context["my_bap_awards"] = (
-                    BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:30]
-                )
+                context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:30]
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -12281,8 +12277,10 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
-            raise PermissionDenied()
+        if request.user.is_authenticated and not request.user.is_superuser:
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if not member or not member.has_any_permission:
+                raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -13186,9 +13184,9 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
                 is_deleted=False,
                 active=False,
                 auctiontos_winner__isnull=False,
-                bap_award__isnull=True,
             )
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
+            .prefetch_related("bap_award")
             .order_by("-date_end")
         )
 
@@ -14439,21 +14437,16 @@ class DiscordInteractionsView(View):
 
 
 class LotBapPointsView(LoginRequiredMixin, View):
-    """AJAX endpoint to manually set BAP points for a lot. BAP admins only."""
+    """Inline BAP approve/reject/undo endpoint for the Pending BAP table."""
 
-    def post(self, request, pk):
-        lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
-        club = lot.auction.club if lot.auction else None
-        if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
-            return HttpResponse(status=403)
-        try:
-            points = int(request.POST.get("bap_points_awarded", 0))
-            if points < 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            return HttpResponse(status=400)
+    def _seller_name(self, lot):
+        if lot.auctiontos_seller:
+            return lot.auctiontos_seller.name
+        if lot.user:
+            return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
+        return f"lot #{lot.pk}"
 
-        # Resolve seller to ClubMember for the BapAward record
+    def _resolve_member(self, lot, club):
         seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
         seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
         member = None
@@ -14461,13 +14454,71 @@ class LotBapPointsView(LoginRequiredMixin, View):
             member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
         if not member and seller_email:
             member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+        return member
 
+    def _render_buttons(self, request, lot, club):
+        lot.refresh_from_db()
+        try:
+            award = lot.bap_award
+        except Exception:
+            award = None
+        lot.bap_award_cached = award
+        default_points = club.points_per_lot if club.points_per_lot > 0 else 5
+        return render(
+            request,
+            "auctions/bap_lot_buttons.html",
+            {"lot": lot, "club": club, "default_points": default_points},
+        )
+
+    def post(self, request, pk):
+        lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
+        club = lot.auction.club if lot.auction else None
+        if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
+            return HttpResponse(status=403)
+
+        action = request.POST.get("action", "approve")
+
+        if action == "undo":
+            existing = BapAward.objects.filter(lot=lot).first()
+            if existing:
+                existing.delete()
+            lot.bap_points_awarded = 0
+            lot.manually_approved = False
+            lot.bap_auto_reason = ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            return self._render_buttons(request, lot, club)
+
+        if action == "reject":
+            existing = BapAward.objects.filter(lot=lot).first()
+            if existing:
+                existing.delete()
+            lot.bap_points_awarded = 0
+            lot.manually_approved = True
+            lot.bap_auto_reason = ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Rejected BAP points for {self._seller_name(lot)}: {lot.lot_name}",
+                applies_to="BAP",
+            )
+            return self._render_buttons(request, lot, club)
+
+        # action == "approve"
+        def _parse_pts(key):
+            try:
+                return max(0, int(str(request.POST.get(key, 0)).strip() or 0))
+            except (ValueError, TypeError):
+                return 0
+
+        bap_pts = _parse_pts("bap_points")
+        hap_pts = _parse_pts("hap_points")
+        cap_pts = _parse_pts("cap_points")
+
+        member = self._resolve_member(lot, club)
         award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
-        if points > 0 and member:
-            placeholder = lot.bap_placeholder
-            bap_pts = points if placeholder == "BAP" else 0
-            hap_pts = points if placeholder == "HAP" else 0
-            cap_pts = points if placeholder == "Culture" else 0
+
+        if (bap_pts or hap_pts or cap_pts) and member:
             BapAward.objects.update_or_create(
                 lot=lot,
                 defaults={
@@ -14479,30 +14530,18 @@ class LotBapPointsView(LoginRequiredMixin, View):
                     "awarded_by": request.user,
                 },
             )
-        elif points == 0:
-            existing_award = BapAward.objects.filter(lot=lot).first()
-            if existing_award:
-                existing_award.delete()
-
-        # Keep lot fields in sync for eligibility queries and legacy display
-        lot.bap_points_awarded = points
-        lot.manually_approved = True
-        lot.bap_auto_reason = ""
-        lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-
-        if lot.auctiontos_seller:
-            name = lot.auctiontos_seller.name
-        elif lot.user:
-            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
-        else:
-            name = f"lot #{lot.pk}"
-        ClubHistory.objects.create(
-            club=club,
-            user=request.user,
-            action=f"Awarded {points} BAP point(s) to {name} for lot {lot.lot_name}",
-            applies_to="BAP",
-        )
-        return HttpResponse(status=204)
+            lot.bap_points_awarded = bap_pts + hap_pts + cap_pts
+            lot.manually_approved = True
+            lot.bap_auto_reason = ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {self._seller_name(lot)} for {lot.lot_name}",
+                applies_to="BAP",
+            )
+        # If no points or member not found, leave lot in pending state (don't set manually_approved)
+        return self._render_buttons(request, lot, club)
 
 
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):

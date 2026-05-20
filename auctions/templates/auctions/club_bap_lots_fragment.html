@@ -11,10 +11,17 @@
     </button>
     <div class="dropdown-menu dropdown-menu-end" style="min-width:12rem">
       <label class="dropdown-item">
-        <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending approval
+        <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending
       </label>
       <label class="dropdown-item">
         <input type="checkbox" class="bap_filter" id="checkbox_approved"> Approved
+      </label>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_rejected"> Rejected
+      </label>
+      <div class="dropdown-divider"></div>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_breeder"> Checked breeder
       </label>
     </div>
   </span>
@@ -29,18 +36,25 @@
 
 <script>
 (function () {
+  var STATUS_KEYWORDS = ['pending', 'approved', 'rejected'];
+  var ALL_KEYWORDS = STATUS_KEYWORDS.concat(['breeder']);
+
   function syncCheckboxesFromQuery() {
     var val = (document.getElementById('id_query') || {}).value || '';
     var tokens = val.toLowerCase().split(/\s+/);
-    document.getElementById('checkbox_pending').checked = tokens.indexOf('pending') !== -1;
-    document.getElementById('checkbox_approved').checked = tokens.indexOf('approved') !== -1;
+    ALL_KEYWORDS.forEach(function (kw) {
+      var cb = document.getElementById('checkbox_' + kw);
+      if (cb) cb.checked = tokens.indexOf(kw) !== -1;
+    });
   }
 
-  function updateQueryKeyword(keyword, add) {
+  function updateQueryKeyword(keyword, add, exclusive) {
     var el = document.getElementById('id_query');
     if (!el) return;
     var val = el.value;
-    ['pending', 'approved'].forEach(function (kw) {
+    // Remove the keyword (and optionally other exclusive keywords) first
+    var toRemove = exclusive ? STATUS_KEYWORDS : [keyword];
+    toRemove.forEach(function (kw) {
       val = val.replace(new RegExp('(^|\\s)' + kw + '(?=\\s|$)', 'g'), ' ');
     });
     val = val.trim();
@@ -62,18 +76,20 @@
     syncCheckboxesFromQuery();
   }
 
-  var pending = document.getElementById('checkbox_pending');
-  var approved = document.getElementById('checkbox_approved');
-  if (pending) {
-    pending.addEventListener('change', function () {
-      if (this.checked && approved) approved.checked = false;
-      updateQueryKeyword('pending', this.checked);
+  // Status filters are mutually exclusive
+  STATUS_KEYWORDS.forEach(function (kw) {
+    var cb = document.getElementById('checkbox_' + kw);
+    if (!cb) return;
+    cb.addEventListener('change', function () {
+      updateQueryKeyword(kw, this.checked, true);
     });
-  }
-  if (approved) {
-    approved.addEventListener('change', function () {
-      if (this.checked && pending) pending.checked = false;
-      updateQueryKeyword('approved', this.checked);
+  });
+
+  // Breeder filter is independent (can combine with status)
+  var breederCb = document.getElementById('checkbox_breeder');
+  if (breederCb) {
+    breederCb.addEventListener('change', function () {
+      updateQueryKeyword('breeder', this.checked, false);
     });
   }
 })();

@@ -723,94 +723,40 @@ class ClubBapLotHTMxTable(tables.Table):
 
     lot_name = tables.Column(verbose_name="Lot", orderable=True)
     seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
-    auction = tables.Column(accessor="auction", verbose_name="Auction", orderable=False)
     date_end = tables.Column(
         verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
     )
-    bap_points_awarded = tables.Column(verbose_name="Points", orderable=True)
-    status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
-
-    _MODAL_ATTRS = (
-        'hx-target="#modals-here" hx-trigger="click" '
-        '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"'
-    )
-
-    def _modal_url(self, record):
-        award = getattr(record, "bap_award", None)
-        if award:
-            return reverse("bapaward_admin", kwargs={"pk": award.pk})
-        slug = record.auction.club.slug if record.auction and record.auction.club_id else None
-        if slug:
-            return reverse("bapaward_create", kwargs={"slug": slug}) + f"?lot_pk={record.pk}"
-        return None
+    actions = tables.Column(empty_values=(), verbose_name="Actions", orderable=False)
 
     def render_lot_name(self, value, record):
-        modal_url = self._modal_url(record)
-        if modal_url:
-            return format_html(
-                '{} <a hx-get="{}" {} class="btn btn-sm btn-outline-primary ms-1" title="Set points">'
-                '<i class="bi bi-plus-circle"></i> Set points</a>',
-                value,
-                modal_url,
-                mark_safe(self._MODAL_ATTRS),
-            )
         return value
 
     def render_seller(self, value, record):
-        if value:
-            return str(value)
-        return "—"
-
-    def render_auction(self, value, record):
-        if value:
-            return str(value)
-        return "—"
+        return str(value) if value else "—"
 
     def render_date_end(self, value, record):
-        if value:
-            return value.strftime("%b %-d, %Y")
-        return "—"
+        return value.strftime("%b %-d, %Y") if value else "—"
 
-    def render_bap_points_awarded(self, value, record):
-        award = getattr(record, "bap_award", None)
-        modal_url = self._modal_url(record)
-        if award:
-            placeholder = record.bap_placeholder
-            if placeholder == "HAP":
-                display = f"{award.hap_points} HAP"
-            elif placeholder == "Culture":
-                display = f"{award.cap_points} CAP"
-            else:
-                display = f"{award.points} BAP"
-        else:
-            display = record.bap_placeholder
-        if modal_url:
-            return format_html(
-                '<a hx-get="{}" {}>{}</a>',
-                modal_url,
-                mark_safe(self._MODAL_ATTRS),
-                display,
+    def render_actions(self, record):
+        from django.template.loader import render_to_string
+
+        try:
+            award = record.bap_award
+        except Exception:
+            award = None
+        record.bap_award_cached = award
+        default_points = self.club.points_per_lot if self.club and self.club.points_per_lot > 0 else 5
+        return mark_safe(
+            render_to_string(
+                "auctions/bap_lot_buttons.html",
+                {"lot": record, "club": self.club, "default_points": default_points},
             )
-        return display
-
-    def render_status(self, value, record):
-        award = getattr(record, "bap_award", None)
-        if award:
-            if award.awarded_by_id is None:
-                return mark_safe('<span class="badge bg-success">Auto-approved</span>')
-            return mark_safe('<span class="badge bg-success">Approved</span>')
-        if record.manually_approved:
-            return mark_safe('<span class="badge bg-secondary">Manually set</span>')
-        reason = record.sold_lot_no_bap_reason
-        if reason:
-            label = dict(record.BAP_REASON_CHOICES).get(reason, reason)
-            return format_html('<span class="badge bg-warning text-dark">{}</span>', label)
-        return mark_safe('<span class="badge bg-primary">Pending</span>')
+        )
 
     class Meta:
         model = Lot
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("lot_name", "seller", "auction", "date_end", "bap_points_awarded", "status")
+        fields = ("lot_name", "seller", "date_end", "actions")
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)

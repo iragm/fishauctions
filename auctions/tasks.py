@@ -261,7 +261,7 @@ def update_expired_membership_discord_roles(self):
     # Zero out YTD BAP/HAP/CAP counters at the start of each new year
     import datetime
 
-    today = datetime.date.today()
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
     if today.month == 1 and today.day == 1:
         ClubMember.objects.filter(
             is_deleted=False,

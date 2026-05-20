@@ -1,5 +1,4 @@
 {% load static %}
-<script src="{% static 'js/vendor/jquery.min.js' %}"></script>
 {{ form.media }}
 {% load crispy_forms_tags %}
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
@@ -36,14 +35,25 @@
 })();
 </script>
 <script>
-htmx.on("htmx:afterSettle", (e) => {
-    setTimeout(() => {
-        if (typeof dal_init === 'undefined') {
-            window.dispatchEvent(new Event('load'));
-            $('.js-services-multiselect').select2();
-            dal_init = true;
-        }
-    }, 200);
-});
+(function tryInit(retries) {
+    // Wait for DAL (yl) and select2 (jQuery.fn.select2) to be available from form.media async scripts
+    if (typeof yl === 'undefined' || typeof jQuery === 'undefined' || !jQuery.fn.select2) {
+        if (retries > 0) setTimeout(function() { tryInit(retries - 1); }, 100);
+        return;
+    }
+    // Trigger DAL's load-time initialization if it hasn't run yet
+    if (!window.__dal__initialize) {
+        window.dispatchEvent(new Event('load'));
+    }
+    // Initialize DAL widgets and any plain select2 multiselects in this modal
+    setTimeout(function() {
+        var $ = (window.django && django.jQuery) || jQuery;
+        $('[data-autocomplete-light-function=select2]').not('.select2-hidden-accessible').each(function() {
+            if (window.__dal__initialize) { window.__dal__initialize(this); }
+            else if (yl.functions && yl.functions.select2) { yl.functions.select2($, this); }
+        });
+        $.fn.select2 && $('.js-services-multiselect').not('.select2-hidden-accessible').select2();
+    }, 50);
+})(30);
 </script>
 {{ extra_script }}

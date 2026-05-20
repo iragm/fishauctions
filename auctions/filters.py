@@ -1181,17 +1181,24 @@ class ClubBapLotFilter(django_filters.FilterSet):
 
     def _apply_query(self, queryset, value):
         tokens = value.lower().split()
-        status_keywords = {"pending", "approved"}
+        status_keywords = {"pending", "approved", "rejected"}
         status = next((t for t in tokens if t in status_keywords), None)
-        search_tokens = [t for t in tokens if t not in status_keywords]
+        breeder_only = "breeder" in tokens
+        search_tokens = [t for t in tokens if t not in status_keywords and t != "breeder"]
         search = " ".join(search_tokens)
 
         if status == "pending":
-            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False, manually_approved=False)
+            # Not yet reviewed: no BapAward and not manually dismissed
+            queryset = queryset.filter(bap_award__isnull=True, manually_approved=False)
         elif status == "approved":
-            queryset = queryset.filter(bap_points_awarded__gt=0)
-        else:
-            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False)
+            queryset = queryset.filter(bap_award__isnull=False)
+        elif status == "rejected":
+            # Manually dismissed with no BapAward
+            queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
+        # no status keyword = show all sold lots (no extra filter)
+
+        if breeder_only:
+            queryset = queryset.filter(i_bred_this_fish=True)
 
         if search:
             queryset = queryset.filter(

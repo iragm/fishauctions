@@ -13,6 +13,7 @@ from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
+from dal import forward as dal_forward
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -3691,7 +3692,7 @@ class BapAwardForm(forms.ModelForm):
         club_slug = club.slug if club else ""
         self.fields["club_member"].widget = autocomplete.ModelSelect2(
             url="club-member-autocomplete",
-            forward=[autocomplete.forward.Const(club_slug, "club_slug")],
+            forward=[dal_forward.Const(club_slug, "club_slug")],
             attrs={"data-placeholder": "Search for a member…", "data-html": True},
         )
         if club:
@@ -3724,7 +3725,9 @@ class BapAwardForm(forms.ModelForm):
         if member_link_html:
             prefix_items.append(HTML(member_link_html))
         if lot:
-            prefix_items.append(HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>'))
+            prefix_items.append(
+                HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')
+            )
         if prefix_items:
             layout_fields = prefix_items + layout_fields
         if delete_url:
@@ -3742,7 +3745,9 @@ class BapAwardForm(forms.ModelForm):
             )
         elif post_url:
             footer = Div(
-                HTML('<button type="button" class="btn btn-secondary btn-sm" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
+                HTML(
+                    '<button type="button" class="btn btn-secondary btn-sm" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
                 ),
@@ -3821,7 +3826,9 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Close</button>'),
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Close</button>'
+                    ),
                     css_class="modal-footer",
                 ),
             )
@@ -3830,7 +3837,9 @@ class ClubMemberAdminForm(forms.ModelForm):
                 *base_fields,
                 *discord_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    ),
                     HTML(
                         f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                     ),
@@ -3879,7 +3888,9 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         self.helper.layout = Layout(
             *self.Meta.fields,
             Div(
-                HTML('<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'),
+                HTML(
+                    '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                 ),
