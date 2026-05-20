@@ -13199,6 +13199,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
                 is_deleted=False,
                 active=False,
                 auctiontos_winner__isnull=False,
+                winning_price__isnull=False,
                 i_bred_this_fish=True,
             )
             .filter(Exists(matching_member))

@@ -1,6 +1,12 @@
 {% load render_table from django_tables2 %}
 {% load crispy_forms_tags %}
 
+<p class="text-muted small mt-2">
+  This is a list of lots sold in this club's auctions that have BAP checked and were sold by a club member.
+  You can quickly approve, change, or deny BAP points for each lot.
+  Filter by club member name or email to find lots from a specific club member.
+</p>
+
 <div class="d-flex align-items-start gap-2 mt-2 mb-2 flex-wrap">
   <form id="lots-filter-form" class="flex-grow-1" method="get">
     {% crispy filter.form %}

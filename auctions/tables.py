@@ -728,6 +728,7 @@ class ClubBapLotHTMxTable(tables.Table):
 
     lot_name = tables.Column(verbose_name="Lot", orderable=True)
     seller_name = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
+    quantity = tables.Column(verbose_name="Qty", orderable=True)
     date_end = tables.Column(
         verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
     )
@@ -768,7 +769,7 @@ class ClubBapLotHTMxTable(tables.Table):
     class Meta:
         model = Lot
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("lot_name", "seller_name", "date_end", "bap_reason", "actions")
+        fields = ("lot_name", "seller_name", "quantity", "date_end", "bap_reason", "actions")
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)
