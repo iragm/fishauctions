@@ -3785,10 +3785,10 @@ class ClubMemberAdminForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
 
-        # Restrict discord_role_override queryset to this club's roles
+        # Restrict discord_role_override queryset to roles the bot can actually assign
         has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
         if club:
-            self.fields["discord_role_override"].queryset = club.discord_roles.all()
+            self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
         # Hide Discord role fields when the club has no Discord server
         discord_fields = []
@@ -3844,6 +3844,13 @@ class ClubMemberAdminForm(forms.ModelForm):
                 *discord_fields,
             )
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+    def clean_discord_role_override(self):
+        role = self.cleaned_data.get("discord_role_override")
+        if role and not role.bot_can_manage:
+            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
+            raise forms.ValidationError(msg)
+        return role
 
 
 class ClubMemberPermissionsForm(forms.ModelForm):
