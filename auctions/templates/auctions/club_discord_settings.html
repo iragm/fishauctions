@@ -107,6 +107,17 @@
     <p class="text-muted small">
       To have announcements about upcoming auctions in a channel, you can use the slash command <code>/auctions_here</code>. This only works <strong>after</strong> you have connected your Discord server to a club.
     </p>
+    {% if club.auction_channel_id %}
+      <p class="text-success mb-0">
+        <i class="bi bi-check-circle-fill"></i>
+        Auction announcements channel is set. Run <code>/auctions_here</code> in a different channel to change it.
+      </p>
+    {% else %}
+      <p class="text-muted mb-0">
+        <i class="bi bi-x-circle"></i>
+        No auction announcements channel set. Run <code>/auctions_here</code> in the channel where you want announcements posted.
+      </p>
+    {% endif %}
   </div>
 </div>
 
