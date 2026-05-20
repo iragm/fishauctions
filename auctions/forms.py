@@ -3695,7 +3695,7 @@ class BapAwardForm(forms.ModelForm):
         self.fields["club_member"].widget = autocomplete.ModelSelect2(
             url="club-member-autocomplete",
             forward=["club_slug"],
-            attrs={"data-placeholder": "Search for a member…", "data-html": True},
+            attrs={"data-placeholder": "Search for a member…", "data-html": True, "style": "width: 100%"},
         )
         if club:
             self.fields["club_member"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).order_by(
@@ -3720,7 +3720,7 @@ class BapAwardForm(forms.ModelForm):
             from django.urls import reverse as _reverse
 
             member = self.instance.club_member
-            member_url = _reverse("club_member_admin", kwargs={"pk": member.pk})
+            member_url = _reverse("clubmember_admin", kwargs={"pk": member.pk})
             member_link_html = f'<p class="mb-1"><small>Member: <a href="{member_url}" target="_blank" class="text-primary fw-bold">{member}</a></small></p>'
 
         prefix_items = []

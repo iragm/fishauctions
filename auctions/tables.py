@@ -683,7 +683,12 @@ class BapAwardHTMxTable(tables.Table):
 
     def _edit_link(self, record, content):
         url = reverse("bapaward_admin", kwargs={"pk": record.pk})
-        return format_html('<a hx-get="{}" {}>{}</a>', url, mark_safe(self._MODAL_ATTRS), content)
+        return format_html(
+            '<a hx-get="{}" {} class="text-info" style="cursor:pointer;text-decoration:underline">{}</a>',
+            url,
+            mark_safe(self._MODAL_ATTRS),
+            content,
+        )
 
     def render_member(self, value, record):
         return self._edit_link(record, str(value))

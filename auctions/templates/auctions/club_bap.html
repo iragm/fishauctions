@@ -42,11 +42,9 @@
 <div id="awards-table-container"
      hx-get=""
      hx-trigger="bapAwardListChanged from:body"
-     hx-swap="outerHTML">
+     hx-swap="innerHTML">
   {% render_table table %}
 </div>
-
-<div id="modals-here"></div>
 
 <script>
 (function () {
@@ -60,5 +58,15 @@
     });
   }
 })();
+
+// Define closeModal at page level so Cancel always works, even before the modal script runs.
+window.closeModal = function () {
+  var container = document.getElementById('modals-here');
+  var backdrop = document.getElementById('modal-backdrop');
+  var modal = document.getElementById('modal');
+  if (backdrop) { backdrop.classList.remove('show'); backdrop.style.pointerEvents = 'none'; }
+  if (modal) { modal.classList.remove('show'); modal.style.pointerEvents = 'none'; }
+  setTimeout(function () { if (container) container.innerHTML = ''; }, 300);
+};
 </script>
 {% endblock %}
