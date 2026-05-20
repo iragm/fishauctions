@@ -719,6 +719,10 @@ class ClubDiscordRole(models.Model):
     is_paid_role = models.BooleanField(
         default=False, help_text="Assign this role to members with a current paid membership"
     )
+    bot_can_manage = models.BooleanField(
+        default=True,
+        help_text="False when this role is at or above the bot's own role in the Discord hierarchy; the bot cannot assign or remove roles at its own level or higher",
+    )
     createdon = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

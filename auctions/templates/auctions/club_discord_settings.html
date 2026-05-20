@@ -75,11 +75,21 @@
           {% for role in roles %}
           <tr>
             <td>
-              <a href="{% url 'club_discord_edit_role' club.slug role.pk %}">{{ role.role_name }}</a>
+              {% if role.bot_can_manage %}
+                <a href="{% url 'club_discord_edit_role' club.slug role.pk %}">{{ role.role_name }}</a>
+              {% else %}
+                <span class="text-muted">{{ role.role_name }}</span>
+              {% endif %}
               {% if role.is_paid_role %}<span class="badge bg-success ms-1">Paid</span>{% endif %}
               {% if role.is_unpaid_role %}<span class="badge bg-warning text-dark ms-1">Unpaid</span>{% endif %}
               {% if role.bap_points_for_role %}<span class="badge bg-info text-dark ms-1">BAP &ge; {{ role.bap_points_for_role }}</span>{% endif %}
               {% if role.hap_points_for_role %}<span class="badge bg-info text-dark ms-1">HAP &ge; {{ role.hap_points_for_role }}</span>{% endif %}
+              {% if not role.bot_can_manage %}
+                <span class="badge bg-secondary ms-1"
+                      title="The bot&#39;s role must be above this role in the Discord hierarchy for it to be manageable">
+                  <i class="bi bi-lock-fill"></i> Bot can&#39;t manage
+                </span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}

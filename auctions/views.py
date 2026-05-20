@@ -13995,32 +13995,69 @@ def _has_discord_manage_guild(data):
 def _sync_discord_roles(club, bot_token):
     """Fetch roles from Discord and upsert ClubDiscordRole objects.
 
+    Also fetches the bot's own member record to determine its highest role position.
+    Roles at or above that position have bot_can_manage=False.
+
     Returns the number of roles synced, or None if the API call failed.
     """
-    url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
+    headers = {"Authorization": f"Bot {bot_token}"}
+    guild_id = club.discord_server_id
+
+    # Fetch all guild roles
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/roles"
     try:
-        resp = requests.get(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
     except requests.RequestException as exc:
         logger.exception("Error fetching Discord roles: %s", exc)
         return None
     if resp.status_code != 200:
         logger.warning("Discord roles fetch failed: status=%s response=%s", resp.status_code, resp.text)
         return None
+
+    all_roles = resp.json()
+    # Build a position lookup by role ID
+    position_by_id = {r["id"]: r.get("position", 0) for r in all_roles}
+
+    # Fetch the bot's own guild member to find its highest role position
+    bot_max_position = 0
+    try:
+        me_resp = requests.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}/members/@me",
+            headers=headers,
+            timeout=10,
+        )
+        if me_resp.status_code == 200:
+            bot_role_ids = me_resp.json().get("roles", [])
+            if bot_role_ids:
+                bot_max_position = max(position_by_id.get(rid, 0) for rid in bot_role_ids)
+        else:
+            logger.warning("Discord @me fetch failed: status=%s", me_resp.status_code)
+    except requests.RequestException as exc:
+        logger.exception("Error fetching bot's own member record: %s", exc)
+
     updated = 0
     fetched_role_ids = set()
-    for role in resp.json():
+    for role in all_roles:
         role_id = role.get("id", "")
         role_name = role.get("name", "")
-        if role_id == club.discord_server_id or role.get("managed"):
+        if role_id == guild_id or role.get("managed"):
             continue
+        role_position = role.get("position", 0)
+        can_manage = bot_max_position > role_position
         fetched_role_ids.add(role_id)
         obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
         if obj:
+            update_fields = []
             if obj.role_name != role_name:
                 obj.role_name = role_name
-                obj.save(update_fields=["role_name"])
+                update_fields.append("role_name")
+            if obj.bot_can_manage != can_manage:
+                obj.bot_can_manage = can_manage
+                update_fields.append("bot_can_manage")
+            if update_fields:
+                obj.save(update_fields=update_fields)
         else:
-            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
+            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name, bot_can_manage=can_manage)
         updated += 1
     # Remove roles that no longer exist in Discord (only those with a non-empty role_id;
     # preserve placeholder rows without a Discord ID)
@@ -14591,10 +14628,20 @@ class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
 
     def get(self, request, slug, pk, *args, **kwargs):
         role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        if not role.bot_can_manage:
+            messages.error(
+                request,
+                f'"{role.role_name}" is at or above the bot\'s role in the Discord hierarchy. '
+                "Move the bot's role above it in Discord before configuring it here.",
+            )
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
         return render(request, "auctions/club_discord_role_edit.html", {"club": self.club, "role": role})
 
     def post(self, request, slug, pk, *args, **kwargs):
         role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        if not role.bot_can_manage:
+            messages.error(request, f'"{role.role_name}" cannot be edited — the bot\'s role is not above it.')
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
         is_paid = "is_paid_role" in request.POST
         is_unpaid = "is_unpaid_role" in request.POST
         try:
