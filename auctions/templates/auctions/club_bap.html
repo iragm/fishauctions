@@ -64,9 +64,9 @@ window.closeModal = function () {
   var container = document.getElementById('modals-here');
   var backdrop = document.getElementById('modal-backdrop');
   var modal = document.getElementById('modal');
-  if (backdrop) { backdrop.classList.remove('show'); backdrop.style.pointerEvents = 'none'; }
-  if (modal) { modal.classList.remove('show'); modal.style.pointerEvents = 'none'; }
-  setTimeout(function () { if (container) container.innerHTML = ''; }, 300);
+  if (backdrop) backdrop.classList.remove('show');
+  if (modal) modal.classList.remove('show');
+  window._modalCloseTimer = setTimeout(function () { if (container) container.innerHTML = ''; }, 300);
 };
 </script>
 {% endblock %}

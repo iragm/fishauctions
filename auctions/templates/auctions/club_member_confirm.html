@@ -19,14 +19,15 @@
 </div>
 <script>
 (function() {
+  clearTimeout(window._modalCloseTimer);
   function closeModal() {
     var container = document.getElementById("modals-here");
     var backdrop = document.getElementById("modal-backdrop");
     var modal = document.getElementById("modal");
-    if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
-    if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
+    if (backdrop) backdrop.classList.remove("show");
+    if (modal) modal.classList.remove("show");
     document.removeEventListener("keydown", escHandler);
-    setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
+    window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
   }
   window.closeModal = closeModal;
   function escHandler(e) { if (e.key === "Escape") closeModal(); }
