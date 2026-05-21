@@ -1268,7 +1268,7 @@ class Auction(models.Model):
     )
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
-        help_text="Automatically include club membership renewal fees when needed.",
+        help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
     )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"

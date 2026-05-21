@@ -12843,13 +12843,23 @@ class ClubMemberRenewView(APIView):
         return member
 
     def _new_expiration(self, member, today):
-        """Compute the new expiration: extend current expiration by one year (rolling → end of year)."""
+        """Compute the new expiration.
+
+        Rolling memberships always extend one year from today. For non-rolling
+        clubs, extend one year from the current expiration if it is still in
+        the future; otherwise extend one year from today.
+        """
         club = member.club
         current_exp = member.membership_expiration_date
-        base = max(current_exp, today) if current_exp else today
-        if club.membership_system == "january_first":
-            return date_type(base.year + 1, 1, 1)
-        return date_type(base.year + 1, 12, 31)
+        if club.membership_system != "rolling" and current_exp and current_exp > today:
+            base = current_exp
+        else:
+            base = today
+        try:
+            return base.replace(year=base.year + 1)
+        except ValueError:
+            # Feb 29 in a non-leap-year target
+            return base.replace(month=2, day=28, year=base.year + 1)
 
     def get(self, request, pk):
         member = self._get_member(pk, request)
@@ -12953,22 +12963,22 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
-        date_str = request.POST.get("membership_last_paid", "")
+        date_str = request.POST.get("membership_expiration_date", "")
         try:
-            paid_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+            new_expiration = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
             messages.error(request, "Invalid date.")
             return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
-        member.membership_last_paid = paid_date
-        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
+        member.membership_expiration_date = new_expiration
+        member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
         member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Set membership last paid for {member} to {paid_date}",
+            action=f"Set membership expiration for {member} to {new_expiration}",
             applies_to="MEMBERSHIP",
         )
-        messages.success(request, f"Membership renewed for {member}.")
+        messages.success(request, f"Expiration date updated for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
 

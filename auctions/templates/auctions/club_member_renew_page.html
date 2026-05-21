@@ -18,8 +18,8 @@
     <form method="post">
       {% csrf_token %}
       <div class="mb-3">
-        <label for="membership_last_paid" class="form-label">Expiration date</label>
-        <input type="date" class="form-control" id="membership_last_paid" name="membership_last_paid"
+        <label for="membership_expiration_date" class="form-label">Expiration date</label>
+        <input type="date" class="form-control" id="membership_expiration_date" name="membership_expiration_date"
           value="{{ default_date|date:'Y-m-d' }}" required>
         <div class="form-text">
           Use <em>Renew</em> from the member list for a one-click extension based on the club's renewal rules.
