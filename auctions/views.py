@@ -12335,6 +12335,12 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if requested_member_uuid:
             member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
+        # Only the actual owner — not a holder of the UUID renewal link — may see the
+        # Google Wallet save button, since adding to a wallet should never be done on
+        # behalf of someone else.
+        context["is_membership_owner"] = bool(
+            member and self.request.user.is_authenticated and member.user_id == self.request.user.id
+        )
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
         club = self.club

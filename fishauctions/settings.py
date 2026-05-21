@@ -765,6 +765,15 @@ DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 DISCORD_BOT_CLIENT_ID = os.environ.get("DISCORD_BOT_CLIENT_ID", "")
 
+# Google Wallet membership card integration (optional). See readme.md.
+# If any of these are blank, the "Add to Google Wallet" button is hidden.
+GOOGLE_WALLET_ISSUER_ID = os.environ.get("GOOGLE_WALLET_ISSUER_ID", "")
+GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = os.environ.get("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "")
+# The PEM-encoded RSA private key from the service account JSON keyfile.
+# `\n` escape sequences in the env value are converted to real newlines so the key
+# can be supplied on a single line in .env files.
+GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = os.environ.get("GOOGLE_WALLET_SERVICE_ACCOUNT_KEY", "").replace("\\n", "\n")
+
 REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
