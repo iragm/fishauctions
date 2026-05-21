@@ -14490,18 +14490,12 @@ class ClubPermissionTests(TestCase):
             username="perm_admin", password="testpass", email="perm_admin@example.com"
         )
         ClubMember.objects.create(club=self.club, user=self.view_user, name="View", permission_view=True)
-        ClubMember.objects.create(
-            club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True
-        )
+        ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
         ClubMember.objects.create(club=self.club, user=self.export_user, name="Export", permission_export=True)
-        ClubMember.objects.create(
-            club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True
-        )
+        ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
         ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
         ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
-        self.target_member = ClubMember.objects.create(
-            club=self.club, name="Target Member", email="target@example.com"
-        )
+        self.target_member = ClubMember.objects.create(club=self.club, name="Target Member", email="target@example.com")
 
     def _login(self, user):
         self.client.login(username=user.username, password="testpass")
@@ -15295,9 +15289,7 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         self.assertIsNone(auction.club)
         # Create club member and assign manage_auctions permission
-        ClubMember.objects.create(
-            club=self.club, user=user2, name="Role Assign", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user2, name="Role Assign", permission_manage_auctions=True)
         # Auction should now have club set
         auction.refresh_from_db()
         self.assertEqual(auction.club, self.club)
@@ -15315,9 +15307,7 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user2,
             club=None,
         )
-        ClubMember.objects.create(
-            club=self.club, user=user2, name="Role Hist", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user2, name="Role Hist", permission_manage_auctions=True)
         history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES")
         self.assertTrue(history.exists())
         self.assertTrue(any("Automatically associated with club" in h.action for h in history))
@@ -15333,9 +15323,7 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user3,
             club=None,
         )
-        ClubMember.objects.create(
-            club=self.club, user=user3, name="No Pref", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user3, name="No Pref", permission_manage_auctions=True)
         auction.refresh_from_db()
         # club should remain None since user's preferences don't point to this club
         self.assertIsNone(auction.club)
@@ -16321,9 +16309,7 @@ class ClubViewOnlyAccessTests(TestCase):
         self.target_user = User.objects.create_user(
             username="view_target", password="testpass", email="view_target@example.com"
         )
-        self.target_member = ClubMember.objects.create(
-            club=self.club, user=self.target_user, name="Target Person"
-        )
+        self.target_member = ClubMember.objects.create(club=self.club, user=self.target_user, name="Target Person")
 
     def test_viewer_can_access_club_admin(self):
         self.client.login(username="viewer_user", password="testpass")
@@ -16612,9 +16598,7 @@ class DiscordJoinModalNameTests(TestCase):
             "guild_id": self.club.discord_server_id,
             "user": {"id": discord_id, "username": username},
             "data": {
-                "components": [
-                    {"components": [{"custom_id": k, "value": v}]} for k, v in fields.items()
-                ],
+                "components": [{"components": [{"custom_id": k, "value": v}]} for k, v in fields.items()],
             },
         }
 
@@ -16677,9 +16661,7 @@ class ClubMemberIngestNameTests(TestCase):
 
         self.club = Club.objects.create(name="Ingest Logic Club")
         _, prefix, key_hash = ClubAPIKey.generate()
-        self.api_key = ClubAPIKey.objects.create(
-            club=self.club, name="ingest-logic", prefix=prefix, key_hash=key_hash
-        )
+        self.api_key = ClubAPIKey.objects.create(club=self.club, name="ingest-logic", prefix=prefix, key_hash=key_hash)
 
     def test_map_fields_combines_first_and_last(self):
         from .services import map_fields

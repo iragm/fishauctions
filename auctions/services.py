@@ -4,9 +4,7 @@ from .models import ClubHistory, ClubMember
 
 # Source of truth for ClubMember fields acceptable via API ingest.
 # Note: ``first_name`` and ``last_name`` are accepted as aliases but stored as ``name``.
-INGEST_ALLOWED_FIELDS = frozenset(
-    {"name", "email", "phone_number", "address", "memo"}
-)
+INGEST_ALLOWED_FIELDS = frozenset({"name", "email", "phone_number", "address", "memo"})
 
 
 def map_fields(data: dict, api_key) -> dict:

@@ -353,8 +353,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
         return
     if invoice.auctiontos_user:
         member_defaults = {
-            "name": invoice.auctiontos_user.name
-            or f"{user.first_name} {user.last_name}".strip(),
+            "name": invoice.auctiontos_user.name or f"{user.first_name} {user.last_name}".strip(),
             "email": invoice.auctiontos_user.email or user.email,
             "source": "auction_invoice",
         }
@@ -13589,8 +13588,10 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
         external_field = request.POST.get("external_field", "").strip()
         internal_field = request.POST.get("internal_field", "").strip()
-        if external_field and internal_field and (
-            internal_field in INGEST_ALLOWED_FIELDS or internal_field in ("first_name", "last_name")
+        if (
+            external_field
+            and internal_field
+            and (internal_field in INGEST_ALLOWED_FIELDS or internal_field in ("first_name", "last_name"))
         ):
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
