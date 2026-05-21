@@ -1055,8 +1055,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         text = " ".join(remaining)
         if text:
             queryset = queryset.filter(
-                Q(first_name__icontains=text)
-                | Q(last_name__icontains=text)
+                Q(name__icontains=text)
                 | Q(email__icontains=text)
                 | Q(user__email__icontains=text)
                 | Q(discord_username__icontains=text)
@@ -1129,8 +1128,7 @@ class BapAwardFilter(django_filters.FilterSet):
         if not value:
             return queryset
         return queryset.filter(
-            Q(club_member__first_name__icontains=value)
-            | Q(club_member__last_name__icontains=value)
+            Q(club_member__name__icontains=value)
             | Q(club_member__email__icontains=value)
             | Q(lot__lot_name__icontains=value)
             | Q(notes__icontains=value)

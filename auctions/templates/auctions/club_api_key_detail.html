@@ -40,7 +40,7 @@
 
 <h5>Field mappings</h5>
 <p class="text-muted small">Map incoming field names to ClubMember fields. Unmapped fields are passed through unchanged if they match an allowed field name.</p>
-<p class="text-muted small"><i class="bi bi-info-circle"></i> Mapping any field to <code>name</code> (or sending a field literally called <code>name</code>) will automatically split the value on the first space into <code>first_name</code> and <code>last_name</code>.</p>
+<p class="text-muted small"><i class="bi bi-info-circle"></i> Members store a single <code>name</code> field. If <code>first_name</code> and/or <code>last_name</code> are sent (or mapped) instead, they will be combined into <code>name</code>.</p>
 
 {% if field_mappings %}
 <table class="table table-sm mb-3" style="max-width:480px">
@@ -75,7 +75,6 @@
   <div>
     <label class="form-label small fw-semibold mb-1">Internal field</label>
     <select name="internal_field" class="form-select form-select-sm" style="width:160px">
-      <option value="name">name (auto-split)</option>
       {% for field in available_fields %}
       <option value="{{ field }}">{{ field }}</option>
       {% endfor %}

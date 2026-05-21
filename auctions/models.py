@@ -764,8 +764,7 @@ class ClubMember(ContactRecord):
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="club_memberships")
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="members")
-    first_name = models.CharField(max_length=100, blank=True)
-    last_name = models.CharField(max_length=100, blank=True)
+    name = models.CharField(max_length=200, blank=True)
     discord_id = models.CharField(max_length=100, blank=True, null=True)
     discord_username = models.CharField(
         max_length=100, blank=True, null=True, help_text="Discord username (e.g. cooluser)"
@@ -835,7 +834,7 @@ class ClubMember(ContactRecord):
         null=True,
         blank=True,
         related_name="duplicate_of",
-        help_text="Another club member with the same last name; may be a duplicate",
+        help_text="Another club member with the same name; may be a duplicate",
     )
 
     @property
@@ -853,9 +852,8 @@ class ClubMember(ContactRecord):
         )
 
     def __str__(self):
-        name = f"{self.first_name} {self.last_name}".strip()
-        if name:
-            return name
+        if self.name:
+            return self.name
         if self.email:
             return self.email
         return f"Member #{self.pk}"
@@ -1003,7 +1001,7 @@ class ClubMember(ContactRecord):
         return timezone.make_aware(datetime.datetime.combine(reminder_date, datetime.time(hour=12)))
 
     class Meta:
-        ordering = ["last_name", "first_name"]
+        ordering = ["name"]
 
     def save(self, *args, **kwargs):
         previous_membership_last_paid = None
@@ -1061,9 +1059,9 @@ class ClubMember(ContactRecord):
             super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)
-        if self.last_name:
+        if self.name:
             duplicate = (
-                ClubMember.objects.filter(club=self.club, last_name=self.last_name, is_deleted=False)
+                ClubMember.objects.filter(club=self.club, name__iexact=self.name, is_deleted=False)
                 .exclude(pk=self.pk)
                 .first()
             )

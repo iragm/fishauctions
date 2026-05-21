@@ -770,7 +770,7 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
 class BapAwardAdmin(admin.ModelAdmin):
     list_display = ("club_member", "date", "points", "hap_points", "cap_points", "lot", "awarded_by")
     list_filter = ("date",)
-    search_fields = ("club_member__first_name", "club_member__last_name", "club_member__email", "notes")
+    search_fields = ("club_member__name", "club_member__email", "notes")
     ordering = ("-date",)
     raw_id_fields = ("club_member", "lot", "awarded_by")
 
@@ -803,7 +803,7 @@ admin.site.register(AuctionHistory, AuctionHistoryAdmin)
 class ClubMemberAdmin(admin.ModelAdmin):
     model = ClubMember
     list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
-    search_fields = ("first_name", "last_name", "email", "user__email", "user__username")
+    search_fields = ("name", "email", "user__email", "user__username")
     list_filter = ("club", "source", "is_deleted")
     readonly_fields = (
         "user",

@@ -5224,8 +5224,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member = ClubMember.objects.create(
             club=self.club,
             user=self.online_tos.user,
-            first_name="Renew",
-            last_name="Me",
+            name="Renew Me",
             email=self.online_tos.email,
             membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
         )
@@ -14192,8 +14191,7 @@ class ClubModelTests(TestCase):
         """phone_as_string should format a 10-digit number with dashes"""
         member = ClubMember.objects.create(
             club=self.club,
-            first_name="Alice",
-            last_name="Smith",
+            name="Alice Smith",
             phone_number="5551234567",
         )
         self.assertEqual(member.phone_as_string, "555-123-4567")
@@ -14202,14 +14200,13 @@ class ClubModelTests(TestCase):
         """phone_as_string returns raw digits for non-10-digit numbers"""
         member = ClubMember.objects.create(
             club=self.club,
-            first_name="Bob",
-            last_name="Jones",
+            name="Bob Jones",
             phone_number="123456",
         )
         self.assertEqual(member.phone_as_string, "123456")
 
     def test_club_member_str_with_name(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Alice", last_name="Smith")
+        member = ClubMember.objects.create(club=self.club, name="Alice Smith")
         self.assertEqual(str(member), "Alice Smith")
 
     def test_club_member_str_with_email_no_name(self):
@@ -14221,7 +14218,7 @@ class ClubModelTests(TestCase):
         self.assertIn("Member #", str(member))
 
     def test_club_member_defaults(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test", last_name="User")
+        member = ClubMember.objects.create(club=self.club, name="Test User")
         self.assertFalse(member.is_deleted)
         self.assertEqual(member.source, "manually_added")
         self.assertEqual(member.contact_status, "contact")
@@ -14248,7 +14245,7 @@ class ClubModelTests(TestCase):
 
     def test_club_member_permission_defaults(self):
         """All permission fields should default to False"""
-        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        member = ClubMember.objects.create(club=self.club, name="Test")
         for field in [
             "permission_admin",
             "permission_view",
@@ -14261,19 +14258,18 @@ class ClubModelTests(TestCase):
             self.assertFalse(getattr(member, field), f"{field} should default to False")
 
     def test_has_any_permission_false_by_default(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        member = ClubMember.objects.create(club=self.club, name="Test")
         self.assertFalse(member.has_any_permission)
 
     def test_has_any_permission_true_when_one_set(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test", permission_view=True)
+        member = ClubMember.objects.create(club=self.club, name="Test", permission_view=True)
         self.assertTrue(member.has_any_permission)
 
     def test_club_member_with_user(self):
         member = ClubMember.objects.create(
             club=self.club,
             user=self.member_user,
-            first_name="Jane",
-            last_name="Doe",
+            name="Jane Doe",
             source="joined",
         )
         self.assertEqual(member.user, self.member_user)
@@ -14294,8 +14290,7 @@ class ClubViewTests(TestCase):
         self.owner_member = ClubMember.objects.create(
             club=self.club,
             user=self.owner,
-            first_name="Owner",
-            last_name="User",
+            name="Owner User",
             permission_admin=True,
         )
 
@@ -14442,7 +14437,7 @@ class ClubViewTests(TestCase):
     def test_club_admin_regular_member_gets_403(self):
         """View-only member cannot access club edit"""
         regular_user = User.objects.create_user(username="regular_member", password="testpass", email="reg@example.com")
-        ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=regular_user, name="Regular", permission_view=True)
         self.client.login(username="regular_member", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -14494,18 +14489,18 @@ class ClubPermissionTests(TestCase):
         self.admin_user = User.objects.create_user(
             username="perm_admin", password="testpass", email="perm_admin@example.com"
         )
-        ClubMember.objects.create(club=self.club, user=self.view_user, first_name="View", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.view_user, name="View", permission_view=True)
         ClubMember.objects.create(
-            club=self.club, user=self.add_edit_user, first_name="AddEdit", permission_add_edit=True
+            club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True
         )
-        ClubMember.objects.create(club=self.club, user=self.export_user, first_name="Export", permission_export=True)
+        ClubMember.objects.create(club=self.club, user=self.export_user, name="Export", permission_export=True)
         ClubMember.objects.create(
-            club=self.club, user=self.edit_club_user, first_name="EditClub", permission_edit_club=True
+            club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True
         )
-        ClubMember.objects.create(club=self.club, user=self.bap_user, first_name="Bap", permission_manage_bap=True)
-        ClubMember.objects.create(club=self.club, user=self.admin_user, first_name="Admin", permission_admin=True)
+        ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
         self.target_member = ClubMember.objects.create(
-            club=self.club, first_name="Target", last_name="Member", email="target@example.com"
+            club=self.club, name="Target Member", email="target@example.com"
         )
 
     def _login(self, user):
@@ -14802,7 +14797,7 @@ class ClubPermissionTests(TestCase):
     def test_cross_club_renew_page_returns_404(self):
         """A member from another club cannot renew a member that doesn't belong to their club"""
         other_club = Club.objects.create(name="Other Club")
-        ClubMember.objects.create(club=other_club, user=self.admin_user, first_name="Admin", permission_admin=True)
+        ClubMember.objects.create(club=other_club, user=self.admin_user, name="Admin", permission_admin=True)
         url = reverse("club_member_renew_page", kwargs={"slug": other_club.slug, "pk": self.target_member.pk})
         self._login(self.admin_user)
         response = self.client.get(url)
@@ -14823,27 +14818,27 @@ class ClubMemberUpdateTests(TestCase):
         )
         self.club = Club.objects.create(name="Update Test Club", allow_joining=True, enable_club_page=True)
         self.member = ClubMember.objects.create(
-            club=self.club, user=self.member_user, first_name="Jane", last_name="Doe", email="cu_member@example.com"
+            club=self.club, user=self.member_user, name="Jane Doe", email="cu_member@example.com"
         )
 
     def test_member_can_update_info(self):
         """A club member can update their own contact info"""
         self.client.login(username="cu_member", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"action": "update", "first_name": "Janet", "last_name": "Doe"})
+        response = self.client.post(url, {"action": "update", "name": "Janet Doe"})
         self.assertEqual(response.status_code, 302)
         self.member.refresh_from_db()
-        self.assertEqual(self.member.first_name, "Janet")
+        self.assertEqual(self.member.name, "Janet Doe")
 
     def test_non_member_update_is_ignored(self):
         """A non-member's update action is silently ignored"""
         self.client.login(username="cu_other", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"action": "update", "first_name": "Hacker", "last_name": "X"})
+        response = self.client.post(url, {"action": "update", "name": "Hacker X"})
         self.assertEqual(response.status_code, 302)
         # member record unchanged
         self.member.refresh_from_db()
-        self.assertEqual(self.member.first_name, "Jane")
+        self.assertEqual(self.member.name, "Jane Doe")
 
     def test_csv_import_adds_members(self):
         """CSV import creates new club members"""
@@ -14898,7 +14893,7 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
         content = response.content.decode("utf-8")
-        self.assertIn("First Name", content)
+        self.assertIn("Name", content)
         self.assertIn("Jane", content)
 
     def test_csv_export_respects_filter(self):
@@ -14906,7 +14901,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
-        ClubMember.objects.create(club=self.club, first_name="Bob", last_name="Smith", email="bob@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Smith", email="bob@example.com")
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_export", kwargs={"slug": self.club.slug})
         response = self.client.get(url, {"query": "Jane"})
@@ -14962,7 +14957,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
+        response = self.client.post(url, {"name": self.member.name})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
 
@@ -15001,7 +14996,7 @@ class ClubMemberUpdateTests(TestCase):
         )
         self.client.force_login(self.owner)
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": "Searchable", "last_name": "Member"})
+        response = self.client.post(url, {"name": "Searchable Member"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id_email"], "searchable@example.com")
         self.assertEqual(response.json()["id_phone_number"], "555-0100")
@@ -15016,15 +15011,14 @@ class ClubMemberUpdateTests(TestCase):
         ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
         ClubMember.objects.create(
             club=other_club,
-            first_name="Managed",
-            last_name="Member",
+            name="Managed Member",
             email="managed-member@example.com",
             phone_number="555-0111",
             address="456 Club Rd",
         )
         self.client.force_login(self.owner)
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": "Managed", "last_name": "Member"})
+        response = self.client.post(url, {"name": "Managed Member"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id_email"], "managed-member@example.com")
         self.assertEqual(response.json()["id_phone_number"], "555-0111")
@@ -15041,7 +15035,7 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function cmHasAutocompleteData(response)")
         self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
-        self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
+        self.assertContains(response, 'cmSetFieldNote("id_name", response.name_tooltip);')
 
     def test_merge_member_review_updates_kept_member_before_delete(self):
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
@@ -15050,8 +15044,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member.save()
         source = ClubMember.objects.create(
             club=self.club,
-            first_name="Source",
-            last_name="Member",
+            name="Source Member",
             email="source@example.com",
             phone_number="5551112222",
             address="111 Source St",
@@ -15071,8 +15064,7 @@ class ClubMemberUpdateTests(TestCase):
             {
                 "step": "review",
                 "target": self.member.pk,
-                "first_name": "Merged",
-                "last_name": "Member",
+                "name": "Merged Member",
                 "email": "merged@example.com",
                 "phone_number": "5553334444",
                 "address": "222 Updated Ave",
@@ -15082,7 +15074,7 @@ class ClubMemberUpdateTests(TestCase):
         self.member.refresh_from_db()
         source.refresh_from_db()
         self.assertTrue(source.is_deleted)
-        self.assertEqual(self.member.first_name, "Merged")
+        self.assertEqual(self.member.name, "Merged Member")
         self.assertEqual(self.member.email, "merged@example.com")
         self.assertEqual(self.member.phone_number, "5553334444")
         self.assertEqual(self.member.address, "222 Updated Ave")
@@ -15113,7 +15105,7 @@ class ClubAPITests(TestCase):
 
         token = Token.objects.create(user=self.owner)
         ClubMember.objects.create(club=self.club, user=self.owner, permission_view=True)
-        ClubMember.objects.create(club=self.club, first_name="Test", last_name="Member", email="tm@example.com")
+        ClubMember.objects.create(club=self.club, name="Test Member", email="tm@example.com")
         url = reverse("api_club_members", kwargs={"slug": self.club.slug})
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
         self.assertEqual(response.status_code, 200)
@@ -15207,8 +15199,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.owner_member = ClubMember.objects.create(
             club=self.club,
             user=self.owner,
-            first_name="Owner",
-            last_name="User",
+            name="Owner User",
             permission_admin=True,
         )
 
@@ -15252,7 +15243,7 @@ class ClubAuctionIntegrationTests(TestCase):
         user_no_perm.userdata.club = self.club
         user_no_perm.userdata.save()
         # Add as member with no relevant permissions
-        ClubMember.objects.create(club=self.club, user=user_no_perm, first_name="No", last_name="Perm")
+        ClubMember.objects.create(club=self.club, user=user_no_perm, name="No Perm")
         response = self._create_auction_via_view(user_no_perm)
         self.assertEqual(response.status_code, 302)
         auction = Auction.objects.filter(created_by=user_no_perm).last()
@@ -15305,7 +15296,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertIsNone(auction.club)
         # Create club member and assign manage_auctions permission
         ClubMember.objects.create(
-            club=self.club, user=user2, first_name="Role", last_name="Assign", permission_manage_auctions=True
+            club=self.club, user=user2, name="Role Assign", permission_manage_auctions=True
         )
         # Auction should now have club set
         auction.refresh_from_db()
@@ -15325,7 +15316,7 @@ class ClubAuctionIntegrationTests(TestCase):
             club=None,
         )
         ClubMember.objects.create(
-            club=self.club, user=user2, first_name="Role", last_name="Hist", permission_manage_auctions=True
+            club=self.club, user=user2, name="Role Hist", permission_manage_auctions=True
         )
         history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES")
         self.assertTrue(history.exists())
@@ -15343,7 +15334,7 @@ class ClubAuctionIntegrationTests(TestCase):
             club=None,
         )
         ClubMember.objects.create(
-            club=self.club, user=user3, first_name="No", last_name="Pref", permission_manage_auctions=True
+            club=self.club, user=user3, name="No Pref", permission_manage_auctions=True
         )
         auction.refresh_from_db()
         # club should remain None since user's preferences don't point to this club
@@ -15400,8 +15391,7 @@ class ClubAuctionIntegrationTests(TestCase):
         ClubMember.objects.create(
             club=self.club,
             user=user2,
-            first_name="Admin",
-            last_name="Two",
+            name="Admin Two",
             email="admin2_tos@example.com",
             permission_manage_auctions=True,
         )
@@ -15872,6 +15862,32 @@ class ClubMemberIngestAPITests(TestCase):
         member = ClubMember.objects.get(club=self.club, email="source@example.com")
         self.assertEqual(member.source, self.api_key.name)
 
+    def test_first_name_alias_stored_as_name(self):
+        """first_name passed via API is stored on the single ``name`` field."""
+        self._post({"email": "alice@example.com", "first_name": "Alice"})
+        member = ClubMember.objects.get(club=self.club, email="alice@example.com")
+        self.assertEqual(member.name, "Alice")
+
+    def test_first_and_last_name_combined_into_name(self):
+        """first_name + last_name are combined into a single ``name``."""
+        self._post({"email": "bobsmith@example.com", "first_name": "Bob", "last_name": "Smith"})
+        member = ClubMember.objects.get(club=self.club, email="bobsmith@example.com")
+        self.assertEqual(member.name, "Bob Smith")
+
+    def test_single_name_field_stored_directly(self):
+        """A single ``name`` field is stored verbatim."""
+        self._post({"email": "carol@example.com", "name": "Carol Q Smith"})
+        member = ClubMember.objects.get(club=self.club, email="carol@example.com")
+        self.assertEqual(member.name, "Carol Q Smith")
+
+    def test_mapped_first_name_combined_with_last_name(self):
+        """Field mappings can rename external fields to first_name/last_name; the result is one name."""
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="given", internal_field="first_name")
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="surname", internal_field="last_name")
+        self._post({"email": "mapped@example.com", "given": "Mapped", "surname": "User"})
+        member = ClubMember.objects.get(club=self.club, email="mapped@example.com")
+        self.assertEqual(member.name, "Mapped User")
+
 
 class ClubAPIKeyUITests(TestCase):
     """Permission and basic access tests for API key management UI views."""
@@ -16173,8 +16189,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.source_member = ClubMember.objects.create(
             club=self.club,
             user=self.source_user,
-            first_name="Source",
-            last_name="Member",
+            name="Source Member",
             email="source@example.com",
             phone_number="555-1111",
             membership_last_paid=timezone.now().date(),
@@ -16183,8 +16198,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.target_member = ClubMember.objects.create(
             club=self.club,
             user=self.target_user,
-            first_name="Target",
-            last_name="Member",
+            name="Target Member",
             email="",
         )
         self.create_url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
@@ -16195,8 +16209,7 @@ class ClubMemberManagementViewTests(TestCase):
         response = self.client.post(
             self.create_url,
             {
-                "first_name": "New",
-                "last_name": "Member",
+                "name": "New Member",
                 "email": "newmember@example.com",
                 "phone_number": "",
                 "address": "",
@@ -16221,7 +16234,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(
             self.validation_url,
-            {"first_name": "Source", "last_name": "Member", "email": "source@example.com"},
+            {"name": "Source Member", "email": "source@example.com"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -16279,8 +16292,7 @@ class ClubMemberManagementViewTests(TestCase):
             {
                 "step": "review",
                 "target": self.target_member.pk,
-                "first_name": "Target",
-                "last_name": "Member",
+                "name": "Target Member",
                 "email": "source@example.com",
                 "phone_number": "555-1111",
                 "address": "",
@@ -16310,7 +16322,7 @@ class ClubViewOnlyAccessTests(TestCase):
             username="view_target", password="testpass", email="view_target@example.com"
         )
         self.target_member = ClubMember.objects.create(
-            club=self.club, user=self.target_user, first_name="Target", last_name="Person"
+            club=self.club, user=self.target_user, name="Target Person"
         )
 
     def test_viewer_can_access_club_admin(self):
@@ -16336,7 +16348,7 @@ class ClubViewOnlyAccessTests(TestCase):
     def test_viewer_cannot_post_to_clubmember_admin(self):
         self.client.login(username="viewer_user", password="testpass")
         url = reverse("clubmember_admin", kwargs={"pk": self.target_member.pk})
-        response = self.client.post(url, {"first_name": "Hacked"})
+        response = self.client.post(url, {"name": "Hacked"})
         self.assertEqual(response.status_code, 403)
 
     def test_viewer_cannot_access_permissions_dialog(self):
@@ -16378,8 +16390,7 @@ class ClubMembershipInvoiceTests(TestCase):
         self.club_member = ClubMember.objects.create(
             club=self.club,
             user=self.member_user,
-            first_name="Alice",
-            last_name="Smith",
+            name="Alice Smith",
             email="member@example.com",
         )
 
@@ -16583,3 +16594,116 @@ class ClubMembershipSettingsFormPaymentUserTests(TestCase):
 
     def test_plain_member_excluded(self):
         self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())
+
+
+class DiscordJoinModalNameTests(TestCase):
+    """Tests for the Discord join modal — the modal now collects a single ``name``
+    field, but the handler must still accept ``first_name`` / ``last_name`` for
+    backward compatibility with any cached/older Discord modal definitions."""
+
+    def setUp(self):
+        from .views import DiscordInteractionsView
+
+        self.club = Club.objects.create(name="Discord Join Club", discord_server_id="999000111")
+        self.view = DiscordInteractionsView()
+
+    def _modal_data(self, fields, discord_id="55501", username="newbie"):
+        return {
+            "guild_id": self.club.discord_server_id,
+            "user": {"id": discord_id, "username": username},
+            "data": {
+                "components": [
+                    {"components": [{"custom_id": k, "value": v}]} for k, v in fields.items()
+                ],
+            },
+        }
+
+    def test_accepts_single_name_field(self):
+        self.view._handle_join_modal(self._modal_data({"name": "Solo Name", "email": "solo@example.com"}))
+        m = ClubMember.objects.get(club=self.club, email="solo@example.com")
+        self.assertEqual(m.name, "Solo Name")
+
+    def test_accepts_first_and_last_name(self):
+        self.view._handle_join_modal(
+            self._modal_data({"first_name": "Old", "last_name": "Cache", "email": "oc@example.com"})
+        )
+        m = ClubMember.objects.get(club=self.club, email="oc@example.com")
+        self.assertEqual(m.name, "Old Cache")
+
+    def test_accepts_only_first_name(self):
+        self.view._handle_join_modal(
+            self._modal_data({"first_name": "First", "email": "first@example.com"}, discord_id="55502"),
+        )
+        m = ClubMember.objects.get(club=self.club, email="first@example.com")
+        self.assertEqual(m.name, "First")
+
+
+class ClubMemberNameModelTests(TestCase):
+    """Tests for the renamed ``name`` field on ClubMember."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Name Field Club")
+
+    def test_str_uses_name(self):
+        m = ClubMember.objects.create(club=self.club, name="Jane Doe")
+        self.assertEqual(str(m), "Jane Doe")
+
+    def test_str_falls_back_to_email(self):
+        m = ClubMember.objects.create(club=self.club, email="x@example.com")
+        self.assertEqual(str(m), "x@example.com")
+
+    def test_str_fallback_member_id(self):
+        m = ClubMember.objects.create(club=self.club)
+        self.assertIn("Member #", str(m))
+
+    def test_display_name_matches_str(self):
+        m = ClubMember.objects.create(club=self.club, name="Solo")
+        self.assertEqual(m.display_name, str(m))
+
+    def test_possible_duplicate_detected_by_name(self):
+        a = ClubMember.objects.create(club=self.club, name="Same Name")
+        b = ClubMember.objects.create(club=self.club, name="Same Name")
+        a.refresh_from_db()
+        b.refresh_from_db()
+        self.assertEqual(a.possible_duplicate_id, b.pk)
+        self.assertEqual(b.possible_duplicate_id, a.pk)
+
+
+class ClubMemberIngestNameTests(TestCase):
+    """Unit-level tests for the serializer/map_fields combine logic."""
+
+    def setUp(self):
+        from .models import ClubAPIKey
+
+        self.club = Club.objects.create(name="Ingest Logic Club")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club, name="ingest-logic", prefix=prefix, key_hash=key_hash
+        )
+
+    def test_map_fields_combines_first_and_last(self):
+        from .services import map_fields
+
+        result = map_fields({"first_name": "Map", "last_name": "Fields"}, self.api_key)
+        self.assertEqual(result["name"], "Map Fields")
+        self.assertNotIn("first_name", result)
+        self.assertNotIn("last_name", result)
+
+    def test_map_fields_keeps_existing_name(self):
+        from .services import map_fields
+
+        result = map_fields({"name": "Direct", "first_name": "Ignored"}, self.api_key)
+        self.assertEqual(result["name"], "Direct")
+
+    def test_serializer_rejects_when_no_email_or_name(self):
+        from .serializers import ClubMemberIngestSerializer
+
+        s = ClubMemberIngestSerializer(data={})
+        self.assertFalse(s.is_valid())
+
+    def test_serializer_combines_first_and_last_name(self):
+        from .serializers import ClubMemberIngestSerializer
+
+        s = ClubMemberIngestSerializer(data={"first_name": "A", "last_name": "B"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(s.validated_data["name"], "A B")

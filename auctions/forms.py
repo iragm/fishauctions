@@ -3463,7 +3463,7 @@ class ClubMemberSelfServiceForm(forms.ModelForm):
 
     class Meta:
         model = ClubMember
-        fields = ["first_name", "last_name", "phone_number", "address"]
+        fields = ["name", "phone_number", "address"]
 
 
 class ClubEditForm(forms.ModelForm):
@@ -3699,7 +3699,7 @@ class BapAwardForm(forms.ModelForm):
         )
         if club:
             self.fields["club_member"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).order_by(
-                "last_name", "first_name"
+                "name"
             )
         if not self.instance.pk and not self.initial.get("date"):
             self.fields["date"].initial = timezone.now().date()
@@ -3756,8 +3756,7 @@ class ClubMemberAdminForm(forms.ModelForm):
     class Meta:
         model = ClubMember
         fields = [
-            "first_name",
-            "last_name",
+            "name",
             "email",
             "phone_number",
             "address",
@@ -3766,8 +3765,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             "discord_role_override",
         ]
         widgets = {
-            "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
-            "last_name": forms.TextInput(attrs={"placeholder": "Last name"}),
+            "name": forms.TextInput(attrs={"placeholder": "Name"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
             "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
@@ -3802,8 +3800,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             ]
 
         base_fields = [
-            "first_name",
-            "last_name",
+            "name",
             "email",
             "phone_number",
             "address",
@@ -3913,7 +3910,7 @@ class ClubMemberMergeTargetForm(forms.Form):
 class ClubMemberMergeReviewForm(forms.ModelForm):
     class Meta:
         model = ClubMember
-        fields = ["first_name", "last_name", "email", "phone_number", "address"]
+        fields = ["name", "email", "phone_number", "address"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -353,19 +353,14 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
         return
     if invoice.auctiontos_user:
         member_defaults = {
-            "first_name": invoice.auctiontos_user.name.split(" ")[0]
-            if invoice.auctiontos_user.name
-            else user.first_name,
-            "last_name": " ".join(invoice.auctiontos_user.name.split(" ")[1:])
-            if invoice.auctiontos_user.name
-            else user.last_name,
+            "name": invoice.auctiontos_user.name
+            or f"{user.first_name} {user.last_name}".strip(),
             "email": invoice.auctiontos_user.email or user.email,
             "source": "auction_invoice",
         }
     else:
         member_defaults = {
-            "first_name": user.first_name,
-            "last_name": user.last_name,
+            "name": f"{user.first_name} {user.last_name}".strip(),
             "email": user.email,
             "source": "membership_payment",
         }
@@ -836,11 +831,9 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
         if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
             return ClubMember.objects.none()
-        qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("last_name", "first_name")
+        qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("name")
         if self.q:
-            qs = qs.filter(
-                Q(first_name__icontains=self.q) | Q(last_name__icontains=self.q) | Q(email__icontains=self.q)
-            )
+            qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
         return qs
 
 
@@ -9251,12 +9244,9 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
 
         for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
             changes = []
-            if club_member.first_name != user.first_name:
-                changes.append(f"first name to '{user.first_name}'")
-                club_member.first_name = user.first_name
-            if club_member.last_name != user.last_name:
-                changes.append(f"last name to '{user.last_name}'")
-                club_member.last_name = user.last_name
+            if club_member.name != new_name:
+                changes.append(f"name to '{new_name}'")
+                club_member.name = new_name
             if club_member.phone_number != new_phone:
                 changes.append(f"phone to '{new_phone}'")
                 club_member.phone_number = new_phone
@@ -12259,8 +12249,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             ClubMember.objects.create(
                 club=self.club,
                 user=request.user,
-                first_name=request.user.first_name,
-                last_name=request.user.last_name,
+                name=f"{request.user.first_name} {request.user.last_name}".strip(),
                 email=request.user.email,
                 source="joined",
             )
@@ -12291,7 +12280,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("last_name", "first_name")
+        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("name")
 
     def get_template_names(self):
         if self.request.htmx:
@@ -12340,12 +12329,10 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             pk = int(request.POST.get("pk") or 0) or None
         except (ValueError, TypeError):
             pk = None
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
+        name = request.POST.get("name", "").strip()
         email = request.POST.get("email", "").strip()
         result = {
-            "id_first_name": "",
-            "id_last_name": "",
+            "id_name": "",
             "id_email": "",
             "id_phone_number": "",
             "id_address": "",
@@ -12356,37 +12343,32 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
         # Auto-fill from manageable club members or auction histories when name typed without email.
-        if (first_name or last_name) and not email and not pk:
-            full_name = f"{first_name} {last_name}".strip()
+        if name and not email and not pk:
             member_match = (
                 ClubMember.objects.filter(
                     club_id__in=club_ids_available_for_contact_autofill(request.user), is_deleted=False
                 )
-                .filter(first_name__iexact=first_name, last_name__iexact=last_name)
+                .filter(name__iexact=name)
                 .order_by("-createdon")
                 .first()
             )
             if member_match:
-                result["id_first_name"] = member_match.first_name
-                result["id_last_name"] = member_match.last_name
+                result["id_name"] = member_match.name
                 result["id_email"] = member_match.email or ""
                 result["id_phone_number"] = member_match.phone_number or ""
                 result["id_address"] = member_match.address or ""
             else:
                 old_auctions = auctions_available_for_contact_autofill(request.user)
                 tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
-                old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+                old_tos = AuctionTOSFilter.generic(None, tos_qs, name, match_names_only=True).first()
                 if old_tos:
-                    # Split the single AuctionTOS name field into first/last
-                    parts = old_tos.name.strip().split(" ", 1)
-                    result["id_first_name"] = parts[0]
-                    result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                    result["id_name"] = old_tos.name
                     result["id_email"] = old_tos.email
                     result["id_phone_number"] = old_tos.phone_number or ""
                     result["id_address"] = old_tos.address or ""
         # Duplicate name check within this club
-        if first_name or last_name:
-            dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
+        if name:
+            dup = base_qs.filter(name__iexact=name).first()
             if dup:
                 result["name_tooltip"] = f"{dup} is already in this club"
         # Duplicate email check within this club
@@ -12460,11 +12442,11 @@ function cmSetFieldInvalid(fieldId, message, is_invalid) {{
 }}
 
 function cmShowAutocomplete(response, remove) {{
-    var feedback = document.getElementById('id_first_name_feedback');
+    var feedback = document.getElementById('id_name_feedback');
     if (feedback) feedback.remove();
     if (remove) return;
     feedback = document.createElement("div");
-    feedback.id = "id_first_name_feedback";
+    feedback.id = "id_name_feedback";
     feedback.className = "valid-feedback d-block cursor-pointer";
     var btn = document.createElement("button");
     btn.role = "button";
@@ -12473,7 +12455,7 @@ function cmShowAutocomplete(response, remove) {{
     btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
     feedback.appendChild(btn);
     var autocomplete = response;
-    document.getElementById('id_first_name').parentNode.appendChild(feedback);
+    document.getElementById('id_name').parentNode.appendChild(feedback);
     var link = document.getElementById('autocompleteMemberForm');
     link.addEventListener('click', function(event) {{
         event.preventDefault();
@@ -12490,7 +12472,7 @@ function cmShowAutocomplete(response, remove) {{
 }}
 
 function cmHasAutocompleteData(response) {{
-    return !!(response.id_email || response.id_phone_number || response.id_address || response.id_last_name);
+    return !!(response.id_email || response.id_phone_number || response.id_address);
 }}
 
 function cmSetFieldNote(fieldId, message) {{
@@ -12510,8 +12492,7 @@ function cmSetFieldNote(fieldId, message) {{
 function cmValidateField() {{
     var data = {{
         pk: member_pk,
-        first_name: $("#id_first_name").val(),
-        last_name: $("#id_last_name").val(),
+        name: $("#id_name").val(),
         email: $("#id_email").val(),
     }};
     $.ajax({{
@@ -12521,13 +12502,13 @@ function cmValidateField() {{
         headers: {{ "X-CSRFToken": clubmember_csrf_token }},
         success: function(response) {{
             if (response.name_tooltip) {{
-                cmSetFieldNote("id_first_name", response.name_tooltip);
+                cmSetFieldNote("id_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
             }} else if (cmHasAutocompleteData(response)) {{
                 cmShowAutocomplete(response);
-                cmSetFieldNote("id_first_name", "");
+                cmSetFieldNote("id_name", "");
             }} else {{
-                cmSetFieldNote("id_first_name", "");
+                cmSetFieldNote("id_name", "");
                 cmShowAutocomplete(response, true);
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
@@ -12535,7 +12516,7 @@ function cmValidateField() {{
     }});
 }}
 
-$("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+$("#id_name, #id_email").on("blur", cmValidateField);
 
 (function() {{
     var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
@@ -13608,7 +13589,9 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
         external_field = request.POST.get("external_field", "").strip()
         internal_field = request.POST.get("internal_field", "").strip()
-        if external_field and internal_field and (internal_field == "name" or internal_field in INGEST_ALLOWED_FIELDS):
+        if external_field and internal_field and (
+            internal_field in INGEST_ALLOWED_FIELDS or internal_field in ("first_name", "last_name")
+        ):
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
                 external_field=external_field,
@@ -13696,12 +13679,10 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                     continue
                 first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
                 last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
-                if not first_name and not last_name:
-                    full_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES)
-                    if full_name:
-                        parts = full_name.split(" ", 1)
-                        first_name = parts[0]
-                        last_name = parts[1] if len(parts) > 1 else ""
+                if first_name or last_name:
+                    member_name = f"{first_name} {last_name}".strip()
+                else:
+                    member_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES) or ""
                 phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
                 address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
                 memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
@@ -13716,8 +13697,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                 date_joined = self.parse_flexible_date(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES))
                 existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
                 if existing:
-                    existing.first_name = first_name[:100] if first_name else existing.first_name
-                    existing.last_name = last_name[:100] if last_name else existing.last_name
+                    existing.name = member_name[:200] if member_name else existing.name
                     existing.phone_number = phone[:20]
                     existing.address = address[:500]
                     existing.memo = memo[:500]
@@ -13737,8 +13717,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                     new_member = ClubMember.objects.create(
                         club=self.club,
                         email=email[:254],
-                        first_name=first_name[:100] if first_name else "",
-                        last_name=last_name[:100] if last_name else "",
+                        name=member_name[:200] if member_name else "",
                         phone_number=phone[:20] if phone else "",
                         address=address[:500] if address else "",
                         memo=memo[:500] if memo else "",
@@ -13793,8 +13772,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         writer = csv.writer(response)
         writer.writerow(
             [
-                "First Name",
-                "Last Name",
+                "Name",
                 "Email",
                 "Phone",
                 "Address",
@@ -13814,8 +13792,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         for member in qs:
             writer.writerow(
                 [
-                    member.first_name,
-                    member.last_name,
+                    member.name,
                     member.email or "",
                     member.phone_as_string,
                     member.address,
@@ -14167,20 +14144,8 @@ class DiscordInteractionsView(View):
                             "components": [
                                 {
                                     "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                    "custom_id": "first_name",
-                                    "label": "First name",
-                                    "style": 1,
-                                    "required": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": _DISCORD_COMPONENT_ACTION_ROW,
-                            "components": [
-                                {
-                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                    "custom_id": "last_name",
-                                    "label": "Last name",
+                                    "custom_id": "name",
+                                    "label": "Name",
                                     "style": 1,
                                     "required": True,
                                 }
@@ -14222,8 +14187,12 @@ class DiscordInteractionsView(View):
             for comp in row.get("components", []):
                 fields[comp.get("custom_id", "")] = comp.get("value", "")
 
-        first_name = fields.get("first_name", "").strip()
-        last_name = fields.get("last_name", "").strip()
+        # Accept either a single ``name`` field or ``first_name`` / ``last_name``.
+        name = fields.get("name", "").strip()
+        if not name:
+            first_name = fields.get("first_name", "").strip()
+            last_name = fields.get("last_name", "").strip()
+            name = f"{first_name} {last_name}".strip()
         email = fields.get("email", "").strip()
 
         if not guild_id or not discord_id:
@@ -14270,8 +14239,7 @@ class DiscordInteractionsView(View):
         # Create a new club member
         new_member = ClubMember(
             club=club,
-            first_name=first_name,
-            last_name=last_name,
+            name=name,
             email=email or None,
             discord_id=discord_id,
             discord_username=discord_username or None,

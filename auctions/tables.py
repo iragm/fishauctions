@@ -651,7 +651,7 @@ class ClubHistoryHTMxTable(tables.Table):
         self.club = kwargs.pop("club", None)
         if self.club:
             self._member_names = {
-                m.user_id: f"{m.first_name} {m.last_name}".strip() or m.email or str(m)
+                m.user_id: m.name or m.email or str(m)
                 for m in ClubMember.objects.filter(club=self.club, is_deleted=False).exclude(user=None)
             }
         else:
