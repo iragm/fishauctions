@@ -280,12 +280,7 @@ document.addEventListener("DOMContentLoaded", function() {
       <td>{{ invoice.currency_symbol }}{{ invoice.first_bid_payout|floatformat:2 }}</td>
     </tr>
   {% endif %}
-  {% if invoice.tax %}
-  <tr>
-    <td>Tax</td>
-    <td>{{ invoice.currency_symbol }}{{invoice.tax|floatformat:2 }}</td>
-  </tr>
-  {% endif %}
+  {% include "auctions/partials/invoice_tax_row.html" %}
   {% include "auctions/partials/invoice_membership_fee_row.html" %}
   {% for adjustment in invoice.changed_adjustments %}
     <tr>

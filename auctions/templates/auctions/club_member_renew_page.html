@@ -9,8 +9,8 @@
   <div class="card-body">
     <h5 class="card-title">{{ member }}</h5>
     {% if member.membership_expiration_date %}
-    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y"|default:"—" }}</p>
-    <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"N j, Y" }}</p>
+    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"M j, Y"|default:"—" }}</p>
+    <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"M j, Y" }}</p>
     {% else %}
     <p class="text-muted small mb-3">No expiration date on record.</p>
     {% endif %}

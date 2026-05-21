@@ -1,0 +1,8 @@
+{% if invoice.tax %}
+<tr id="invoice-tax-row">
+  <td>Tax</td>
+  <td>{{ invoice.currency_symbol }}{{ invoice.tax|floatformat:2 }}</td>
+</tr>
+{% else %}
+<tr id="invoice-tax-row" style="display: none;"><td></td><td></td></tr>
+{% endif %}

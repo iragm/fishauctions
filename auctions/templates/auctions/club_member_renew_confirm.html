@@ -7,12 +7,12 @@
       </div>
       <div class="modal-body">
         {% if member.membership_last_paid %}
-        <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
-        <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"N j, Y" }}</p>
+        <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"M j, Y" }}</p>
+        <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"M j, Y" }}</p>
         {% else %}
         <p class="text-muted small mb-3">No payment on record.</p>
         {% endif %}
-        <p class="mb-0">New expiration will be: <strong>{{ new_expiration|date:"N j, Y" }}</strong></p>
+        <p class="mb-0">New expiration will be: <strong>{{ new_expiration|date:"M j, Y" }}</strong></p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -32,8 +32,8 @@
     var container = document.getElementById("modals-here");
     var backdrop = document.getElementById("modal-backdrop");
     var modal = document.getElementById("modal");
-    if (backdrop) backdrop.classList.remove("show");
-    if (modal) modal.classList.remove("show");
+    if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
+    if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
     document.removeEventListener("keydown", escHandler);
     window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
   }

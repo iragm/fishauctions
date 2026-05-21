@@ -1760,20 +1760,25 @@ class InvoiceRenewalNeededToggleView(APIView):
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
-        # OOB swaps so the invoice fee row, final total, and quick-checkout summary
-        # update in real time when the box is toggled.
+        # OOB swaps so the invoice fee row, tax row, final total, and quick-checkout summary
+        # all update in real time when the box is toggled.
         fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
+        tax_row = render_to_string("auctions/partials/invoice_tax_row.html", ctx, request=request)
         total_row = render_to_string("auctions/partials/invoice_final_total_row.html", ctx, request=request)
         oob_fee = fee_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_tax = tax_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
-        # Wrap <tr> OOB swaps in <template> so the browser does not discard them
-        # when parsing a fragment outside of a <table> context.
-        oob_fee = f"<template>{oob_fee}</template>"
-        oob_total = f"<template>{oob_total}</template>"
+        # Wrap <tr> OOB swaps in <table> so the browser's HTML parser does not discard
+        # them when they appear outside a table context, while still letting htmx find
+        # and process the hx-swap-oob attribute (unlike <template>, whose content is
+        # inert and not reachable by querySelectorAll).
+        oob_fee = f"<table>{oob_fee}</table>"
+        oob_tax = f"<table>{oob_tax}</table>"
+        oob_total = f"<table>{oob_total}</table>"
         oob_summary = (
             f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
         )
-        return HttpResponse(body + oob_fee + oob_total + oob_summary)
+        return HttpResponse(body + oob_fee + oob_tax + oob_total + oob_summary)
 
 
 class UpdateLotPushNotificationsView(APIPostView):

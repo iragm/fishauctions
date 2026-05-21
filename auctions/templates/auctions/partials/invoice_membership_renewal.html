@@ -23,7 +23,7 @@
   </div>
   <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>
   {% if invoice.renewal_processed %}
-  <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required.</small></div>
+  <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
   {% endif %}
 </div>
 {% endif %}

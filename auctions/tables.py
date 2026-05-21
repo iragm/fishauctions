@@ -415,7 +415,7 @@ class ClubMemberHTMxTable(tables.Table):
         orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    membership_last_paid = tables.DateColumn(
+    membership_last_paid = tables.Column(
         accessor="membership_last_paid",
         verbose_name="Last paid",
         orderable=True,
@@ -495,6 +495,11 @@ class ClubMemberHTMxTable(tables.Table):
                 "s" if days_expired != 1 else "",
             )
         return formatted
+
+    def render_membership_last_paid(self, value):
+        if not value:
+            return "—"
+        return value.strftime("%b %-d, %Y")
 
     _SOURCE_LABELS = {
         "discord": "Discord",

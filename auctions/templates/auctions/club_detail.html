@@ -30,7 +30,7 @@
       <h5 class="card-title">Your membership</h5>
       <p class="mb-1">Member since: {{ member.createdon|date:"N j, Y" }}</p>
       {% if club.membership_annual_fee and membership_expiration_date %}
-      <p class="mb-1">Membership expires: {{ membership_expiration_date|date:"N j, Y" }}</p>
+      <p class="mb-1">Membership expires: {{ membership_expiration_date|date:"M j, Y" }}</p>
       {% endif %}
       {% if club.enable_breeder_award_program %}
         {% if member.bap_points or member.hap_points or member.culture_points %}
