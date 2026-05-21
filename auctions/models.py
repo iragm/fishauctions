@@ -1049,6 +1049,16 @@ class ClubMember(ContactRecord):
             )
             if existing:
                 self.email_address_status = existing.email_address_status
+            else:
+                # Also check AuctionTOS records from auctions belonging to this club
+                existing_tos = (
+                    AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
+                    .filter(email=self.email, auction__club=self.club)
+                    .order_by("-createdon")
+                    .first()
+                )
+                if existing_tos:
+                    self.email_address_status = existing_tos.email_address_status
         if self.is_deleted:
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
