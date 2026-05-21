@@ -537,6 +537,7 @@ class ClubMemberHTMxTable(tables.Table):
             set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
             confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
             merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+            membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
             email_item = format_html("")
             if record.email:
                 icon_class = "bi bi-envelope"
@@ -558,6 +559,10 @@ class ClubMemberHTMxTable(tables.Table):
                 '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
                 '<li><a class="dropdown-item" href="{}">'
                 '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>'
                 "{}"
                 '<li><hr class="dropdown-divider"></li>'
                 '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
@@ -567,6 +572,7 @@ class ClubMemberHTMxTable(tables.Table):
                 renew_confirm_url,
                 set_expiry_url,
                 merge_url,
+                membership_number_url,
                 email_item,
                 confirm_delete_url,
             )

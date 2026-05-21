@@ -538,6 +538,11 @@ def remove_html_color_tags(text):
     return sanitize_summernote_html(text)
 
 
+def _default_membership_number():
+    """Return a random 10-digit membership number for new ClubMember records."""
+    return randint(1_000_000_000, 9_999_999_999)
+
+
 class BlogPost(models.Model):
     """
     A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
@@ -799,6 +804,10 @@ class ClubMember(ContactRecord):
     culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
     membership_expiration_date = models.DateField(null=True, blank=True)
+    membership_number = models.BigIntegerField(
+        default=_default_membership_number,
+        help_text="Unique membership number assigned to this member.",
+    )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")

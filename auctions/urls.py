@@ -610,6 +610,11 @@ urlpatterns = [
         "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
     ),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
+    path(
+        "api/clubmember/<int:pk>/membership-number/",
+        views.ClubMembershipNumberView.as_view(),
+        name="club_member_membership_number",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
         "api/clubmember/<int:pk>/confirm/<str:action>/",

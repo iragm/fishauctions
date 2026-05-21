@@ -12894,6 +12894,40 @@ class ClubMemberRenewView(APIView):
         return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
+class ClubMembershipNumberView(APIView):
+    """Show a modal with the member's membership number and allow resetting it."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_member(self, pk, request):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        return member
+
+    def get(self, request, pk):
+        member = self._get_member(pk, request)
+        return render(request, "auctions/club_membership_number.html", {"member": member})
+
+    def post(self, request, pk):
+        from auctions.models import _default_membership_number
+
+        member = self._get_member(pk, request)
+        member.membership_number = _default_membership_number()
+        member.save(update_fields=["membership_number"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Reset membership number for {member}",
+            applies_to="MEMBERS",
+        )
+        return render(request, "auctions/club_membership_number.html", {"member": member})
+
+
 class ClubMemberDeleteView(APIView):
     """Soft-delete a club member."""
 
@@ -13972,6 +14006,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                 "Contact Status",
                 "Discord ID",
                 "Memo",
+                "Membership Number",
             ]
         )
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
@@ -13992,6 +14027,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                     member.contact_status,
                     member.discord_id or "",
                     member.memo,
+                    member.membership_number,
                 ]
             )
         query_filter = request.GET.get("query", "all")
