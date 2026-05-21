@@ -338,7 +338,7 @@ class ClubAPIKeyInline(admin.TabularInline):
     extra = 0
     fields = ("name", "prefix", "is_active", "created_at", "last_used_at")
     readonly_fields = ("prefix", "created_at", "last_used_at")
-    show_change_link = True
+    show_change_link = False
 
 
 class ClubAdmin(admin.ModelAdmin):
