@@ -946,27 +946,34 @@ class ClubMember(ContactRecord):
         headers = {"Authorization": f"Bot {bot_token}"}
         base_url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles"
 
+        role_sync_succeeded = True
+
         # Remove all club-managed roles that are not the target (skip unmanageable ones)
         for club_role in self.club.discord_roles.all():
             if not club_role.bot_can_manage:
                 continue
             if role is None or club_role.pk != role.pk:
                 try:
-                    _requests.delete(f"{base_url}/{club_role.role_id}", headers=headers, timeout=10)
+                    response = _requests.delete(f"{base_url}/{club_role.role_id}", headers=headers, timeout=10)
+                    if response.status_code not in [200, 204, 404]:
+                        role_sync_succeeded = False
                 except Exception:
-                    pass
+                    role_sync_succeeded = False
 
         # Assign the target role (if any); bail if the bot can't manage it
         if role:
             if not role.bot_can_manage:
                 return
             try:
-                _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
+                response = _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
+                if response.status_code not in [200, 201, 204]:
+                    role_sync_succeeded = False
             except Exception:
-                pass
+                role_sync_succeeded = False
 
         # Track what was last assigned so the daily task can skip unchanged members
-        ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
+        if role_sync_succeeded:
+            ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
 
     @property
     def display_name(self):

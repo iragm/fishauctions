@@ -18,7 +18,7 @@
     >
     <label class="form-check-label" for="renewal_needed_checkbox_{{ invoice.pk }}">
       Apply {{ invoice.auction.club.name }} membership fee
-      {% if invoice.auction.club.membership_annual_fee %}(${{ invoice.auction.club.membership_annual_fee|floatformat:2 }}){% endif %}
+      {% if invoice.auction.club.membership_annual_fee %}({{ invoice.auction.currency_symbol }}{{ invoice.auction.club.membership_annual_fee|floatformat:2 }}){% endif %}
     </label>
   </div>
   <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>

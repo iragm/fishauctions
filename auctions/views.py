@@ -14037,7 +14037,9 @@ def _sync_discord_roles(club, bot_token):
                     bot_role_ids = member_resp.json().get("roles", [])
                     if bot_role_ids:
                         bot_max_position = max(position_by_id.get(rid, 0) for rid in bot_role_ids)
-                    logger.info("Discord bot position resolved: user_id=%s bot_max_position=%s", bot_user_id, bot_max_position)
+                    logger.info(
+                        "Discord bot position resolved: user_id=%s bot_max_position=%s", bot_user_id, bot_max_position
+                    )
                 else:
                     logger.warning("Discord guild member fetch failed: status=%s", member_resp.status_code)
         else:
