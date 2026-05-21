@@ -8616,9 +8616,7 @@ class PayPalAPIMixin:
             invoice.status = "PAID"
             invoice.save()
             try:
-                _process_invoice_membership_renewal(
-                    invoice, payment_method="PayPal", external_id=payment.external_id
-                )
+                _process_invoice_membership_renewal(invoice, payment_method="PayPal", external_id=payment.external_id)
             except Exception:
                 logger.exception("membership renewal failed after PayPal payment on invoice %s", invoice.pk)
             if invoice.auction and invoice.auctiontos_user:

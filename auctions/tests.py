@@ -14350,7 +14350,7 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Membership email address")
-        self.assertContains(response, "Replies to membership inquires will be sent to this email")
+        self.assertContains(response, "Replies to membership inquiries will be sent to this email")
         self.assertContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
