@@ -591,7 +591,7 @@ class Club(models.Model):
         blank=True,
         null=True,
         verbose_name="Membership email address",
-        help_text="Replies to membership inquires will be sent to this email",
+        help_text="Replies to membership inquiries will be sent to this email",
     )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
