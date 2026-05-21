@@ -1695,28 +1695,39 @@ class InvoicePaid(APIView):
             if not auction.permission_check(request.user):
                 raise PermissionDenied()
         new_status = kwargs["status"]
+        # Core: persist the new invoice status. Everything else is "extra"
+        # and must not be allowed to block the status change.
         invoice.status = new_status
-        # Set or clear invoice_notification_due based on status change
+        run_at = None
         if new_status in ("UNPAID", "PAID"):
-            # Schedule notification in the future to allow for undo
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
             invoice.invoice_notification_due = run_at
-            schedule_invoice_notification(invoice.pk, run_at)
         elif new_status == "DRAFT":
-            # Cancel scheduled notification when setting to open
             invoice.invoice_notification_due = None
-            cancel_invoice_notification(invoice.pk)
         invoice.save()
+        try:
+            if run_at:
+                schedule_invoice_notification(invoice.pk, run_at)
+            elif new_status == "DRAFT":
+                cancel_invoice_notification(invoice.pk)
+        except Exception:
+            logger.exception("schedule/cancel invoice notification failed for invoice %s", invoice.pk)
         if new_status == "PAID":
-            _process_invoice_membership_renewal(
-                invoice, acting_user=request.user if request.user.is_authenticated else None
-            )
+            try:
+                _process_invoice_membership_renewal(
+                    invoice, acting_user=request.user if request.user.is_authenticated else None
+                )
+            except Exception:
+                logger.exception("invoice membership renewal failed for invoice %s", invoice.pk)
         user = request.user if request.user.is_authenticated else None
-        auction.create_history(
-            applies_to="INVOICES",
-            action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
-            user=user,
-        )
+        try:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
+                user=user,
+            )
+        except Exception:
+            logger.exception("create_history failed for invoice %s", invoice.pk)
         return HttpResponse(
             render_to_string("invoice_buttons.html", {"invoice": invoice}),
             status=200,
@@ -3158,9 +3169,15 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         lot.date_end = timezone.now()
         lot.active = False
         lot.save()
-        lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        try:
+            lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        except Exception:
+            logger.exception("add_winner_message failed for lot %s", lot.pk)
         if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
-            lot.auto_award_bap_points()
+            try:
+                lot.auto_award_bap_points()
+            except Exception:
+                logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def post(self, request, *args, **kwargs):
@@ -3183,23 +3200,32 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if lot and not lot_error and action == "to_online_high_bidder":
             result["success_message"] = lot.sell_to_online_high_bidder
             result["last_sold_lot_number"] = lot.lot_number_display
-            lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
-            lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Sold lot {lot.lot_number_display} to online high bidder",
-                user=self.request.user,
-            )
+            try:
+                lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            except Exception:
+                logger.exception("add_winner_message failed for lot %s", lot.pk)
+            try:
+                lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Sold lot {lot.lot_number_display} to online high bidder",
+                    user=self.request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for lot %s", lot.pk)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
             result["success_message"] = self.end_unsold(lot)
             result["last_sold_lot_number"] = lot.lot_number_display
-            lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Marked lot {lot.lot_number_display} as ended without being sold",
-                user=self.request.user,
-            )
+            try:
+                lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+                    user=self.request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for lot %s", lot.pk)
             return JsonResponse(result)
         if (
             not price_error
@@ -3222,11 +3248,14 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
-                lot.auction.create_history(
-                    applies_to="LOTS",
-                    action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
-                    user=self.request.user,
-                )
+                try:
+                    lot.auction.create_history(
+                        applies_to="LOTS",
+                        action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
+                        user=self.request.user,
+                    )
+                except Exception:
+                    logger.exception("create_history failed for lot %s", lot.pk)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -5818,13 +5847,19 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
-                    obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
+                    try:
+                        obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
+                    except Exception:
+                        logger.exception("add_winner_message failed for lot %s", obj.pk)
                     if not obj.date_end:
                         obj.date_end = timezone.now()
                         obj.active = False
                         obj.save()
                     if obj.auction and obj.auction.club and not obj.bap_points_awarded and not obj.manually_approved:
-                        obj.auto_award_bap_points()
+                        try:
+                            obj.auto_award_bap_points()
+                        except Exception:
+                            logger.exception("auto_award_bap_points failed for lot %s", obj.pk)
             return HttpResponse("<script>location.reload();</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
@@ -7920,14 +7955,24 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         form = self.get_form()
         if form.is_valid():
             for lot in self.queryset:
-                lot.sell_to_online_high_bidder
+                try:
+                    lot.sell_to_online_high_bidder
+                except Exception:
+                    logger.exception("sell_to_online_high_bidder failed for lot %s", lot.pk)
+                    continue
                 if lot.auctiontos_winner:
-                    lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
-            self.auction.create_history(
-                applies_to="LOTS",
-                action=f"Sold {self.queryset.count()} lots to online high bidder",
-                user=request.user,
-            )
+                    try:
+                        lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+                    except Exception:
+                        logger.exception("add_winner_message failed for lot %s", lot.pk)
+            try:
+                self.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Sold {self.queryset.count()} lots to online high bidder",
+                    user=request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for auction %s", self.auction.pk)
             return HttpResponse("<script>location.reload();</script>", status=200)
         return self.form_invalid(form)
 
@@ -7988,27 +8033,39 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         if self.new_invoice_status in ("UNPAID", "PAID"):
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
+            # Core: change the status and save. Extras follow, each guarded.
             try:
                 invoice.status = self.new_invoice_status
                 invoice.invoice_notification_due = run_at
-                invoice.recalculate()
                 invoice.save()
-                if self.new_invoice_status == "PAID":
+            except Exception:
+                logger.exception("Failed to update invoice %s to %s in bulk", invoice.pk, self.new_invoice_status)
+                continue
+            try:
+                invoice.recalculate()
+            except Exception:
+                logger.exception("recalculate failed for invoice %s in bulk", invoice.pk)
+            if self.new_invoice_status == "PAID":
+                try:
                     _process_invoice_membership_renewal(invoice, acting_user=request.user)
-                # Schedule or cancel notification for each invoice
+                except Exception:
+                    logger.exception("membership renewal failed for invoice %s in bulk", invoice.pk)
+            try:
                 if run_at:
                     schedule_invoice_notification(invoice.pk, run_at)
                 else:
                     cancel_invoice_notification(invoice.pk)
             except Exception:
-                logger.exception("Failed to update invoice %s to %s in bulk", invoice.pk, self.new_invoice_status)
-                continue
+                logger.exception("schedule/cancel notification failed for invoice %s in bulk", invoice.pk)
         action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
-        self.auction.create_history(
-            applies_to="INVOICES",
-            action=action,
-            user=request.user,
-        )
+        try:
+            self.auction.create_history(
+                applies_to="INVOICES",
+                action=action,
+                user=request.user,
+            )
+        except Exception:
+            logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
         return HttpResponse("<script>location.reload();</script>", status=200)
 
 
@@ -8544,20 +8601,34 @@ class PayPalAPIMixin:
                 "amount_available_to_refund": amt,
             },
         )
-        invoice.recalculate()
+        try:
+            invoice.recalculate()
+        except Exception:
+            logger.exception("recalculate failed for invoice %s after PayPal payment", invoice.pk)
         if created and invoice.auctiontos_user and invoice.auction:
-            action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
-            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+            try:
+                action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
+                invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+            except Exception:
+                logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
         # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
         if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             invoice.status = "PAID"
             invoice.save()
-            _process_invoice_membership_renewal(invoice, payment_method="PayPal", external_id=payment.external_id)
-            if invoice.auction and invoice.auctiontos_user:
-                invoice.auction.create_history(
-                    applies_to="INVOICES",
-                    action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
+            try:
+                _process_invoice_membership_renewal(
+                    invoice, payment_method="PayPal", external_id=payment.external_id
                 )
+            except Exception:
+                logger.exception("membership renewal failed after PayPal payment on invoice %s", invoice.pk)
+            if invoice.auction and invoice.auctiontos_user:
+                try:
+                    invoice.auction.create_history(
+                        applies_to="INVOICES",
+                        action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
+                    )
+                except Exception:
+                    logger.exception("create_history failed after PayPal payment on invoice %s", invoice.pk)
             # I have given some thought to putting this in a model property instead
             # Putting it here only sends the message when an invoice is paid via PayPal
             if invoice.auction:
@@ -12086,14 +12157,22 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 payment_record.receipt_number = receipt_number
                             payment_record.save()
                         if invoice.auctiontos_user and invoice.auction:
-                            action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
-                            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                            try:
+                                action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
+                                invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                            except Exception:
+                                logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
                             invoice.save()
-                            _process_invoice_membership_renewal(
-                                invoice, payment_method="Square", external_id=payment_id
-                            )
+                            try:
+                                _process_invoice_membership_renewal(
+                                    invoice, payment_method="Square", external_id=payment_id
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "membership renewal failed after Square payment on invoice %s", invoice.pk
+                                )
 
                             # Send websocket notification for payment completion
                             try:

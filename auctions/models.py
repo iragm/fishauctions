@@ -4468,19 +4468,25 @@ class Lot(models.Model):
         message = (
             f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         )
-        LotHistory.objects.create(
-            lot=self,
-            user=user,
-            message=message,
-            notification_sent=True,
-            bid_amount=winning_price,
-            changed_price=True,
-            seen=True,
-        )
-        invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
-        if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-        invoice.recalculate()
+        try:
+            LotHistory.objects.create(
+                lot=self,
+                user=user,
+                message=message,
+                notification_sent=True,
+                bid_amount=winning_price,
+                changed_price=True,
+                seen=True,
+            )
+        except Exception:
+            logger.exception("Failed to create winner LotHistory for lot %s", self.pk)
+        try:
+            invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+            invoice.recalculate()
+        except Exception:
+            logger.exception("Failed to recalculate invoice after winner set on lot %s", self.pk)
         self.send_websocket_message(
             {
                 "type": "chat_message",
@@ -4548,13 +4554,17 @@ class Lot(models.Model):
 
         if info:
             self.send_websocket_message(result)
-            LotHistory.objects.create(
-                lot=self,
-                user=bidder,
-                message=message,
-                changed_price=True,
-                current_price=self.high_bid,
-            )
+            try:
+                LotHistory.objects.create(
+                    lot=self,
+                    user=bidder,
+                    message=message,
+                    changed_price=True,
+                    current_price=self.high_bid,
+                )
+            except Exception:
+                # LotHistory is for the activity feed; never block the lot from ending.
+                logger.exception("Failed to create lot end LotHistory for lot %s", self.pk)
         self.save()
 
     def send_non_auction_lot_emails(self):
