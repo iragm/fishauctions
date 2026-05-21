@@ -4493,9 +4493,14 @@ class Lot(models.Model):
         )
 
     def send_websocket_message(self, message):
-        channel_layer = channels.layers.get_channel_layer()
-        serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
-        async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
+        try:
+            channel_layer = channels.layers.get_channel_layer()
+            serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
+            async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
+        except Exception:
+            # Channel layer failures must never prevent a winner from being declared
+            # or a lot from being marked sold.
+            logger.exception("Failed to send websocket message for lot %s", self.pk)
 
     def send_ending_very_soon_message(self):
         """Send a websocket message when the lot is ending in less than a minute"""
@@ -5774,11 +5779,11 @@ class Lot(models.Model):
     def create_update_invoices(self):
         """Call whenever ending this lot, or when creating it"""
         if self.auction and self.winner and not self.auctiontos_winner:
-            tos = (
-                AuctionTOS.objects.filter(Q(user=self.winner) | Q(email=self.winner.email), auction=self.auction)
-                .order_by("-createdon")
-                .first()
-            )
+            winner_email = (self.winner.email or "").strip()
+            tos_filter = Q(user=self.winner)
+            if winner_email:
+                tos_filter |= Q(email__iexact=winner_email)
+            tos = AuctionTOS.objects.filter(tos_filter, auction=self.auction).order_by("-createdon").first()
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
@@ -6191,11 +6196,17 @@ class Invoice(models.Model):
     def membership_status_for_invoice(self):
         if not self.auction or not self.auction.club:
             return "No club"
-        if not self.auctiontos_user.user:
-            return "No linked user"
-        member = ClubMember.objects.filter(
-            club=self.auction.club, user=self.auctiontos_user.user, is_deleted=False
-        ).first()
+        if not self.auctiontos_user:
+            return "No bidder"
+        user = self.auctiontos_user.user
+        email = (self.auctiontos_user.email or "").strip()
+        if not user and not email:
+            return "No linked user or email"
+        member = None
+        if user:
+            member = ClubMember.objects.filter(club=self.auction.club, user=user, is_deleted=False).first()
+        if not member and email:
+            member = ClubMember.objects.filter(club=self.auction.club, email__iexact=email, is_deleted=False).first()
         if not member:
             return "Not a member"
         if not member.membership_last_paid:

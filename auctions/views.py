@@ -302,15 +302,46 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
+def _invoice_membership_lookup_email(invoice):
+    """Return a usable lookup email for the buyer on this invoice, or empty string."""
+    if not invoice:
+        return ""
+    tos = invoice.auctiontos_user
+    candidates = []
+    if tos:
+        candidates.append(tos.email)
+        if tos.user:
+            candidates.append(tos.user.email)
+    if invoice.buyer:
+        candidates.append(invoice.buyer.email)
+    for email in candidates:
+        if email and email.strip():
+            return email.strip()
+    return ""
+
+
+def _find_club_member(club, user, email):
+    """Match an existing (non-deleted) ClubMember by user link first, then by email."""
+    if not club:
+        return None
+    member = None
+    if user:
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member and email:
+        member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
+    return member
+
+
 def _invoice_membership_candidate(invoice):
     if not invoice or not invoice.auction or not invoice.auction.club or not invoice.auctiontos_user:
         return None
     if not invoice.auction.add_people_from_auction_to_club:
         return None
     user = invoice.auctiontos_user.user
-    if not user:
+    email = _invoice_membership_lookup_email(invoice)
+    if not user and not email:
         return None
-    return ClubMember.objects.filter(club=invoice.auction.club, user=user, is_deleted=False).first()
+    return _find_club_member(invoice.auction.club, user, email)
 
 
 def _should_mark_invoice_renewal_needed(invoice):
@@ -323,6 +354,10 @@ def _should_mark_invoice_renewal_needed(invoice):
     if not auction.add_membership_fee_to_invoices_for_expired_members:
         return False
     if not club.membership_annual_fee:
+        return False
+    # Without a usable email we cannot reliably look up or create a ClubMember;
+    # don't auto-add the fee in that case (an admin can still toggle it on manually).
+    if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
         return False
     member = _invoice_membership_candidate(invoice)
     if not member:
@@ -343,60 +378,95 @@ def _ensure_invoice_renewal_state(invoice):
 
 
 def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
-    if not invoice or not invoice.renewal_needed or invoice.renewal_processed:
+    """Process a membership renewal triggered by an invoice payment.
+
+    Wrapped in a try/except + atomic block so a failure (e.g. Discord API outage)
+    cannot bubble out and break the caller that just marked the invoice paid.
+    """
+    if not invoice or not invoice.renewal_needed:
         return
-    club = invoice.club or (invoice.auction.club if invoice.auction else None)
-    if not club:
+    try:
+        with transaction.atomic():
+            # Re-fetch under the row lock so concurrent webhooks can't double-process.
+            locked = Invoice.objects.select_for_update().filter(pk=invoice.pk).first()
+            if not locked or not locked.renewal_needed or locked.renewal_processed:
+                return
+            club = locked.club or (locked.auction.club if locked.auction else None)
+            if not club:
+                return
+            user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
+            email = _invoice_membership_lookup_email(locked)
+            if not user and not email:
+                # Nothing reliable to identify the buyer by; do not create a junk member.
+                logger.warning(
+                    "Skipping renewal on invoice %s: no linked user and no email available",
+                    locked.pk,
+                )
+                return
+            member = _find_club_member(club, user, email)
+            if not member:
+                if locked.auctiontos_user:
+                    name = locked.auctiontos_user.name or (
+                        f"{user.first_name} {user.last_name}".strip() if user else ""
+                    )
+                    member_email = locked.auctiontos_user.email or (user.email if user else "") or email
+                    source = "auction_invoice"
+                else:
+                    name = f"{user.first_name} {user.last_name}".strip() if user else ""
+                    member_email = (user.email if user else "") or email
+                    source = "membership_payment"
+                member = ClubMember.objects.create(
+                    club=club,
+                    user=user,
+                    name=name,
+                    email=member_email,
+                    source=source,
+                )
+            elif user and not member.user:
+                # Link the existing email-only member to the user now that we know them.
+                member.user = user
+                member.save(update_fields=["user"])
+            today = timezone.now().date()
+            current_exp = member.membership_expiration_date
+            base = max(current_exp, today) if current_exp else today
+            if club.membership_system == "january_first":
+                member.membership_expiration_date = date_type(base.year + 1, 1, 1)
+            else:
+                member.membership_expiration_date = date_type(base.year + 1, 12, 31)
+            member.membership_last_paid = today
+            if member.email:
+                member.email_address_status = "VALID"
+            member.save(
+                update_fields=[
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "membership_expiration_reminder_due",
+                    "email_address_status",
+                ]
+            )
+            InvoicePayment.objects.create(
+                invoice=None,
+                club_member=member,
+                payment_target="CLUB_MEMBER",
+                amount=Decimal(club.membership_annual_fee or 0),
+                amount_available_to_refund=Decimal("0.00"),
+                currency=locked.currency,
+                payment_method=payment_method,
+                memo=f"Renewal from invoice #{locked.pk}",
+            )
+            locked.renewal_processed = True
+            locked.save(update_fields=["renewal_processed"])
+            # Keep the in-memory invoice in sync for the caller.
+            invoice.renewal_processed = True
+    except Exception:
+        logger.exception("Failed to process membership renewal for invoice %s", invoice.pk)
         return
-    user = invoice.buyer or (invoice.auctiontos_user.user if invoice.auctiontos_user else None)
-    if not user:
-        return
-    if invoice.auctiontos_user:
-        member_defaults = {
-            "name": invoice.auctiontos_user.name or f"{user.first_name} {user.last_name}".strip(),
-            "email": invoice.auctiontos_user.email or user.email,
-            "source": "auction_invoice",
-        }
-    else:
-        member_defaults = {
-            "name": f"{user.first_name} {user.last_name}".strip(),
-            "email": user.email,
-            "source": "membership_payment",
-        }
-    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
-    if not member:
-        member = ClubMember.objects.create(club=club, user=user, **member_defaults)
-    today = timezone.now().date()
-    current_exp = member.membership_expiration_date
-    base = max(current_exp, today) if current_exp else today
-    if club.membership_system == "january_first":
-        member.membership_expiration_date = date_type(base.year + 1, 1, 1)
-    else:
-        member.membership_expiration_date = date_type(base.year + 1, 12, 31)
-    member.membership_last_paid = today
-    if member.email:
-        member.email_address_status = "VALID"
-    member.save(
-        update_fields=[
-            "membership_last_paid",
-            "membership_expiration_date",
-            "membership_expiration_reminder_due",
-            "email_address_status",
-        ]
-    )
-    member.maybe_assign_discord_role()
-    InvoicePayment.objects.create(
-        invoice=None,
-        club_member=member,
-        payment_target="CLUB_MEMBER",
-        amount=Decimal(club.membership_annual_fee or 0),
-        amount_available_to_refund=Decimal("0.00"),
-        currency=invoice.currency,
-        payment_method=payment_method,
-        memo=f"Renewal from invoice #{invoice.pk}",
-    )
-    invoice.renewal_processed = True
-    invoice.save(update_fields=["renewal_processed"])
+    # Discord role assignment is best-effort: a network/API failure must not
+    # roll back the renewal nor crash the caller.
+    try:
+        member.maybe_assign_discord_role()
+    except Exception:
+        logger.exception("Failed to assign Discord role for club member %s", getattr(member, "pk", None))
     payer_email = (
         (invoice.buyer.email if invoice.buyer else None)
         or (invoice.auctiontos_user.email if invoice.auctiontos_user else None)
@@ -405,12 +475,15 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     id_suffix = f" (ID: {external_id})" if external_id else ""
     payer_prefix = f"User {payer_email} " if payer_email else ""
     action = f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{id_suffix}"
-    ClubHistory.objects.create(
-        club=club,
-        user=acting_user,
-        action=action,
-        applies_to="MEMBERSHIP",
-    )
+    try:
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=action,
+            applies_to="MEMBERSHIP",
+        )
+    except Exception:
+        logger.exception("Failed to record ClubHistory for renewal of invoice %s", invoice.pk)
 
 
 def _disable_integrated_payments_if_only_method(user, method_label):
@@ -1674,13 +1747,22 @@ class InvoiceRenewalNeededToggleView(APIView):
         invoice.renewal_needed = renewal_needed
         invoice.save(update_fields=["renewal_needed"])
         invoice.recalculate()
-        return HttpResponse(
-            render_to_string(
-                "auctions/partials/invoice_membership_renewal.html",
-                {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)},
-                request=request,
-            )
+        ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
+        body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
+        # OOB swaps so the invoice fee row, final total, and quick-checkout summary
+        # update in real time when the box is toggled.
+        fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
+        total_row = render_to_string("auctions/partials/invoice_final_total_row.html", ctx, request=request)
+        oob_fee = fee_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        # Wrap <tr> OOB swaps in <template> so the browser does not discard them
+        # when parsing a fragment outside of a <table> context.
+        oob_fee = f"<template>{oob_fee}</template>"
+        oob_total = f"<template>{oob_total}</template>"
+        oob_summary = (
+            f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
         )
+        return HttpResponse(body + oob_fee + oob_total + oob_summary)
 
 
 class UpdateLotPushNotificationsView(APIPostView):
@@ -7906,17 +7988,21 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         if self.new_invoice_status in ("UNPAID", "PAID"):
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
-            invoice.status = self.new_invoice_status
-            invoice.invoice_notification_due = run_at
-            invoice.recalculate()
-            invoice.save()
-            if self.new_invoice_status == "PAID":
-                _process_invoice_membership_renewal(invoice, acting_user=request.user)
-            # Schedule or cancel notification for each invoice
-            if run_at:
-                schedule_invoice_notification(invoice.pk, run_at)
-            else:
-                cancel_invoice_notification(invoice.pk)
+            try:
+                invoice.status = self.new_invoice_status
+                invoice.invoice_notification_due = run_at
+                invoice.recalculate()
+                invoice.save()
+                if self.new_invoice_status == "PAID":
+                    _process_invoice_membership_renewal(invoice, acting_user=request.user)
+                # Schedule or cancel notification for each invoice
+                if run_at:
+                    schedule_invoice_notification(invoice.pk, run_at)
+                else:
+                    cancel_invoice_notification(invoice.pk)
+            except Exception:
+                logger.exception("Failed to update invoice %s to %s in bulk", invoice.pk, self.new_invoice_status)
+                continue
         action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
         self.auction.create_history(
             applies_to="INVOICES",
@@ -8474,12 +8560,15 @@ class PayPalAPIMixin:
                 )
             # I have given some thought to putting this in a model property instead
             # Putting it here only sends the message when an invoice is paid via PayPal
-            channel_layer = channels.layers.get_channel_layer()
             if invoice.auction:
-                async_to_sync(channel_layer.group_send)(
-                    f"auctions_{invoice.auction.pk}",
-                    {"type": "invoice_paid", "pk": invoice.pk},
-                )
+                try:
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"auctions_{invoice.auction.pk}",
+                        {"type": "invoice_paid", "pk": invoice.pk},
+                    )
+                except Exception:
+                    logger.exception("Failed to send invoice_paid websocket for invoice %s (PayPal)", invoice.pk)
 
         return None, invoice
 
@@ -12007,21 +12096,27 @@ class SquareWebhookView(SquareAPIMixin, View):
                             )
 
                             # Send websocket notification for payment completion
-                            channel_layer = channels.layers.get_channel_layer()
-                            async_to_sync(channel_layer.group_send)(
-                                f"invoice_{invoice.pk}",
-                                {
-                                    "type": "invoice_status",
-                                    "message": "paid",
-                                },
-                            )
-                            if invoice.auction:
+                            try:
+                                channel_layer = channels.layers.get_channel_layer()
                                 async_to_sync(channel_layer.group_send)(
-                                    f"auctions_{invoice.auction.pk}",
+                                    f"invoice_{invoice.pk}",
                                     {
-                                        "type": "invoice_paid",
-                                        "pk": invoice.pk,
+                                        "type": "invoice_status",
+                                        "message": "paid",
                                     },
+                                )
+                                if invoice.auction:
+                                    async_to_sync(channel_layer.group_send)(
+                                        f"auctions_{invoice.auction.pk}",
+                                        {
+                                            "type": "invoice_paid",
+                                            "pk": invoice.pk,
+                                        },
+                                    )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send websocket notification for Square payment on invoice %s",
+                                    invoice.pk,
                                 )
                         logger.info("Square payment completed for invoice %s", invoice.pk)
                     else:

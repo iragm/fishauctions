@@ -53,7 +53,11 @@ def declare_winners_on_lots(lots):
                 logger.exception(e)
         else:
             # note: once again, lots that are part of an in-person auction are not included here
-            lot.send_ending_very_soon_message()
+            try:
+                lot.send_ending_very_soon_message()
+            except Exception as e:
+                logger.warning('Unable to send ending-soon message for "%s":', lot)
+                logger.exception(e)
 
 
 class Command(BaseCommand):
