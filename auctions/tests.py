@@ -16970,3 +16970,128 @@ class AppleWalletPassTests(TestCase):
         ):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
+
+
+class MembershipNumberModeTests(TestCase):
+    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+
+    def setUp(self):
+        import datetime as _dt
+
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="mn_user", password="x", email="m@b.c")
+        self.club = Club.objects.create(name="Mode Test Club")
+        self.club.membership_system = "rolling"
+        self.club.save()
+        # Two members: one paid (expires in 30 days), one not.
+        self.paid = ClubMember.objects.create(
+            club=self.club,
+            name="Paid",
+            user=self.user,
+            membership_last_paid=timezone.now().date(),
+            membership_expiration_date=timezone.now().date() + _dt.timedelta(days=30),
+        )
+        self.unpaid = ClubMember.objects.create(club=self.club, name="Unpaid")
+
+    def test_is_paid_member_property(self):
+        self.assertTrue(self.paid.is_paid_member)
+        self.assertFalse(self.unpaid.is_paid_member)
+
+    def test_visibility_all_members(self):
+        self.club.membership_number_mode = "all_members"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertTrue(self.paid.membership_number_visible)
+        self.assertTrue(self.unpaid.membership_number_visible)
+
+    def test_visibility_paid_only(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertTrue(self.paid.membership_number_visible)
+        self.assertFalse(self.unpaid.membership_number_visible)
+
+    def test_visibility_disabled(self):
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertFalse(self.paid.membership_number_visible)
+        self.assertFalse(self.unpaid.membership_number_visible)
+
+    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        # Unpaid user logged in as themselves → 404 (number isn't visible).
+        unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
+        self.unpaid.user = unpaid_user
+        self.unpaid.save()
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.unpaid.pk})
+        self.client.force_login(unpaid_user)
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="cert.p12",
+            APPLE_WALLET_CERT_PASSWORD="",
+            APPLE_WALLET_WWDR_FILE="wwdr.pem",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+            APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+        ):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 404)
+
+    def test_google_wallet_url_empty_when_number_hidden(self):
+        from .templatetags.membership_tags import google_wallet_save_url
+
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.paid.refresh_from_db()
+        # Should bail out before ever touching settings/JWT.
+        self.assertEqual(google_wallet_save_url(self.paid), "")
+
+    def test_admin_membership_number_view_404_when_disabled(self):
+        from .models import ClubMember
+
+        # Give the user admin permissions on the club so the perm check passes.
+        admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
+        ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.client.force_login(admin)
+        url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "disabled"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "paid_only"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
+
+    def test_signal_no_revoke_when_loosening_to_all_members(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "all_members"
+                self.club.save()
+            delay.assert_not_called()
+
+    def test_expire_task_only_targets_unpaid_when_flagged(self):
+        """The bulk task respects unpaid_only and skips paid members."""
+        from .tasks import expire_google_wallet_objects_for_club
+
+        with patch("auctions.google_wallet.is_configured", return_value=True):
+            with patch("auctions.google_wallet.expire_generic_object_for_member") as expire:
+                expire_google_wallet_objects_for_club.apply(args=[self.club.pk], kwargs={"unpaid_only": True})
+        targeted_pks = {call.args[0].pk for call in expire.call_args_list}
+        self.assertEqual(targeted_pks, {self.unpaid.pk})

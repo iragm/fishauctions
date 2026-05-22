@@ -3548,6 +3548,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "contact_email",
             "membership_system",
             "membership_annual_fee",
+            "membership_number_mode",
             "payment_user",
             "send_membership_expiration_reminders",
             "allow_integrated_payments",
@@ -3569,6 +3570,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.layout = Layout(
             "membership_system",
             "membership_annual_fee",
+            "membership_number_mode",
             "allow_integrated_payments",
             "payment_user",
             "send_membership_expiration_reminders",

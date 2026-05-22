@@ -104,6 +104,41 @@ def _class_body(club) -> dict:
     }
 
 
+def _object_id_for_member(member) -> str:
+    return f"{settings.GOOGLE_WALLET_ISSUER_ID}.member_{member.pk}"
+
+
+def expire_generic_object_for_member(member) -> bool:
+    """PATCH the member's Wallet object to state=EXPIRED so devices show it as expired.
+
+    Returns True if Google confirms the object is now expired (200), or False if
+    we couldn't tell (404 = object never existed = nothing to revoke, treated
+    as success). Raises on transport / 5xx for Celery retry.
+    """
+    if not is_configured():
+        return False
+    token = get_access_token()
+    if not token:
+        return False
+    object_id = _object_id_for_member(member)
+    resp = requests.patch(
+        f"{WALLET_API_BASE}/genericObject/{object_id}",
+        json={"state": "EXPIRED"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if resp.status_code == 200:
+        logger.info("Expired Google Wallet object %s", object_id)
+        return True
+    if resp.status_code == 404:
+        # No object means the user never added the pass to Wallet — nothing to revoke.
+        logger.info("Google Wallet object %s does not exist; nothing to expire", object_id)
+        return False
+    logger.error("Google Wallet expire failed for member %s: %s %s", member.pk, resp.status_code, resp.text)
+    resp.raise_for_status()
+    return False
+
+
 def create_generic_class(club) -> bool:
     """Create the GenericClass for this club on Google Wallet.
 

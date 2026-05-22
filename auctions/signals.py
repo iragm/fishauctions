@@ -158,6 +158,45 @@ def update_user_location(sender, instance, **kwargs):
         pass
 
 
+@receiver(pre_save, sender="auctions.Club")
+def stash_previous_membership_number_mode(sender, instance, **kwargs):
+    """Snapshot the previous mode value so the post_save handler can detect transitions."""
+    if instance.pk:
+        from .models import Club
+
+        prev = Club.objects.filter(pk=instance.pk).values_list("membership_number_mode", flat=True).first()
+        instance._previous_membership_number_mode = prev
+    else:
+        instance._previous_membership_number_mode = None
+
+
+@receiver(post_save, sender="auctions.Club")
+def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
+    """When membership_number_mode tightens, expire active Wallet passes.
+
+    Transitions handled:
+      * anything → "disabled"   : expire ALL members' Wallet objects
+      * anything → "paid_only"  : expire UNPAID members' Wallet objects (only when
+                                  the previous mode was not already "paid_only")
+
+    Apple Wallet does not have an equivalent push-revocation API without the
+    full Web Service implementation, so we rely on the embedded `expirationDate`
+    in the pkpass plus URL gating on re-download.
+    """
+    if created:
+        return
+    prev = getattr(instance, "_previous_membership_number_mode", None)
+    current = instance.membership_number_mode
+    if prev == current:
+        return
+    from .tasks import expire_google_wallet_objects_for_club
+
+    if current == "disabled":
+        transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk))
+    elif current == "paid_only" and prev != "paid_only":
+        transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk, unpaid_only=True))
+
+
 @receiver(pre_save, sender="auctions.Lot")
 def update_lot_info(sender, instance, **kwargs):
     """Fill out the location and address from the user; set end date from auction."""

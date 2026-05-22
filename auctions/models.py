@@ -639,6 +639,21 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    MEMBERSHIP_NUMBER_MODE_CHOICES = (
+        ("disabled", "No member numbers"),
+        ("paid_only", "Paid members only"),
+        ("all_members", "All members"),
+    )
+    membership_number_mode = models.CharField(
+        max_length=20,
+        choices=MEMBERSHIP_NUMBER_MODE_CHOICES,
+        default="all_members",
+        verbose_name="Member number",
+        help_text=(
+            "10 digit automatically generated number that can be scanned with a "
+            "barcode reader, QR code, and added to Google Wallet."
+        ),
+    )
     payment_user = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -895,6 +910,40 @@ class ClubMember(ContactRecord):
         if self.email:
             return self.email
         return f"Member #{self.pk}"
+
+    @property
+    def membership_number_visible(self) -> bool:
+        """True when this member's number/QR/barcode should be shown / wallet-saveable.
+
+        Honors the club's `membership_number_mode`:
+          - disabled    → never
+          - paid_only   → only when is_paid_member
+          - all_members → always
+        """
+        mode = self.club.membership_number_mode
+        if mode == "disabled":
+            return False
+        if mode == "paid_only":
+            return self.is_paid_member
+        return True
+
+    @property
+    def is_paid_member(self) -> bool:
+        """True when the member's dues are current.
+
+        Uses membership_expiration_date when present, else falls back to
+        membership_last_paid interpreted under the club's membership_system.
+        Single source of truth — every UI gate / wallet check should call this
+        instead of re-deriving the logic.
+        """
+        today = timezone.now().date()
+        if self.membership_expiration_date:
+            return self.membership_expiration_date >= today
+        if self.membership_last_paid:
+            if self.club.membership_system == "january_first":
+                return self.membership_last_paid >= datetime.date(today.year, 1, 1)
+            return self.membership_last_paid >= today - datetime.timedelta(days=365)
+        return False
 
     @property
     def discord_role(self):

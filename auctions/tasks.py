@@ -608,6 +608,39 @@ def create_google_wallet_class_for_club(self, club_pk):
         Club.objects.filter(pk=club.pk).update(google_wallet_class_created=True)
 
 
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
+    """Expire (state=EXPIRED) every active Wallet pass for a club's members.
+
+    When `unpaid_only=True` only members whose dues are currently lapsed are
+    touched — used when the club switches to "paid members only" mode.
+    """
+    from auctions.google_wallet import expire_generic_object_for_member, is_configured
+    from auctions.models import Club, ClubMember
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    members = ClubMember.objects.filter(club=club, is_deleted=False)
+    for member in members:
+        if unpaid_only and member.is_paid_member:
+            continue
+        try:
+            expire_generic_object_for_member(member)
+        except requests.RequestException:
+            # Let Celery's autoretry handle transient failures on the outer task.
+            raise
+
+
 @shared_task(bind=True, ignore_result=True)
 def recalculate_club_bap_points(self, club_pk):
     """Recalculate BAP/HAP/CAP point totals for all active members of a club."""

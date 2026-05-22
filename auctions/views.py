@@ -12916,6 +12916,9 @@ class ClubMembershipNumberView(APIView):
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
+        if member.club.membership_number_mode == "disabled":
+            # Feature is off for this club — admin endpoint should not be reachable.
+            raise Http404
         return member
 
     def get(self, request, pk):
@@ -12953,6 +12956,9 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
         if not request.user.is_authenticated or member.user_id != request.user.id:
             raise PermissionDenied()
+        # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
+        if not member.membership_number_visible:
+            raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
         response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
@@ -14025,44 +14031,47 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
         writer = csv.writer(response)
-        writer.writerow(
-            [
-                "Name",
-                "Email",
-                "Phone",
-                "Address",
-                "BAP Points",
-                "HAP Points",
-                "Membership Last Paid",
-                "Date Joined",
-                "Source",
-                "Contact Status",
-                "Discord ID",
-                "Memo",
-                "Membership Number",
-            ]
-        )
+        # Omit the Membership Number column entirely when the club has the
+        # feature disabled — user asked for "no UI" referencing those numbers.
+        include_membership_number = self.club.membership_number_mode != "disabled"
+        header = [
+            "Name",
+            "Email",
+            "Phone",
+            "Address",
+            "BAP Points",
+            "HAP Points",
+            "Membership Last Paid",
+            "Date Joined",
+            "Source",
+            "Contact Status",
+            "Discord ID",
+            "Memo",
+        ]
+        if include_membership_number:
+            header.append("Membership Number")
+        writer.writerow(header)
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         filterset = ClubMemberFilter(request.GET, queryset=base_qs)
         qs = filterset.qs
         for member in qs:
-            writer.writerow(
-                [
-                    member.name,
-                    member.email or "",
-                    member.phone_as_string,
-                    member.address,
-                    member.bap_points,
-                    member.hap_points,
-                    member.membership_last_paid or "",
-                    member.createdon.date(),
-                    member.source,
-                    member.contact_status,
-                    member.discord_id or "",
-                    member.memo,
-                    member.membership_number,
-                ]
-            )
+            row = [
+                member.name,
+                member.email or "",
+                member.phone_as_string,
+                member.address,
+                member.bap_points,
+                member.hap_points,
+                member.membership_last_paid or "",
+                member.createdon.date(),
+                member.source,
+                member.contact_status,
+                member.discord_id or "",
+                member.memo,
+            ]
+            if include_membership_number:
+                row.append(member.membership_number)
+            writer.writerow(row)
         query_filter = request.GET.get("query", "all")
         ClubHistory.objects.create(
             club=self.club,
