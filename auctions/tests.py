@@ -14776,16 +14776,16 @@ class ClubPermissionTests(TestCase):
         """Admin can renew a membership via the dedicated renew page"""
         self._login(self.admin_user)
         url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
-        response = self.client.post(url, {"membership_last_paid": "2026-01-15"})
+        response = self.client.post(url, {"membership_expiration_date": "2026-01-15"})
         self.assertEqual(response.status_code, 302)
         self.target_member.refresh_from_db()
-        self.assertEqual(str(self.target_member.membership_last_paid), "2026-01-15")
+        self.assertEqual(str(self.target_member.membership_expiration_date), "2026-01-15")
 
     def test_renew_page_post_non_member_gets_403(self):
         """Non-member cannot POST to the renew page"""
         self._login(self.non_member)
         url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
-        response = self.client.post(url, {"membership_last_paid": "2026-01-15"})
+        response = self.client.post(url, {"membership_expiration_date": "2026-01-15"})
         self.assertEqual(response.status_code, 403)
 
     def test_cross_club_renew_page_returns_404(self):
@@ -15527,6 +15527,7 @@ class ClubSettingsViewTests(TestCase):
                 "contact_email": "membership@example.com",
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
+                "membership_number_mode": "disabled",
                 "payment_user": "",
                 "send_membership_expiration_reminders": "on",
             },
@@ -16244,10 +16245,10 @@ class ClubMemberManagementViewTests(TestCase):
     def test_renew_page_updates_requested_paid_date(self):
         self.client.login(username="club_editor", password="testpass")
         renew_page_url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})
-        response = self.client.post(renew_page_url, {"membership_last_paid": "2024-01-15"})
+        response = self.client.post(renew_page_url, {"membership_expiration_date": "2024-01-15"})
         self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.source_member.refresh_from_db()
-        self.assertEqual(self.source_member.membership_last_paid.isoformat(), "2024-01-15")
+        self.assertEqual(self.source_member.membership_expiration_date.isoformat(), "2024-01-15")
 
     def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
         self.client.login(username="club_editor", password="testpass")

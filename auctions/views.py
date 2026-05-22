@@ -4495,8 +4495,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
 
         except json.JSONDecodeError:
             return JsonResponse({"success": False, "error": "Invalid JSON data"})
-        except Exception as e:
-            return JsonResponse({"success": False, "error": str(e)})
+        except Exception:
+            logger.exception("Failed to save lot via lot modal for auction %s", self.auction.pk)
+            return JsonResponse({"success": False, "error": "Unable to save lot."})
 
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.pop("slug", ""))
@@ -10006,8 +10007,11 @@ class DeleteUserIgnoreCategory(APIView):
             exists = UserIgnoreCategory.objects.get(category=category, user=request.user)
             exists.delete()
             return JsonResponse(data={"result": "deleted"})
-        except Exception as e:
-            return JsonResponse(data={"error": str(e)})
+        except UserIgnoreCategory.DoesNotExist:
+            return JsonResponse(data={"error": "Category was not ignored."}, status=404)
+        except Exception:
+            logger.exception("Failed deleting ignored category for user %s", request.user.pk)
+            return JsonResponse(data={"error": "Unable to update ignored categories."}, status=500)
 
 
 class GetUserIgnoreCategory(APIView):

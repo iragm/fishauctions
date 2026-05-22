@@ -4,7 +4,6 @@
   {% if club.icon %}
   {% thumbnail club.icon "club_icon" as club_icon %}
   <img src="{{ club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
-  {% endthumbnail %}
   {% endif %}
   <span>{{ club.name }}</span>
 </h3>

@@ -231,7 +231,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
         if not match_names_only:
             # Apply filters based on patterns
             for keyword, filter_data in invoice_patterns.items():
-                pattern = re.compile(rf"^{keyword}|\s{keyword}\s|\s{keyword}$")
+                keyword_pattern = re.escape(keyword)
+                pattern = re.compile(rf"^{keyword_pattern}|\s{keyword_pattern}\s|\s{keyword_pattern}$")
                 if pattern.search(value):
                     value = pattern.sub("", value)
                     qs = qs.filter(**filter_data)

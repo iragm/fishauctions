@@ -246,14 +246,19 @@ def distance_to(
         correction = 0.6213712  # close enough
     else:
         correction = 1  # km
-    for i in [
-        latitude,
-        longitude,
-        lat_field_name,
-        lng_field_name,
-        approximate_distance_to,
-    ]:
-        if '"' in str(i) or "'" in str(i):
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+        approximate_distance_to = float(approximate_distance_to)
+    except (TypeError, ValueError):
+        msg = "invalid character passed to distance_to, possible sql injection risk"
+        raise TypeError(msg) from None
+    if approximate_distance_to <= 0:
+        msg = "approximate_distance_to must be > 0"
+        raise TypeError(msg)
+    field_name_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    for field_name in [lat_field_name, lng_field_name]:
+        if not field_name_pattern.fullmatch(str(field_name)):
             msg = "invalid character passed to distance_to, possible sql injection risk"
             raise TypeError(msg)
     # Great circle distance formula, CEILING is used to keep people from triangulating locations

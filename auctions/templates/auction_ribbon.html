@@ -4,7 +4,6 @@
   {% if auction.club and auction.club.icon %}
   {% thumbnail auction.club.icon "club_icon" as auction_club_icon %}
   <img src="{{ auction_club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
-  {% endthumbnail %}
   {% endif %}
   <span>{{auction}}</span>
 </h3>
