@@ -626,11 +626,16 @@ def update_google_wallet_objects_for_club(self, club_pk):
     club = Club.objects.filter(pk=club_pk).first()
     if not club:
         return
-    members = ClubMember.objects.filter(club=club, is_deleted=False)
+    members = ClubMember.objects.filter(club=club, is_deleted=False).select_related("user", "club")
     for member in members:
         try:
             update_generic_object_for_member(member)
         except requests.RequestException:
+            logger.exception(
+                "Google Wallet object refresh failed for club=%s member=%s",
+                club.pk,
+                member.pk,
+            )
             raise
 
 

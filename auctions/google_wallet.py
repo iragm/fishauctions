@@ -135,6 +135,14 @@ def _object_id_for_member(member) -> str:
     return f"{settings.GOOGLE_WALLET_ISSUER_ID}.member_{member.pk}"
 
 
+def _member_display_name(member) -> str:
+    if member.name:
+        return member.name
+    if member.user:
+        return member.user.get_full_name() or member.user.username
+    return "Member"
+
+
 def update_generic_object_for_member(member) -> bool:
     """PATCH member object fields that should reflect current club/member data."""
     if not is_configured():
@@ -143,7 +151,7 @@ def update_generic_object_for_member(member) -> bool:
     if not token:
         return False
     object_id = _object_id_for_member(member)
-    member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
+    member_name = _member_display_name(member)
     body = {
         "cardTitle": {
             "defaultValue": {"language": "en-US", "value": member.club.name},

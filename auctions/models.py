@@ -256,6 +256,8 @@ def distance_to(
     if approximate_distance_to <= 0:
         msg = "approximate_distance_to must be > 0"
         raise TypeError(msg)
+    # Allow both simple identifiers (latitude) and backtick-qualified table/column names
+    # (`auctions_lot`.`latitude`) used by some raw SQL annotation call sites.
     sql_identifier = r"(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z_][A-Za-z0-9_]*`)"
     field_name_pattern = re.compile(rf"^{sql_identifier}(?:\.{sql_identifier})*$")
     for field_name in [lat_field_name, lng_field_name]:
