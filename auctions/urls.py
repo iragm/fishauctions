@@ -649,6 +649,11 @@ urlpatterns = [
         views.ClubMemberDetailAPIView.as_view(),
         name="api_club_member_detail",
     ),
+    path(
+        "api/v1/clubs/<slug:slug>/members/<int:pk>/bap-awards/",
+        views.ClubMemberBapAwardAPIView.as_view(),
+        name="api_club_member_bap_awards",
+    ),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),

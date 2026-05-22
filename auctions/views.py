@@ -95,14 +95,14 @@ from reportlab.platypus import (
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.exceptions import NotAuthenticated
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from .authentication import APIKeyAuthentication, ApiKeyThrottle
+from .authentication import APIKeyAuthentication, ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
@@ -206,8 +206,14 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .serializers import ClubMemberIngestSerializer, ClubMemberSerializer
-from .services import INGEST_ALLOWED_FIELDS, create_club_member_from_api, map_fields
+from .serializers import (
+    CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
+    BapAwardAPIKeyCreateSerializer,
+    ClubMemberAPIKeySerializer,
+    ClubMemberIngestSerializer,
+    ClubMemberSerializer,
+)
+from .services import create_club_member_from_api, map_fields
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -300,6 +306,13 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+class IsAuthenticatedOrAPIKey(BasePermission):
+    """Allow requests authenticated either as a user or with a club API key."""
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated or hasattr(request, "api_key")
 
 
 def _invoice_membership_lookup_email(invoice):
@@ -13708,6 +13721,8 @@ class ClubMemberIngestAPIView(APIView):
         club = request.club
         if not slug or club.slug != slug:
             return Response({"error": "API key does not belong to this club."}, status=403)
+        if not api_key.can_add_club_members:
+            return Response({"error": "API key cannot add club members."}, status=403)
         mapped = map_fields(dict(request.data), api_key)
         serializer = ClubMemberIngestSerializer(data=mapped)
         if not serializer.is_valid():
@@ -13759,15 +13774,35 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, slug):
-        return render(request, "auctions/club_api_key_create.html", {"club": self.club})
+        return render(
+            request,
+            "auctions/club_api_key_create.html",
+            {
+                "club": self.club,
+                "form_values": {
+                    "name": "",
+                    "can_add_club_members": True,
+                    "can_read_club_member_list": False,
+                    "can_update_club_members": False,
+                    "can_add_bap_points": False,
+                },
+            },
+        )
 
     def post(self, request, slug):
         name = request.POST.get("name", "").strip()
+        form_values = {
+            "name": name,
+            "can_add_club_members": bool(request.POST.get("can_add_club_members", "on")),
+            "can_read_club_member_list": bool(request.POST.get("can_read_club_member_list")),
+            "can_update_club_members": bool(request.POST.get("can_update_club_members")),
+            "can_add_bap_points": bool(request.POST.get("can_add_bap_points")),
+        }
         if not name:
             return render(
                 request,
                 "auctions/club_api_key_create.html",
-                {"club": self.club, "error": "Name is required."},
+                {"club": self.club, "error": "Name is required.", "form_values": form_values},
             )
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         api_key = ClubAPIKey.objects.create(
@@ -13776,6 +13811,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             prefix=prefix,
             key_hash=key_hash,
             created_by=request.user,
+            **{key: value for key, value in form_values.items() if key != "name"},
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -13807,8 +13843,11 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["api_key"] = api_key
         ctx["field_mappings"] = api_key.field_mappings.order_by("external_field")
         ctx["new_raw_key"] = new_raw_key
-        ctx["available_fields"] = sorted(INGEST_ALLOWED_FIELDS)
+        ctx["available_fields"] = sorted(CLUB_MEMBER_API_KEY_MAPPING_FIELDS)
         ctx["site_domain"] = Site.objects.get_current().domain
+        ctx["example_member_id"] = (
+            self.club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
+        )
         return ctx
 
 
@@ -13855,7 +13894,7 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         if (
             external_field
             and internal_field
-            and (internal_field in INGEST_ALLOWED_FIELDS or internal_field in ("first_name", "last_name"))
+            and internal_field in CLUB_MEMBER_API_KEY_MAPPING_FIELDS
         ):
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
@@ -14090,34 +14129,86 @@ class ClubAPIViewMixin:
     """Shared mixin for club REST API views"""
 
     serializer_class = ClubMemberSerializer
-    authentication_classes = [TokenAuthentication, SessionAuthentication]
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication, SessionAuthentication, OptionalAPIKeyAuthentication]
+    permission_classes = [IsAuthenticatedOrAPIKey]
 
     def get_club(self):
         if not hasattr(self, "_club"):
             slug = self.kwargs.get("slug")
             self._club = get_object_or_404(Club, slug=slug)
+            api_key = getattr(self.request, "api_key", None)
+            if api_key and api_key.club_id != self._club.pk:
+                msg = "API key does not belong to this club."
+                raise PermissionDenied(msg)
         return self._club
 
-    def get_queryset(self):
+    def is_api_key_request(self):
+        return hasattr(self.request, "api_key")
+
+    def require_club_permission(self, user_permission, api_key_permission, message):
         club = self.get_club()
-        if not check_club_permission(self.request.user, club, "permission_view"):
-            self.permission_denied(self.request, message="You do not have permission to view members of this club.")
+        if self.is_api_key_request():
+            if not getattr(self.request.api_key, api_key_permission, False):
+                self.permission_denied(self.request, message=message)
+            return club
+        if not check_club_permission(self.request.user, club, user_permission):
+            self.permission_denied(self.request, message=message)
+        return club
+
+    def get_serializer_class(self):
+        if self.is_api_key_request() and self.request.method in {"POST", "PUT", "PATCH"}:
+            return ClubMemberAPIKeySerializer
+        return self.serializer_class
+
+    def get_mapped_request_data(self):
+        if not self.is_api_key_request():
+            return self.request.data
+        return map_fields(dict(self.request.data), self.request.api_key)
+
+    def get_queryset(self):
+        club = self.require_club_permission(
+            "permission_view",
+            "can_read_club_member_list",
+            "You do not have permission to view members of this club.",
+        )
         return ClubMember.objects.filter(club=club, is_deleted=False)
 
 
 class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
     """List and create club members via REST API"""
 
+    def create(self, request, *args, **kwargs):
+        if not self.is_api_key_request():
+            return super().create(request, *args, **kwargs)
+        serializer = self.get_serializer(data=self.get_mapped_request_data())
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=201, headers=headers)
+
     def perform_create(self, serializer):
-        club = self.get_club()
-        if not check_club_permission(self.request.user, club, "permission_add_edit"):
-            self.permission_denied(self.request, message="You do not have permission to add members to this club.")
-        member = serializer.save(club=club, added_by=self.request.user)
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_add_club_members",
+            "You do not have permission to add members to this club.",
+        )
+        save_kwargs = {"club": club}
+        if self.is_api_key_request():
+            save_kwargs["added_by"] = None
+            if not serializer.validated_data.get("source"):
+                save_kwargs["source"] = self.request.api_key.name
+        else:
+            save_kwargs["added_by"] = self.request.user
+        member = serializer.save(**save_kwargs)
+        actor = (
+            f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
+            if self.is_api_key_request()
+            else "API"
+        )
         ClubHistory.objects.create(
             club=club,
-            user=self.request.user,
-            action=f"Added member {member} via API",
+            user=None if self.is_api_key_request() else self.request.user,
+            action=f"Added member {member} via {actor}",
             applies_to="MEMBERS",
         )
 
@@ -14125,19 +14216,50 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
 class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update, or delete a club member via REST API"""
 
+    def get_queryset(self):
+        if self.is_api_key_request() and self.request.method in {"PUT", "PATCH"}:
+            club = self.require_club_permission(
+                "permission_add_edit",
+                "can_update_club_members",
+                "You do not have permission to edit members of this club.",
+            )
+            return ClubMember.objects.filter(club=club, is_deleted=False)
+        return super().get_queryset()
+
+    def update(self, request, *args, **kwargs):
+        if not self.is_api_key_request():
+            return super().update(request, *args, **kwargs)
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=self.get_mapped_request_data(), partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        if getattr(instance, "_prefetched_objects_cache", None):
+            instance._prefetched_objects_cache = {}
+        return Response(serializer.data)
+
     def perform_update(self, serializer):
-        club = self.get_club()
-        if not check_club_permission(self.request.user, club, "permission_add_edit"):
-            self.permission_denied(self.request, message="You do not have permission to edit members of this club.")
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_update_club_members",
+            "You do not have permission to edit members of this club.",
+        )
         member = serializer.save()
+        actor = (
+            f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
+            if self.is_api_key_request()
+            else "API"
+        )
         ClubHistory.objects.create(
             club=club,
-            user=self.request.user,
-            action=f"Updated member {member} via API",
+            user=None if self.is_api_key_request() else self.request.user,
+            action=f"Updated member {member} via {actor}",
             applies_to="MEMBERS",
         )
 
     def perform_destroy(self, instance):
+        if self.is_api_key_request():
+            self.permission_denied(self.request, message="API keys cannot delete club members.")
         club = self.get_club()
         if not check_club_permission(self.request.user, club, "permission_add_edit"):
             self.permission_denied(self.request, message="You do not have permission to delete members of this club.")
@@ -14150,6 +14272,43 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
         )
+
+
+class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
+    """Add BAP points to a club member via REST API."""
+
+    serializer_class = BapAwardAPIKeyCreateSerializer
+
+    def post(self, request, slug, pk):
+        club = self.require_club_permission(
+            "permission_manage_bap",
+            "can_add_bap_points",
+            "You do not have permission to add BAP points to this club.",
+        )
+        if not club.enable_breeder_award_program:
+            raise Http404
+        member = get_object_or_404(ClubMember, pk=pk, club=club, is_deleted=False)
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        award = BapAward.objects.create(
+            club_member=member,
+            date=serializer.validated_data.get("date") or timezone.now().date(),
+            points=serializer.validated_data["points"],
+            notes=serializer.validated_data.get("notes", ""),
+            awarded_by=None if self.is_api_key_request() else request.user,
+        )
+        actor = (
+            f"API key [{request.api_key.prefix}] ({request.api_key.name})"
+            if self.is_api_key_request()
+            else "API"
+        )
+        ClubHistory.objects.create(
+            club=club,
+            user=None if self.is_api_key_request() else request.user,
+            action=f"Added {award} to {member} via {actor}",
+            applies_to="BAP",
+        )
+        return Response({"id": award.pk, "member_id": member.pk, "points": award.points}, status=201)
 
 
 # ---------------------------------------------------------------------------

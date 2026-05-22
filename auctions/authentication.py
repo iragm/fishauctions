@@ -20,12 +20,17 @@ class APIKeyAuthentication(BaseAuthentication):
     def authenticate_header(self, request):
         return "Api-Key"
 
-    def authenticate(self, request):
+    @staticmethod
+    def _get_raw_key(request):
         raw_key = request.META.get("HTTP_X_API_KEY", "")
         if not raw_key:
             auth_header = request.META.get("HTTP_AUTHORIZATION", "")
             if auth_header.startswith("Api-Key "):
                 raw_key = auth_header[8:].strip()
+        return raw_key
+
+    def authenticate(self, request):
+        raw_key = self._get_raw_key(request)
         if not raw_key:
             msg = "API key required."
             raise AuthenticationFailed(msg)
@@ -38,6 +43,16 @@ class APIKeyAuthentication(BaseAuthentication):
         # Return AnonymousUser so request.user is never None; the real credential
         # is the api_key stored on request.
         return (AnonymousUser(), api_key)
+
+
+class OptionalAPIKeyAuthentication(APIKeyAuthentication):
+    """Authenticate requests using a ClubAPIKey when one is supplied."""
+
+    def authenticate(self, request):
+        raw_key = self._get_raw_key(request)
+        if not raw_key:
+            return None
+        return super().authenticate(request)
 
 
 class ApiKeyThrottle(SimpleRateThrottle):

@@ -1231,6 +1231,10 @@ class ClubAPIKey(models.Model):
     prefix = models.CharField(max_length=12, unique=True, db_index=True)
     key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
     is_active = models.BooleanField(default=True)
+    can_add_club_members = models.BooleanField(default=True)
+    can_read_club_member_list = models.BooleanField(default=False)
+    can_update_club_members = models.BooleanField(default=False)
+    can_add_bap_points = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)

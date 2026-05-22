@@ -28,6 +28,7 @@ from .models import (
     AuctionDropdown,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Bid,
     Category,
     ChatSubscription,
@@ -15119,6 +15120,112 @@ class ClubAPITests(TestCase):
         self.assertGreaterEqual(len(data), 1)
 
 
+class ClubAPIKeyMemberPermissionTests(TestCase):
+    """API key permission checks for club member API endpoints."""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="club_key_owner", password="testpass", email="key@example.com")
+        self.club = Club.objects.create(name="Club Key API Club", enable_breeder_award_program=True)
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            name="Existing Member",
+            email="existing@example.com",
+            memo="before",
+        )
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Extended API",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+        )
+        self.raw_key = raw_key
+        self.list_url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        self.detail_url = reverse("api_club_member_detail", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+        self.bap_url = reverse("api_club_member_bap_awards", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+
+    def test_api_key_list_requires_read_permission(self):
+        response = self.client.get(self.list_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 403)
+
+    def test_api_key_can_list_members_when_enabled(self):
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        response = self.client.get(self.list_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["email"], "existing@example.com")
+
+    def test_api_key_create_supports_extended_field_mapping(self):
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="discord_user", internal_field="discord_id")
+        response = self.client.post(
+            self.list_url,
+            {"email": "mappedmember@example.com", "discord_user": "12345"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 201)
+        created = ClubMember.objects.get(club=self.club, email="mappedmember@example.com")
+        self.assertEqual(created.discord_id, "12345")
+        self.assertEqual(created.source, self.api_key.name)
+
+    def test_api_key_update_requires_update_permission(self):
+        response = self.client.patch(
+            self.detail_url,
+            {"memo": "after"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_api_key_update_uses_field_mapping(self):
+        self.api_key.can_update_club_members = True
+        self.api_key.save(update_fields=["can_update_club_members"])
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="member_note", internal_field="memo")
+        response = self.client.patch(
+            self.detail_url,
+            {"member_note": "after"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.memo, "after")
+
+    def test_api_key_cannot_delete_member(self):
+        self.api_key.can_update_club_members = True
+        self.api_key.save(update_fields=["can_update_club_members"])
+        response = self.client.delete(self.detail_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 403)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_deleted)
+
+    def test_api_key_can_add_bap_points_when_enabled(self):
+        self.api_key.can_add_bap_points = True
+        self.api_key.save(update_fields=["can_add_bap_points"])
+        response = self.client.post(
+            self.bap_url,
+            {"points": 7, "notes": "bonus"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 201)
+        award = BapAward.objects.get(club_member=self.member)
+        self.assertEqual(award.points, 7)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 7)
+
+    def test_api_key_bap_endpoint_requires_permission(self):
+        response = self.client.post(
+            self.bap_url,
+            {"points": 3},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 403)
+
+
 class ParseBoolEnvTests(TestCase):
     """Cover fishauctions._env.parse_bool_env, which gates settings.DEBUG."""
 
@@ -15820,6 +15927,13 @@ class ClubMemberIngestAPITests(TestCase):
         self.assertEqual(response.json()["status"], "created")
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="new@example.com").exists())
 
+    def test_add_member_permission_required(self):
+        self.api_key.can_add_club_members = False
+        self.api_key.save(update_fields=["can_add_club_members"])
+        response = self._post({"email": "blocked@example.com"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, email="blocked@example.com").exists())
+
     def test_email_lowercased_on_creation(self):
         self._post({"email": "UPPER@Example.COM"})
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
@@ -15946,6 +16060,33 @@ class ClubAPIKeyUITests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(ClubAPIKey.objects.filter(club=self.club, name="My Integration").exists())
 
+    def test_create_key_permission_defaults(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(self.create_url, {"name": "Default Permissions"})
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Default Permissions")
+        self.assertTrue(api_key.can_add_club_members)
+        self.assertFalse(api_key.can_read_club_member_list)
+        self.assertFalse(api_key.can_update_club_members)
+        self.assertFalse(api_key.can_add_bap_points)
+
+    def test_create_key_can_enable_all_extended_permissions(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(
+            self.create_url,
+            {
+                "name": "Everything Key",
+                "can_add_club_members": "on",
+                "can_read_club_member_list": "on",
+                "can_update_club_members": "on",
+                "can_add_bap_points": "on",
+            },
+        )
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Everything Key")
+        self.assertTrue(api_key.can_add_club_members)
+        self.assertTrue(api_key.can_read_club_member_list)
+        self.assertTrue(api_key.can_update_club_members)
+        self.assertTrue(api_key.can_add_bap_points)
+
     def test_create_redirects_to_detail_with_raw_key_in_session(self):
         self.client.login(username="apiui_editor", password="testpass")
         self.client.post(self.create_url, {"name": "Session Key"})
@@ -16008,6 +16149,26 @@ class ClubAPIKeyUITests(TestCase):
         detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
         response = self.client.get(detail_url)
         self.assertEqual(response.status_code, 403)
+
+    def test_detail_shows_extended_example_endpoints(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Examples",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.editor,
+            can_read_club_member_list=True,
+            can_update_club_members=True,
+            can_add_bap_points=True,
+        )
+        member = ClubMember.objects.create(club=self.club, name="Endpoint Example")
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/bap-awards/")
 
 
 class ClubPermissionWildcardTests(TestCase):

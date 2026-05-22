@@ -23,7 +23,7 @@
 
 <div class="mb-4 small text-muted">
   Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
-  Endpoint: <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/ingest/</code>
+  Legacy ingest endpoint: <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/ingest/</code>
 </div>
 
 <div class="row mb-4">
@@ -38,9 +38,36 @@
   </div>
 </div>
 
+<h5>Permissions</h5>
+<table class="table table-sm mb-4" style="max-width:640px">
+  <tbody>
+    <tr><th style="width:18rem">Add club members</th><td>{% if api_key.can_add_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Read club member list</th><td>{% if api_key.can_read_club_member_list %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Update club members</th><td>{% if api_key.can_update_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Add BAP points</th><td>{% if api_key.can_add_bap_points %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+  </tbody>
+</table>
+
+<h5>Example endpoints</h5>
+<div class="small text-muted mb-4">
+  {% if api_key.can_add_club_members %}
+  <div><strong>Add club member:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+  {% endif %}
+  {% if api_key.can_read_club_member_list %}
+  <div><strong>Read club member list:</strong> <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+  {% endif %}
+  {% if api_key.can_update_club_members %}
+  <div><strong>Update club member:</strong> <code>PATCH https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/</code></div>
+  {% endif %}
+  {% if api_key.can_add_bap_points %}
+  <div><strong>Add BAP points:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/bap-awards/</code></div>
+  {% endif %}
+</div>
+
 <h5>Field mappings</h5>
-<p class="text-muted small">Map incoming field names to ClubMember fields. Unmapped fields are passed through unchanged if they match an allowed field name.</p>
+<p class="text-muted small">Map incoming field names to club member fields. Unmapped fields are passed through unchanged if they match an allowed field name.</p>
 <p class="text-muted small"><i class="bi bi-info-circle"></i> Members store a single <code>name</code> field. If <code>first_name</code> and/or <code>last_name</code> are sent (or mapped) instead, they will be combined into <code>name</code>.</p>
+<p class="text-muted small"><i class="bi bi-info-circle"></i> Field mapping applies to club member create and update payloads. BAP point requests always use the fixed <code>points</code>, <code>date</code>, and <code>notes</code> fields directly.</p>
 
 {% if field_mappings %}
 <table class="table table-sm mb-3" style="max-width:480px">
@@ -84,7 +111,7 @@
 </form>
 
 <div class="mt-3 small text-muted">
-  <strong>Allowed internal fields:</strong>
+  <strong>Allowed mapped club member fields:</strong>
   {% for field in available_fields %}<code>{{ field }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}
 </div>
 {% endif %}
