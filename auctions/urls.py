@@ -637,12 +637,6 @@ urlpatterns = [
         views.ClubMemberRenewPageView.as_view(),
         name="club_member_renew_page",
     ),
-    # REST API v1
-    path(
-        "api/v1/clubs/<slug:slug>/members/ingest/",
-        views.ClubMemberIngestAPIView.as_view(),
-        name="api_club_member_ingest",
-    ),
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
     path(
         "api/v1/clubs/<slug:slug>/members/<int:pk>/",

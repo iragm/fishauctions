@@ -21,11 +21,6 @@
 </div>
 {% endif %}
 
-<div class="mb-4 small text-muted">
-  Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
-  Legacy ingest endpoint: <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/ingest/</code>
-</div>
-
 <div class="row mb-4">
   <div class="col-md-6">
     <table class="table table-sm table-borderless">
@@ -49,6 +44,9 @@
 </table>
 
 <h5>Example endpoints</h5>
+<div class="mb-4 small text-muted">
+  Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
+</div>
 <div class="small text-muted mb-4">
   {% if api_key.can_add_club_members %}
   <div><strong>Add club member:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>

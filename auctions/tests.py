@@ -17367,6 +17367,24 @@ class ClubIconWalletTests(TestCase):
                 self.club.save()
             delay.assert_not_called()
 
+    def test_adding_icon_to_initialized_club_dispatches_wallet_class_task(self):
+        """Adding an icon for the first time to an already-initialized club must re-push the class."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .models import Club
+
+        # Club starts with no icon, class already confirmed on Google's side.
+        no_icon_club = Club.objects.create(name="No Icon Yet")
+        Club.objects.filter(pk=no_icon_club.pk).update(google_wallet_class_created=True)
+        no_icon_club.refresh_from_db()
+        self.assertFalse(bool(no_icon_club.icon))
+
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                no_icon_club.icon = SimpleUploadedFile("first.png", self._png_bytes(), content_type="image/png")
+                no_icon_club.save()
+            delay.assert_called_once_with(no_icon_club.pk)
+
     def test_club_rename_dispatches_wallet_object_sync(self):
         with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
@@ -17418,7 +17436,11 @@ class ClubIconWalletTests(TestCase):
         self.assertEqual(img.size, (29, 29))
 
     def test_create_generic_class_patches_on_409(self):
-        """409 from POST must trigger a PATCH so icon updates propagate to existing classes."""
+        """409 from POST must trigger a PATCH so icon updates propagate to existing classes.
+
+        The PATCH body must include the logo when the club has an icon, so that adding
+        an icon after the class was initially created (without one) propagates correctly.
+        """
         from unittest.mock import MagicMock
 
         from .google_wallet import create_generic_class
@@ -17436,3 +17458,7 @@ class ClubIconWalletTests(TestCase):
                         self.assertTrue(create_generic_class(self.club))
         self.assertEqual(post_mock.call_count, 1)
         self.assertEqual(patch_mock.call_count, 1)
+        # The PATCH body must contain the logo so that clubs which set their icon
+        # after the class was first created (without a logo) get the logo on their passes.
+        patch_body = patch_mock.call_args.kwargs["json"]
+        self.assertIn("logo", patch_body)

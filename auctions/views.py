@@ -13709,40 +13709,40 @@ class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
             return 0
 
 
-class ClubMemberIngestAPIView(APIView):
-    """API key-authenticated endpoint for external services to create ClubMember records."""
+# class ClubMemberIngestAPIView(APIView):
+#     """API key-authenticated endpoint for external services to create ClubMember records."""
 
-    authentication_classes = [APIKeyAuthentication]
-    permission_classes = []
-    throttle_classes = [ApiKeyThrottle]
+#     authentication_classes = [APIKeyAuthentication]
+#     permission_classes = []
+#     throttle_classes = [ApiKeyThrottle]
 
-    def post(self, request, slug=None):
-        api_key = request.api_key
-        club = request.club
-        if not slug or club.slug != slug:
-            return Response({"error": "API key does not belong to this club."}, status=403)
-        if not api_key.can_add_club_members:
-            return Response({"error": "API key cannot add club members."}, status=403)
-        mapped = map_fields(dict(request.data), api_key)
-        serializer = ClubMemberIngestSerializer(data=mapped)
-        if not serializer.is_valid():
-            received_fields = ", ".join(mapped.keys()) if mapped else "none"
-            ClubHistory.objects.create(
-                club=club,
-                user=None,
-                action=(
-                    f"API ingest rejected [{api_key.prefix}] ({api_key.name}): {serializer.errors} "
-                    f"— received fields: {received_fields}. "
-                    f"Set up field mapping on this key to resolve this issue."
-                ),
-                applies_to="MEMBERS",
-            )
-            return Response({"status": "error", "errors": serializer.errors}, status=400)
-        member, created = create_club_member_from_api(serializer.validated_data, club, api_key)
-        return Response(
-            {"status": "created" if created else "duplicate", "member_id": member.pk},
-            status=201 if created else 200,
-        )
+#     def post(self, request, slug=None):
+#         api_key = request.api_key
+#         club = request.club
+#         if not slug or club.slug != slug:
+#             return Response({"error": "API key does not belong to this club."}, status=403)
+#         if not api_key.can_add_club_members:
+#             return Response({"error": "API key cannot add club members."}, status=403)
+#         mapped = map_fields(dict(request.data), api_key)
+#         serializer = ClubMemberIngestSerializer(data=mapped)
+#         if not serializer.is_valid():
+#             received_fields = ", ".join(mapped.keys()) if mapped else "none"
+#             ClubHistory.objects.create(
+#                 club=club,
+#                 user=None,
+#                 action=(
+#                     f"API ingest rejected [{api_key.prefix}] ({api_key.name}): {serializer.errors} "
+#                     f"— received fields: {received_fields}. "
+#                     f"Set up field mapping on this key to resolve this issue."
+#                 ),
+#                 applies_to="MEMBERS",
+#             )
+#             return Response({"status": "error", "errors": serializer.errors}, status=400)
+#         member, created = create_club_member_from_api(serializer.validated_data, club, api_key)
+#         return Response(
+#             {"status": "created" if created else "duplicate", "member_id": member.pk},
+#             status=201 if created else 200,
+#         )
 
 
 class ClubAPIKeyListView(LoginRequiredMixin, ClubViewMixin, TemplateView):
@@ -13899,11 +13899,7 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
         external_field = request.POST.get("external_field", "").strip()
         internal_field = request.POST.get("internal_field", "").strip()
-        if (
-            external_field
-            and internal_field
-            and internal_field in CLUB_MEMBER_API_KEY_MAPPING_FIELDS
-        ):
+        if external_field and internal_field and internal_field in CLUB_MEMBER_API_KEY_MAPPING_FIELDS:
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
                 external_field=external_field,
@@ -14305,11 +14301,7 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
             notes=serializer.validated_data.get("notes", ""),
             awarded_by=None if self.is_api_key_request() else request.user,
         )
-        actor = (
-            f"API key [{request.api_key.prefix}] ({request.api_key.name})"
-            if self.is_api_key_request()
-            else "API"
-        )
+        actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})" if self.is_api_key_request() else "API"
         ClubHistory.objects.create(
             club=club,
             user=None if self.is_api_key_request() else request.user,
