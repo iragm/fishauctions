@@ -15140,6 +15140,7 @@ class ClubAPIKeyMemberPermissionTests(TestCase):
             prefix=prefix,
             key_hash=key_hash,
             created_by=self.owner,
+            can_add_club_members=True,
         )
         self.raw_key = raw_key
         self.list_url = reverse("api_club_members", kwargs={"slug": self.club.slug})
@@ -16075,9 +16076,13 @@ class ClubAPIKeyUITests(TestCase):
             self.create_url,
             {
                 "name": "Everything Key",
+                "can_add_club_members_present": "1",
                 "can_add_club_members": "on",
+                "can_read_club_member_list_present": "1",
                 "can_read_club_member_list": "on",
+                "can_update_club_members_present": "1",
                 "can_update_club_members": "on",
+                "can_add_bap_points_present": "1",
                 "can_add_bap_points": "on",
             },
         )

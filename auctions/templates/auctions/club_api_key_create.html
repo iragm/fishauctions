@@ -22,18 +22,22 @@
   <div class="mb-3">
     <div class="form-label fw-semibold">Permissions</div>
     <div class="form-check">
+      <input type="hidden" name="can_add_club_members_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_add_club_members" name="can_add_club_members" {% if form_values.can_add_club_members %}checked{% endif %}>
       <label class="form-check-label" for="id_can_add_club_members">Can add club members</label>
     </div>
     <div class="form-check">
+      <input type="hidden" name="can_read_club_member_list_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_read_club_member_list" name="can_read_club_member_list" {% if form_values.can_read_club_member_list %}checked{% endif %}>
       <label class="form-check-label" for="id_can_read_club_member_list">Can read club member list</label>
     </div>
     <div class="form-check">
+      <input type="hidden" name="can_update_club_members_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_update_club_members" name="can_update_club_members" {% if form_values.can_update_club_members %}checked{% endif %}>
       <label class="form-check-label" for="id_can_update_club_members">Can update club members</label>
     </div>
     <div class="form-check">
+      <input type="hidden" name="can_add_bap_points_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_add_bap_points" name="can_add_bap_points" {% if form_values.can_add_bap_points %}checked{% endif %}>
       <label class="form-check-label" for="id_can_add_bap_points">Can add BAP points</label>
     </div>

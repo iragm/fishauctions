@@ -13790,13 +13790,18 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         )
 
     def post(self, request, slug):
+        def checkbox_value(name, *, default=False):
+            if f"{name}_present" not in request.POST:
+                return default
+            return request.POST.get(name) == "on"
+
         name = request.POST.get("name", "").strip()
         form_values = {
             "name": name,
-            "can_add_club_members": bool(request.POST.get("can_add_club_members", "on")),
-            "can_read_club_member_list": bool(request.POST.get("can_read_club_member_list")),
-            "can_update_club_members": bool(request.POST.get("can_update_club_members")),
-            "can_add_bap_points": bool(request.POST.get("can_add_bap_points")),
+            "can_add_club_members": checkbox_value("can_add_club_members", default=True),
+            "can_read_club_member_list": checkbox_value("can_read_club_member_list"),
+            "can_update_club_members": checkbox_value("can_update_club_members"),
+            "can_add_bap_points": checkbox_value("can_add_bap_points"),
         }
         if not name:
             return render(
@@ -13811,7 +13816,10 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             prefix=prefix,
             key_hash=key_hash,
             created_by=request.user,
-            **{key: value for key, value in form_values.items() if key != "name"},
+            can_add_club_members=form_values["can_add_club_members"],
+            can_read_club_member_list=form_values["can_read_club_member_list"],
+            can_update_club_members=form_values["can_update_club_members"],
+            can_add_bap_points=form_values["can_add_bap_points"],
         )
         ClubHistory.objects.create(
             club=self.club,
