@@ -135,6 +135,50 @@ def _object_id_for_member(member) -> str:
     return f"{settings.GOOGLE_WALLET_ISSUER_ID}.member_{member.pk}"
 
 
+def update_generic_object_for_member(member) -> bool:
+    """PATCH member object fields that should reflect current club/member data."""
+    if not is_configured():
+        return False
+    token = get_access_token()
+    if not token:
+        return False
+    object_id = _object_id_for_member(member)
+    member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
+    body = {
+        "cardTitle": {
+            "defaultValue": {"language": "en-US", "value": member.club.name},
+        },
+        "subheader": {
+            "defaultValue": {"language": "en-US", "value": member_name},
+        },
+        "textModulesData": [
+            {"id": "member_id", "header": "Member ID", "body": str(member.membership_number)},
+        ],
+        "barcode": {
+            "type": "CODE_128",
+            "value": str(member.membership_number),
+            "alternateText": str(member.membership_number),
+        },
+    }
+    if member.membership_expiration_date:
+        body["validTimeInterval"] = {"end": {"date": f"{member.membership_expiration_date.isoformat()}T23:59:59"}}
+    resp = requests.patch(
+        f"{WALLET_API_BASE}/genericObject/{object_id}",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if resp.status_code == 200:
+        logger.info("Patched Google Wallet object %s", object_id)
+        return True
+    if resp.status_code == 404:
+        logger.info("Google Wallet object %s does not exist; nothing to patch", object_id)
+        return False
+    logger.error("Google Wallet object patch failed for member %s: %s %s", member.pk, resp.status_code, resp.text)
+    resp.raise_for_status()
+    return False
+
+
 def expire_generic_object_for_member(member) -> bool:
     """PATCH the member's Wallet object to state=EXPIRED so devices show it as expired.
 

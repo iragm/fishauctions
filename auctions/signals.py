@@ -163,17 +163,20 @@ def stash_previous_club_state(sender, instance, **kwargs):
     """Snapshot prev field values so post_save handlers can detect transitions.
 
     Currently tracks: membership_number_mode (revocation logic), icon name
-    (re-push the Wallet class so new logos propagate to existing passes).
+    (re-push the Wallet class so new logos propagate), and club name
+    (refresh member wallet object metadata on rename).
     """
     if instance.pk:
         from .models import Club
 
-        prev = Club.objects.filter(pk=instance.pk).values("membership_number_mode", "icon").first() or {}
+        prev = Club.objects.filter(pk=instance.pk).values("membership_number_mode", "icon", "name").first() or {}
         instance._previous_membership_number_mode = prev.get("membership_number_mode")
         instance._previous_icon_name = prev.get("icon") or ""
+        instance._previous_name = prev.get("name") or ""
     else:
         instance._previous_membership_number_mode = None
         instance._previous_icon_name = ""
+        instance._previous_name = ""
 
 
 @receiver(post_save, sender="auctions.Club")
@@ -281,6 +284,19 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
     from .tasks import create_google_wallet_class_for_club
 
     transaction.on_commit(lambda: create_google_wallet_class_for_club.delay(instance.pk))
+
+
+@receiver(post_save, sender="auctions.Club")
+def refresh_google_wallet_objects_for_club_name_change(sender, instance, created, **kwargs):
+    """Patch member wallet object metadata when a club is renamed."""
+    if created:
+        return
+    prev_name = getattr(instance, "_previous_name", "")
+    if prev_name == instance.name:
+        return
+    from .tasks import update_google_wallet_objects_for_club
+
+    transaction.on_commit(lambda: update_google_wallet_objects_for_club.delay(instance.pk))
 
 
 @receiver(bounce_received)

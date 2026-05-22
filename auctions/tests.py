@@ -10553,6 +10553,18 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         distance_km = distance_to(40.7128, -74.0060, unit="km")
         self.assertIsNotNone(distance_km)
 
+    def test_distance_to_allows_qualified_sql_field_names(self):
+        """Backtick-qualified table.column identifiers are valid for raw SQL annotation."""
+        from auctions.models import distance_to
+
+        distance = distance_to(
+            40.7128,
+            -74.0060,
+            lat_field_name="`auctions_lot`.`latitude`",
+            lng_field_name="`auctions_lot`.`longitude`",
+        )
+        self.assertIsNotNone(distance)
+
     def test_find_image_with_user(self):
         """Test find_image prioritizes images from specific user"""
         from auctions.models import find_image
@@ -17188,6 +17200,30 @@ class ClubIconWalletTests(TestCase):
                 self.club.name = "Renamed"
                 self.club.save()
             delay.assert_not_called()
+
+    def test_club_rename_dispatches_wallet_object_sync(self):
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.name = "Renamed Club"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_update_generic_object_for_member_patches_with_current_club_name(self):
+        from unittest.mock import MagicMock
+
+        from .google_wallet import update_generic_object_for_member
+
+        patch_resp = MagicMock(status_code=200, text="patched")
+        with self.settings(
+            GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+        ):
+            with patch("auctions.google_wallet.get_access_token", return_value="t"):
+                with patch("auctions.google_wallet.requests.patch", return_value=patch_resp) as patch_mock:
+                    self.assertTrue(update_generic_object_for_member(self.member))
+        payload = patch_mock.call_args.kwargs["json"]
+        self.assertEqual(payload["cardTitle"]["defaultValue"]["value"], self.club.name)
 
     def test_apple_wallet_icon_png_uses_club_icon(self):
         from .apple_wallet import _icon_png

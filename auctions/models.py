@@ -256,7 +256,8 @@ def distance_to(
     if approximate_distance_to <= 0:
         msg = "approximate_distance_to must be > 0"
         raise TypeError(msg)
-    field_name_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    sql_identifier = r"(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z_][A-Za-z0-9_]*`)"
+    field_name_pattern = re.compile(rf"^{sql_identifier}(?:\.{sql_identifier})*$")
     for field_name in [lat_field_name, lng_field_name]:
         if not field_name_pattern.fullmatch(str(field_name)):
             msg = "invalid character passed to distance_to, possible sql injection risk"

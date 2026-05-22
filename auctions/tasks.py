@@ -616,6 +616,32 @@ def create_google_wallet_class_for_club(self, club_pk):
     retry_backoff_max=600,
     max_retries=5,
 )
+def update_google_wallet_objects_for_club(self, club_pk):
+    """Patch existing Google Wallet objects for all active members in a club."""
+    from auctions.google_wallet import is_configured, update_generic_object_for_member
+    from auctions.models import Club, ClubMember
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    members = ClubMember.objects.filter(club=club, is_deleted=False)
+    for member in members:
+        try:
+            update_generic_object_for_member(member)
+        except requests.RequestException:
+            raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
 def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     """Expire (state=EXPIRED) every active Wallet pass for a club's members.
 
