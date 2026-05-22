@@ -5,6 +5,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
+from django.db import transaction
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -219,12 +220,15 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
 
     Only fires on create — slug renames must NOT re-trigger this, because Wallet
     class IDs are immutable and we key them off the (stable) club PK.
+
+    Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't
+    leak a task that then tries to create a Wallet class for a nonexistent club.
     """
     if not created:
         return
     from .tasks import create_google_wallet_class_for_club
 
-    create_google_wallet_class_for_club.delay(instance.pk)
+    transaction.on_commit(lambda: create_google_wallet_class_for_club.delay(instance.pk))
 
 
 @receiver(bounce_received)

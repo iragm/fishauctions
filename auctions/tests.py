@@ -16767,11 +16767,44 @@ class GoogleWalletClassCreateTests(TestCase):
     def test_signal_dispatches_on_create_only(self):
         from .models import Club
 
+        # transaction.on_commit callbacks do not fire inside TestCase's atomic block
+        # unless we capture them — use captureOnCommitCallbacks(execute=True) so the
+        # signal's lambda actually runs and we can observe the .delay() call.
         with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
-            club = Club.objects.create(name="Another")
+            with self.captureOnCommitCallbacks(execute=True):
+                club = Club.objects.create(name="Another")
             delay.assert_called_once_with(club.pk)
             delay.reset_mock()
             # Rename — slug regenerates from AutoSlugField, but signal must NOT re-fire.
-            club.name = "Another Renamed"
-            club.save()
+            with self.captureOnCommitCallbacks(execute=True):
+                club.name = "Another Renamed"
+                club.save()
             delay.assert_not_called()
+
+
+class MembershipNumberUniquenessTests(TestCase):
+    """The DB-level unique constraint plus save() retry must prevent collisions."""
+
+    def setUp(self):
+        from .models import Club
+
+        self.club = Club.objects.create(name="Unique Test Club")
+
+    def test_save_repicks_on_collision(self):
+        """If a new member is constructed with a number that already exists, save() picks a new one."""
+        from .models import ClubMember
+
+        first = ClubMember.objects.create(club=self.club, name="A")
+        # Force a collision by hand and save again.
+        second = ClubMember(club=self.club, name="B", membership_number=first.membership_number)
+        second.save()
+        self.assertNotEqual(first.membership_number, second.membership_number)
+
+    def test_pick_unique_returns_unused_value(self):
+        from .models import ClubMember, _pick_unique_membership_number
+
+        existing = ClubMember.objects.create(club=self.club, name="A")
+        new_number = _pick_unique_membership_number()
+        self.assertNotEqual(new_number, existing.membership_number)
+        # Sanity: the picker keeps producing a number even when an unrelated row exists.
+        self.assertTrue(1_000_000_000 <= new_number <= 9_999_999_999)

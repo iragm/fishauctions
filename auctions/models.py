@@ -539,8 +539,32 @@ def remove_html_color_tags(text):
 
 
 def _default_membership_number():
-    """Return a random 10-digit membership number for new ClubMember records."""
+    """Return a random 10-digit membership number for new ClubMember records.
+
+    Uniqueness is enforced at the DB level. Collisions are statistically rare
+    (~30k members before a 50% chance) but possible — `_pick_unique_membership_number`
+    handles retries when an actual collision happens.
+    """
     return randint(1_000_000_000, 9_999_999_999)
+
+
+def _pick_unique_membership_number():
+    """Return a random membership number that does not collide with any existing row.
+
+    Retries up to 20 times; with a 9B-key space and realistic deployments the
+    expected number of retries is effectively zero, so this is more than enough.
+    Raises RuntimeError if 20 attempts all collide (should be impossible in practice).
+    """
+    # Local import: ClubMember is defined later in this module.
+    from django.apps import apps
+
+    ClubMemberCls = apps.get_model("auctions", "ClubMember")
+    for _ in range(20):
+        candidate = _default_membership_number()
+        if not ClubMemberCls.objects.filter(membership_number=candidate).exists():
+            return candidate
+    msg = "Could not generate a unique membership number after 20 attempts."
+    raise RuntimeError(msg)
 
 
 class BlogPost(models.Model):
@@ -806,6 +830,7 @@ class ClubMember(ContactRecord):
     membership_expiration_date = models.DateField(null=True, blank=True)
     membership_number = models.BigIntegerField(
         default=_default_membership_number,
+        unique=True,
         help_text="Unique membership number assigned to this member.",
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
@@ -1013,6 +1038,14 @@ class ClubMember(ContactRecord):
         ordering = ["name"]
 
     def save(self, *args, **kwargs):
+        # Belt-and-suspenders uniqueness for membership_number: the DB has a unique
+        # constraint, but on the off chance the random default collides with an
+        # existing row, repick before the INSERT happens so callers don't have to
+        # catch IntegrityError. This is cheap (one indexed lookup) and only runs
+        # when the value isn't already known to be unique.
+        if self.membership_number and not self.pk:
+            if ClubMember.objects.filter(membership_number=self.membership_number).exists():
+                self.membership_number = _pick_unique_membership_number()
         previous_membership_last_paid = None
         previous_expiration_date = None
         previous_email = None

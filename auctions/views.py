@@ -12920,10 +12920,10 @@ class ClubMembershipNumberView(APIView):
         return render(request, "auctions/club_membership_number.html", {"member": member})
 
     def post(self, request, pk):
-        from auctions.models import _default_membership_number
+        from auctions.models import _pick_unique_membership_number
 
         member = self._get_member(pk, request)
-        member.membership_number = _default_membership_number()
+        member.membership_number = _pick_unique_membership_number()
         member.save(update_fields=["membership_number"])
         ClubHistory.objects.create(
             club=member.club,

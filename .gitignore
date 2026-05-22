@@ -1,5 +1,8 @@
 *.pyc
 .env
+# Service account keys (e.g. Google Wallet) sit alongside .env at repo root.
+# Root-only pattern so committed JSON in subdirs (fixtures, devcontainer, vscode) is unaffected.
+/*.json
 db.sqlite3
 auctions/static/rest_framework/
 set_env.sh

@@ -766,13 +766,33 @@ DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 DISCORD_BOT_CLIENT_ID = os.environ.get("DISCORD_BOT_CLIENT_ID", "")
 
 # Google Wallet membership card integration (optional). See readme.md.
-# If any of these are blank, the "Add to Google Wallet" button is hidden.
+# Set GOOGLE_WALLET_KEYFILE in .env to the filename of your Google service account
+# JSON key. The file must live in the same directory as .env (the project BASE_DIR).
+# If either the issuer ID or the keyfile is missing/unreadable, the "Add to Google
+# Wallet" button is hidden and the auto-create-class signal no-ops.
 GOOGLE_WALLET_ISSUER_ID = os.environ.get("GOOGLE_WALLET_ISSUER_ID", "")
-GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = os.environ.get("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "")
-# The PEM-encoded RSA private key from the service account JSON keyfile.
-# `\n` escape sequences in the env value are converted to real newlines so the key
-# can be supplied on a single line in .env files.
-GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = os.environ.get("GOOGLE_WALLET_SERVICE_ACCOUNT_KEY", "").replace("\\n", "\n")
+GOOGLE_WALLET_KEYFILE = os.environ.get("GOOGLE_WALLET_KEYFILE", "")
+GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = ""
+GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = ""
+if GOOGLE_WALLET_KEYFILE:
+    import json as _json
+
+    _wallet_keyfile_path = BASE_DIR / GOOGLE_WALLET_KEYFILE
+    try:
+        with _wallet_keyfile_path.open() as _f:
+            _wallet_key = _json.load(_f)
+        GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = _wallet_key.get("client_email", "")
+        GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = _wallet_key.get("private_key", "")
+    except (OSError, ValueError):
+        # File missing or invalid JSON — leave email/key empty so is_configured() returns False.
+        # We intentionally don't raise so a misconfigured prod box still boots; the wallet
+        # button just won't appear and the create-class signal no-ops.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "GOOGLE_WALLET_KEYFILE=%s could not be loaded; Google Wallet disabled.",
+            _wallet_keyfile_path,
+        )
 
 REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {

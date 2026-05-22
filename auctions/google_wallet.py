@@ -87,7 +87,7 @@ def _class_id_for_club(club) -> str:
 
 
 def _class_body(club) -> dict:
-    body: dict = {
+    return {
         "id": _class_id_for_club(club),
         "classTemplateInfo": {
             "cardTemplateOverride": {
@@ -102,11 +102,6 @@ def _class_body(club) -> dict:
         },
         "hexBackgroundColor": DEFAULT_HEX_BG,
     }
-    # Add a logo only when the club has a publicly reachable image URL.
-    logo_url = getattr(club, "logo_url", "") or ""
-    if logo_url.startswith("https://"):
-        body["logo"] = {"sourceUri": {"uri": logo_url}}
-    return body
 
 
 def create_generic_class(club) -> bool:

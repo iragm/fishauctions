@@ -259,14 +259,13 @@ Adds an *Add to Google Wallet* button on each club member's self-service page so
    - In the Cloud console, IAM & Admin → Service Accounts → **Create service account**.
    - Skip optional roles; create the account, then open it and go to the **Keys** tab → **Add key** → **Create new key** → **JSON**. Download the key file and keep it private.
    - Back in the Wallet console, **Users** → invite the service account email with the *Developer* role.
-5. Add the credentials to your `.env` file:
+5. Drop the JSON keyfile you downloaded in step 4 into the **same directory as your `.env` file** (the project root). Pick a filename you'll recognize — e.g. `google-wallet-key.json`. JSON files at the repo root are gitignored, so you don't need to do anything else to keep it out of source control.
+6. Add to your `.env` file:
    ```
    GOOGLE_WALLET_ISSUER_ID=3388000000022XXXXXX
-   GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL=wallet-signer@your-project.iam.gserviceaccount.com
-   GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
+   GOOGLE_WALLET_KEYFILE=google-wallet-key.json
    ```
-   The private key is the `private_key` field from the JSON keyfile you downloaded in step 4. Keep the literal `\n` escape sequences if you put it on one line in `.env`, or use `.env`-style multi-line if your loader supports it.
-6. Make sure `fishauctions/settings.py` reads those three variables from the environment (mirroring the pattern used for Square / Discord settings). If any one is missing the button is automatically hidden, so partial config is safe.
+   `GOOGLE_WALLET_KEYFILE` is just the filename — settings.py joins it to `BASE_DIR`. If the file is missing or invalid, the integration silently disables itself (warning logged) so a misconfigured prod box still boots; the wallet button just won't appear and the auto-create-class signal no-ops.
 
 Wallet GenericClass records (one per club) are created automatically — a `post_save` signal on `Club` dispatches a Celery task on creation, and the class ID is keyed off `club.pk` (not the slug) so renames don't churn Wallet identities. To backfill existing clubs after enabling Wallet, run:
 ```

@@ -49,16 +49,15 @@ def google_wallet_save_url(member):
     """
     if not member:
         return ""
-    issuer_id = getattr(settings, "GOOGLE_WALLET_ISSUER_ID", "")
-    service_account_email = getattr(settings, "GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "")
-    private_key = getattr(settings, "GOOGLE_WALLET_SERVICE_ACCOUNT_KEY", "")
-    if not (issuer_id and service_account_email and private_key):
+    from auctions.google_wallet import is_configured
+
+    if not is_configured():
         return ""
-    try:
-        import jwt
-    except ImportError:
-        logger.warning("PyJWT not available; cannot generate Google Wallet link")
-        return ""
+    issuer_id = settings.GOOGLE_WALLET_ISSUER_ID
+    service_account_email = settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
+    private_key = settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
+    import jwt
+
     try:
         club = member.club
         # Wallet class IDs are immutable, so we use club.pk (stable) instead of
