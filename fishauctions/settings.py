@@ -794,6 +794,17 @@ if GOOGLE_WALLET_KEYFILE:
             _wallet_keyfile_path,
         )
 
+# Apple Wallet membership card integration (optional). See readme.md.
+# Drop your Pass Type ID .p12 cert and the Apple WWDR intermediate .pem next to .env
+# and point these settings at the filenames. If any one is missing the "Add to
+# Apple Wallet" button is hidden and pkpass downloads return 404.
+APPLE_WALLET_CERT_FILE = os.environ.get("APPLE_WALLET_CERT_FILE", "")
+APPLE_WALLET_CERT_PASSWORD = os.environ.get("APPLE_WALLET_CERT_PASSWORD", "")
+APPLE_WALLET_WWDR_FILE = os.environ.get("APPLE_WALLET_WWDR_FILE", "")
+APPLE_WALLET_PASS_TYPE_IDENTIFIER = os.environ.get("APPLE_WALLET_PASS_TYPE_IDENTIFIER", "")
+APPLE_WALLET_TEAM_IDENTIFIER = os.environ.get("APPLE_WALLET_TEAM_IDENTIFIER", "")
+APPLE_WALLET_ORGANIZATION_NAME = os.environ.get("APPLE_WALLET_ORGANIZATION_NAME", "")
+
 REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",

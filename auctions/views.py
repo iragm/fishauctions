@@ -12341,6 +12341,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["is_membership_owner"] = bool(
             member and self.request.user.is_authenticated and member.user_id == self.request.user.id
         )
+        from auctions.apple_wallet import is_configured as _apple_configured
+
+        context["apple_wallet_enabled"] = _apple_configured()
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
         club = self.club
@@ -12932,6 +12935,30 @@ class ClubMembershipNumberView(APIView):
             applies_to="MEMBERS",
         )
         return render(request, "auctions/club_membership_number.html", {"member": member})
+
+
+class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
+    """Serve a signed .pkpass file for a member.
+
+    Only the member's owning account may download — UUID renewal links must NOT
+    be able to download someone else's wallet card. We use the same identity
+    check as the Google Wallet save URL: request.user.id == member.user_id.
+    """
+
+    def get(self, request, pk):
+        from auctions.apple_wallet import generate_pkpass_for_member, is_configured
+
+        if not is_configured():
+            raise Http404
+        member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
+        if not request.user.is_authenticated or member.user_id != request.user.id:
+            raise PermissionDenied()
+        pkpass_bytes = generate_pkpass_for_member(member)
+        response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
+        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
+        # Wallet passes are personalized — don't cache them at intermediaries.
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 class ClubMemberDeleteView(APIView):

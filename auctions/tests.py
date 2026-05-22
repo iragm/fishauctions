@@ -16829,3 +16829,144 @@ class MembershipNumberUniquenessTests(TestCase):
         self.assertNotEqual(new_number, existing.membership_number)
         # Sanity: the picker keeps producing a number even when an unrelated row exists.
         self.assertTrue(1_000_000_000 <= new_number <= 9_999_999_999)
+
+
+class AppleWalletPassTests(TestCase):
+    """Verify the .pkpass builder produces a valid signed zip with the right metadata."""
+
+    def setUp(self):
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="apple_user", password="x", email="a@b.c")
+        self.other_user = User.objects.create_user(username="other_user", password="x", email="o@b.c")
+        self.club = Club.objects.create(name="Apple Test Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Test Member", user=self.user)
+
+    def _make_cert_files(self, tmp_path):
+        """Generate a self-signed cert + WWDR-stand-in cert and return their paths."""
+        import datetime as _dt
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        from cryptography.x509.oid import NameOID
+
+        def _make_cert(subject):
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
+            now = _dt.datetime.now(_dt.timezone.utc)
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(name)
+                .issuer_name(name)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - _dt.timedelta(minutes=1))
+                .not_valid_after(now + _dt.timedelta(days=1))
+                .sign(key, hashes.SHA256())
+            )
+            return key, cert
+
+        signer_key, signer_cert = _make_cert("Pass Type Cert")
+        _wwdr_key, wwdr_cert = _make_cert("WWDR Stand-in")
+
+        # .p12 with no password — encryption=NoEncryption matches APPLE_WALLET_CERT_PASSWORD="".
+        p12_bytes = pkcs12.serialize_key_and_certificates(
+            name=b"pass-cert",
+            key=signer_key,
+            cert=signer_cert,
+            cas=None,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        p12_path = tmp_path / "cert.p12"
+        p12_path.write_bytes(p12_bytes)
+
+        wwdr_pem = wwdr_cert.public_bytes(serialization.Encoding.PEM)
+        wwdr_path = tmp_path / "wwdr.pem"
+        wwdr_path.write_bytes(wwdr_pem)
+        return p12_path, wwdr_path
+
+    def test_generate_pkpass_contains_required_files(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = self._make_cert_files(tmp_path)
+            # Clear the cached signing certs from any earlier test.
+            apple_wallet._load_signing_certs.cache_clear()
+            with self.settings(
+                BASE_DIR=tmp_path,
+                APPLE_WALLET_CERT_FILE=p12_path.name,
+                APPLE_WALLET_CERT_PASSWORD="",
+                APPLE_WALLET_WWDR_FILE=wwdr_path.name,
+                APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+                APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+                APPLE_WALLET_ORGANIZATION_NAME="Test Org",
+            ):
+                self.assertTrue(apple_wallet.is_configured())
+                pkpass_bytes = apple_wallet.generate_pkpass_for_member(self.member)
+        # The result must be a valid zip containing all required files.
+        import io
+        import json as _json
+        import zipfile as _zip
+
+        with _zip.ZipFile(io.BytesIO(pkpass_bytes)) as zf:
+            names = set(zf.namelist())
+            self.assertEqual(
+                names,
+                {"pass.json", "icon.png", "icon@2x.png", "logo.png", "manifest.json", "signature"},
+            )
+            pass_data = _json.loads(zf.read("pass.json"))
+            self.assertEqual(pass_data["passTypeIdentifier"], "pass.com.example.membership")
+            self.assertEqual(pass_data["teamIdentifier"], "ABCDE12345")
+            self.assertEqual(pass_data["serialNumber"], f"member-{self.member.pk}")
+            self.assertEqual(pass_data["barcode"]["message"], str(self.member.membership_number))
+            # Manifest must list a sha1 for every payload file (not itself, not signature).
+            manifest = _json.loads(zf.read("manifest.json"))
+            self.assertEqual(set(manifest.keys()), {"pass.json", "icon.png", "icon@2x.png", "logo.png"})
+
+    def test_is_configured_false_when_settings_missing(self):
+        from . import apple_wallet
+
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="",
+            APPLE_WALLET_WWDR_FILE="",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="",
+            APPLE_WALLET_TEAM_IDENTIFIER="",
+        ):
+            self.assertFalse(apple_wallet.is_configured())
+
+    def test_pkpass_download_requires_owner(self):
+        """Only the owning user may download; UUID-link visitors / other users get 403."""
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.member.pk})
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="cert.p12",
+            APPLE_WALLET_CERT_PASSWORD="",
+            APPLE_WALLET_WWDR_FILE="wwdr.pem",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+            APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+        ):
+            # Wrong user → 403.
+            self.client.force_login(self.other_user)
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 403)
+            # Anonymous → redirect to login (LoginRequiredMixin).
+            self.client.logout()
+            response = self.client.get(url)
+            self.assertIn(response.status_code, (302, 401, 403))
+
+    def test_pkpass_download_404_when_not_configured(self):
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.member.pk})
+        self.client.force_login(self.user)
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="",
+            APPLE_WALLET_WWDR_FILE="",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="",
+            APPLE_WALLET_TEAM_IDENTIFIER="",
+        ):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 404)

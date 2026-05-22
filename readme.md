@@ -277,6 +277,34 @@ When everything is wired up, members visiting their club page (`/clubs/<slug>/`)
 
 **Note on the demo / unapproved issuer:** Google caps unapproved issuers at ~5 generic classes total. Auto-creation will start failing once you exceed that. The Celery task logs a clear 4xx error and retries on transient failures; in practice you'll want to wait until your issuer is approved before enabling the integration site-wide.
 
+#### Apple Wallet membership cards (optional)
+
+Adds an *Add to Apple Wallet* button next to the Google Wallet one. Same security model — only the signed-in account that matches the membership can download the pass; UUID renewal links cannot.
+
+Unlike Google Wallet there is no REST API: passes are signed `.pkpass` zip files generated server-side on each download. No Celery task, no class to pre-create.
+
+**One-time setup** (done by the site admin):
+
+1. **Apple Developer Account.** You need a paid account ($99/yr) at [developer.apple.com](https://developer.apple.com).
+2. **Pass Type Identifier.** Sign in → Certificates, Identifiers & Profiles → Identifiers → **+** → *Pass Type IDs*. Use the reverse-DNS form, e.g. `pass.com.yourdomain.membership`. Note your **Team ID** (top-right of the developer portal).
+3. **Pass Type ID certificate.** On the new Pass Type ID, click *Create Certificate*, generate a CSR with Keychain Access on macOS (Keychain Access → Certificate Assistant → Request a Certificate from a Certificate Authority → save to disk), upload the CSR, download the resulting `.cer`. In Keychain Access, double-click the `.cer` to install, then right-click the cert under *My Certificates* → **Export → .p12** and set a password. Drop the `.p12` next to your `.env`.
+4. **Apple WWDR intermediate cert.** Download from [Apple PKI](https://www.apple.com/certificateauthority/) — pick *Worldwide Developer Relations - G4* and save the `.pem`. Drop it next to your `.env` too.
+5. JSON, `.p12`, and `.pem` files at the repo root are gitignored.
+6. Add to your `.env`:
+   ```
+   APPLE_WALLET_CERT_FILE=pass-type-id.p12
+   APPLE_WALLET_CERT_PASSWORD=your-p12-password
+   APPLE_WALLET_WWDR_FILE=AppleWWDRCAG4.pem
+   APPLE_WALLET_PASS_TYPE_IDENTIFIER=pass.com.yourdomain.membership
+   APPLE_WALLET_TEAM_IDENTIFIER=ABCDE12345
+   APPLE_WALLET_ORGANIZATION_NAME=Your Club
+   ```
+   If any of these is missing the button is hidden and pkpass downloads return 404.
+
+When wired up, members visiting `/clubs/<slug>/` while signed in see *Add to Apple Wallet* next to the Google version. Tapping it on an iPhone (Safari) opens Wallet's native add UI. On desktop you'll just download the `.pkpass` file.
+
+Icons and logos in the pass are auto-generated from the club name (white text on the same slate background as the Google card). If you want custom artwork later, drop a `apple_wallet_assets/<club-slug>/` directory pattern in and extend `auctions/apple_wallet.py:_placeholder_png`.
+
 #### Discord bot integration (optional)
 
 This feature lets club members join a Discord server and automatically receive a role and be added to the club member list.

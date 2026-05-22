@@ -615,6 +615,11 @@ urlpatterns = [
         views.ClubMembershipNumberView.as_view(),
         name="club_member_membership_number",
     ),
+    path(
+        "api/clubmember/<int:pk>/apple-wallet.pkpass",
+        views.ClubMemberAppleWalletPassView.as_view(),
+        name="club_member_apple_wallet",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
         "api/clubmember/<int:pk>/confirm/<str:action>/",
