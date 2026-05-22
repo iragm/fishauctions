@@ -67,8 +67,8 @@ def _placeholder_png(text: str, size: tuple[int, int]) -> bytes:
     """Generate a simple solid-color PNG with centered text as a fallback asset.
 
     Apple Wallet requires at minimum icon.png (29x29) and icon@2x.png (58x58),
-    plus a logo.png (max 160x50). We don't have per-club logo assets in the DB,
-    so we draw something minimal and consistent.
+    plus a logo.png (max 160x50). When the club has no uploaded icon we draw
+    something minimal and consistent.
     """
     img = Image.new("RGB", size, DEFAULT_BACKGROUND_RGB)
     draw = ImageDraw.Draw(img)
@@ -84,6 +84,34 @@ def _placeholder_png(text: str, size: tuple[int, int]) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def _icon_png(club, size: tuple[int, int]) -> bytes:
+    """Return PNG bytes sized to `size`, using the club icon if set.
+
+    Falls back to the text placeholder if the club has no icon or the file can't
+    be opened. Always returns RGB (no alpha) since some Wallet clients have been
+    finicky about transparency on the icon slot.
+    """
+    if getattr(club, "icon", None):
+        try:
+            with club.icon.open("rb") as f:
+                with Image.open(f) as src:
+                    img = src.convert("RGB").copy()
+            img.thumbnail(size, Image.LANCZOS)
+            # Pad to exact target size with the brand background — Apple displays
+            # icon.png at a fixed square in the lock-screen UI, so consistency
+            # beats letting iOS rescale.
+            canvas = Image.new("RGB", size, DEFAULT_BACKGROUND_RGB)
+            offset = ((size[0] - img.width) // 2, (size[1] - img.height) // 2)
+            canvas.paste(img, offset)
+            buf = io.BytesIO()
+            canvas.save(buf, format="PNG", optimize=True)
+            return buf.getvalue()
+        except Exception:
+            logger.exception("Failed to render club icon for Apple Wallet; falling back to placeholder")
+    initials = "".join(p[:1] for p in (club.name or "M").split()[:2]).upper() or "M"
+    return _placeholder_png(initials, size)
 
 
 def _build_pass_json(member) -> dict:
@@ -159,13 +187,17 @@ def generate_pkpass_for_member(member) -> bytes:
         msg = "Apple Wallet is not configured (missing cert / pass type / team ID)."
         raise RuntimeError(msg)
 
-    # Build the files that go inside the pkpass.
-    initials = "".join(p[:1] for p in (member.club.name or "M").split()[:2]).upper() or "M"
+    # Build the files that go inside the pkpass. icon.png / icon@2x.png are
+    # square (Apple displays them at the lock-screen notification thumbnail
+    # size); logo.png appears in the top-left of the pass. When the club has
+    # uploaded an icon we use it for both — otherwise we fall back to a text
+    # placeholder rendered from the club name initials.
+    club = member.club
     files: dict[str, bytes] = {
         "pass.json": json.dumps(_build_pass_json(member), separators=(",", ":")).encode("utf-8"),
-        "icon.png": _placeholder_png(initials, (29, 29)),
-        "icon@2x.png": _placeholder_png(initials, (58, 58)),
-        "logo.png": _placeholder_png(member.club.name[:24] or "Membership", (160, 50)),
+        "icon.png": _icon_png(club, (29, 29)),
+        "icon@2x.png": _icon_png(club, (58, 58)),
+        "logo.png": _icon_png(club, (50, 50)),
     }
 
     # Apple requires SHA-1 hashes for each file in manifest.json. The signature

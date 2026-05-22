@@ -1,5 +1,13 @@
 {# Tab ribbon shown on all club admin pages #}
-<h3>{{ club.name }}</h3>
+{% load thumbnail %}
+<h3 class="d-flex align-items-center gap-2">
+  {% if club.icon %}
+  {% thumbnail club.icon "club_icon" as club_icon %}
+  <img src="{{ club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
+  {% endthumbnail %}
+  {% endif %}
+  <span>{{ club.name }}</span>
+</h3>
 {% if view.can_edit_settings or view.can_manage_bap or view.can_access_admin %}
 <ul class="nav nav-tabs mb-3">
   <li class="nav-item">

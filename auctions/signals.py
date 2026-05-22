@@ -159,15 +159,21 @@ def update_user_location(sender, instance, **kwargs):
 
 
 @receiver(pre_save, sender="auctions.Club")
-def stash_previous_membership_number_mode(sender, instance, **kwargs):
-    """Snapshot the previous mode value so the post_save handler can detect transitions."""
+def stash_previous_club_state(sender, instance, **kwargs):
+    """Snapshot prev field values so post_save handlers can detect transitions.
+
+    Currently tracks: membership_number_mode (revocation logic), icon name
+    (re-push the Wallet class so new logos propagate to existing passes).
+    """
     if instance.pk:
         from .models import Club
 
-        prev = Club.objects.filter(pk=instance.pk).values_list("membership_number_mode", flat=True).first()
-        instance._previous_membership_number_mode = prev
+        prev = Club.objects.filter(pk=instance.pk).values("membership_number_mode", "icon").first() or {}
+        instance._previous_membership_number_mode = prev.get("membership_number_mode")
+        instance._previous_icon_name = prev.get("icon") or ""
     else:
         instance._previous_membership_number_mode = None
+        instance._previous_icon_name = ""
 
 
 @receiver(post_save, sender="auctions.Club")
@@ -255,17 +261,22 @@ def create_user_userdata(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def ensure_google_wallet_class(sender, instance, created, **kwargs):
-    """Ensure the Google Wallet GenericClass exists for this club.
+    """Ensure the Google Wallet GenericClass exists / is current for this club.
 
-    Fires whenever a Club is saved and its Wallet class has not yet been confirmed
-    created. Once `google_wallet_class_created` is True, this is a no-op so routine
-    name/slug edits don't spam Google's API. The task itself is idempotent
-    (409 already-exists = treated as success) so even a stale flag is safe.
+    Fires when:
+      * the class hasn't been confirmed created yet (`google_wallet_class_created` False), or
+      * the club icon was just changed (so the new logo propagates to existing passes).
 
-    Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't
-    leak a task that then tries to create a Wallet class for a nonexistent club.
+    The task itself is upsert (POST → PATCH on 409) so re-running it is always safe.
+    Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't leak
+    a task that then tries to create a Wallet class for a nonexistent club.
     """
-    if instance.google_wallet_class_created:
+    icon_changed = False
+    prev_icon = getattr(instance, "_previous_icon_name", "")
+    current_icon = instance.icon.name if instance.icon else ""
+    if prev_icon != current_icon:
+        icon_changed = True
+    if instance.google_wallet_class_created and not icon_changed:
         return
     from .tasks import create_google_wallet_class_for_club
 

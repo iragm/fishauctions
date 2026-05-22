@@ -3473,6 +3473,7 @@ class ClubEditForm(forms.ModelForm):
         model = Club
         fields = [
             "name",
+            "icon",
             "homepage",
             "facebook_page",
             "enable_club_page",
@@ -3500,8 +3501,11 @@ class ClubEditForm(forms.ModelForm):
         self.fields["enable_membership"].label = "Membership and payments"
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        # Required so the icon ImageField actually uploads.
+        self.helper.attrs = {"enctype": "multipart/form-data"}
         self.helper.layout = Layout(
             "name",
+            "icon",
             "homepage",
             "facebook_page",
             Div(

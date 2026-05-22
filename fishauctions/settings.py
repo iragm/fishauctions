@@ -415,6 +415,11 @@ THUMBNAIL_ALIASES = {
         "ad": {"size": (250, 150), "crop": False},
         "lot_list": {"size": (250, 150), "crop": "smart"},
         # 'lot_full': {'size': (600, 600), 'crop': False},
+        # Club icon: used inline next to club names and as logo/icon on wallet
+        # passes. Square crop, sized to be retina-friendly (Apple wants up to 58px,
+        # Google's logo recommendation is ~660x660 source).
+        "club_icon": {"size": (128, 128), "crop": "smart"},
+        "club_icon_small": {"size": (32, 32), "crop": "smart"},
     },
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"

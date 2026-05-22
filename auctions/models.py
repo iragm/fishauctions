@@ -675,6 +675,12 @@ class Club(models.Model):
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
+    icon = ThumbnailerImageField(
+        upload_to="club_icons/",
+        blank=True,
+        null=True,
+        help_text="Square logo shown beside the club name and on Google/Apple Wallet membership cards.",
+    )
     google_wallet_class_created = models.BooleanField(
         default=False,
         help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",

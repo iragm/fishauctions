@@ -86,8 +86,31 @@ def _class_id_for_club(club) -> str:
     return f"{settings.GOOGLE_WALLET_ISSUER_ID}.membership_{club.pk}"
 
 
+def _absolute_icon_url(club) -> str:
+    """Return a publicly-reachable https URL for the club's icon, or "" if none/unusable.
+
+    Google Wallet only accepts publicly resolvable https URLs for `logo.sourceUri.uri`,
+    so we build one from the current Site domain and the thumbnailer's URL. If the
+    deployment is on http only, we still return https — Google will reject it but
+    that's a config issue, not a runtime one. Returns "" when there is no icon.
+    """
+    if not getattr(club, "icon", None):
+        return ""
+    try:
+        from django.contrib.sites.models import Site
+        from easy_thumbnails.files import get_thumbnailer
+
+        thumbnailer = get_thumbnailer(club.icon)
+        thumb = thumbnailer["club_icon"]
+        domain = Site.objects.get_current().domain
+        return f"https://{domain}{thumb.url}"
+    except Exception:
+        logger.exception("Could not build icon URL for club %s", club.pk)
+        return ""
+
+
 def _class_body(club) -> dict:
-    return {
+    body: dict = {
         "id": _class_id_for_club(club),
         "classTemplateInfo": {
             "cardTemplateOverride": {
@@ -102,6 +125,10 @@ def _class_body(club) -> dict:
         },
         "hexBackgroundColor": DEFAULT_HEX_BG,
     }
+    icon_url = _absolute_icon_url(club)
+    if icon_url:
+        body["logo"] = {"sourceUri": {"uri": icon_url}}
+    return body
 
 
 def _object_id_for_member(member) -> str:
@@ -140,10 +167,11 @@ def expire_generic_object_for_member(member) -> bool:
 
 
 def create_generic_class(club) -> bool:
-    """Create the GenericClass for this club on Google Wallet.
+    """Create-or-update the GenericClass for this club on Google Wallet.
 
-    Returns True if the class exists on Google's side after this call (200 created
-    or 409 already exists). Raises on transport errors so Celery can retry.
+    Tries POST first. On 409 (already exists) issues a PATCH with the same body,
+    so re-running the task after the club icon / metadata changes will push the
+    update to existing wallet passes. Raises on transport / 5xx for Celery retry.
     """
     if not is_configured():
         logger.info("Google Wallet not configured; skipping class creation for club %s", club.pk)
@@ -152,18 +180,28 @@ def create_generic_class(club) -> bool:
     if not token:
         return False
     body = _class_body(club)
-    resp = requests.post(
-        f"{WALLET_API_BASE}/genericClass",
-        json=body,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=20,
-    )
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.post(f"{WALLET_API_BASE}/genericClass", json=body, headers=headers, timeout=20)
     if resp.status_code == 200:
         logger.info("Created Google Wallet class %s for club %s", body["id"], club.pk)
         return True
     if resp.status_code == 409:
-        logger.info("Google Wallet class %s already exists for club %s", body["id"], club.pk)
-        return True
+        # Class already exists — PATCH it so newly-set fields (e.g. logo) propagate
+        # to passes already on user devices.
+        patch_resp = requests.patch(
+            f"{WALLET_API_BASE}/genericClass/{body['id']}", json=body, headers=headers, timeout=20
+        )
+        if patch_resp.status_code == 200:
+            logger.info("Patched Google Wallet class %s for club %s", body["id"], club.pk)
+            return True
+        logger.error(
+            "Google Wallet class patch failed for club %s: %s %s",
+            club.pk,
+            patch_resp.status_code,
+            patch_resp.text,
+        )
+        patch_resp.raise_for_status()
+        return False
     # 4xx other than 409 indicates a config / data problem the caller must see.
     logger.error("Google Wallet class create failed for club %s: %s %s", club.pk, resp.status_code, resp.text)
     resp.raise_for_status()

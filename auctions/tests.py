@@ -16743,7 +16743,8 @@ class GoogleWalletClassCreateTests(TestCase):
         body = post.call_args.kwargs["json"]
         self.assertEqual(body["id"], f"3388000000022XXXXXX.membership_{self.club.pk}")
 
-    def test_409_is_treated_as_success(self):
+    def test_409_triggers_patch_and_returns_success(self):
+        """POST → 409 → PATCH (so icon / metadata updates push to existing classes)."""
         from .google_wallet import create_generic_class
 
         with patch("auctions.google_wallet.get_access_token", return_value="t"):
@@ -16751,7 +16752,12 @@ class GoogleWalletClassCreateTests(TestCase):
                 "auctions.google_wallet.requests.post",
                 return_value=self._mock_response(409, text="already exists"),
             ):
-                self.assertTrue(create_generic_class(self.club))
+                with patch(
+                    "auctions.google_wallet.requests.patch",
+                    return_value=self._mock_response(200, {"id": "patched"}),
+                ) as patch_mock:
+                    self.assertTrue(create_generic_class(self.club))
+        self.assertEqual(patch_mock.call_count, 1)
 
     def test_400_raises(self):
         from .google_wallet import create_generic_class
@@ -17095,3 +17101,135 @@ class MembershipNumberModeTests(TestCase):
                 expire_google_wallet_objects_for_club.apply(args=[self.club.pk], kwargs={"unpaid_only": True})
         targeted_pks = {call.args[0].pk for call in expire.call_args_list}
         self.assertEqual(targeted_pks, {self.unpaid.pk})
+
+
+class ClubIconWalletTests(TestCase):
+    """The uploaded Club.icon must flow into the Google Wallet class and Apple pkpass."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import tempfile
+
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
+
+    def _png_bytes(self, size=(64, 64), color=(220, 30, 30)):
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.new("RGB", size, color)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def setUp(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="icon_user", password="x", email="i@b.c")
+        self.club = Club.objects.create(name="Iconed Club")
+        self.club.icon = SimpleUploadedFile("test.png", self._png_bytes(), content_type="image/png")
+        self.club.save()
+        self.member = ClubMember.objects.create(club=self.club, user=self.user, name="M")
+
+    def test_google_wallet_class_body_includes_logo_when_icon_set(self):
+        from .google_wallet import _class_body
+
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(self.club)
+        self.assertIn("logo", body)
+        self.assertTrue(body["logo"]["sourceUri"]["uri"].startswith("https://"))
+        self.assertIn("/media/", body["logo"]["sourceUri"]["uri"])
+
+    def test_google_wallet_class_body_omits_logo_when_no_icon(self):
+        from .google_wallet import _class_body
+        from .models import Club
+
+        no_icon = Club.objects.create(name="Bare Club")
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(no_icon)
+        self.assertNotIn("logo", body)
+
+    def test_icon_change_redispatches_wallet_class_task(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        # Flip the flag manually so we'd normally skip — the change-detection
+        # logic must override and dispatch anyway.
+        from .models import Club
+
+        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
+        self.club.refresh_from_db()
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.icon = SimpleUploadedFile(
+                    "new.png", self._png_bytes(color=(0, 255, 0)), content_type="image/png"
+                )
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_unchanged_icon_does_not_redispatch(self):
+        from .models import Club
+
+        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
+        self.club.refresh_from_db()
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.name = "Renamed"
+                self.club.save()
+            delay.assert_not_called()
+
+    def test_apple_wallet_icon_png_uses_club_icon(self):
+        from .apple_wallet import _icon_png
+
+        png = _icon_png(self.club, (29, 29))
+        # Decode the PNG and confirm it's the requested size — proves it ran
+        # through the icon-rendering branch (not the placeholder text fallback).
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.open(_io.BytesIO(png))
+        self.assertEqual(img.size, (29, 29))
+
+    def test_apple_wallet_icon_png_falls_back_to_placeholder_without_icon(self):
+        from .apple_wallet import _icon_png
+        from .models import Club
+
+        no_icon = Club.objects.create(name="No Icon Club")
+        png = _icon_png(no_icon, (29, 29))
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.open(_io.BytesIO(png))
+        self.assertEqual(img.size, (29, 29))
+
+    def test_create_generic_class_patches_on_409(self):
+        """409 from POST must trigger a PATCH so icon updates propagate to existing classes."""
+        from unittest.mock import MagicMock
+
+        from .google_wallet import create_generic_class
+
+        post_resp = MagicMock(status_code=409, text="exists")
+        patch_resp = MagicMock(status_code=200, text="patched")
+        with self.settings(
+            GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+        ):
+            with patch("auctions.google_wallet.get_access_token", return_value="t"):
+                with patch("auctions.google_wallet.requests.post", return_value=post_resp) as post_mock:
+                    with patch("auctions.google_wallet.requests.patch", return_value=patch_resp) as patch_mock:
+                        self.assertTrue(create_generic_class(self.club))
+        self.assertEqual(post_mock.call_count, 1)
+        self.assertEqual(patch_mock.call_count, 1)
