@@ -1,4 +1,5 @@
 django-qr-code
+python-barcode
 asgiref
 attrs
 autobahn

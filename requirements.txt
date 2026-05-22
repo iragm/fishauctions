@@ -358,6 +358,8 @@ pyparsing==3.3.2
     # via -r requirements.in
 pyphen==0.17.2
     # via weasyprint
+python-barcode==0.16.1
+    # via -r requirements.in
 python-crontab==3.3.0
     # via django-celery-beat
 python-dateutil==2.9.0.post0

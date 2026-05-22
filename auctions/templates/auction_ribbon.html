@@ -1,5 +1,12 @@
 {# this is the tabs that are shown on many auction pages #}
-<h3>{{auction}}</h3>
+{% load thumbnail %}
+<h3 class="d-flex align-items-center gap-2">
+  {% if auction.club and auction.club.icon %}
+  {% thumbnail auction.club.icon "club_icon" as auction_club_icon %}
+  <img src="{{ auction_club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
+  {% endif %}
+  <span>{{auction}}</span>
+</h3>
 <small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
 {% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}

@@ -21,6 +21,11 @@ urlpatterns = [
         views.AuctionAutocomplete.as_view(),
         name="auction-autocomplete",
     ),
+    path(
+        "api/club-member-autocomplete/",
+        views.ClubMemberAutocomplete.as_view(),
+        name="club-member-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
@@ -504,6 +509,11 @@ urlpatterns = [
         views.MarkInvoicesPaid.as_view(),
         name="auction_invoices_paid",
     ),
+    path(
+        "api/invoices/<int:pk>/renewal-toggle/",
+        views.InvoiceRenewalNeededToggleView.as_view(),
+        name="invoice_renewal_toggle",
+    ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
         "api/lots/<slug:slug>/sell-to-highest-bidder",
@@ -559,11 +569,18 @@ urlpatterns = [
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
+    path(
+        "clubs/<slug:slug>/membership-settings/",
+        views.ClubMembershipSettingsView.as_view(),
+        name="club_membership_settings",
+    ),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
-    path("clubs/<slug:slug>/bap/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
-    path("clubs/<slug:slug>/bap/recalculate/", views.ClubBapRecalculateView.as_view(), name="club_bap_recalculate"),
+    path("clubs/<slug:slug>/bap/", views.ClubBapView.as_view(), name="club_bap"),
+    path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
+    path("clubs/<slug:slug>/bap/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     # API key management (login-required UI)
     path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
@@ -593,6 +610,16 @@ urlpatterns = [
         "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
     ),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
+    path(
+        "api/clubmember/<int:pk>/membership-number/",
+        views.ClubMembershipNumberView.as_view(),
+        name="club_member_membership_number",
+    ),
+    path(
+        "api/clubmember/<int:pk>/apple-wallet.pkpass",
+        views.ClubMemberAppleWalletPassView.as_view(),
+        name="club_member_apple_wallet",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
         "api/clubmember/<int:pk>/confirm/<str:action>/",
@@ -600,10 +627,13 @@ urlpatterns = [
         name="club_member_confirm",
     ),
     path("api/clubmember/new/<slug:slug>/", views.ClubMemberCreateView.as_view(), name="clubmember_create"),
+    path("api/bapaward/new/<slug:slug>/", views.BapAwardAdminView.as_view(), name="bapaward_create"),
+    path("api/bapaward/<int:pk>/", views.BapAwardAdminView.as_view(), name="bapaward_admin"),
+    path("api/bapaward/<int:pk>/delete/", views.BapAwardDeleteView.as_view(), name="bapaward_delete"),
     path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
     path("clubs/<slug:slug>/admin/merge/<int:pk>/", views.ClubMemberMergeView.as_view(), name="club_member_merge"),
     path(
-        "clubs/<slug:slug>/admin/member/<int:pk>/renew/",
+        "clubs/<slug:slug>/admin/member/<int:pk>/set-expiration/",
         views.ClubMemberRenewPageView.as_view(),
         name="club_member_renew_page",
     ),

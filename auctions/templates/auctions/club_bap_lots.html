@@ -1,106 +1,10 @@
 {% extends "base.html" %}
 {% load render_table from django_tables2 %}
 {% load crispy_forms_tags %}
-{% block title %}BAP Lots &mdash; {{ club.name }}{% endblock %}
+{% block title %}Pending BAP — {{ club.name }}{% endblock %}
 
 {% block content %}
-<h3><i class="bi bi-award"></i> {{ club.name }} &mdash; BAP Lot Review</h3>
-
-<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
-  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to members</a>
-  <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-house"></i> Club page</a>
-
-  <form method="post" action="{% url 'club_bap_recalculate' club.slug %}" class="d-inline">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-sm btn-warning"><i class="bi bi-arrow-repeat"></i> Recalculate all points</button>
-  </form>
-  <small class="text-muted">
-    {% if last_run %}Last run: {{ last_run|date:"N j, Y g:i a" }}.{% else %}Never run.{% endif %}
-    {% if next_run %} Next scheduled: {{ next_run|date:"N j, Y g:i a" }}.{% endif %}
-  </small>
-</div>
-
-<div class="d-flex align-items-center gap-2 mt-2 mb-2">
-  <span class="dropdown">
-    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="bi bi-filter"></i> Filters
-    </button>
-    <div class="dropdown-menu" style="min-width:12rem">
-      <label class="dropdown-item">
-        <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending approval
-      </label>
-      <label class="dropdown-item">
-        <input type="checkbox" class="bap_filter" id="checkbox_approved"> Approved
-      </label>
-    </div>
-  </span>
-  <form id="filter-form" class="flex-grow-1" method="get">
-    {% crispy filter.form %}
-  </form>
-</div>
-
-<div class="table-container"
-     hx-get=""
-     hx-trigger="bapLotListChanged from:body"
-     hx-swap="outerHTML">
-  {% render_table table %}
-</div>
-
+{% include "club_ribbon.html" %}
+{% include "auctions/club_bap_lots_fragment.html" %}
 <div id="modals-here"></div>
-
-{% block extra_js %}
-<script>
-function saveBapPoints(el) {
-  $.ajax({
-    type: "POST",
-    beforeSend: function(req) { req.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}"); },
-    url: el.dataset.url,
-    data: { bap_points_awarded: el.value },
-    success: function() {
-      $(el).removeClass("is-invalid").addClass("is-valid");
-    },
-    error: function() {
-      $(el).removeClass("is-valid").addClass("is-invalid");
-    },
-  });
-}
-
-$(document).ready(function () {
-  // Sync query text → checkboxes on load and on blur
-  function syncCheckboxesFromQuery() {
-    var val = $("#id_query").val().toLowerCase();
-    var tokens = val.split(/\s+/);
-    $("#checkbox_pending").prop("checked", tokens.indexOf("pending") !== -1);
-    $("#checkbox_approved").prop("checked", tokens.indexOf("approved") !== -1);
-  }
-  $("#id_query").on("blur", syncCheckboxesFromQuery);
-  syncCheckboxesFromQuery();
-
-  function updateQueryKeyword(keyword, add) {
-    var el = document.getElementById("id_query");
-    var val = el.value;
-    // Remove all status keywords first
-    var statusKeywords = ["pending", "approved"];
-    statusKeywords.forEach(function(kw) {
-      val = val.replace(new RegExp("(^|\\s)" + kw + "(?=\\s|$)", "g"), " ");
-    });
-    val = val.trim();
-    if (add) val = (val ? val + " " : "") + keyword;
-    el.value = val.trim();
-    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-  }
-
-  // Mutual exclusivity: checking one unchecks the other
-  $("#checkbox_pending").change(function () {
-    if (this.checked) $("#checkbox_approved").prop("checked", false);
-    updateQueryKeyword("pending", this.checked);
-  });
-  $("#checkbox_approved").change(function () {
-    if (this.checked) $("#checkbox_pending").prop("checked", false);
-    updateQueryKeyword("approved", this.checked);
-  });
-});
-</script>
-{% endblock %}
 {% endblock %}

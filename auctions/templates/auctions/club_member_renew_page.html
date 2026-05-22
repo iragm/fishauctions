@@ -1,31 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Renew Membership — {{ member }}{% endblock %}
+{% block title %}Set Expiration Date — {{ member }}{% endblock %}
 
 {% block content %}
-<h3><i class="bi bi-calendar-check"></i> Renew Membership</h3>
+<h3><i class="bi bi-calendar-range"></i> Set Expiration Date</h3>
 <p class="text-muted">Club: <strong>{{ club.name }}</strong></p>
 
 <div class="card mb-4" style="max-width: 480px;">
   <div class="card-body">
     <h5 class="card-title">{{ member }}</h5>
-    {% if member.membership_last_paid %}
-    <p class="text-muted small">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+    {% if member.membership_expiration_date %}
+    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"M j, Y"|default:"—" }}</p>
+    <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"M j, Y" }}</p>
     {% else %}
-    <p class="text-muted small">No payment on record.</p>
+    <p class="text-muted small mb-3">No expiration date on record.</p>
     {% endif %}
 
     <form method="post">
       {% csrf_token %}
       <div class="mb-3">
-        <label for="membership_last_paid" class="form-label">Date of payment</label>
-        <input type="date" class="form-control" id="membership_last_paid" name="membership_last_paid"
+        <label for="membership_expiration_date" class="form-label">Expiration date</label>
+        <input type="date" class="form-control" id="membership_expiration_date" name="membership_expiration_date"
           value="{{ default_date|date:'Y-m-d' }}" required>
         <div class="form-text">
-          {% if club.membership_system == "rolling" %}
-          Rolling annual membership — set to today to renew for one year from this date.
-          {% else %}
-          January 1st renewal — set to today to mark as paid for the current membership year.
-          {% endif %}
+          Use <em>Renew</em> from the member list for a one-click extension based on the club's renewal rules.
         </div>
       </div>
       <div class="d-flex gap-2">

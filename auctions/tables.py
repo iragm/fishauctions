@@ -3,7 +3,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionHistory, AuctionTOS, ClubHistory, ClubMember, Lot
+from .models import Auction, AuctionHistory, AuctionTOS, BapAward, ClubHistory, ClubMember, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -389,6 +389,17 @@ class LotHTMxTableForUsers(tables.Table):
         }
 
 
+_PERMISSION_BADGES = [
+    ("permission_admin", "Admin"),
+    ("permission_edit_club", "Edit club settings"),
+    ("permission_manage_auctions", "Manage auctions"),
+    ("permission_manage_bap", "Award points"),
+    ("permission_export", "Export data"),
+    ("permission_add_edit", "Manage membership"),
+    ("permission_view", "View members"),
+]
+
+
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
     name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
@@ -401,6 +412,24 @@ class ClubMemberHTMxTable(tables.Table):
     hap_points = tables.Column(
         accessor="hap_points",
         verbose_name="HAP",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    membership_last_paid = tables.Column(
+        accessor="membership_last_paid",
+        verbose_name="Last paid",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    membership_expiration_date = tables.Column(
+        accessor="membership_expiration_date",
+        verbose_name="Expires",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    createdon = tables.DateColumn(
+        accessor="createdon",
+        verbose_name="Joined",
         orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
@@ -440,7 +469,50 @@ class ClubMemberHTMxTable(tables.Table):
             )
         if record.email_address_status == "VALID":
             result += format_html("<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>")
+        for field, label in _PERMISSION_BADGES:
+            if getattr(record, field, False):
+                result += format_html(
+                    " <span class='badge bg-danger' title='{}'>{}</span>",
+                    label,
+                    label,
+                )
+                break
         return result
+
+    def render_membership_expiration_date(self, value):
+        from django.utils import timezone
+
+        if not value:
+            return "—"
+        today = timezone.now().date()
+        formatted = value.strftime("%b %-d, %Y")
+        days_expired = (today - value).days
+        if days_expired > 0:
+            return format_html(
+                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>",
+                formatted,
+                days_expired,
+                "s" if days_expired != 1 else "",
+            )
+        return formatted
+
+    def render_membership_last_paid(self, value):
+        if not value:
+            return "—"
+        return value.strftime("%b %-d, %Y")
+
+    _SOURCE_LABELS = {
+        "discord": "Discord",
+        "manually_added": "Manual",
+        "csv": "CSV",
+    }
+
+    def render_source(self, value, record):
+        if value == "joined":
+            from django.conf import settings
+
+            return getattr(settings, "NAVBAR_BRAND", "Website")
+        return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
         if not self.can_add_edit and not self.can_manage_permissions:
@@ -451,8 +523,9 @@ class ClubMemberHTMxTable(tables.Table):
         if self.can_manage_permissions:
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
-                '<li><a class="dropdown-item" href="#"'
-                ' hx-get="{}" hx-target="#modals-here">'
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                 '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
                 "<li><hr class='dropdown-divider'></li>",
                 perms_url,
@@ -460,7 +533,8 @@ class ClubMemberHTMxTable(tables.Table):
 
         edit_items = format_html("")
         if self.can_add_edit:
-            renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+            renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+            set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
             confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
             merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
             email_item = format_html("")
@@ -475,43 +549,89 @@ class ClubMemberHTMxTable(tables.Table):
                     record.email,
                     icon_class,
                 )
+            # Member-number action is hidden entirely when the club has the feature disabled.
+            membership_number_item = format_html("")
+            if record.club.membership_number_mode != "disabled":
+                membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
+                membership_number_item = format_html(
+                    '<li><a class="dropdown-item" href="javascript:void(0)"'
+                    ' hx-get="{}" hx-target="#modals-here"'
+                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
+                    membership_number_url,
+                )
             edit_items = format_html(
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
                 '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
+                '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
                 '<li><a class="dropdown-item" href="{}">'
                 '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
                 "{}"
+                "{}"
                 '<li><hr class="dropdown-divider"></li>'
-                '<li><a class="dropdown-item text-danger" href="#"'
-                ' hx-get="{}" hx-target="#modals-here">'
+                '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                 '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
-                renew_url,
+                renew_confirm_url,
+                set_expiry_url,
                 merge_url,
+                membership_number_item,
                 email_item,
                 confirm_delete_url,
+            )
+
+        django_admin_item = format_html("")
+        if self.request and getattr(self.request.user, "is_staff", False):
+            admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
+            django_admin_item = format_html(
+                "<li><hr class='dropdown-divider'></li>"
+                '<li><a class="dropdown-item" href="{}" target="_blank">'
+                '<i class="bi bi-wrench me-1"></i>Django admin</a></li>',
+                admin_url,
             )
 
         return format_html(
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
             edit_items,
+            django_admin_item,
         )
 
     class Meta:
         model = ClubMember
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("name", "bap_points", "hap_points", "source", "actions")
+        fields = (
+            "name",
+            "bap_points",
+            "hap_points",
+            "membership_last_paid",
+            "membership_expiration_date",
+            "createdon",
+            "source",
+            "actions",
+        )
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
-        super().__init__(*args, **kwargs)
+        can_manage_bap = kwargs.pop("can_manage_bap", False)
+        can_manage_membership = kwargs.pop("can_manage_membership", False)
+        exclude = list(kwargs.pop("exclude", None) or [])
+        if not can_manage_bap:
+            exclude += ["bap_points", "hap_points"]
+        if not can_manage_membership:
+            exclude += ["membership_last_paid", "membership_expiration_date"]
+        super().__init__(*args, exclude=exclude, **kwargs)
 
 
 class ClubHistoryHTMxTable(tables.Table):
@@ -534,6 +654,9 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def render_name(self, value, record):
         if record.user:
+            name = self._member_names.get(record.user_id)
+            if name:
+                return name
             return record.user.get_full_name() or record.user.username
         return "System"
 
@@ -544,66 +667,127 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)
+        if self.club:
+            self._member_names = {
+                m.user_id: m.name or m.email or str(m)
+                for m in ClubMember.objects.filter(club=self.club, is_deleted=False).exclude(user=None)
+            }
+        else:
+            self._member_names = {}
         super().__init__(*args, **kwargs)
+
+
+class BapAwardHTMxTable(tables.Table):
+    """Table of BapAward records for the club BAP awards tab."""
+
+    hide_string = "d-md-table-cell d-none"
+
+    member = tables.Column(accessor="club_member", verbose_name="Member", orderable=True)
+    date = tables.Column(verbose_name="Date", orderable=True)
+    points = tables.Column(verbose_name="BAP", orderable=True)
+    hap_points = tables.Column(verbose_name="HAP", orderable=True)
+    cap_points = tables.Column(verbose_name="CAP", orderable=True)
+    lot_name = tables.Column(accessor="lot", verbose_name="Lot", orderable=False)
+    notes = tables.Column(
+        verbose_name="Notes",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+
+    _MODAL_ATTRS = (
+        'hx-target="#modals-here" hx-trigger="click" '
+        '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"'
+    )
+
+    def _edit_link(self, record, content):
+        url = reverse("bapaward_admin", kwargs={"pk": record.pk})
+        return format_html(
+            '<a hx-get="{}" {} class="text-info" style="cursor:pointer;text-decoration:underline">{}</a>',
+            url,
+            mark_safe(self._MODAL_ATTRS),
+            content,
+        )
+
+    def render_member(self, value, record):
+        return self._edit_link(record, str(value))
+
+    def render_date(self, value, record):
+        return self._edit_link(record, value.strftime("%b %-d, %Y"))
+
+    def render_lot_name(self, value, record):
+        if value:
+            return format_html('<a href="{}" target="_blank">{}</a>', value.lot_link, value.lot_name)
+        return "—"
+
+    def render_notes(self, value, record):
+        if not value:
+            return "—"
+        if len(value) > 60:
+            return format_html('<span title="{}">{}&hellip;</span>', value, value[:60])
+        return value
+
+    class Meta:
+        model = BapAward
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("member", "date", "points", "hap_points", "cap_points", "lot_name", "notes")
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)
+        if self.club:
+            if not self.club.separate_hap:
+                self.columns.hide("hap_points")
+            if not self.club.separate_cap:
+                self.columns.hide("cap_points")
 
 
 class ClubBapLotHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
 
     lot_name = tables.Column(verbose_name="Lot", orderable=True)
-    seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
-    auction = tables.Column(accessor="auction", verbose_name="Auction", orderable=False)
+    seller_name = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
+    quantity = tables.Column(verbose_name="Qty", orderable=True)
     date_end = tables.Column(
         verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
     )
-    bap_points_awarded = tables.Column(verbose_name="Points", orderable=True)
-    status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
+    bap_reason = tables.Column(accessor="bap_auto_reason", verbose_name="Reason", orderable=False)
+    actions = tables.Column(empty_values=(), verbose_name="Actions", orderable=False)
 
     def render_lot_name(self, value, record):
-        url = record.lot_link
-        return format_html('<a href="{}" target="_blank">{}</a>', url, value)
+        return value
 
-    def render_seller(self, value, record):
-        if value:
-            return str(value)
-        return "—"
+    def render_seller_name(self, value, record):
+        return value.name if value else "—"
 
-    def render_auction(self, value, record):
-        if value:
-            return format_html('<a href="{}" target="_blank">{}</a>', value.get_absolute_url(), str(value))
-        return "—"
+    def render_bap_reason(self, value, record):
+        reason = value or record.unsold_lot_no_bap_reason
+        if not reason:
+            return ""
+        return dict(Lot.BAP_REASON_CHOICES).get(reason, reason)
 
     def render_date_end(self, value, record):
-        if value:
-            return value.strftime("%b %-d, %Y")
-        return "—"
+        return value.strftime("%b %-d, %Y") if value else "—"
 
-    def render_bap_points_awarded(self, value, record):
-        url = reverse("lot_bap_points", kwargs={"pk": record.pk})
-        return format_html(
-            '<input type="text" value="{}" placeholder="{}" class="form-control form-control-sm d-inline-block"'
-            ' style="width:70px;" data-lot-pk="{}" data-url="{}" onchange="saveBapPoints(this)">',
-            value or "",
-            record.bap_placeholder,
-            record.pk,
-            url,
+    def render_actions(self, record):
+        from django.template.loader import render_to_string
+
+        try:
+            award = record.bap_award
+        except Exception:
+            award = None
+        record.bap_award_cached = award
+        default_points = self.club.points_per_lot if self.club and self.club.points_per_lot > 0 else 5
+        return mark_safe(
+            render_to_string(
+                "auctions/bap_lot_buttons.html",
+                {"lot": record, "club": self.club, "default_points": default_points},
+            )
         )
-
-    def render_status(self, value, record):
-        if record.bap_points_awarded:
-            return mark_safe('<span class="badge bg-success">Approved</span>')
-        if record.manually_approved:
-            return mark_safe('<span class="badge bg-secondary">Manually set</span>')
-        reason = record.sold_lot_no_bap_reason
-        if reason:
-            label = dict(record.BAP_REASON_CHOICES).get(reason, reason)
-            return format_html('<span class="badge bg-warning text-dark">{}</span>', label)
-        return mark_safe('<span class="badge bg-primary">Pending</span>')
 
     class Meta:
         model = Lot
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("lot_name", "seller", "auction", "date_end", "bap_points_awarded", "status")
+        fields = ("lot_name", "seller_name", "quantity", "date_end", "bap_reason", "actions")
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)

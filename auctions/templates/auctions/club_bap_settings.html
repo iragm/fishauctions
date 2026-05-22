@@ -4,7 +4,7 @@
 
 {% block content %}
 {{ form.media }}
-<h3><i class="bi bi-award"></i> BAP Settings &mdash; {{ club.name }}</h3>
+{% include "club_ribbon.html" %}
 
 {% crispy form %}
 

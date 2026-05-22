@@ -22,6 +22,7 @@ class Command(BaseCommand):
         payload = {
             "name": "connect",
             "description": "Connect this Discord server to a club",
+            "default_member_permissions": "32",
             "options": [
                 {
                     "name": "club_uuid",
@@ -41,6 +42,7 @@ class Command(BaseCommand):
         auctions_here_payload = {
             "name": "auctions_here",
             "description": "Set this channel to receive auction announcements for this club",
+            "default_member_permissions": "32",
         }
         resp2 = requests.post(url, headers=headers, json=auctions_here_payload, timeout=10)
         if resp2.status_code in (200, 201):
@@ -67,3 +69,13 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Successfully registered /bap command."))
         else:
             self.stderr.write(f"Failed to register /bap: {resp4.status_code} {resp4.text}")
+
+        join_payload = {
+            "name": "join",
+            "description": "Join this club",
+        }
+        resp5 = requests.post(url, headers=headers, json=join_payload, timeout=10)
+        if resp5.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /join command."))
+        else:
+            self.stderr.write(f"Failed to register /join: {resp5.status_code} {resp5.text}")

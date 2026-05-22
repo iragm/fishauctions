@@ -1,0 +1,8 @@
+{% if invoice.membership_fee_amount %}
+<tr id="invoice-membership-fee-row">
+  <td>{{ invoice.auction.club.name }} membership fee</td>
+  <td>{{ invoice.currency_symbol }}{{ invoice.membership_fee_amount|floatformat:2 }}</td>
+</tr>
+{% else %}
+<tr id="invoice-membership-fee-row" style="display: none;"><td></td><td></td></tr>
+{% endif %}

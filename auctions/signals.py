@@ -5,6 +5,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
+from django.db import transaction
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -157,6 +158,54 @@ def update_user_location(sender, instance, **kwargs):
         pass
 
 
+@receiver(pre_save, sender="auctions.Club")
+def stash_previous_club_state(sender, instance, **kwargs):
+    """Snapshot prev field values so post_save handlers can detect transitions.
+
+    Currently tracks: membership_number_mode (revocation logic), icon name
+    (re-push the Wallet class so new logos propagate), and club name
+    (refresh member wallet object metadata on rename).
+    """
+    if instance.pk:
+        from .models import Club
+
+        prev = Club.objects.filter(pk=instance.pk).values("membership_number_mode", "icon", "name").first() or {}
+        instance._previous_membership_number_mode = prev.get("membership_number_mode")
+        instance._previous_icon_name = prev.get("icon") or ""
+        instance._previous_name = prev.get("name") or ""
+    else:
+        instance._previous_membership_number_mode = None
+        instance._previous_icon_name = ""
+        instance._previous_name = ""
+
+
+@receiver(post_save, sender="auctions.Club")
+def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
+    """When membership_number_mode tightens, expire active Wallet passes.
+
+    Transitions handled:
+      * anything → "disabled"   : expire ALL members' Wallet objects
+      * anything → "paid_only"  : expire UNPAID members' Wallet objects (only when
+                                  the previous mode was not already "paid_only")
+
+    Apple Wallet does not have an equivalent push-revocation API without the
+    full Web Service implementation, so we rely on the embedded `expirationDate`
+    in the pkpass plus URL gating on re-download.
+    """
+    if created:
+        return
+    prev = getattr(instance, "_previous_membership_number_mode", None)
+    current = instance.membership_number_mode
+    if prev == current:
+        return
+    from .tasks import expire_google_wallet_objects_for_club
+
+    if current == "disabled":
+        transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk))
+    elif current == "paid_only" and prev != "paid_only":
+        transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk, unpaid_only=True))
+
+
 @receiver(pre_save, sender="auctions.Lot")
 def update_lot_info(sender, instance, **kwargs):
     """Fill out the location and address from the user; set end date from auction."""
@@ -211,6 +260,43 @@ def create_user_userdata(sender, instance, created, **kwargs):
         from auctions.models import UserData
 
         UserData.objects.create(user=instance)
+
+
+@receiver(post_save, sender="auctions.Club")
+def ensure_google_wallet_class(sender, instance, created, **kwargs):
+    """Ensure the Google Wallet GenericClass exists / is current for this club.
+
+    Fires when:
+      * the class hasn't been confirmed created yet (`google_wallet_class_created` False), or
+      * the club icon was just changed (so the new logo propagates to existing passes).
+
+    The task itself is upsert (POST → PATCH on 409) so re-running it is always safe.
+    Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't leak
+    a task that then tries to create a Wallet class for a nonexistent club.
+    """
+    icon_changed = False
+    prev_icon = getattr(instance, "_previous_icon_name", "")
+    current_icon = instance.icon.name if instance.icon else ""
+    if prev_icon != current_icon:
+        icon_changed = True
+    if instance.google_wallet_class_created and not icon_changed:
+        return
+    from .tasks import create_google_wallet_class_for_club
+
+    transaction.on_commit(lambda: create_google_wallet_class_for_club.delay(instance.pk))
+
+
+@receiver(post_save, sender="auctions.Club")
+def refresh_google_wallet_objects_for_club_name_change(sender, instance, created, **kwargs):
+    """Patch member wallet object metadata when a club is renamed."""
+    if created:
+        return
+    prev_name = getattr(instance, "_previous_name", "")
+    if prev_name == instance.name:
+        return
+    from .tasks import update_google_wallet_objects_for_club
+
+    transaction.on_commit(lambda: update_google_wallet_objects_for_club.delay(instance.pk))
 
 
 @receiver(bounce_received)

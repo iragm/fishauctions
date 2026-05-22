@@ -246,14 +246,22 @@ def distance_to(
         correction = 0.6213712  # close enough
     else:
         correction = 1  # km
-    for i in [
-        latitude,
-        longitude,
-        lat_field_name,
-        lng_field_name,
-        approximate_distance_to,
-    ]:
-        if '"' in str(i) or "'" in str(i):
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+        approximate_distance_to = float(approximate_distance_to)
+    except (TypeError, ValueError):
+        msg = "invalid character passed to distance_to, possible sql injection risk"
+        raise TypeError(msg) from None
+    if approximate_distance_to <= 0:
+        msg = "approximate_distance_to must be > 0"
+        raise TypeError(msg)
+    # Allow both simple identifiers (latitude) and backtick-qualified table/column names
+    # (`auctions_lot`.`latitude`) used by some raw SQL annotation call sites.
+    sql_identifier = r"(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z_][A-Za-z0-9_]*`)"
+    field_name_pattern = re.compile(rf"^{sql_identifier}(?:\.{sql_identifier})*$")
+    for field_name in [lat_field_name, lng_field_name]:
+        if not field_name_pattern.fullmatch(str(field_name)):
             msg = "invalid character passed to distance_to, possible sql injection risk"
             raise TypeError(msg)
     # Great circle distance formula, CEILING is used to keep people from triangulating locations
@@ -538,6 +546,35 @@ def remove_html_color_tags(text):
     return sanitize_summernote_html(text)
 
 
+def _default_membership_number():
+    """Return a random 10-digit membership number for new ClubMember records.
+
+    Uniqueness is enforced at the DB level. Collisions are statistically rare
+    (~30k members before a 50% chance) but possible — `_pick_unique_membership_number`
+    handles retries when an actual collision happens.
+    """
+    return randint(1_000_000_000, 9_999_999_999)
+
+
+def _pick_unique_membership_number():
+    """Return a random membership number that does not collide with any existing row.
+
+    Retries up to 20 times; with a 9B-key space and realistic deployments the
+    expected number of retries is effectively zero, so this is more than enough.
+    Raises RuntimeError if 20 attempts all collide (should be impossible in practice).
+    """
+    # Local import: ClubMember is defined later in this module.
+    from django.apps import apps
+
+    ClubMemberCls = apps.get_model("auctions", "ClubMember")
+    for _ in range(20):
+        candidate = _default_membership_number()
+        if not ClubMemberCls.objects.filter(membership_number=candidate).exists():
+            return candidate
+    msg = "Could not generate a unique membership number after 20 attempts."
+    raise RuntimeError(msg)
+
+
 class BlogPost(models.Model):
     """
     A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
@@ -586,7 +623,13 @@ class Club(models.Model):
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
-    contact_email = models.CharField(max_length=255, blank=True, null=True)
+    contact_email = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Membership email address",
+        help_text="Replies to membership inquiries will be sent to this email",
+    )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
     notes = models.CharField(max_length=300, blank=True, null=True)
@@ -604,6 +647,33 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    MEMBERSHIP_NUMBER_MODE_CHOICES = (
+        ("disabled", "No member numbers"),
+        ("paid_only", "Paid members only"),
+        ("all_members", "All members"),
+    )
+    membership_number_mode = models.CharField(
+        max_length=20,
+        choices=MEMBERSHIP_NUMBER_MODE_CHOICES,
+        default="all_members",
+        verbose_name="Member number",
+        help_text=(
+            "10 digit automatically generated number that can be scanned with a "
+            "barcode reader, QR code, and added to Google Wallet."
+        ),
+    )
+    payment_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_payment_destinations",
+        help_text="Club dues are sent to this user's connected payment account.",
+    )
+    send_membership_expiration_reminders = models.BooleanField(
+        default=False,
+        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
+    )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
         max_length=100,
@@ -613,17 +683,32 @@ class Club(models.Model):
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
+    icon = ThumbnailerImageField(
+        upload_to="club_icons/",
+        blank=True,
+        null=True,
+        help_text="Square logo shown beside the club name and on Google/Apple Wallet membership cards.",
+    )
+    google_wallet_class_created = models.BooleanField(
+        default=False,
+        help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",
+    )
     allow_joining = models.BooleanField(default=False)
     allow_integrated_payments = models.BooleanField(default=False)
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
         default=False,
         verbose_name="Enable public club page",
-        help_text="When enabled, this club will appear on the club map and have a public detail page.",
+        help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
     )
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
+    )
+    enable_membership = models.BooleanField(
+        default=False,
+        verbose_name="Enable membership",
+        help_text="Enable membership tracking, dues collection, and expiration reminders.",
     )
     days_between_same_name_lots = models.IntegerField(
         default=0,
@@ -696,6 +781,10 @@ class ClubDiscordRole(models.Model):
     is_paid_role = models.BooleanField(
         default=False, help_text="Assign this role to members with a current paid membership"
     )
+    bot_can_manage = models.BooleanField(
+        default=True,
+        help_text="False when this role is at or above the bot's own role in the Discord hierarchy; the bot cannot assign or remove roles at its own level or higher",
+    )
     createdon = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -737,8 +826,7 @@ class ClubMember(ContactRecord):
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="club_memberships")
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="members")
-    first_name = models.CharField(max_length=100, blank=True)
-    last_name = models.CharField(max_length=100, blank=True)
+    name = models.CharField(max_length=200, blank=True)
     discord_id = models.CharField(max_length=100, blank=True, null=True)
     discord_username = models.CharField(
         max_length=100, blank=True, null=True, help_text="Discord username (e.g. cooluser)"
@@ -757,6 +845,14 @@ class ClubMember(ContactRecord):
         verbose_name="Discord role (manual override)",
         help_text="Only used when automatic role management is disabled.",
     )
+    last_discord_role_assigned = models.ForeignKey(
+        "ClubDiscordRole",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Last role auto-assigned via the Discord API; used to detect when the role needs to change.",
+    )
     bap_points = models.PositiveIntegerField(default=0)
     hap_points = models.PositiveIntegerField(default=0)
     culture_points = models.PositiveIntegerField(default=0, help_text="Culture Award Program points.")
@@ -764,6 +860,14 @@ class ClubMember(ContactRecord):
     hap_points_ytd = models.PositiveIntegerField(default=0, help_text="HAP points earned this calendar year.")
     culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
+    membership_expiration_date = models.DateField(null=True, blank=True)
+    membership_number = models.BigIntegerField(
+        default=_default_membership_number,
+        unique=True,
+        help_text="Unique membership number assigned to this member.",
+    )
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
     added_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_club_members"
@@ -777,11 +881,18 @@ class ClubMember(ContactRecord):
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     source = models.CharField(max_length=200, default="manually_added")
-    permission_admin = models.BooleanField(default=False, help_text="Full admin access — grants all other permissions.")
-    permission_view = models.BooleanField(default=False, help_text="View the member list.")
-    permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
+    permission_admin = models.BooleanField(
+        default=False, help_text="Full admin access — grants all other permissions.  Use only if absolutely necessary."
+    )
+    permission_view = models.BooleanField(
+        default=False, help_text="View the member list.  Other permissions implicitly grant this."
+    )
+    permission_export = models.BooleanField(default=False, help_text="Import and export member data as CSV.")
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
-    permission_edit_club = models.BooleanField(default=False, help_text="Edit club settings.")
+    permission_edit_club = models.BooleanField(
+        default=False,
+        help_text="Change club setup, Discord, API keys, payment settings, and membership settings.  Nearly as dangerous as admin.",
+    )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
     possible_duplicate = models.ForeignKey(
@@ -790,7 +901,7 @@ class ClubMember(ContactRecord):
         null=True,
         blank=True,
         related_name="duplicate_of",
-        help_text="Another club member with the same last name; may be a duplicate",
+        help_text="Another club member with the same name; may be a duplicate",
     )
 
     @property
@@ -808,12 +919,45 @@ class ClubMember(ContactRecord):
         )
 
     def __str__(self):
-        name = f"{self.first_name} {self.last_name}".strip()
-        if name:
-            return name
+        if self.name:
+            return self.name
         if self.email:
             return self.email
         return f"Member #{self.pk}"
+
+    @property
+    def membership_number_visible(self) -> bool:
+        """True when this member's number/QR/barcode should be shown / wallet-saveable.
+
+        Honors the club's `membership_number_mode`:
+          - disabled    → never
+          - paid_only   → only when is_paid_member
+          - all_members → always
+        """
+        mode = self.club.membership_number_mode
+        if mode == "disabled":
+            return False
+        if mode == "paid_only":
+            return self.is_paid_member
+        return True
+
+    @property
+    def is_paid_member(self) -> bool:
+        """True when the member's dues are current.
+
+        Uses membership_expiration_date when present, else falls back to
+        membership_last_paid interpreted under the club's membership_system.
+        Single source of truth — every UI gate / wallet check should call this
+        instead of re-deriving the logic.
+        """
+        today = timezone.now().date()
+        if self.membership_expiration_date:
+            return self.membership_expiration_date >= today
+        if self.membership_last_paid:
+            if self.club.membership_system == "january_first":
+                return self.membership_last_paid >= datetime.date(today.year, 1, 1)
+            return self.membership_last_paid >= today - datetime.timedelta(days=365)
+        return False
 
     @property
     def discord_role(self):
@@ -840,14 +984,17 @@ class ClubMember(ContactRecord):
             return None
 
         # Determine membership status
-        membership_valid = False
-        if self.membership_last_paid:
+        today = timezone.now().date()
+        if self.membership_expiration_date:
+            membership_valid = self.membership_expiration_date >= today
+        elif self.membership_last_paid:
             club = self.club
-            today = timezone.now().date()
             if club.membership_system == "january_first":
                 membership_valid = self.membership_last_paid >= datetime.date(today.year, 1, 1)
-            else:  # rolling
+            else:
                 membership_valid = self.membership_last_paid >= today - datetime.timedelta(days=365)
+        else:
+            membership_valid = False
 
         if not membership_valid:
             unpaid_role = next((r for r in roles_qs if r.is_unpaid_role), None)
@@ -878,34 +1025,149 @@ class ClubMember(ContactRecord):
         return None
 
     def maybe_assign_discord_role(self):
-        """Compute the correct Discord role and assign it via the API if auto-managed and credentials are set."""
+        """Compute the correct Discord role, remove any stale club roles, then assign the new one.
+
+        Ensures a member holds at most one auto-managed Discord role at a time.
+        Updates last_discord_role_assigned after a successful reassignment.
+        """
         import requests as _requests
         from django.conf import settings as _settings
 
-        role = self.discord_role
-        if not role or not self.discord_id or not self.club.discord_server_id:
+        if not self.discord_id or not self.club.discord_server_id:
             return
         bot_token = getattr(_settings, "DISCORD_BOT_TOKEN", "")
         if not bot_token:
             return
-        url = (
-            f"https://discord.com/api/v10/guilds/{self.club.discord_server_id}"
-            f"/members/{self.discord_id}/roles/{role.role_id}"
-        )
-        try:
-            _requests.put(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
-        except Exception:
-            pass
+
+        role = self.discord_role
+        guild_id = self.club.discord_server_id
+        user_id = self.discord_id
+        headers = {"Authorization": f"Bot {bot_token}"}
+        base_url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles"
+
+        role_sync_succeeded = True
+
+        # Remove all club-managed roles that are not the target (skip unmanageable ones)
+        for club_role in self.club.discord_roles.all():
+            if not club_role.bot_can_manage:
+                continue
+            if role is None or club_role.pk != role.pk:
+                try:
+                    response = _requests.delete(f"{base_url}/{club_role.role_id}", headers=headers, timeout=10)
+                    if response.status_code not in [200, 204, 404]:
+                        role_sync_succeeded = False
+                except Exception:
+                    role_sync_succeeded = False
+
+        # Assign the target role (if any); bail if the bot can't manage it
+        if role:
+            if not role.bot_can_manage:
+                return
+            try:
+                response = _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
+                if response.status_code not in [200, 201, 204]:
+                    role_sync_succeeded = False
+            except Exception:
+                role_sync_succeeded = False
+
+        # Track what was last assigned so the daily task can skip unchanged members
+        if role_sync_succeeded:
+            ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
 
     @property
     def display_name(self):
         """Name for display — always non-empty."""
         return str(self)
 
+    @property
+    def member_page_url(self):
+        """Relative URL for this member's club detail page with their UUID pre-filled."""
+        from django.urls import reverse
+
+        return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"?user={self.uuid}"
+
+    def calculate_membership_expiration_reminder_due(self):
+        if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
+            return None
+        expiration_date = self.membership_expiration_date
+        if not expiration_date and self.membership_last_paid:
+            paid = self.membership_last_paid
+            if self.club.membership_system == "january_first":
+                expiration_date = datetime.date(paid.year + 1, 1, 1)
+            else:
+                expiration_date = paid + datetime.timedelta(days=365)
+        if not expiration_date:
+            return None
+        reminder_date = expiration_date - datetime.timedelta(days=1)
+        return timezone.make_aware(datetime.datetime.combine(reminder_date, datetime.time(hour=12)))
+
     class Meta:
-        ordering = ["last_name", "first_name"]
+        ordering = ["name"]
 
     def save(self, *args, **kwargs):
+        # Belt-and-suspenders uniqueness for membership_number: the DB has a unique
+        # constraint, but on the off chance the random default collides with an
+        # existing row, repick before the INSERT happens so callers don't have to
+        # catch IntegrityError. This is cheap (one indexed lookup) and only runs
+        # when the value isn't already known to be unique.
+        if self.membership_number and not self.pk:
+            if ClubMember.objects.filter(membership_number=self.membership_number).exists():
+                self.membership_number = _pick_unique_membership_number()
+        previous_membership_last_paid = None
+        previous_expiration_date = None
+        previous_email = None
+        previous_reminder_due = None
+        if self.pk:
+            prev = (
+                ClubMember.objects.filter(pk=self.pk)
+                .values(
+                    "membership_last_paid", "membership_expiration_date", "email", "membership_expiration_reminder_due"
+                )
+                .first()
+            )
+            if prev:
+                previous_membership_last_paid = prev["membership_last_paid"]
+                previous_expiration_date = prev["membership_expiration_date"]
+                previous_email = prev["email"]
+                previous_reminder_due = prev["membership_expiration_reminder_due"]
+        expiration_changed = (
+            self.membership_last_paid != previous_membership_last_paid
+            or self.membership_expiration_date != previous_expiration_date
+        )
+        if expiration_changed:
+            new_reminder = self.calculate_membership_expiration_reminder_due()
+            if new_reminder is not None:
+                # If the recalculated reminder would fire sooner than the previous one
+                # (or the previous reminder was already sent/cleared), enforce a 30-day
+                # minimum from now so the email cannot be triggered again immediately.
+                if previous_reminder_due is None or new_reminder < previous_reminder_due:
+                    min_reminder = timezone.now() + datetime.timedelta(days=30)
+                    if new_reminder < min_reminder:
+                        new_reminder = min_reminder
+            self.membership_expiration_reminder_due = new_reminder
+        # Inherit email_address_status from another known record, same as AuctionTOS pattern
+        if self.email and self.email != previous_email:
+            self.email_address_status = "UNKNOWN"
+        if self.email and self.email_address_status == "UNKNOWN":
+            existing = (
+                ClubMember.objects.exclude(pk=self.pk or 0)
+                .exclude(email_address_status="UNKNOWN")
+                .filter(email=self.email, is_deleted=False)
+                .order_by("-createdon")
+                .first()
+            )
+            if existing:
+                self.email_address_status = existing.email_address_status
+            else:
+                # Also check AuctionTOS records from auctions belonging to this club
+                existing_tos = (
+                    AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
+                    .filter(email=self.email, auction__club=self.club)
+                    .order_by("-createdon")
+                    .first()
+                )
+                if existing_tos:
+                    self.email_address_status = existing_tos.email_address_status
         if self.is_deleted:
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
@@ -916,9 +1178,9 @@ class ClubMember(ContactRecord):
             super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)
-        if self.last_name:
+        if self.name:
             duplicate = (
-                ClubMember.objects.filter(club=self.club, last_name=self.last_name, is_deleted=False)
+                ClubMember.objects.filter(club=self.club, name__iexact=self.name, is_deleted=False)
                 .exclude(pk=self.pk)
                 .first()
             )
@@ -1109,6 +1371,14 @@ class Auction(models.Model):
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
+    add_people_from_auction_to_club = models.BooleanField(
+        default=False,
+        help_text="Add auction participants to the associated club.",
+    )
+    add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
+        default=False,
+        help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
+    )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
@@ -1151,7 +1421,9 @@ class Auction(models.Model):
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
     bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
     use_categories = models.BooleanField(default=True, verbose_name="Use category field")
-    use_categories.help_text = "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc.  This option is required if you want to promote your auction on the main auctions list."
+    use_categories.help_text = (
+        "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc."
+    )
     is_deleted = models.BooleanField(default=False)
     ONLINE_BIDDING_OPTIONS = (
         ("allow", "Allow buy now and bidding"),
@@ -4305,19 +4577,25 @@ class Lot(models.Model):
         message = (
             f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         )
-        LotHistory.objects.create(
-            lot=self,
-            user=user,
-            message=message,
-            notification_sent=True,
-            bid_amount=winning_price,
-            changed_price=True,
-            seen=True,
-        )
-        invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
-        if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-        invoice.recalculate()
+        try:
+            LotHistory.objects.create(
+                lot=self,
+                user=user,
+                message=message,
+                notification_sent=True,
+                bid_amount=winning_price,
+                changed_price=True,
+                seen=True,
+            )
+        except Exception:
+            logger.exception("Failed to create winner LotHistory for lot %s", self.pk)
+        try:
+            invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+            invoice.recalculate()
+        except Exception:
+            logger.exception("Failed to recalculate invoice after winner set on lot %s", self.pk)
         self.send_websocket_message(
             {
                 "type": "chat_message",
@@ -4330,9 +4608,14 @@ class Lot(models.Model):
         )
 
     def send_websocket_message(self, message):
-        channel_layer = channels.layers.get_channel_layer()
-        serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
-        async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
+        try:
+            channel_layer = channels.layers.get_channel_layer()
+            serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
+            async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
+        except Exception:
+            # Channel layer failures must never prevent a winner from being declared
+            # or a lot from being marked sold.
+            logger.exception("Failed to send websocket message for lot %s", self.pk)
 
     def send_ending_very_soon_message(self):
         """Send a websocket message when the lot is ending in less than a minute"""
@@ -4380,13 +4663,17 @@ class Lot(models.Model):
 
         if info:
             self.send_websocket_message(result)
-            LotHistory.objects.create(
-                lot=self,
-                user=bidder,
-                message=message,
-                changed_price=True,
-                current_price=self.high_bid,
-            )
+            try:
+                LotHistory.objects.create(
+                    lot=self,
+                    user=bidder,
+                    message=message,
+                    changed_price=True,
+                    current_price=self.high_bid,
+                )
+            except Exception:
+                # LotHistory is for the activity feed; never block the lot from ending.
+                logger.exception("Failed to create lot end LotHistory for lot %s", self.pk)
         self.save()
 
     def send_non_auction_lot_emails(self):
@@ -4909,12 +5196,15 @@ class Lot(models.Model):
             return "not_club_member"
         if club.only_active_members_can_participate:
             today = timezone.now().date()
-            if not member.membership_last_paid:
-                return "not_active_member"
-            if club.membership_system == "january_first":
-                valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+            if member.membership_expiration_date:
+                valid = member.membership_expiration_date >= today
+            elif member.membership_last_paid:
+                if club.membership_system == "january_first":
+                    valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+                else:
+                    valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
             else:
-                valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
+                valid = False
             if not valid:
                 return "not_active_member"
         if club.days_between_same_name_lots > 0:
@@ -4942,23 +5232,55 @@ class Lot(models.Model):
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):
-        """Set bap_points_awarded and bap_auto_reason based on club rules. Call after auction ends."""
-        if self.auction and self.auction.club and not self.bap_points_awarded and not self.manually_approved:
-            reason = self.sold_lot_no_bap_reason
-            if reason:
-                self.bap_auto_reason = reason
-                self.bap_points_awarded = 0
-                self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
-                return
-            club = self.auction.club
-            if club.auto_add_points:
-                if club.points_per_lot > 0:
-                    points = club.points_per_lot
-                else:
-                    points = self.species_category.bap_points if self.species_category else 5
-                self.bap_points_awarded = points
-            self.bap_auto_reason = ""
-            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+        """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
+
+        Safe to call unconditionally on set_winner — skips silently if no club, or if an award already exists.
+        """
+        if not (self.auction and self.auction.club):
+            return
+        # Skip if a BapAward already exists for this lot (auto or manual)
+        if BapAward.objects.filter(lot=self).exists():
+            return
+        club = self.auction.club
+        # Always compute and persist the eligibility reason so the pending table can display it without
+        # falling back to live queries.  Empty string = eligible (no blocking reason).
+        reason = self.sold_lot_no_bap_reason
+        self.bap_auto_reason = reason or ""
+        self.bap_points_awarded = 0
+        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+        if reason:
+            # Ineligible — reason stored above; nothing more to do
+            return
+        if not club.auto_add_points:
+            # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
+            return
+        # Eligible + auto_add_points: create the BapAward now
+        if club.points_per_lot > 0:
+            points = club.points_per_lot
+        else:
+            points = self.species_category.bap_points if self.species_category else 5
+        seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
+        if not seller_user:
+            return
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member:
+            return
+        award_date = self.date_end.date() if self.date_end else timezone.now().date()
+        placeholder = self.bap_placeholder
+        bap_pts = points if placeholder == "BAP" else 0
+        hap_pts = points if placeholder == "HAP" else 0
+        cap_pts = points if placeholder == "Culture" else 0
+        BapAward.objects.create(
+            club_member=member,
+            date=award_date,
+            points=bap_pts,
+            hap_points=hap_pts,
+            cap_points=cap_pts,
+            lot=self,
+            awarded_by=None,  # None = auto-awarded by the system
+        )
+        self.bap_points_awarded = points
+        self.save(update_fields=["bap_points_awarded"])
 
     @property
     def pre_registered(self):
@@ -5576,11 +5898,11 @@ class Lot(models.Model):
     def create_update_invoices(self):
         """Call whenever ending this lot, or when creating it"""
         if self.auction and self.winner and not self.auctiontos_winner:
-            tos = (
-                AuctionTOS.objects.filter(Q(user=self.winner) | Q(email=self.winner.email), auction=self.auction)
-                .order_by("-createdon")
-                .first()
-            )
+            winner_email = (self.winner.email or "").strip()
+            tos_filter = Q(user=self.winner)
+            if winner_email:
+                tos_filter |= Q(email__iexact=winner_email)
+            tos = AuctionTOS.objects.filter(tos_filter, auction=self.auction).order_by("-createdon").first()
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
@@ -5657,13 +5979,104 @@ class Lot(models.Model):
     #     return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
 
 
+class BapAward(models.Model):
+    """A record of BAP/HAP/CAP points awarded to a club member for a lot."""
+
+    club_member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="bap_awards")
+    date = models.DateField()
+    points = models.IntegerField(default=0, help_text="BAP points awarded.")
+    hap_points = models.IntegerField(default=0, help_text="HAP points awarded.")
+    cap_points = models.IntegerField(default=0, help_text="CAP (culture) points awarded.")
+    lot = models.OneToOneField(
+        Lot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bap_award",
+    )
+    awarded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bap_awards_given",
+        help_text="The user who manually awarded these points. Null if auto-awarded.",
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self):
+        parts = []
+        if self.points:
+            parts.append(f"{self.points} BAP")
+        if self.hap_points:
+            parts.append(f"{self.hap_points} HAP")
+        if self.cap_points:
+            parts.append(f"{self.cap_points} CAP")
+        label = "/".join(parts) if parts else "0"
+        result = f"{label} points"
+        if self.lot_id:
+            result += f" for {self.lot}"
+        if self.notes:
+            result += f" ({self.notes})"
+        return result
+
+    @staticmethod
+    def recalculate_member_points(member):
+        """Recalculate and persist all-time and YTD BAP/HAP/CAP totals for a club member."""
+        from django.utils import timezone
+
+        this_year = timezone.now().year
+        awards = BapAward.objects.filter(club_member=member).exclude(lot__is_deleted=True).exclude(lot__banned=True)
+        bap = hap = cap = bap_ytd = hap_ytd = cap_ytd = 0
+        for a in awards:
+            is_ytd = a.date.year == this_year
+            bap += a.points
+            hap += a.hap_points
+            cap += a.cap_points
+            if is_ytd:
+                bap_ytd += a.points
+                hap_ytd += a.hap_points
+                cap_ytd += a.cap_points
+        ClubMember.objects.filter(pk=member.pk).update(
+            bap_points=bap,
+            hap_points=hap,
+            culture_points=cap,
+            bap_points_ytd=bap_ytd,
+            hap_points_ytd=hap_ytd,
+            culture_points_ytd=cap_ytd,
+        )
+        member.refresh_from_db()
+        member.maybe_assign_discord_role()
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        BapAward.recalculate_member_points(self.club_member)
+
+    def delete(self, *args, **kwargs):
+        member = self.club_member
+        result = super().delete(*args, **kwargs)
+        BapAward.recalculate_member_points(member)
+        return result
+
+
 class Invoice(models.Model):
     """
     The total amount you get paid or owe to the club for an auction
     """
 
     auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-    auctiontos_user = models.ForeignKey(AuctionTOS, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
+    auctiontos_user = models.ForeignKey(
+        AuctionTOS, blank=True, null=True, on_delete=models.CASCADE, related_name="auctiontos"
+    )
+    club = models.ForeignKey(
+        "Club", blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
+    )
+    buyer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
+    )
     date = models.DateTimeField(auto_now_add=True, blank=True)
     status = models.CharField(
         max_length=20,
@@ -5691,12 +6104,16 @@ class Invoice(models.Model):
     calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
+    renewal_needed = models.BooleanField(default=False)
+    renewal_processed = models.BooleanField(default=False)
 
     @property
     def currency(self):
-        """Get the currency for this invoice based on the auction creator"""
+        """Get the currency for this invoice based on the auction creator or club payment user"""
         if self.auction and self.auction.created_by:
             return self.auction.created_by.userdata.currency
+        if self.club and self.club.payment_user:
+            return self.club.payment_user.userdata.currency
         return "USD"
 
     @property
@@ -5720,8 +6137,9 @@ class Invoice(models.Model):
             return False
         if self.net_after_payments >= 0:
             return False
+        if self.club:
+            return self.show_paypal_button or self.show_square_button
         if not self.auction:
-            # change this if we ever allow direct person to person payments
             return False
 
         # Check if auction allows any payment method
@@ -5754,22 +6172,36 @@ class Invoice(models.Model):
         """True if we can show specifically the PayPal button"""
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
             return False
-        if self.auction and not self.auction.enable_online_payments:
-            return False
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
-            return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
+        if self.club:
+            if not self.club.payment_user:
+                return False
+            payment_user = self.club.payment_user
+            if not payment_user.userdata.is_trusted:
+                return False
+            from auctions.models import PayPalSeller
+
+            has_paypal = (
+                payment_user.is_superuser
+                or PayPalSeller.objects.filter(user=payment_user, paypal_merchant_id__isnull=False)
+                .exclude(paypal_merchant_id="")
+                .exists()
+            )
+            return has_paypal
+        if not self.auction:
+            return False
+        if not self.auction.enable_online_payments:
+            return False
+        if not self.auction.created_by.userdata.is_trusted:
+            return False
         if (
-            self.auction
-            and not self.auction.created_by.is_superuser
+            not self.auction.created_by.is_superuser
             and not self.auction.created_by.userdata.paypal_enabled
             and not self.auction.paypal_information
         ):
-            return False
-        if not self.auction:
             return False
         return True
 
@@ -5777,23 +6209,31 @@ class Invoice(models.Model):
     def show_square_button(self):
         """True if we can show specifically the Square button
         Square requires OAuth - seller must have linked their account"""
-        # Check OAuth is configured
         if not (getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)):
-            return False
-        if self.auction and not self.auction.enable_square_payments:
-            return False
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
             return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
-        # Square requires OAuth - check if seller has linked their account
-        if self.auction and not self.auction.created_by.userdata.square_enabled:
-            return False
-        if self.auction and not self.auction.square_information:
-            return False
+        if self.club:
+            if not self.club.payment_user:
+                return False
+            payment_user = self.club.payment_user
+            if not payment_user.userdata.is_trusted:
+                return False
+            from auctions.models import SquareSeller
+
+            seller = SquareSeller.objects.filter(user=payment_user).first()
+            return bool(seller and seller.square_merchant_id)
         if not self.auction:
+            return False
+        if not self.auction.enable_square_payments:
+            return False
+        if not self.auction.created_by.userdata.is_trusted:
+            return False
+        if not self.auction.created_by.userdata.square_enabled:
+            return False
+        if not self.auction.square_information:
             return False
         return True
         if self.auction and not self.auction.created_by.userdata.is_trusted:
@@ -5818,7 +6258,8 @@ class Invoice(models.Model):
         """Always use this after invoice.show_payment_button
         This assumes that the button will show up, but be grayed out
          We will return a string reason to the user"""
-
+        if not self.auction:
+            return None
         if self.auction.is_online and not self.auction.closed and self.status == "DRAFT":
             timedelta = self.dynamic_end - timezone.now()
             seconds = timedelta.total_seconds()
@@ -5863,6 +6304,42 @@ class Invoice(models.Model):
     def changed_adjustments(self):
         return self.adjustments.exclude(amount=0)
 
+    @property
+    def membership_fee_amount(self):
+        club = self.club or (self.auction.club if self.auction else None)
+        if not (club and self.renewal_needed and club.membership_annual_fee):
+            return Decimal("0.00")
+        return Decimal(club.membership_annual_fee)
+
+    @property
+    def membership_status_for_invoice(self):
+        if not self.auction or not self.auction.club:
+            return "No club"
+        if not self.auctiontos_user:
+            return "No bidder"
+        user = self.auctiontos_user.user
+        email = (self.auctiontos_user.email or "").strip()
+        if not user and not email:
+            return "No linked user or email"
+        member = None
+        if user:
+            member = ClubMember.objects.filter(club=self.auction.club, user=user, is_deleted=False).first()
+        if not member and email:
+            member = ClubMember.objects.filter(club=self.auction.club, email__iexact=email, is_deleted=False).first()
+        if not member:
+            return "Not a member"
+        if not member.membership_last_paid:
+            return "Never paid"
+        expiration_date = member.membership_expiration_date
+        if not expiration_date:
+            return "Unknown"
+        days_until_expiration = (expiration_date - timezone.now().date()).days
+        if days_until_expiration < 0:
+            return f"Expired {abs(days_until_expiration)} day(s) ago"
+        if days_until_expiration <= 14:
+            return f"Expires in {days_until_expiration} day(s)"
+        return "Active"
+
     def recalculate(self):
         """Store the current net in the calculated_total field.
 
@@ -5906,7 +6383,7 @@ class Invoice(models.Model):
             )
         )
         total_final = totals["total_final"] or Decimal(0.00)
-        rate = Decimal(self.auction.tax or 0) / Decimal(100)
+        rate = Decimal(self.auction.tax or 0 if self.auction else 0) / Decimal(100)
         tax_amount = total_final * rate
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -5923,6 +6400,7 @@ class Invoice(models.Model):
         subtotal += Decimal(self.first_bid_payout)
         subtotal += Decimal(self.flat_value_adjustments)
         subtotal += Decimal(subtotal * self.percent_value_adjustments / 100)
+        subtotal -= Decimal(self.membership_fee_amount)
         subtotal -= Decimal(self.tax)
         if not subtotal:
             subtotal = 0
@@ -5944,7 +6422,7 @@ class Invoice(models.Model):
     @property
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
-        if not self.auction.invoice_rounding:
+        if not self.auction or not self.auction.invoice_rounding:
             return self.net
         rounded = round(self.net)
         if self.user_should_be_paid:
@@ -6105,14 +6583,20 @@ class Invoice(models.Model):
     @property
     def location(self):
         """Pickup location selected by the user"""
-        return self.auctiontos_user.pickup_location
+        if self.auctiontos_user:
+            return self.auctiontos_user.pickup_location
+        return None
 
     @property
     def contact_email(self):
         if self.location:
             if self.location.pickup_location_contact_email:
                 return self.location.pickup_location_contact_email
-        return self.auction.created_by.email
+        if self.auction:
+            return self.auction.created_by.email
+        if self.club and self.club.payment_user:
+            return self.club.payment_user.email
+        return None
 
     @property
     def has_refunds(self):
@@ -6185,14 +6669,22 @@ class Invoice(models.Model):
 
     @property
     def invoice_summary(self):
-        return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
+        if self.auctiontos_user:
+            return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
+        if self.buyer:
+            return f"{self.buyer.get_full_name() or self.buyer.username} {self.invoice_summary_short}"
+        return self.invoice_summary_short
 
     @property
     def label(self):
         return self.auction
 
     def __str__(self):
-        return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
+        if self.auctiontos_user:
+            return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
+        if self.club and self.buyer:
+            return f"{self.buyer.get_full_name() or self.buyer.username}'s membership invoice for {self.club.name}"
+        return f"Invoice #{self.pk}"
 
     def get_absolute_url(self):
         return reverse("invoice_by_pk", kwargs={"pk": self.pk})
@@ -6226,11 +6718,14 @@ class Invoice(models.Model):
         return Decimal(total)
 
     def save(self, *args, **kwargs):
-        if not self.auction:
+        if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
         # Ensure there is only one invoice per AuctionTOS.
         # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
+        # Club-only invoices (no auctiontos_user) skip this deduplication.
+        if not self.auctiontos_user:
+            return
         oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
         if oldest and oldest.pk != self.pk:
             # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
@@ -6310,8 +6805,16 @@ class InvoicePayment(models.Model):
         ("FAILED", "Failed"),
         ("REFUNDED", "Refunded"),
     )
+    PAYMENT_TARGET_CHOICES = (
+        ("INVOICE", "Invoice"),
+        ("CLUB_MEMBER", "Club member"),
+    )
 
-    invoice = models.ForeignKey("Invoice", related_name="payments", on_delete=models.CASCADE)
+    invoice = models.ForeignKey("Invoice", related_name="payments", on_delete=models.CASCADE, null=True, blank=True)
+    club_member = models.ForeignKey(
+        "ClubMember", related_name="payments", on_delete=models.CASCADE, null=True, blank=True
+    )
+    payment_target = models.CharField(max_length=20, choices=PAYMENT_TARGET_CHOICES, default="INVOICE")
     amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     amount_available_to_refund = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     currency = models.CharField(max_length=10, default="USD")
@@ -7269,10 +7772,18 @@ class SquareSeller(models.Model):
         try:
             from django.urls import reverse
 
-            payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+            if invoice.club:
+                payment_note = f"Club membership fee for {invoice.club.name}"[:500]
+            elif invoice.auctiontos_user and invoice.auction:
+                payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+            else:
+                payment_note = "Membership fee"[:500]
 
             # Get and validate buyer email
-            buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
+            if invoice.club and invoice.buyer:
+                buyer_email = invoice.buyer.email
+            else:
+                buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
 
             # Validate email domain - Square blocks certain domains like example.com
             if buyer_email:
@@ -7313,12 +7824,16 @@ class SquareSeller(models.Model):
                         "address_line_1": invoice.auctiontos_user.address[:500],
                     }
 
+            if invoice.club:
+                redirect_url = request.build_absolute_uri(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
+            else:
+                redirect_url = request.build_absolute_uri(
+                    reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
+                )
             link_resp = client.checkout.payment_links.create(
                 idempotency_key=str(uuid_module.uuid4()),
                 checkout_options={
-                    "redirect_url": request.build_absolute_uri(
-                        reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
-                    ),
+                    "redirect_url": redirect_url,
                     "ask_for_shipping_address": ask_for_shipping_address,
                 },
                 pre_populated_data=pre_populated_data or {},

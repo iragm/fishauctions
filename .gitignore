@@ -1,5 +1,11 @@
 *.pyc
 .env
+# Service account keys (e.g. Google Wallet) and signing certs (e.g. Apple Wallet)
+# sit alongside .env at repo root. Root-only patterns so committed files in subdirs
+# (fixtures, devcontainer, vscode, swag/) are unaffected.
+/*.json
+/*.p12
+/*.pem
 db.sqlite3
 auctions/static/rest_framework/
 set_env.sh

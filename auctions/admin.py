@@ -15,12 +15,12 @@ from .models import (
     AuctionCampaign,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Bid,
     BlogPost,
     Category,
     Club,
     ClubAPIKey,
-    ClubAPIKeyFieldMap,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -333,6 +333,14 @@ class ClubDiscordRoleInline(admin.TabularInline):
     readonly_fields = ("createdon",)
 
 
+class ClubAPIKeyInline(admin.TabularInline):
+    model = ClubAPIKey
+    extra = 0
+    fields = ("name", "prefix", "is_active", "created_at", "last_used_at")
+    readonly_fields = ("prefix", "created_at", "last_used_at")
+    show_change_link = False
+
+
 class ClubAdmin(admin.ModelAdmin):
     model = Club
     list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
@@ -354,6 +362,7 @@ class ClubAdmin(admin.ModelAdmin):
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
+        ClubAPIKeyInline,
     ]
     actions = [export_to_csv]
 
@@ -629,7 +638,7 @@ class InvoiceAdmin(admin.ModelAdmin):
         "auction",
         "status",
     )
-    search_fields = ("auctiontos_user__name",)
+    search_fields = ("auctiontos_user__name", "buyer__first_name", "buyer__last_name", "club__name")
     readonly_fields = ()  # overridden by get_readonly_fields
     inlines = [
         SoldLotInline,
@@ -757,6 +766,15 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
         return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
 
 
+@admin.register(BapAward)
+class BapAwardAdmin(admin.ModelAdmin):
+    list_display = ("club_member", "date", "points", "hap_points", "cap_points", "lot", "awarded_by")
+    list_filter = ("date",)
+    search_fields = ("club_member__name", "club_member__email", "notes")
+    ordering = ("-date",)
+    raw_id_fields = ("club_member", "lot", "awarded_by")
+
+
 admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
@@ -785,25 +803,17 @@ admin.site.register(AuctionHistory, AuctionHistoryAdmin)
 class ClubMemberAdmin(admin.ModelAdmin):
     model = ClubMember
     list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
-    search_fields = ("first_name", "last_name", "email", "user__email", "user__username")
+    search_fields = ("name", "email", "user__email", "user__username")
     list_filter = ("club", "source", "is_deleted")
-    actions = [export_to_csv]
-
-
-class ClubDiscordRoleAdmin(admin.ModelAdmin):
-    model = ClubDiscordRole
-    list_display = (
-        "role_name",
-        "role_id",
-        "is_paid_role",
-        "is_unpaid_role",
-        "bap_points_for_role",
-        "hap_points_for_role",
+    readonly_fields = (
+        "user",
         "club",
-        "createdon",
+        "discord_roles",
+        "added_by",
+        "possible_duplicate",
+        "membership_expiration_date",
     )
-    list_filter = ("is_paid_role", "is_unpaid_role", "club")
-    search_fields = ("role_name", "role_id", "club__name")
+    actions = [export_to_csv]
 
 
 class ClubHistoryAdmin(admin.ModelAdmin):
@@ -815,19 +825,4 @@ class ClubHistoryAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ClubMember, ClubMemberAdmin)
-
-admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
-
-
-class ClubAPIKeyFieldMapInline(admin.TabularInline):
-    model = ClubAPIKeyFieldMap
-    extra = 0
-
-
-@admin.register(ClubAPIKey)
-class ClubAPIKeyAdmin(admin.ModelAdmin):
-    list_display = ["name", "club", "prefix", "is_active", "created_at", "last_used_at"]
-    list_filter = ["is_active", "club"]
-    readonly_fields = ["prefix", "key_hash", "created_at", "last_used_at"]
-    inlines = [ClubAPIKeyFieldMapInline]

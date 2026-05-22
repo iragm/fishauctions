@@ -246,6 +246,65 @@ For PayPal payments, similar OAuth configuration is needed (see .env.example for
 If you have existing users, enable Square payments for them by running `docker exec -it django python3 manage.py  change_square on`.  `SQUARE_ENABLED_FOR_USERS` will determine if any newly created users will be able to link their account.
 
 
+#### Google Wallet membership cards (optional)
+
+Adds an *Add to Google Wallet* button on each club member's self-service page so members can save their membership card (with QR code and barcode) to their phone. The button is only shown when the member is signed in and their account matches the membership — UUID renewal links cannot trigger the wallet save (you should never add someone else's card to your own wallet).
+
+**One-time server-wide setup** (done by the site admin):
+
+1. Create a Google Cloud project at [console.cloud.google.com](https://console.cloud.google.com).
+2. Enable the **Google Wallet API** for that project (APIs & Services → Library).
+3. Apply for a Google Wallet issuer account at [pay.google.com/business/console](https://pay.google.com/business/console) (Google Wallet API → Get started). After approval Google will give you a numeric **Issuer ID** — this is your `GOOGLE_WALLET_ISSUER_ID`.
+4. In the Wallet console, link the Google Cloud service account you'll use for signing:
+   - In the Cloud console, IAM & Admin → Service Accounts → **Create service account**.
+   - Skip optional roles; create the account, then open it and go to the **Keys** tab → **Add key** → **Create new key** → **JSON**. Download the key file and keep it private.
+   - Back in the Wallet console, **Users** → invite the service account email with the *Developer* role.
+5. Drop the JSON keyfile you downloaded in step 4 into the **same directory as your `.env` file** (the project root). Pick a filename you'll recognize — e.g. `google-wallet-key.json`. JSON files at the repo root are gitignored, so you don't need to do anything else to keep it out of source control.
+6. Add to your `.env` file:
+   ```
+   GOOGLE_WALLET_ISSUER_ID=3388000000022XXXXXX
+   GOOGLE_WALLET_KEYFILE=google-wallet-key.json
+   ```
+   `GOOGLE_WALLET_KEYFILE` is just the filename — settings.py joins it to `BASE_DIR`. If the file is missing or invalid, the integration silently disables itself (warning logged) so a misconfigured prod box still boots; the wallet button just won't appear and the auto-create-class signal no-ops.
+
+Wallet GenericClass records (one per club) are created automatically — a `post_save` signal on `Club` dispatches a Celery task on creation, and the class ID is keyed off `club.pk` (not the slug) so renames don't churn Wallet identities. To backfill existing clubs after enabling Wallet, run:
+```
+docker exec -it django python3 manage.py sync_google_wallet_classes
+```
+Pass `--sync` to run inline instead of dispatching to Celery. The task is idempotent (409 *already exists* is treated as success).
+
+When everything is wired up, members visiting their club page (`/clubs/<slug>/`) while signed in will see the *Add to Google Wallet* badge below their membership number, QR code and barcode.
+
+**Note on the demo / unapproved issuer:** Google caps unapproved issuers at ~5 generic classes total. Auto-creation will start failing once you exceed that. The Celery task logs a clear 4xx error and retries on transient failures; in practice you'll want to wait until your issuer is approved before enabling the integration site-wide.
+
+#### Apple Wallet membership cards (optional)
+
+Adds an *Add to Apple Wallet* button next to the Google Wallet one. Same security model — only the signed-in account that matches the membership can download the pass; UUID renewal links cannot.
+
+Unlike Google Wallet there is no REST API: passes are signed `.pkpass` zip files generated server-side on each download. No Celery task, no class to pre-create.
+
+**One-time setup** (done by the site admin):
+
+1. **Apple Developer Account.** You need a paid account ($99/yr) at [developer.apple.com](https://developer.apple.com).
+2. **Pass Type Identifier.** Sign in → Certificates, Identifiers & Profiles → Identifiers → **+** → *Pass Type IDs*. Use the reverse-DNS form, e.g. `pass.com.yourdomain.membership`. Note your **Team ID** (top-right of the developer portal).
+3. **Pass Type ID certificate.** On the new Pass Type ID, click *Create Certificate*, generate a CSR with Keychain Access on macOS (Keychain Access → Certificate Assistant → Request a Certificate from a Certificate Authority → save to disk), upload the CSR, download the resulting `.cer`. In Keychain Access, double-click the `.cer` to install, then right-click the cert under *My Certificates* → **Export → .p12** and set a password. Drop the `.p12` next to your `.env`.
+4. **Apple WWDR intermediate cert.** Download from [Apple PKI](https://www.apple.com/certificateauthority/) — pick *Worldwide Developer Relations - G4* and save the `.pem`. Drop it next to your `.env` too.
+5. JSON, `.p12`, and `.pem` files at the repo root are gitignored.
+6. Add to your `.env`:
+   ```
+   APPLE_WALLET_CERT_FILE=pass-type-id.p12
+   APPLE_WALLET_CERT_PASSWORD=your-p12-password
+   APPLE_WALLET_WWDR_FILE=AppleWWDRCAG4.pem
+   APPLE_WALLET_PASS_TYPE_IDENTIFIER=pass.com.yourdomain.membership
+   APPLE_WALLET_TEAM_IDENTIFIER=ABCDE12345
+   APPLE_WALLET_ORGANIZATION_NAME=Your Club
+   ```
+   If any of these is missing the button is hidden and pkpass downloads return 404.
+
+When wired up, members visiting `/clubs/<slug>/` while signed in see *Add to Apple Wallet* next to the Google version. Tapping it on an iPhone (Safari) opens Wallet's native add UI. On desktop you'll just download the `.pkpass` file.
+
+Icons and logos in the pass are auto-generated from the club name (white text on the same slate background as the Google card). If you want custom artwork later, drop a `apple_wallet_assets/<club-slug>/` directory pattern in and extend `auctions/apple_wallet.py:_placeholder_png`.
+
 #### Discord bot integration (optional)
 
 This feature lets club members join a Discord server and automatically receive a role and be added to the club member list.

@@ -1,14 +1,15 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags bap_filters %}
+{% load crispy_forms_tags bap_filters membership_tags qr_code %}
 {% block title %}{{ club.name }}{% endblock %}
 
 {% block content %}
-<h3>{{ club.name }}</h3>
+{% include "club_ribbon.html" %}
 
 {% if club.description %}
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
+{% if club.homepage or club.facebook_page %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
@@ -16,34 +17,8 @@
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
-  {% if can_access_admin %}
-  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Manage membership</a>
-  {% endif %}
-  {% if can_manage_bap and club.enable_breeder_award_program %}
-  <a href="{% url 'club_bap_lots' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Admin</a>
-  {% endif %}
-  {% if can_edit_settings or can_manage_bap or can_access_admin %}
-  <div class="dropdown">
-    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="bi bi-sliders"></i> Setup
-    </button>
-    <ul class="dropdown-menu">
-      {% if can_edit_settings %}
-      <li><a class="dropdown-item" href="{% url 'club_edit' club.slug %}"><i class="bi bi-gear"></i> Club Setup</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_discord_config' club.slug %}"><i class="bi bi-discord"></i> Discord Setup</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_api_keys' club.slug %}"><i class="bi bi-key"></i> API Keys</a></li>
-      {% endif %}
-      {% if can_manage_bap %}
-      <li><a class="dropdown-item" href="{% url 'club_bap_settings' club.slug %}"><i class="bi bi-award"></i> BAP Setup</a></li>
-      {% endif %}
-      {% if can_access_admin %}
-      {% if can_edit_settings or can_manage_bap %}<li><hr class="dropdown-divider"></li>{% endif %}
-      <li><a class="dropdown-item" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>
-      {% endif %}
-    </ul>
-  </div>
-  {% endif %}
 </div>
+{% endif %}
 
 {% if not club.enable_club_page and can_access_admin %}
 <p class="text-muted small"><i class="bi bi-eye-slash"></i> This page is only visible to admins. <a href="{% url 'club_edit' club.slug %}">Enable it in settings</a> to make it public.</p>
@@ -54,6 +29,9 @@
     <div class="card-body">
       <h5 class="card-title">Your membership</h5>
       <p class="mb-1">Member since: {{ member.createdon|date:"N j, Y" }}</p>
+      {% if club.membership_annual_fee and membership_expiration_date %}
+      <p class="mb-1">Membership expires: {{ membership_expiration_date|date:"M j, Y" }}</p>
+      {% endif %}
       {% if club.enable_breeder_award_program %}
         {% if member.bap_points or member.hap_points or member.culture_points %}
         <p class="mb-0">
@@ -66,6 +44,60 @@
         {% if member.bap_points or member.hap_points %}
         <p class="mb-0">BAP Points: {{ member.bap_points }} | HAP Points: {{ member.hap_points }}</p>
         {% endif %}
+      {% endif %}
+
+      {% if member.membership_number_visible %}
+      <hr>
+      <div class="row align-items-center g-3">
+        <div class="col-md-7">
+          <div class="text-muted small mb-1">Membership number</div>
+          <div class="font-monospace fs-5 mb-2">{{ member.membership_number }}</div>
+          <div class="membership-barcode" style="max-width: 320px;">{% membership_barcode member.membership_number %}</div>
+        </div>
+        <div class="col-md-5 text-md-end">
+          <div class="d-inline-block">{% qr_from_text member.membership_number|stringformat:"s" size="s" %}</div>
+        </div>
+      </div>
+
+      {% if is_membership_owner %}
+        {% google_wallet_save_url member as wallet_url %}
+        <div class="mt-3 d-flex flex-wrap gap-2">
+          {% if wallet_url %}
+          <a class="btn btn-dark btn-sm" href="{{ wallet_url }}" target="_blank" rel="noopener">
+            <i class="bi bi-google"></i> Add to Google Wallet
+          </a>
+          {% endif %}
+          {% if apple_wallet_enabled %}
+          <a class="btn btn-dark btn-sm" href="{% url 'club_member_apple_wallet' pk=member.pk %}">
+            <i class="bi bi-apple"></i> Add to Apple Wallet
+          </a>
+          {% elif wallet_url %}
+          {# Google Wallet is configured but Apple isn't — show a stub that explains why. #}
+          <button class="btn btn-dark btn-sm" type="button"
+            data-bs-toggle="collapse" data-bs-target="#apple-wallet-explainer"
+            aria-expanded="false" aria-controls="apple-wallet-explainer">
+            <i class="bi bi-apple"></i> Add to Apple Wallet
+          </button>
+          {% endif %}
+        </div>
+        {% if not apple_wallet_enabled and wallet_url %}
+        <div id="apple-wallet-explainer" class="collapse mt-2">
+          <div class="alert alert-info mb-0">
+            Apple wants a hundred bucks to add passes, which is crazy given everything else is completely free.
+            If you want to add membership cards to your iPhone, send the $100 to TFCB and we'll get verified with them
+            and enable Apple Wallet integration for everyone. Or just take a screenshot.
+          </div>
+        </div>
+        {% endif %}
+      {% endif %}
+      {% endif %}{# membership_number_visible #}
+
+      {% if show_membership_payment_button %}
+      <div class="mt-3">
+        <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
+          <i class="bi bi-credit-card"></i> Renew Membership
+        </a>
+      </div>
       {% endif %}
     </div>
   </div>
@@ -95,6 +127,11 @@
   {% if club.separate_cap %}
   <li class="nav-item" role="presentation">
     <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
+  </li>
+  {% endif %}
+  {% if my_bap_awards is not None %}
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" type="button" role="tab">My Points</button>
   </li>
   {% endif %}
 </ul>
@@ -165,6 +202,24 @@
     <div id="culture-alltime" style="display:none">
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
     </div>
+  </div>
+  {% endif %}
+
+  {% if my_bap_awards is not None %}
+  {# My Points tab #}
+  <div class="tab-pane fade" id="my-points-tab" role="tabpanel">
+    {% if my_bap_awards %}
+    <ul class="list-group list-group-flush mt-2">
+      {% for award in my_bap_awards %}
+      <li class="list-group-item d-flex gap-3 py-2">
+        <span class="text-muted" style="min-width:6rem">{{ award.date|date:"N j, Y" }}</span>
+        <span>{{ award }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted mt-3">No points recorded yet.</p>
+    {% endif %}
   </div>
   {% endif %}
 

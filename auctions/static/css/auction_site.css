@@ -52,7 +52,7 @@ a.ad:hover {
     z-index: 1050;
   }
 
-  .modelselect2 {
+  select.modelselect2 {
     display: none !important;
   }
 

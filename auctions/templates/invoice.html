@@ -92,20 +92,6 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 });
 </script>
-{% if viewer_has_bap %}
-<script>
-function saveBapPoints(el) {
-    $.ajax({
-        type: "POST",
-        beforeSend: function(req) { req.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}"); },
-        url: el.dataset.bapUrl,
-        data: { bap_points_awarded: el.value },
-        success: function() { $(el).addClass("is-valid").removeClass("is-invalid"); },
-        error: function() { $(el).addClass("is-invalid").removeClass("is-valid"); },
-    });
-}
-</script>
-{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -228,6 +214,7 @@ function saveBapPoints(el) {
     </span>
   {% endif %}
 </div>
+{% include "auctions/partials/invoice_membership_renewal.html" %}
 {{ auction.invoice_payment_instructions | default:""}}<br>
 {% if print_label_link %}
   <div>{% if show_links %}
@@ -293,12 +280,8 @@ function saveBapPoints(el) {
       <td>{{ invoice.currency_symbol }}{{ invoice.first_bid_payout|floatformat:2 }}</td>
     </tr>
   {% endif %}
-  {% if invoice.tax %}
-  <tr>
-    <td>Tax</td>
-    <td>{{ invoice.currency_symbol }}{{invoice.tax|floatformat:2 }}</td>
-  </tr>
-  {% endif %}
+  {% include "auctions/partials/invoice_tax_row.html" %}
+  {% include "auctions/partials/invoice_membership_fee_row.html" %}
   {% for adjustment in invoice.changed_adjustments %}
     <tr>
       <td>{{ adjustment.notes }}</td>
@@ -311,10 +294,7 @@ function saveBapPoints(el) {
       <td>{{ invoice.currency_symbol }}{{ payment.amount|floatformat:2 }}</td>
     </tr>
   {% endfor %}
-  <tr>
-    <td>Final total</td>
-    <td>{{ invoice.invoice_summary }}</td>
-  </tr>
+  {% include "auctions/partials/invoice_final_total_row.html" %}
 </table>
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>
@@ -355,8 +335,8 @@ function saveBapPoints(el) {
             {{ lot.lot_name }}
           {% endif%}
           {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
-          {% if lot.bap_points_awarded %}<span class="badge bg-success ms-1">Breeder points: {{ lot.bap_points_awarded }}</span>{% endif %}
-          {% if viewer_has_bap and show_links %}<input type="text" placeholder="{{ lot.bap_placeholder }}" value="{% if lot.bap_points_awarded %}{{ lot.bap_points_awarded }}{% endif %}" class="form-control form-control-sm d-inline-block ms-1" style="width:100px;" data-bap-url="{% url 'lot_bap_points' pk=lot.pk %}" onchange="saveBapPoints(this)" title="{{ lot.bap_placeholder }} points">{% endif %}
+          {% if lot.bap_points_awarded and not viewer_has_bap %}<span class="badge bg-success ms-1">Breeder points: {{ lot.bap_points_awarded }}</span>{% endif %}
+          {% if viewer_has_bap and show_links and lot.i_bred_this_fish %}{% include "auctions/bap_lot_buttons.html" with default_points=bap_default_points %}{% endif %}
         </td>
         <td>
           {% if lot.winning_price %}

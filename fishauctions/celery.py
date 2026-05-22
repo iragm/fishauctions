@@ -83,6 +83,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Update Discord roles for members whose membership has expired or been renewed - every 24 hours
+    "update_expired_membership_discord_roles": {
+        "task": "auctions.tasks.update_expired_membership_discord_roles",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.
@@ -110,10 +115,7 @@ def start_auction_stats_task(sender, **kwargs):
 @worker_ready.connect
 def start_bap_recalculation_tasks(sender, **kwargs):
     """
-    Start BAP self-scheduling recalculation tasks for clubs when the worker is ready.
-
-    This recreates any missing or disabled per-club one-off tasks after container
-    startup, mirroring the startup bootstrap used for auction stats updates.
+    Bootstrap BAP self-scheduling recalculation tasks when the worker is ready.
     """
     from datetime import timedelta
 

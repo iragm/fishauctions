@@ -16,11 +16,13 @@ from dal import autocomplete
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db.models import Q
 from django.forms import (
     HiddenInput,
 )
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -30,6 +32,7 @@ from .models import (
     Auction,
     AuctionDropdown,
     AuctionTOS,
+    BapAward,
     Bid,
     Category,
     ChatSubscription,
@@ -885,7 +888,7 @@ class EditLot(forms.ModelForm):
                     f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
                 ),
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
@@ -1124,7 +1127,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
                     f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success">Save</button>'
@@ -1348,7 +1351,7 @@ class AuctionNoShowForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1403,7 +1406,7 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1444,7 +1447,7 @@ class ChangeInvoiceStatusForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1515,7 +1518,7 @@ class LotRefundForm(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(save_button_html),
                 css_class="modal-footer",
@@ -1913,6 +1916,8 @@ class AuctionEditForm(forms.ModelForm):
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
             "email_users_when_invoices_ready",
+            "add_people_from_auction_to_club",
+            "add_membership_fee_to_invoices_for_expired_members",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
             "only_approved_bidders",
@@ -1982,6 +1987,12 @@ class AuctionEditForm(forms.ModelForm):
             # Hide the field if seller hasn't linked their Square account
             if not self.instance.created_by.userdata.square_enabled:
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()
+
+        if not self.instance.club:
+            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        elif not self.instance.club.membership_annual_fee:
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -2180,6 +2191,14 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
+                    "add_people_from_auction_to_club",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "add_membership_fee_to_invoices_for_expired_members",
+                    css_class="col-md-3",
+                ),
+                Div(
                     "enable_online_payments",
                     css_class="col-md-3",
                 ),
@@ -2270,6 +2289,18 @@ class AuctionEditForm(forms.ModelForm):
                     cleaned_data["minimum_bid"] = round_to_whole_dollar(minimum_bid)
                 else:
                     self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
+        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not cleaned_data.get(
+            "add_people_from_auction_to_club"
+        ):
+            self.add_error(
+                "add_membership_fee_to_invoices_for_expired_members",
+                "Enable adding people from this auction to the club before enabling membership fees.",
+            )
+        if (
+            cleaned_data.get("add_people_from_auction_to_club")
+            or cleaned_data.get("add_membership_fee_to_invoices_for_expired_members")
+        ) and not self.instance.club:
+            self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
     def save(self, commit=True):
@@ -3432,7 +3463,7 @@ class ClubMemberSelfServiceForm(forms.ModelForm):
 
     class Meta:
         model = ClubMember
-        fields = ["first_name", "last_name", "phone_number", "address"]
+        fields = ["name", "phone_number", "address"]
 
 
 class ClubEditForm(forms.ModelForm):
@@ -3442,26 +3473,21 @@ class ClubEditForm(forms.ModelForm):
         model = Club
         fields = [
             "name",
+            "icon",
             "homepage",
             "facebook_page",
-            "membership_system",
-            "membership_annual_fee",
-            "allow_joining",
-            "allow_integrated_payments",
-            "description",
             "enable_club_page",
+            "allow_joining",
+            "enable_breeder_award_program",
+            "enable_membership",
+            "description",
             "location",
             "location_coordinates",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page.",
-            "membership_system": (
-                "January 1st: all memberships expire on Jan 1 each year. "
-                "Rolling: memberships expire one year from the payment date."
-            ),
-            "membership_annual_fee": "Leave blank if free.",
             "allow_joining": "Let members self-join via the public club page.",
-            "allow_integrated_payments": "Accept membership dues directly through the site.",
+            "enable_breeder_award_program": "Track when users breed fish and show a leaderboard of top breeders.",
         }
         widgets = {
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
@@ -3472,18 +3498,24 @@ class ClubEditForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["enable_membership"].label = "Membership and payments"
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        # Required so the icon ImageField actually uploads.
+        self.helper.attrs = {"enctype": "multipart/form-data"}
         self.helper.layout = Layout(
             "name",
+            "icon",
             "homepage",
             "facebook_page",
-            "membership_system",
-            "membership_annual_fee",
-            "allow_joining",
-            "allow_integrated_payments",
+            Div(
+                Div("enable_club_page", css_class="col-3"),
+                Div("allow_joining", css_class="col-3"),
+                Div("enable_breeder_award_program", css_class="col-3"),
+                Div("enable_membership", css_class="col-3"),
+                css_class="row",
+            ),
             "description",
-            "enable_club_page",
             Fieldset(
                 "Location",
                 "location",
@@ -3493,13 +3525,132 @@ class ClubEditForm(forms.ModelForm):
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
 
 
+class _PaymentUserChoiceField(forms.ModelChoiceField):
+    """ModelChoiceField that appends the connected payment accounts to each user label."""
+
+    def __init__(self, *args, paypal_ids=None, square_ids=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.paypal_ids = paypal_ids or set()
+        self.square_ids = square_ids or set()
+
+    def label_from_instance(self, obj):
+        accounts = []
+        if obj.pk in self.paypal_ids:
+            accounts.append("PayPal")
+        if obj.pk in self.square_ids:
+            accounts.append("Square")
+        suffix = f" ({', '.join(accounts)})" if accounts else ""
+        return f"{obj.username}{suffix}"
+
+
+class ClubMembershipSettingsForm(forms.ModelForm):
+    """Form for club admins to configure membership and payment settings."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "contact_email",
+            "membership_system",
+            "membership_annual_fee",
+            "membership_number_mode",
+            "payment_user",
+            "send_membership_expiration_reminders",
+            "allow_integrated_payments",
+        ]
+        help_texts = {
+            "membership_system": (
+                "January 1st: all memberships expire on Jan 1 each year. "
+                "Rolling: memberships expire one year from the payment date."
+            ),
+            "membership_annual_fee": "Leave blank if free.",
+            "allow_integrated_payments": "Accept membership dues directly through the site.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        current_user = kwargs.pop("current_user", None)
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "membership_system",
+            "membership_annual_fee",
+            "membership_number_mode",
+            "allow_integrated_payments",
+            "payment_user",
+            "send_membership_expiration_reminders",
+            "contact_email",
+        )
+        self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
+        club = self.instance
+        if club and club.pk:
+            admin_user_ids = (
+                club.members.filter(is_deleted=False)
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+                .exclude(user__isnull=True)
+                .values_list("user_id", flat=True)
+            )
+            paypal_user_ids = set(
+                PayPalSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
+            )
+            square_user_ids = set(
+                SquareSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
+            )
+            eligible_ids = paypal_user_ids | square_user_ids
+            if settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
+                eligible_ids.update(
+                    User.objects.filter(is_superuser=True, id__in=admin_user_ids).values_list("id", flat=True)
+                )
+            payment_user_qs = User.objects.filter(id__in=eligible_ids).order_by("username")
+        else:
+            paypal_user_ids = set()
+            square_user_ids = set()
+            payment_user_qs = User.objects.none()
+        paypal_available = current_user and (
+            PayPalSeller.objects.filter(user=current_user).exists()
+            or (current_user.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET)
+        )
+        square_available = current_user and SquareSeller.objects.filter(user=current_user).exists()
+        if paypal_available or square_available:
+            connect_parts = []
+            if paypal_available:
+                connect_parts.append(f'<a href="{reverse("paypal_connect")}">PayPal</a>')
+            if square_available:
+                connect_parts.append(f'<a href="{reverse("square_connect")}">Square</a>')
+            payment_help = mark_safe(
+                "Payments are sent to this user's connected account. "
+                f"You can connect {' or '.join(connect_parts)} to take payments "
+            )
+        else:
+            payment_help = "Payments are not enabled for your account."
+        self.fields["payment_user"] = _PaymentUserChoiceField(
+            queryset=payment_user_qs,
+            paypal_ids=paypal_user_ids,
+            square_ids=square_user_ids,
+            required=False,
+            label="Payments go to",
+            help_text=payment_help,
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        allow_integrated = cleaned_data.get("allow_integrated_payments")
+        payment_user = cleaned_data.get("payment_user")
+        if allow_integrated and not payment_user:
+            self.add_error(
+                "payment_user",
+                "No payment method selected, choose an account that payments should go to",
+            )
+        if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
+            self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
+        return cleaned_data
+
+
 class ClubBapSettingsForm(forms.ModelForm):
     """Form for BAP admins to configure Breeder Award Program settings for a club."""
 
     class Meta:
         model = Club
         fields = [
-            "enable_breeder_award_program",
             "auto_add_points",
             "points_per_lot",
             "min_quantity",
@@ -3514,7 +3665,6 @@ class ClubBapSettingsForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.layout = Layout(
-            "enable_breeder_award_program",
             Fieldset(
                 "Point rules",
                 "auto_add_points",
@@ -3529,14 +3679,90 @@ class ClubBapSettingsForm(forms.ModelForm):
         self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
 
 
+class BapAwardForm(forms.ModelForm):
+    """Form for club BAP admins to create or edit a BapAward record."""
+
+    club_slug = forms.CharField(widget=forms.HiddenInput(), required=False)
+
+    class Meta:
+        model = BapAward
+        fields = ["club_member", "date", "points", "hap_points", "cap_points", "notes"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "notes": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def __init__(
+        self, *args, post_url=None, delete_url=None, club=None, show_hap=False, show_cap=False, lot=None, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        club_slug = club.slug if club else ""
+        self.fields["club_slug"].initial = club_slug
+        self.fields["club_member"].widget = autocomplete.ModelSelect2(
+            url="club-member-autocomplete",
+            forward=["club_slug"],
+            attrs={"data-placeholder": "Search for a member…", "data-html": True, "style": "width: 100%"},
+        )
+        if club:
+            self.fields["club_member"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).order_by(
+                "name"
+            )
+        if not self.instance.pk and not self.initial.get("date"):
+            self.fields["date"].initial = timezone.now().date()
+        self.fields["points"].label = "BAP points"
+        self.fields["hap_points"].label = "HAP points"
+        self.fields["cap_points"].label = "CAP points"
+        if not show_hap:
+            del self.fields["hap_points"]
+        if not show_cap:
+            del self.fields["cap_points"]
+
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        layout_fields = list(self.fields.keys())
+
+        prefix_items = []
+        if lot:
+            prefix_items.append(
+                HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')
+            )
+        if prefix_items:
+            layout_fields = prefix_items + layout_fields
+        if delete_url:
+            footer = Div(
+                HTML(
+                    f'<button hx-post="{delete_url}" hx-target="#modals-here" hx-confirm="Delete this award?" type="button" class="btn btn-danger btn-sm">Delete</button>'
+                ),
+                HTML(
+                    '<button type="button" class="btn btn-secondary btn-sm ms-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
+                ),
+                css_class="modal-footer px-0 d-flex",
+            )
+        elif post_url:
+            footer = Div(
+                HTML(
+                    '<button type="button" class="btn btn-secondary btn-sm" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary btn-sm ms-2">Save</button>'
+                ),
+                css_class="modal-footer px-0",
+            )
+        else:
+            footer = None
+        self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
+
+
 class ClubMemberAdminForm(forms.ModelForm):
     """Form for club admins to edit a club member's details."""
 
     class Meta:
         model = ClubMember
         fields = [
-            "first_name",
-            "last_name",
+            "name",
             "email",
             "phone_number",
             "address",
@@ -3545,8 +3771,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             "discord_role_override",
         ]
         widgets = {
-            "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
-            "last_name": forms.TextInput(attrs={"placeholder": "Last name"}),
+            "name": forms.TextInput(attrs={"placeholder": "Name"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
             "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
@@ -3564,10 +3789,10 @@ class ClubMemberAdminForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
 
-        # Restrict discord_role_override queryset to this club's roles
+        # Restrict discord_role_override queryset to roles the bot can actually assign
         has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
         if club:
-            self.fields["discord_role_override"].queryset = club.discord_roles.all()
+            self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
         # Hide Discord role fields when the club has no Discord server
         discord_fields = []
@@ -3581,8 +3806,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             ]
 
         base_fields = [
-            "first_name",
-            "last_name",
+            "name",
             "email",
             "phone_number",
             "address",
@@ -3592,10 +3816,14 @@ class ClubMemberAdminForm(forms.ModelForm):
         if read_only:
             for field in self.fields.values():
                 field.disabled = True
+                if hasattr(field.widget, "attrs"):
+                    field.widget.attrs["style"] = "color: inherit; -webkit-text-fill-color: currentColor; opacity: 1;"
             self.helper.layout = Layout(
                 *base_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Close</button>'
+                    ),
                     css_class="modal-footer",
                 ),
             )
@@ -3604,9 +3832,11 @@ class ClubMemberAdminForm(forms.ModelForm):
                 *base_fields,
                 *discord_fields,
                 Div(
-                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                     HTML(
-                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    ),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                     ),
                     css_class="modal-footer",
                 ),
@@ -3618,6 +3848,13 @@ class ClubMemberAdminForm(forms.ModelForm):
             )
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
 
+    def clean_discord_role_override(self):
+        role = self.cleaned_data.get("discord_role_override")
+        if role and not role.bot_can_manage:
+            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
+            raise forms.ValidationError(msg)
+        return role
+
 
 class ClubMemberPermissionsForm(forms.ModelForm):
     """Admin-only form to set permission bool fields on a ClubMember."""
@@ -3626,23 +3863,38 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         model = ClubMember
         fields = [
             "permission_admin",
-            "permission_view",
-            "permission_export",
-            "permission_add_edit",
             "permission_edit_club",
             "permission_manage_auctions",
             "permission_manage_bap",
+            "permission_export",
+            "permission_add_edit",
+            "permission_view",
         ]
 
     def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
+        labels = {
+            "permission_admin": "Club admin — can do everything, including assigning permissions to other members",
+            "permission_edit_club": "Edit club settings — club setup, Discord, API keys, payment settings, and membership settings",
+            "permission_manage_auctions": "Manage auctions",
+            "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
+            "permission_export": "CSV import/export — can import and export member data as CSV",
+            "permission_add_edit": "Manage membership — add, delete, and edit member records, renew memberships",
+            "permission_view": "View members — can see the member list, but not edit",
+        }
+        for field_name, label in labels.items():
+            self.fields[field_name].label = label
         self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = True
         self.helper.layout = Layout(
             *self.Meta.fields,
             Div(
-                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                 HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                    '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                 ),
                 css_class="modal-footer",
             ),
@@ -3664,7 +3916,7 @@ class ClubMemberMergeTargetForm(forms.Form):
 class ClubMemberMergeReviewForm(forms.ModelForm):
     class Meta:
         model = ClubMember
-        fields = ["first_name", "last_name", "email", "phone_number", "address"]
+        fields = ["name", "email", "phone_number", "address"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

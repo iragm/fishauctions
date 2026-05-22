@@ -1,28 +1,26 @@
 from django.utils import timezone
 
 from .models import ClubHistory, ClubMember
-from .serializers import ClubMemberIngestSerializer
 
-# Derived from the serializer so there's one source of truth for which fields are accepted.
-INGEST_ALLOWED_FIELDS = frozenset(ClubMemberIngestSerializer().fields.keys())
+# Source of truth for ClubMember fields acceptable via API ingest.
+# Note: ``first_name`` and ``last_name`` are accepted as aliases but stored as ``name``.
+INGEST_ALLOWED_FIELDS = frozenset({"name", "email", "phone_number", "address", "memo"})
 
 
 def map_fields(data: dict, api_key) -> dict:
     """Rename incoming keys using ClubAPIKeyFieldMap records for this api_key.
 
-    Special case: if the result contains a 'name' key (either sent directly or
-    mapped to 'name'), it is split on the first space into first_name / last_name.
+    Special case: if ``first_name`` and/or ``last_name`` are present (either sent
+    directly or mapped to those names), they are combined into a single ``name``
+    field (unless ``name`` is already set).
     """
     mapping = {m.external_field: m.internal_field for m in api_key.field_mappings.all()}
     result = {mapping.get(k, k): v for k, v in data.items()}
 
-    if "name" in result:
-        full_name = result.pop("name", "").strip()
-        parts = full_name.split(" ", 1)
-        if "first_name" not in result:
-            result["first_name"] = parts[0]
-        if "last_name" not in result and len(parts) > 1:
-            result["last_name"] = parts[1]
+    first = (result.pop("first_name", "") or "").strip()
+    last = (result.pop("last_name", "") or "").strip()
+    if not result.get("name") and (first or last):
+        result["name"] = f"{first} {last}".strip()
 
     return result
 

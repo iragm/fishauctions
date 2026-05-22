@@ -1,5 +1,4 @@
 {% load static %}
-<script src="{% static 'js/vendor/jquery.min.js' %}"></script>
 {{ form.media }}
 {% load crispy_forms_tags %}
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
@@ -9,7 +8,7 @@
 		<div class="modal-header">
 		  <h5 class="modal-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
 		</div>
-		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning'>{{ unsold_lot_warning }}</span></div>{% endif %}
+		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning text-dark'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip|safe }}</span>
 			<p>{% crispy form form.helper %}</p>
@@ -17,32 +16,64 @@
 	</div>
   </div>
 </div>
-<script>function closeModal() {
-	var container = document.getElementById("modals-here")
-	var backdrop = document.getElementById("modal-backdrop")
-	var modal = document.getElementById("modal")
-	if (modal) {
-		modal.classList.remove("show")
-		modal.style.pointerEvents = "none"
+<script>
+(function() {
+	clearTimeout(window._modalCloseTimer);
+	function closeModal() {
+		var container = document.getElementById("modals-here");
+		var backdrop = document.getElementById("modal-backdrop");
+		var modal = document.getElementById("modal");
+		if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
+		if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
+		document.removeEventListener("keydown", escHandler);
+		window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
 	}
-	if (backdrop) {
-		backdrop.classList.remove("show")
-		backdrop.style.pointerEvents = "none"
-	}
-	setTimeout(function() {
-		if (container) container.innerHTML = ""
-	}, 300)
-}
+	window.closeModal = closeModal;
+	function escHandler(e) { if (e.key === "Escape") closeModal(); }
+	document.addEventListener("keydown", escHandler);
+	var bd = document.getElementById("modal-backdrop");
+	if (bd) bd.addEventListener("click", closeModal);
+})();
 </script>
 <script>
-htmx.on("htmx:afterSettle", (e) => {
-    setTimeout(() => {
-        if (typeof dal_init === 'undefined') {
-            window.dispatchEvent(new Event('load'));
-            $('.js-services-multiselect').select2();
-            dal_init = true;
-        }
-    }, 200);
-});
+(function tryInit(retries) {
+    // Wait for select2.full.js (jQuery.fn.select2) and autocomplete_light.min.js (yl) to load.
+    // These are fetched asynchronously by HTMX even though they have no async attribute.
+    if (typeof yl === 'undefined' || typeof jQuery === 'undefined' || !jQuery.fn.select2) {
+        if (retries > 0) setTimeout(function() { tryInit(retries - 1); }, 100);
+        return;
+    }
+    // select2.min.js registers yl.functions.select2 via a 'dal-init-function' event listener.
+    // Dispatch the event now so it registers (harmless if already registered, guard prevents double-dispatch).
+    if (!yl.functions || !yl.functions.select2) {
+        document.dispatchEvent(new CustomEvent('dal-init-function'));
+    }
+    // If yl.functions.select2 is still missing, select2.min.js hasn't finished loading — retry.
+    if (!yl.functions || !yl.functions.select2) {
+        if (retries > 0) setTimeout(function() { tryInit(retries - 1); }, 100);
+        return;
+    }
+    // Trigger DAL's load-time initialization (sets window.__dal__initialize, MutationObserver, etc.)
+    // This callback never auto-fires for dynamically injected scripts since window.load already fired.
+    if (!window.__dal__initialize) {
+        window.dispatchEvent(new Event('load'));
+    }
+    // Initialize DAL widgets and any plain select2 multiselects in this modal
+    setTimeout(function() {
+        var $ = (window.django && django.jQuery) || jQuery;
+        $('[data-autocomplete-light-function=select2]').not('.select2-hidden-accessible').each(function() {
+            if (window.__dal__initialize) { window.__dal__initialize(this); }
+            else { yl.functions.select2($, this); }
+        });
+        // Re-apply dropdownParent so the Select2 dropdown renders inside the modal
+        // and isn't clipped by the modal's overflow.
+        $('[data-autocomplete-light-function=select2].select2-hidden-accessible').each(function() {
+            var $el = $(this);
+            var opts = $.extend({}, $el.data('select2').options.options, { dropdownParent: $('#modal') });
+            $el.select2('destroy').select2(opts);
+        });
+        $.fn.select2 && $('.js-services-multiselect').not('.select2-hidden-accessible').select2();
+    }, 50);
+})(30);
 </script>
 {{ extra_script }}

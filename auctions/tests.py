@@ -22,7 +22,7 @@ from django.utils import timezone
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 from .filters import LotAdminFilter
-from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
+from .forms import AuctionEditForm, ChangeUsernameForm, ClubMembershipSettingsForm, CreateLotForm
 from .models import (
     Auction,
     AuctionDropdown,
@@ -38,6 +38,7 @@ from .models import (
     ClubMember,
     Invoice,
     InvoiceAdjustment,
+    InvoicePayment,
     Lot,
     LotHistory,
     LotImage,
@@ -4493,6 +4494,29 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Field should NOT be hidden for superuser (site-wide PayPal fallback)
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
+    def test_membership_fields_hidden_without_club(self):
+        self.online_auction.club = None
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
+    def test_membership_fee_field_hidden_for_free_club(self):
+        free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
+        self.online_auction.club = free_club
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
 
 class LotListViewTests(StandardTestCase):
     """Test lot list view with different user types"""
@@ -5180,6 +5204,89 @@ class InvoiceStatusButtonTests(StandardTestCase):
         url = f"/api/payinvoice/{uuid.uuid4()}/PAID"
         response = self.client.post(url)
         assert response.status_code == 404
+
+
+class ClubMembershipRenewalFlowTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Renewal Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            enable_club_page=True,
+            allow_integrated_payments=True,
+            send_membership_expiration_reminders=True,
+        )
+        self.online_auction.club = self.club
+        self.online_auction.add_people_from_auction_to_club = True
+        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+        self.online_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            user=self.online_tos.user,
+            name="Renew Me",
+            email=self.online_tos.email,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+        )
+        self.invoice.refresh_from_db()
+
+    def test_membership_reminder_due_updates_when_membership_changes(self):
+        self.member.membership_last_paid = timezone.now().date()
+        self.member.save()
+        self.member.refresh_from_db()
+        self.assertIsNotNone(self.member.membership_expiration_reminder_due)
+
+    def test_membership_reminder_due_not_set_for_free_membership(self):
+        self.club.membership_annual_fee = None
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.member.membership_last_paid = timezone.now().date()
+        self.member.save()
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_due)
+
+    def test_invoice_membership_fee_applies_when_renewal_needed(self):
+        self.invoice.renewal_needed = True
+        self.invoice.save(update_fields=["renewal_needed"])
+        self.assertEqual(self.invoice.membership_fee_amount, Decimal("25.00"))
+
+    def test_invoice_renewal_toggle_requires_admin(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoice.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_invoice_renewal_toggle_updates(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoice.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.invoice.refresh_from_db()
+        self.assertTrue(self.invoice.renewal_needed)
+
+    def test_marking_invoice_paid_processes_membership_renewal(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+        self.invoice.refresh_from_db()
+        self.member.refresh_from_db()
+        self.assertTrue(self.invoice.renewal_processed)
+        self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
+        self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
+
+    def test_invoice_membership_block_hidden_for_free_membership(self):
+        self.club.membership_annual_fee = None
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -9033,6 +9140,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
             self.fail(f"square_payment_success URL pattern not configured: {e}")
 
 
+@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="")
 class SquareOAuthRevocationTests(StandardTestCase):
     """Tests for Square OAuth authorization revocation handling"""
 
@@ -10444,6 +10552,18 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         # Test kilometers
         distance_km = distance_to(40.7128, -74.0060, unit="km")
         self.assertIsNotNone(distance_km)
+
+    def test_distance_to_allows_qualified_sql_field_names(self):
+        """Backtick-qualified table.column identifiers are valid for raw SQL annotation."""
+        from auctions.models import distance_to
+
+        distance = distance_to(
+            40.7128,
+            -74.0060,
+            lat_field_name="`auctions_lot`.`latitude`",
+            lng_field_name="`auctions_lot`.`longitude`",
+        )
+        self.assertIsNotNone(distance)
 
     def test_find_image_with_user(self):
         """Test find_image prioritizes images from specific user"""
@@ -14083,8 +14203,7 @@ class ClubModelTests(TestCase):
         """phone_as_string should format a 10-digit number with dashes"""
         member = ClubMember.objects.create(
             club=self.club,
-            first_name="Alice",
-            last_name="Smith",
+            name="Alice Smith",
             phone_number="5551234567",
         )
         self.assertEqual(member.phone_as_string, "555-123-4567")
@@ -14093,14 +14212,13 @@ class ClubModelTests(TestCase):
         """phone_as_string returns raw digits for non-10-digit numbers"""
         member = ClubMember.objects.create(
             club=self.club,
-            first_name="Bob",
-            last_name="Jones",
+            name="Bob Jones",
             phone_number="123456",
         )
         self.assertEqual(member.phone_as_string, "123456")
 
     def test_club_member_str_with_name(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Alice", last_name="Smith")
+        member = ClubMember.objects.create(club=self.club, name="Alice Smith")
         self.assertEqual(str(member), "Alice Smith")
 
     def test_club_member_str_with_email_no_name(self):
@@ -14112,7 +14230,7 @@ class ClubModelTests(TestCase):
         self.assertIn("Member #", str(member))
 
     def test_club_member_defaults(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test", last_name="User")
+        member = ClubMember.objects.create(club=self.club, name="Test User")
         self.assertFalse(member.is_deleted)
         self.assertEqual(member.source, "manually_added")
         self.assertEqual(member.contact_status, "contact")
@@ -14139,7 +14257,7 @@ class ClubModelTests(TestCase):
 
     def test_club_member_permission_defaults(self):
         """All permission fields should default to False"""
-        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        member = ClubMember.objects.create(club=self.club, name="Test")
         for field in [
             "permission_admin",
             "permission_view",
@@ -14152,19 +14270,18 @@ class ClubModelTests(TestCase):
             self.assertFalse(getattr(member, field), f"{field} should default to False")
 
     def test_has_any_permission_false_by_default(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        member = ClubMember.objects.create(club=self.club, name="Test")
         self.assertFalse(member.has_any_permission)
 
     def test_has_any_permission_true_when_one_set(self):
-        member = ClubMember.objects.create(club=self.club, first_name="Test", permission_view=True)
+        member = ClubMember.objects.create(club=self.club, name="Test", permission_view=True)
         self.assertTrue(member.has_any_permission)
 
     def test_club_member_with_user(self):
         member = ClubMember.objects.create(
             club=self.club,
             user=self.member_user,
-            first_name="Jane",
-            last_name="Doe",
+            name="Jane Doe",
             source="joined",
         )
         self.assertEqual(member.user, self.member_user)
@@ -14185,8 +14302,7 @@ class ClubViewTests(TestCase):
         self.owner_member = ClubMember.objects.create(
             club=self.club,
             user=self.owner,
-            first_name="Owner",
-            last_name="User",
+            name="Owner User",
             permission_admin=True,
         )
 
@@ -14239,6 +14355,15 @@ class ClubViewTests(TestCase):
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_club_edit_shows_membership_email_field_and_js_toggle(self):
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Membership email address")
+        self.assertContains(response, "Replies to membership inquiries will be sent to this email")
+        self.assertContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
         """Club owner with admin permission can view history"""
@@ -14324,7 +14449,7 @@ class ClubViewTests(TestCase):
     def test_club_admin_regular_member_gets_403(self):
         """View-only member cannot access club edit"""
         regular_user = User.objects.create_user(username="regular_member", password="testpass", email="reg@example.com")
-        ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=regular_user, name="Regular", permission_view=True)
         self.client.login(username="regular_member", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -14338,6 +14463,351 @@ class ClubViewTests(TestCase):
             url = reverse(url_name, kwargs={"slug": self.club.slug})
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
+
+
+class ClubPermissionTests(TestCase):
+    """Verify that each club permission level grants exactly the right access.
+
+    Three user categories are tested for each view:
+    - non_member: authenticated but has no ClubMember record
+    - Various specific-permission members (view_user, add_edit_user, etc.)
+    - admin_user: ClubMember with permission_admin=True (wildcard)
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(
+            name="Permission Test Club",
+            allow_joining=True,
+            enable_club_page=True,
+            enable_breeder_award_program=True,
+        )
+        self.non_member = User.objects.create_user(
+            username="perm_non_member", password="testpass", email="perm_non@example.com"
+        )
+        self.view_user = User.objects.create_user(
+            username="perm_view", password="testpass", email="perm_view@example.com"
+        )
+        self.add_edit_user = User.objects.create_user(
+            username="perm_add_edit", password="testpass", email="perm_add_edit@example.com"
+        )
+        self.export_user = User.objects.create_user(
+            username="perm_export", password="testpass", email="perm_export@example.com"
+        )
+        self.edit_club_user = User.objects.create_user(
+            username="perm_edit_club", password="testpass", email="perm_edit_club@example.com"
+        )
+        self.bap_user = User.objects.create_user(username="perm_bap", password="testpass", email="perm_bap@example.com")
+        self.admin_user = User.objects.create_user(
+            username="perm_admin", password="testpass", email="perm_admin@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.view_user, name="View", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
+        ClubMember.objects.create(club=self.club, user=self.export_user, name="Export", permission_export=True)
+        ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
+        self.target_member = ClubMember.objects.create(club=self.club, name="Target Member", email="target@example.com")
+
+    def _login(self, user):
+        self.client.login(username=user.username, password="testpass")
+
+    # --- Anonymous access ---
+
+    def test_anonymous_redirected_from_club_admin(self):
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_club_edit(self):
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_club_history(self):
+        url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_renew_page(self):
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_bap_settings(self):
+        url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_bap_lots(self):
+        url = reverse("club_bap", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    # --- Non-member access ---
+
+    def test_non_member_blocked_from_club_admin(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_edit(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_history(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_renew_page(self):
+        self._login(self.non_member)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_bap_settings(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_bap_lots(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_bap", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_member_permissions_view(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_csv_export(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_membership_settings(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_view ---
+
+    def test_view_only_can_access_admin_panel(self):
+        """A view-only member can see the member list"""
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_can_access_history(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_blocked_from_club_edit(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_renew_page(self):
+        self._login(self.view_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_bap_settings(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_csv_export(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_blocked_from_member_permissions_view(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_add_edit implicitly grants permission_view ---
+
+    def test_add_edit_implicitly_can_access_admin_panel(self):
+        """A member with add_edit but not view should still see the admin panel"""
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_edit_can_access_renew_page(self):
+        self._login(self.add_edit_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_edit_blocked_from_club_edit(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_bap_settings(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_csv_export(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_blocked_from_member_permissions_view(self):
+        self._login(self.add_edit_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_export ---
+
+    def test_export_can_export_csv(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_export_implicitly_can_access_admin_panel(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_export_blocked_from_club_edit(self):
+        self._login(self.export_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_edit_club ---
+
+    def test_edit_club_can_access_club_edit(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_can_access_membership_settings(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_implicitly_can_access_admin_panel(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_edit_club_blocked_from_bap_settings(self):
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_club_blocked_from_renew_page(self):
+        self._login(self.edit_club_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_edit_club_blocked_from_member_permissions_view(self):
+        """permission_edit_club does not grant permission_admin (needed for permissions view)"""
+        self._login(self.edit_club_user)
+        response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_manage_bap ---
+
+    def test_bap_user_can_access_bap_lots(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_can_access_bap_settings(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_implicitly_can_access_admin_panel(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_user_blocked_from_club_edit(self):
+        self._login(self.bap_user)
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_user_blocked_from_renew_page(self):
+        self._login(self.bap_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_bap_user_blocked_from_bap_lots(self):
+        """A member with view-only access cannot see BAP lots"""
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_admin (wildcard) ---
+
+    def test_admin_can_access_all_views(self):
+        self._login(self.admin_user)
+        for url_name, kwargs in [
+            ("club_admin", {"slug": self.club.slug}),
+            ("club_edit", {"slug": self.club.slug}),
+            ("club_history", {"slug": self.club.slug}),
+            ("club_membership_settings", {"slug": self.club.slug}),
+            ("club_bap_settings", {"slug": self.club.slug}),
+            ("club_bap", {"slug": self.club.slug}),
+            ("club_member_export", {"slug": self.club.slug}),
+            ("club_member_renew_page", {"slug": self.club.slug, "pk": self.target_member.pk}),
+            ("clubmember_permissions", {"pk": self.target_member.pk}),
+        ]:
+            url = reverse(url_name, kwargs=kwargs)
+            response = self.client.get(url)
+            self.assertEqual(
+                response.status_code, 200, f"{url_name} should be 200 for admin, got {response.status_code}"
+            )
+
+    def test_admin_can_set_member_permissions(self):
+        """Only permission_admin members can change other members' permissions"""
+        self._login(self.admin_user)
+        url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_renew_page_updates_membership_date(self):
+        """Admin can renew a membership via the dedicated renew page"""
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.post(url, {"membership_expiration_date": "2026-01-15"})
+        self.assertEqual(response.status_code, 302)
+        self.target_member.refresh_from_db()
+        self.assertEqual(str(self.target_member.membership_expiration_date), "2026-01-15")
+
+    def test_renew_page_post_non_member_gets_403(self):
+        """Non-member cannot POST to the renew page"""
+        self._login(self.non_member)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        response = self.client.post(url, {"membership_expiration_date": "2026-01-15"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_cross_club_renew_page_returns_404(self):
+        """A member from another club cannot renew a member that doesn't belong to their club"""
+        other_club = Club.objects.create(name="Other Club")
+        ClubMember.objects.create(club=other_club, user=self.admin_user, name="Admin", permission_admin=True)
+        url = reverse("club_member_renew_page", kwargs={"slug": other_club.slug, "pk": self.target_member.pk})
+        self._login(self.admin_user)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
 
 
 class ClubMemberUpdateTests(TestCase):
@@ -14354,32 +14824,32 @@ class ClubMemberUpdateTests(TestCase):
         )
         self.club = Club.objects.create(name="Update Test Club", allow_joining=True, enable_club_page=True)
         self.member = ClubMember.objects.create(
-            club=self.club, user=self.member_user, first_name="Jane", last_name="Doe", email="cu_member@example.com"
+            club=self.club, user=self.member_user, name="Jane Doe", email="cu_member@example.com"
         )
 
     def test_member_can_update_info(self):
         """A club member can update their own contact info"""
         self.client.login(username="cu_member", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"action": "update", "first_name": "Janet", "last_name": "Doe"})
+        response = self.client.post(url, {"action": "update", "name": "Janet Doe"})
         self.assertEqual(response.status_code, 302)
         self.member.refresh_from_db()
-        self.assertEqual(self.member.first_name, "Janet")
+        self.assertEqual(self.member.name, "Janet Doe")
 
     def test_non_member_update_is_ignored(self):
         """A non-member's update action is silently ignored"""
         self.client.login(username="cu_other", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"action": "update", "first_name": "Hacker", "last_name": "X"})
+        response = self.client.post(url, {"action": "update", "name": "Hacker X"})
         self.assertEqual(response.status_code, 302)
         # member record unchanged
         self.member.refresh_from_db()
-        self.assertEqual(self.member.first_name, "Jane")
+        self.assertEqual(self.member.name, "Jane Doe")
 
     def test_csv_import_adds_members(self):
         """CSV import creates new club members"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
-        owner_member.permission_add_edit = True
+        owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
@@ -14392,7 +14862,7 @@ class ClubMemberUpdateTests(TestCase):
     def test_csv_import_skips_rows_without_email(self):
         """CSV import skips rows with no email"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
-        owner_member.permission_add_edit = True
+        owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name\n,NoEmail\n"
@@ -14429,7 +14899,7 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
         content = response.content.decode("utf-8")
-        self.assertIn("First Name", content)
+        self.assertIn("Name", content)
         self.assertIn("Jane", content)
 
     def test_csv_export_respects_filter(self):
@@ -14437,7 +14907,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
-        ClubMember.objects.create(club=self.club, first_name="Bob", last_name="Smith", email="bob@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Smith", email="bob@example.com")
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_export", kwargs={"slug": self.club.slug})
         response = self.client.get(url, {"query": "Jane"})
@@ -14493,7 +14963,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
+        response = self.client.post(url, {"name": self.member.name})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
 
@@ -14532,7 +15002,7 @@ class ClubMemberUpdateTests(TestCase):
         )
         self.client.force_login(self.owner)
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": "Searchable", "last_name": "Member"})
+        response = self.client.post(url, {"name": "Searchable Member"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id_email"], "searchable@example.com")
         self.assertEqual(response.json()["id_phone_number"], "555-0100")
@@ -14547,15 +15017,14 @@ class ClubMemberUpdateTests(TestCase):
         ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
         ClubMember.objects.create(
             club=other_club,
-            first_name="Managed",
-            last_name="Member",
+            name="Managed Member",
             email="managed-member@example.com",
             phone_number="555-0111",
             address="456 Club Rd",
         )
         self.client.force_login(self.owner)
         url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"first_name": "Managed", "last_name": "Member"})
+        response = self.client.post(url, {"name": "Managed Member"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id_email"], "managed-member@example.com")
         self.assertEqual(response.json()["id_phone_number"], "555-0111")
@@ -14572,7 +15041,7 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function cmHasAutocompleteData(response)")
         self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
-        self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
+        self.assertContains(response, 'cmSetFieldNote("id_name", response.name_tooltip);')
 
     def test_merge_member_review_updates_kept_member_before_delete(self):
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
@@ -14581,8 +15050,7 @@ class ClubMemberUpdateTests(TestCase):
         owner_member.save()
         source = ClubMember.objects.create(
             club=self.club,
-            first_name="Source",
-            last_name="Member",
+            name="Source Member",
             email="source@example.com",
             phone_number="5551112222",
             address="111 Source St",
@@ -14602,8 +15070,7 @@ class ClubMemberUpdateTests(TestCase):
             {
                 "step": "review",
                 "target": self.member.pk,
-                "first_name": "Merged",
-                "last_name": "Member",
+                "name": "Merged Member",
                 "email": "merged@example.com",
                 "phone_number": "5553334444",
                 "address": "222 Updated Ave",
@@ -14613,7 +15080,7 @@ class ClubMemberUpdateTests(TestCase):
         self.member.refresh_from_db()
         source.refresh_from_db()
         self.assertTrue(source.is_deleted)
-        self.assertEqual(self.member.first_name, "Merged")
+        self.assertEqual(self.member.name, "Merged Member")
         self.assertEqual(self.member.email, "merged@example.com")
         self.assertEqual(self.member.phone_number, "5553334444")
         self.assertEqual(self.member.address, "222 Updated Ave")
@@ -14644,7 +15111,7 @@ class ClubAPITests(TestCase):
 
         token = Token.objects.create(user=self.owner)
         ClubMember.objects.create(club=self.club, user=self.owner, permission_view=True)
-        ClubMember.objects.create(club=self.club, first_name="Test", last_name="Member", email="tm@example.com")
+        ClubMember.objects.create(club=self.club, name="Test Member", email="tm@example.com")
         url = reverse("api_club_members", kwargs={"slug": self.club.slug})
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
         self.assertEqual(response.status_code, 200)
@@ -14738,8 +15205,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.owner_member = ClubMember.objects.create(
             club=self.club,
             user=self.owner,
-            first_name="Owner",
-            last_name="User",
+            name="Owner User",
             permission_admin=True,
         )
 
@@ -14783,7 +15249,7 @@ class ClubAuctionIntegrationTests(TestCase):
         user_no_perm.userdata.club = self.club
         user_no_perm.userdata.save()
         # Add as member with no relevant permissions
-        ClubMember.objects.create(club=self.club, user=user_no_perm, first_name="No", last_name="Perm")
+        ClubMember.objects.create(club=self.club, user=user_no_perm, name="No Perm")
         response = self._create_auction_via_view(user_no_perm)
         self.assertEqual(response.status_code, 302)
         auction = Auction.objects.filter(created_by=user_no_perm).last()
@@ -14835,9 +15301,7 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         self.assertIsNone(auction.club)
         # Create club member and assign manage_auctions permission
-        ClubMember.objects.create(
-            club=self.club, user=user2, first_name="Role", last_name="Assign", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user2, name="Role Assign", permission_manage_auctions=True)
         # Auction should now have club set
         auction.refresh_from_db()
         self.assertEqual(auction.club, self.club)
@@ -14855,9 +15319,7 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user2,
             club=None,
         )
-        ClubMember.objects.create(
-            club=self.club, user=user2, first_name="Role", last_name="Hist", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user2, name="Role Hist", permission_manage_auctions=True)
         history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES")
         self.assertTrue(history.exists())
         self.assertTrue(any("Automatically associated with club" in h.action for h in history))
@@ -14873,9 +15335,7 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user3,
             club=None,
         )
-        ClubMember.objects.create(
-            club=self.club, user=user3, first_name="No", last_name="Pref", permission_manage_auctions=True
-        )
+        ClubMember.objects.create(club=self.club, user=user3, name="No Pref", permission_manage_auctions=True)
         auction.refresh_from_db()
         # club should remain None since user's preferences don't point to this club
         self.assertIsNone(auction.club)
@@ -14931,8 +15391,7 @@ class ClubAuctionIntegrationTests(TestCase):
         ClubMember.objects.create(
             club=self.club,
             user=user2,
-            first_name="Admin",
-            last_name="Two",
+            name="Admin Two",
             email="admin2_tos@example.com",
             permission_manage_auctions=True,
         )
@@ -15033,6 +15492,77 @@ class ClubBapSettingsViewTests(TestCase):
         ClubMember.objects.create(club=self.club, user=settings_user, permission_edit_club=True)
         self.client.login(username="settings_user", password="testpass")
         response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+
+class ClubSettingsViewTests(TestCase):
+    def setUp(self):
+        self.editor = User.objects.create_user(
+            username="club_settings_editor", password="testpass", email="club_settings_editor@example.com"
+        )
+        self.plain = User.objects.create_user(
+            username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
+        )
+        self.club = Club.objects.create(name="Settings Club", enable_membership=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.plain)
+        self.edit_url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        self.membership_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+
+    def test_edit_view_rejects_external_next_redirect(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            f"{self.edit_url}?next=https://evil.example.com",
+            {
+                "name": "Updated Settings Club",
+                "homepage": "https://example.com",
+                "facebook_page": "https://facebook.com/settingsclub",
+                "enable_club_page": "on",
+                "allow_joining": "on",
+                "enable_breeder_award_program": "on",
+                "enable_membership": "on",
+                "description": "Updated description",
+                "location": "Somewhere",
+                "location_coordinates": "",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": "updated-settings-club"}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.name, "Updated Settings Club")
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated club settings").exists())
+
+    def test_membership_settings_save_updates_fields_and_creates_history(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "contact_email": "membership@example.com",
+                "membership_system": "rolling",
+                "membership_annual_fee": "20.00",
+                "membership_number_mode": "disabled",
+                "payment_user": "",
+                "send_membership_expiration_reminders": "on",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.contact_email, "membership@example.com")
+        self.assertEqual(self.club.membership_system, "rolling")
+        self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
+        self.assertTrue(self.club.send_membership_expiration_reminders)
+        self.assertFalse(self.club.allow_integrated_payments)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+
+    def test_membership_settings_shows_form_without_connected_accounts(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.get(self.membership_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Allow integrated payments")
+        self.assertContains(response, "Payments are not enabled for your account.")
+
+    def test_plain_member_cannot_access_membership_settings(self):
+        self.client.login(username="club_settings_plain", password="testpass")
+        response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 403)
 
 
@@ -15200,55 +15730,6 @@ class ClubBapLotsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class ClubBapRecalculateViewTests(TestCase):
-    """Tests for ClubBapRecalculateView (POST-only, triggers Celery task scheduling)."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(
-            username="bap_recalc_owner", password="testpass", email="bap_recalc_owner@example.com"
-        )
-        self.club = Club.objects.create(name="BAP Recalc Club", enable_breeder_award_program=True)
-        self.bap_user = User.objects.create_user(
-            username="bap_recalc_user", password="testpass", email="bap_recalc_user@example.com"
-        )
-        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user, permission_manage_bap=True)
-        self.plain_user = User.objects.create_user(
-            username="bap_recalc_plain", password="testpass", email="bap_recalc_plain@example.com"
-        )
-        ClubMember.objects.create(club=self.club, user=self.plain_user)
-        self.url = reverse("club_bap_recalculate", kwargs={"slug": self.club.slug})
-
-    def test_anon_redirected_to_login(self):
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("login", response["Location"])
-
-    def test_plain_member_gets_403(self):
-        self.client.login(username="bap_recalc_plain", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 403)
-
-    def test_bap_disabled_returns_404(self):
-        self.club.enable_breeder_award_program = False
-        self.club.save()
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 404)
-
-    @patch("auctions.tasks.schedule_bap_recalculation")
-    def test_bap_admin_can_trigger_recalculate(self, mock_schedule):
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertEqual(response.status_code, 302)
-        mock_schedule.assert_called_once_with(self.club.pk)
-
-    @patch("auctions.tasks.schedule_bap_recalculation")
-    def test_redirects_to_bap_lots_after_recalculate(self, mock_schedule):
-        self.client.login(username="bap_recalc_user", password="testpass")
-        response = self.client.post(self.url)
-        self.assertRedirects(response, reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
-
-
 class ClubAPIKeyModelTests(TestCase):
     """Unit tests for ClubAPIKey.generate() and ClubAPIKey.verify()."""
 
@@ -15382,6 +15863,32 @@ class ClubMemberIngestAPITests(TestCase):
         member = ClubMember.objects.get(club=self.club, email="source@example.com")
         self.assertEqual(member.source, self.api_key.name)
 
+    def test_first_name_alias_stored_as_name(self):
+        """first_name passed via API is stored on the single ``name`` field."""
+        self._post({"email": "alice@example.com", "first_name": "Alice"})
+        member = ClubMember.objects.get(club=self.club, email="alice@example.com")
+        self.assertEqual(member.name, "Alice")
+
+    def test_first_and_last_name_combined_into_name(self):
+        """first_name + last_name are combined into a single ``name``."""
+        self._post({"email": "bobsmith@example.com", "first_name": "Bob", "last_name": "Smith"})
+        member = ClubMember.objects.get(club=self.club, email="bobsmith@example.com")
+        self.assertEqual(member.name, "Bob Smith")
+
+    def test_single_name_field_stored_directly(self):
+        """A single ``name`` field is stored verbatim."""
+        self._post({"email": "carol@example.com", "name": "Carol Q Smith"})
+        member = ClubMember.objects.get(club=self.club, email="carol@example.com")
+        self.assertEqual(member.name, "Carol Q Smith")
+
+    def test_mapped_first_name_combined_with_last_name(self):
+        """Field mappings can rename external fields to first_name/last_name; the result is one name."""
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="given", internal_field="first_name")
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="surname", internal_field="last_name")
+        self._post({"email": "mapped@example.com", "given": "Mapped", "surname": "User"})
+        member = ClubMember.objects.get(club=self.club, email="mapped@example.com")
+        self.assertEqual(member.name, "Mapped User")
+
 
 class ClubAPIKeyUITests(TestCase):
     """Permission and basic access tests for API key management UI views."""
@@ -15416,6 +15923,22 @@ class ClubAPIKeyUITests(TestCase):
         self.client.login(username="apiui_editor", password="testpass")
         response = self.client.get(self.list_url)
         self.assertEqual(response.status_code, 200)
+
+    def test_editor_can_access_detail_and_raw_key_is_one_time(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Detail Key", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        session = self.client.session
+        session[f"new_api_key_{api_key.pk}"] = raw_key
+        session.save()
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, raw_key)
+        response = self.client.get(detail_url)
+        self.assertNotContains(response, raw_key)
 
     def test_editor_can_create_key(self):
         self.client.login(username="apiui_editor", password="testpass")
@@ -15466,6 +15989,26 @@ class ClubAPIKeyUITests(TestCase):
         self.client.post(del_url)
         self.assertFalse(ClubAPIKeyFieldMap.objects.filter(pk=mapping.pk).exists())
 
+    def test_invalid_mapping_is_ignored(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Ignore Bad Mapping", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        add_url = reverse("club_api_key_mapping_add", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(add_url, {"external_field": "mystery", "internal_field": "not_a_field"})
+        self.assertFalse(ClubAPIKeyFieldMap.objects.filter(api_key=api_key, external_field="mystery").exists())
+
+    def test_plain_member_cannot_access_detail(self):
+        self.client.login(username="apiui_plain", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Blocked Detail", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, 403)
+
 
 class ClubPermissionWildcardTests(TestCase):
     """Tests for check_club_permission — admin wildcard and individual bool checks."""
@@ -15478,8 +16021,18 @@ class ClubPermissionWildcardTests(TestCase):
         self.user = User.objects.create_user(username="perm_user", password="testpass", email="perm@example.com")
 
     def _make_member(self, **kwargs):
-        ClubMember.objects.filter(club=self.club, user=self.user).delete()
-        return ClubMember.objects.create(club=self.club, user=self.user, **kwargs)
+        defaults = {
+            "permission_admin": False,
+            "permission_view": False,
+            "permission_export": False,
+            "permission_add_edit": False,
+            "permission_edit_club": False,
+            "permission_manage_auctions": False,
+            "permission_manage_bap": False,
+        }
+        defaults.update(kwargs)
+        member, _ = ClubMember.objects.update_or_create(club=self.club, user=self.user, defaults=defaults)
+        return member
 
     def test_admin_passes_all_permissions(self):
         self._make_member(permission_admin=True)
@@ -15617,6 +16170,146 @@ class ClubPermissionsDialogTests(TestCase):
         self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
 
 
+class ClubMemberManagementViewTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(name="Managed Club", enable_membership=True)
+        self.editor_user = User.objects.create_user(
+            username="club_editor", password="testpass", email="club_editor@example.com"
+        )
+        self.viewer_user = User.objects.create_user(
+            username="club_viewer", password="testpass", email="club_viewer@example.com"
+        )
+        self.source_user = User.objects.create_user(
+            username="club_source", password="testpass", email="club_source@example.com"
+        )
+        self.target_user = User.objects.create_user(
+            username="club_target", password="testpass", email="club_target@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.editor_user, permission_add_edit=True, permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.viewer_user, permission_view=True)
+        self.source_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.source_user,
+            name="Source Member",
+            email="source@example.com",
+            phone_number="555-1111",
+            membership_last_paid=timezone.now().date(),
+            permission_manage_bap=True,
+        )
+        self.target_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.target_user,
+            name="Target Member",
+            email="",
+        )
+        self.create_url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+        self.validation_url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+
+    def test_editor_can_create_member_and_history(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(
+            self.create_url,
+            {
+                "name": "New Member",
+                "email": "newmember@example.com",
+                "phone_number": "",
+                "address": "",
+                "contact_status": "contact",
+                "discord_role_auto_managed": "on",
+                "discord_role_override": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        created = ClubMember.objects.get(club=self.club, email="newmember@example.com")
+        self.assertEqual(created.source, "manually_added")
+        self.assertEqual(created.added_by, self.editor_user)
+        self.assertIn("location.reload", response.content.decode("utf-8"))
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
+
+    def test_viewer_cannot_create_member(self):
+        self.client.login(username="club_viewer", password="testpass")
+        response = self.client.get(self.create_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_member_validation_reports_duplicate_name_and_email(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(
+            self.validation_url,
+            {"name": "Source Member", "email": "source@example.com"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["name_tooltip"], "Source Member is already in this club")
+        self.assertEqual(payload["email_tooltip"], "Email is already in this club")
+
+    def test_renew_endpoint_updates_membership_and_history(self):
+        self.source_member.membership_last_paid = None
+        self.source_member.save(update_fields=["membership_last_paid"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 204)
+        self.source_member.refresh_from_db()
+        self.assertEqual(self.source_member.membership_last_paid, timezone.now().date())
+        self.assertTrue(
+            ClubHistory.objects.filter(club=self.club, action__contains="Renewed membership for Source Member").exists()
+        )
+
+    def test_renew_page_updates_requested_paid_date(self):
+        self.client.login(username="club_editor", password="testpass")
+        renew_page_url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})
+        response = self.client.post(renew_page_url, {"membership_expiration_date": "2024-01-15"})
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.source_member.refresh_from_db()
+        self.assertEqual(self.source_member.membership_expiration_date.isoformat(), "2024-01-15")
+
+    def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_delete", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 204)
+        self.source_member.refresh_from_db()
+        self.assertTrue(self.source_member.is_deleted)
+        self.assertTrue(
+            ClubHistory.objects.filter(club=self.club, action__contains="Removed member Source Member").exists()
+        )
+
+    def test_confirm_delete_view_renders_modal(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(
+            reverse("club_member_confirm", kwargs={"pk": self.source_member.pk, "action": "delete"})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Remove member")
+        self.assertContains(response, "Remove Source Member from this club?")
+
+    def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
+        self.client.login(username="club_editor", password="testpass")
+        merge_url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})
+        # Step 1: select target — should show review form
+        response = self.client.post(merge_url, {"target": self.target_member.pk})
+        self.assertEqual(response.status_code, 200)
+        # Step 2: confirm merge with reviewed field values
+        response = self.client.post(
+            merge_url,
+            {
+                "step": "review",
+                "target": self.target_member.pk,
+                "name": "Target Member",
+                "email": "source@example.com",
+                "phone_number": "555-1111",
+                "address": "",
+            },
+        )
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.source_member.refresh_from_db()
+        self.target_member.refresh_from_db()
+        self.assertTrue(self.source_member.is_deleted)
+        self.assertEqual(self.target_member.email, "source@example.com")
+        self.assertEqual(self.target_member.phone_number, "555-1111")
+        self.assertTrue(self.target_member.permission_manage_bap)
+        self.assertEqual(self.target_member.membership_last_paid, timezone.now().date())
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Merged member").exists())
+
+
 class ClubViewOnlyAccessTests(TestCase):
     """Tests verifying view-only members can see the member list but not mutate anything."""
 
@@ -15629,9 +16322,7 @@ class ClubViewOnlyAccessTests(TestCase):
         self.target_user = User.objects.create_user(
             username="view_target", password="testpass", email="view_target@example.com"
         )
-        self.target_member = ClubMember.objects.create(
-            club=self.club, user=self.target_user, first_name="Target", last_name="Person"
-        )
+        self.target_member = ClubMember.objects.create(club=self.club, user=self.target_user, name="Target Person")
 
     def test_viewer_can_access_club_admin(self):
         self.client.login(username="viewer_user", password="testpass")
@@ -15656,7 +16347,7 @@ class ClubViewOnlyAccessTests(TestCase):
     def test_viewer_cannot_post_to_clubmember_admin(self):
         self.client.login(username="viewer_user", password="testpass")
         url = reverse("clubmember_admin", kwargs={"pk": self.target_member.pk})
-        response = self.client.post(url, {"first_name": "Hacked"})
+        response = self.client.post(url, {"name": "Hacked"})
         self.assertEqual(response.status_code, 403)
 
     def test_viewer_cannot_access_permissions_dialog(self):
@@ -15664,3 +16355,918 @@ class ClubViewOnlyAccessTests(TestCase):
         url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
+
+
+@override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
+class ClubMembershipInvoiceTests(TestCase):
+    """Tests for club-only membership invoices (no auction, no auctiontos_user).
+
+    Covers Invoice model properties, _process_invoice_membership_renewal,
+    ClubMembershipPaymentView, and error-redirect behaviour in the PayPal/Square views.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.payment_user = User.objects.create_user(
+            username="club_payer", password="testpass", email="payer@example.com"
+        )
+        self.payment_user.userdata.is_trusted = True
+        self.payment_user.userdata.paypal_enabled = True
+        self.payment_user.userdata.save()
+
+        self.member_user = User.objects.create_user(
+            username="club_member_u", password="testpass", email="member@example.com"
+        )
+
+        self.club = Club.objects.create(
+            name="Pay Club",
+            enable_club_page=True,
+            allow_integrated_payments=True,
+            membership_annual_fee=Decimal("30.00"),
+            membership_system="rolling",
+            payment_user=self.payment_user,
+        )
+        self.club_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.member_user,
+            name="Alice Smith",
+            email="member@example.com",
+        )
+
+    def _make_club_invoice(self, status="UNPAID"):
+        return Invoice.objects.create(
+            club=self.club,
+            buyer=self.member_user,
+            status=status,
+            renewal_needed=True,
+        )
+
+    # -- model property tests --------------------------------------------------
+
+    def test_currency_uses_payment_user_currency(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.currency, self.payment_user.userdata.currency)
+
+    def test_membership_fee_amount_from_club(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.membership_fee_amount, Decimal("30.00"))
+
+    def test_net_is_negative_membership_fee(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.net, Decimal("-30.00"))
+
+    def test_net_after_payments_is_negative_before_payment(self):
+        invoice = self._make_club_invoice()
+        self.assertLess(invoice.net_after_payments, Decimal(0))
+
+    def test_show_paypal_button_true_for_trusted_paypal_user(self):
+        invoice = self._make_club_invoice()
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        self.assertTrue(invoice.show_paypal_button)
+
+    def test_show_paypal_button_false_for_untrusted_payment_user(self):
+        self.payment_user.userdata.is_trusted = False
+        self.payment_user.userdata.save()
+        invoice = self._make_club_invoice()
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_show_paypal_button_true_for_superuser_payment_user(self):
+        self.payment_user.is_superuser = True
+        self.payment_user.save()
+        invoice = self._make_club_invoice()
+        self.assertTrue(invoice.show_paypal_button)
+
+    def test_show_paypal_button_false_when_already_paid(self):
+        invoice = self._make_club_invoice(status="PAID")
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_show_payment_button_true_when_paypal_available(self):
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        invoice = self._make_club_invoice()
+        self.assertTrue(invoice.show_payment_button)
+
+    def test_show_payment_button_false_without_payment_credentials(self):
+        invoice = self._make_club_invoice()
+        self.assertFalse(invoice.show_paypal_button)
+        self.assertFalse(invoice.show_square_button)
+        self.assertFalse(invoice.show_payment_button)
+
+    def test_reason_for_payment_not_available_returns_none_for_club_invoice(self):
+        invoice = self._make_club_invoice()
+        self.assertIsNone(invoice.reason_for_payment_not_available)
+
+    def test_invoice_save_does_not_crash_without_auctiontos_user(self):
+        invoice = self._make_club_invoice()
+        invoice.status = "UNPAID"
+        invoice.save()  # Should not raise
+
+    def test_invoice_str_does_not_crash_without_auctiontos_user(self):
+        invoice = self._make_club_invoice()
+        result = str(invoice)
+        self.assertIn("Pay Club", result)
+
+    # -- _process_invoice_membership_renewal with club invoice -----------------
+
+    def test_process_renewal_updates_membership_last_paid(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        self.club_member.refresh_from_db()
+        self.assertIsNotNone(self.club_member.membership_last_paid)
+        self.assertGreaterEqual(self.club_member.membership_last_paid, timezone.now().date())
+
+    def test_process_renewal_creates_invoice_payment_record(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="Square")
+        self.assertTrue(
+            InvoicePayment.objects.filter(club_member=self.club_member, payment_target="CLUB_MEMBER").exists()
+        )
+
+    def test_process_renewal_marks_invoice_renewal_processed(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        invoice.refresh_from_db()
+        self.assertTrue(invoice.renewal_processed)
+
+    def test_process_renewal_skipped_when_already_processed(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        invoice.renewal_processed = True
+        invoice.save(update_fields=["renewal_processed"])
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        self.assertIsNone(self.club_member.membership_last_paid)
+
+    # -- ClubMembershipPaymentView ---------------------------------------------
+
+    def test_payment_view_404_when_not_configured(self):
+        self.club.allow_integrated_payments = False
+        self.club.save()
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_payment_view_requires_login(self):
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 302)
+
+    def test_payment_view_accessible_for_member(self):
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "30")
+
+    def test_payment_view_creates_unpaid_invoice(self):
+        self.client.login(username="club_member_u", password="testpass")
+        self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertTrue(
+            Invoice.objects.filter(
+                club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True
+            ).exists()
+        )
+
+    # -- CreatePayPalOrderView redirects for club invoices ---------------------
+
+    def test_paypal_order_view_redirects_to_club_pay_on_error(self):
+        """When PayPal is not configured, the view should redirect to club_membership_pay, not invoice_no_login."""
+        invoice = self._make_club_invoice()
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("create_paypal_order", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.post(url)
+        self.assertRedirects(
+            response,
+            reverse("club_membership_pay", kwargs={"slug": self.club.slug}),
+            fetch_redirect_response=False,
+        )
+
+    def test_invoice_no_login_view_accessible_for_club_invoice(self):
+        """Visiting a club invoice via no-login link should not crash (no auctiontos_user, no auction)."""
+        invoice = self._make_club_invoice()
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+
+class ClubMembershipSettingsFormPaymentUserTests(TestCase):
+    """Confirm that the payment_user dropdown only includes members with admin or edit_club permission."""
+
+    def setUp(self):
+        from .models import SquareSeller
+
+        self.club = Club.objects.create(name="Test Club", enable_membership=True)
+
+        # Helper to create a User + ClubMember with specified permissions
+        def _make_member(username, **perms):
+            user = User.objects.create_user(username=username, password="pw")
+            ClubMember.objects.create(club=self.club, user=user, **perms)
+            return user
+
+        self.admin_user = _make_member("admin_u", permission_admin=True)
+        self.edit_club_user = _make_member("edit_club_u", permission_edit_club=True)
+        self.manage_auctions_user = _make_member("manage_auctions_u", permission_manage_auctions=True)
+        self.plain_member = _make_member("plain_u")
+
+        # Give each user a Square account so they are payment-eligible
+        for user in [self.admin_user, self.edit_club_user, self.manage_auctions_user, self.plain_member]:
+            SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
+
+    def _get_payment_user_ids(self):
+        form = ClubMembershipSettingsForm(instance=self.club)
+        return set(form.fields["payment_user"].queryset.values_list("id", flat=True))
+
+    def test_admin_user_included(self):
+        self.assertIn(self.admin_user.pk, self._get_payment_user_ids())
+
+    def test_edit_club_user_included(self):
+        self.assertIn(self.edit_club_user.pk, self._get_payment_user_ids())
+
+    def test_manage_auctions_only_user_excluded(self):
+        """A member with only permission_manage_auctions should not appear in the payment_user choices."""
+        self.assertNotIn(self.manage_auctions_user.pk, self._get_payment_user_ids())
+
+    def test_plain_member_excluded(self):
+        self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())
+
+
+class DiscordJoinModalNameTests(TestCase):
+    """Tests for the Discord join modal — the modal now collects a single ``name``
+    field, but the handler must still accept ``first_name`` / ``last_name`` for
+    backward compatibility with any cached/older Discord modal definitions."""
+
+    def setUp(self):
+        from .views import DiscordInteractionsView
+
+        self.club = Club.objects.create(name="Discord Join Club", discord_server_id="999000111")
+        self.view = DiscordInteractionsView()
+
+    def _modal_data(self, fields, discord_id="55501", username="newbie"):
+        return {
+            "guild_id": self.club.discord_server_id,
+            "user": {"id": discord_id, "username": username},
+            "data": {
+                "components": [{"components": [{"custom_id": k, "value": v}]} for k, v in fields.items()],
+            },
+        }
+
+    def test_accepts_single_name_field(self):
+        self.view._handle_join_modal(self._modal_data({"name": "Solo Name", "email": "solo@example.com"}))
+        m = ClubMember.objects.get(club=self.club, email="solo@example.com")
+        self.assertEqual(m.name, "Solo Name")
+
+    def test_accepts_first_and_last_name(self):
+        self.view._handle_join_modal(
+            self._modal_data({"first_name": "Old", "last_name": "Cache", "email": "oc@example.com"})
+        )
+        m = ClubMember.objects.get(club=self.club, email="oc@example.com")
+        self.assertEqual(m.name, "Old Cache")
+
+    def test_accepts_only_first_name(self):
+        self.view._handle_join_modal(
+            self._modal_data({"first_name": "First", "email": "first@example.com"}, discord_id="55502"),
+        )
+        m = ClubMember.objects.get(club=self.club, email="first@example.com")
+        self.assertEqual(m.name, "First")
+
+
+class ClubMemberNameModelTests(TestCase):
+    """Tests for the renamed ``name`` field on ClubMember."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Name Field Club")
+
+    def test_str_uses_name(self):
+        m = ClubMember.objects.create(club=self.club, name="Jane Doe")
+        self.assertEqual(str(m), "Jane Doe")
+
+    def test_str_falls_back_to_email(self):
+        m = ClubMember.objects.create(club=self.club, email="x@example.com")
+        self.assertEqual(str(m), "x@example.com")
+
+    def test_str_fallback_member_id(self):
+        m = ClubMember.objects.create(club=self.club)
+        self.assertIn("Member #", str(m))
+
+    def test_display_name_matches_str(self):
+        m = ClubMember.objects.create(club=self.club, name="Solo")
+        self.assertEqual(m.display_name, str(m))
+
+    def test_possible_duplicate_detected_by_name(self):
+        a = ClubMember.objects.create(club=self.club, name="Same Name")
+        b = ClubMember.objects.create(club=self.club, name="Same Name")
+        a.refresh_from_db()
+        b.refresh_from_db()
+        self.assertEqual(a.possible_duplicate_id, b.pk)
+        self.assertEqual(b.possible_duplicate_id, a.pk)
+
+
+class ClubMemberIngestNameTests(TestCase):
+    """Unit-level tests for the serializer/map_fields combine logic."""
+
+    def setUp(self):
+        from .models import ClubAPIKey
+
+        self.club = Club.objects.create(name="Ingest Logic Club")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(club=self.club, name="ingest-logic", prefix=prefix, key_hash=key_hash)
+
+    def test_map_fields_combines_first_and_last(self):
+        from .services import map_fields
+
+        result = map_fields({"first_name": "Map", "last_name": "Fields"}, self.api_key)
+        self.assertEqual(result["name"], "Map Fields")
+        self.assertNotIn("first_name", result)
+        self.assertNotIn("last_name", result)
+
+    def test_map_fields_keeps_existing_name(self):
+        from .services import map_fields
+
+        result = map_fields({"name": "Direct", "first_name": "Ignored"}, self.api_key)
+        self.assertEqual(result["name"], "Direct")
+
+    def test_serializer_rejects_when_no_email_or_name(self):
+        from .serializers import ClubMemberIngestSerializer
+
+        s = ClubMemberIngestSerializer(data={})
+        self.assertFalse(s.is_valid())
+
+    def test_serializer_combines_first_and_last_name(self):
+        from .serializers import ClubMemberIngestSerializer
+
+        s = ClubMemberIngestSerializer(data={"first_name": "A", "last_name": "B"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(s.validated_data["name"], "A B")
+
+
+@override_settings(
+    GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+)
+class GoogleWalletClassCreateTests(TestCase):
+    """Verify the Wallet class create task: idempotent, configured-gated, correct body."""
+
+    def setUp(self):
+        from .models import Club
+
+        self.club = Club.objects.create(name="Wallet Test Club")
+
+    def _mock_response(self, status_code, json_body=None, text=""):
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = json_body or {}
+        resp.text = text
+        if status_code >= 400:
+            from requests.exceptions import HTTPError
+
+            resp.raise_for_status.side_effect = HTTPError(f"{status_code}")
+        else:
+            resp.raise_for_status.return_value = None
+        return resp
+
+    @override_settings(
+        GOOGLE_WALLET_ISSUER_ID="",
+        GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="",
+        GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="",
+    )
+    def test_no_op_when_not_configured(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.requests.post") as post:
+            self.assertFalse(create_generic_class(self.club))
+            post.assert_not_called()
+
+    def test_sends_pk_based_class_id(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(200, {"id": "ok"}),
+            ) as post:
+                self.assertTrue(create_generic_class(self.club))
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["id"], f"3388000000022XXXXXX.membership_{self.club.pk}")
+
+    def test_409_triggers_patch_and_returns_success(self):
+        """POST → 409 → PATCH (so icon / metadata updates push to existing classes)."""
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(409, text="already exists"),
+            ):
+                with patch(
+                    "auctions.google_wallet.requests.patch",
+                    return_value=self._mock_response(200, {"id": "patched"}),
+                ) as patch_mock:
+                    self.assertTrue(create_generic_class(self.club))
+        self.assertEqual(patch_mock.call_count, 1)
+
+    def test_400_raises(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(400, text="bad request"),
+            ):
+                with self.assertRaises(Exception):
+                    create_generic_class(self.club)
+
+    def test_signal_dispatches_when_class_not_yet_created(self):
+        from .models import Club
+
+        # transaction.on_commit callbacks do not fire inside TestCase's atomic block
+        # unless we capture them — use captureOnCommitCallbacks(execute=True) so the
+        # signal's lambda actually runs and we can observe the .delay() call.
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                club = Club.objects.create(name="Another")
+            delay.assert_called_once_with(club.pk)
+            delay.reset_mock()
+            # Subsequent edits while the flag is still False — dispatch again so legacy
+            # clubs that pre-date the integration get their class on next save.
+            with self.captureOnCommitCallbacks(execute=True):
+                club.name = "Another Renamed"
+                club.save()
+            delay.assert_called_once_with(club.pk)
+            delay.reset_mock()
+            # Once Google confirms the class exists, the flag is flipped and further
+            # saves must NOT re-dispatch (don't spam Google's API on every edit).
+            club.google_wallet_class_created = True
+            club.save()
+            with self.captureOnCommitCallbacks(execute=True):
+                club.name = "Renamed Again"
+                club.save()
+            delay.assert_not_called()
+
+    def test_task_flips_flag_on_success(self):
+        from .models import Club
+        from .tasks import create_google_wallet_class_for_club
+
+        club = Club.objects.create(name="Flag flip test")
+        self.assertFalse(club.google_wallet_class_created)
+        with patch("auctions.google_wallet.create_generic_class", return_value=True):
+            create_google_wallet_class_for_club.apply(args=[club.pk])
+        club.refresh_from_db()
+        self.assertTrue(club.google_wallet_class_created)
+
+
+class MembershipNumberUniquenessTests(TestCase):
+    """The DB-level unique constraint plus save() retry must prevent collisions."""
+
+    def setUp(self):
+        from .models import Club
+
+        self.club = Club.objects.create(name="Unique Test Club")
+
+    def test_save_repicks_on_collision(self):
+        """If a new member is constructed with a number that already exists, save() picks a new one."""
+        from .models import ClubMember
+
+        first = ClubMember.objects.create(club=self.club, name="A")
+        # Force a collision by hand and save again.
+        second = ClubMember(club=self.club, name="B", membership_number=first.membership_number)
+        second.save()
+        self.assertNotEqual(first.membership_number, second.membership_number)
+
+    def test_pick_unique_returns_unused_value(self):
+        from .models import ClubMember, _pick_unique_membership_number
+
+        existing = ClubMember.objects.create(club=self.club, name="A")
+        new_number = _pick_unique_membership_number()
+        self.assertNotEqual(new_number, existing.membership_number)
+        # Sanity: the picker keeps producing a number even when an unrelated row exists.
+        self.assertTrue(1_000_000_000 <= new_number <= 9_999_999_999)
+
+
+class AppleWalletPassTests(TestCase):
+    """Verify the .pkpass builder produces a valid signed zip with the right metadata."""
+
+    def setUp(self):
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="apple_user", password="x", email="a@b.c")
+        self.other_user = User.objects.create_user(username="other_user", password="x", email="o@b.c")
+        self.club = Club.objects.create(name="Apple Test Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Test Member", user=self.user)
+
+    def _make_cert_files(self, tmp_path):
+        """Generate a self-signed cert + WWDR-stand-in cert and return their paths."""
+        import datetime as _dt
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        from cryptography.x509.oid import NameOID
+
+        def _make_cert(subject):
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
+            now = _dt.datetime.now(_dt.timezone.utc)
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(name)
+                .issuer_name(name)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - _dt.timedelta(minutes=1))
+                .not_valid_after(now + _dt.timedelta(days=1))
+                .sign(key, hashes.SHA256())
+            )
+            return key, cert
+
+        signer_key, signer_cert = _make_cert("Pass Type Cert")
+        _wwdr_key, wwdr_cert = _make_cert("WWDR Stand-in")
+
+        # .p12 with no password — encryption=NoEncryption matches APPLE_WALLET_CERT_PASSWORD="".
+        p12_bytes = pkcs12.serialize_key_and_certificates(
+            name=b"pass-cert",
+            key=signer_key,
+            cert=signer_cert,
+            cas=None,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        p12_path = tmp_path / "cert.p12"
+        p12_path.write_bytes(p12_bytes)
+
+        wwdr_pem = wwdr_cert.public_bytes(serialization.Encoding.PEM)
+        wwdr_path = tmp_path / "wwdr.pem"
+        wwdr_path.write_bytes(wwdr_pem)
+        return p12_path, wwdr_path
+
+    def test_generate_pkpass_contains_required_files(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = self._make_cert_files(tmp_path)
+            # Clear the cached signing certs from any earlier test.
+            apple_wallet._load_signing_certs.cache_clear()
+            with self.settings(
+                BASE_DIR=tmp_path,
+                APPLE_WALLET_CERT_FILE=p12_path.name,
+                APPLE_WALLET_CERT_PASSWORD="",
+                APPLE_WALLET_WWDR_FILE=wwdr_path.name,
+                APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+                APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+                APPLE_WALLET_ORGANIZATION_NAME="Test Org",
+            ):
+                self.assertTrue(apple_wallet.is_configured())
+                pkpass_bytes = apple_wallet.generate_pkpass_for_member(self.member)
+        # The result must be a valid zip containing all required files.
+        import io
+        import json as _json
+        import zipfile as _zip
+
+        with _zip.ZipFile(io.BytesIO(pkpass_bytes)) as zf:
+            names = set(zf.namelist())
+            self.assertEqual(
+                names,
+                {"pass.json", "icon.png", "icon@2x.png", "logo.png", "manifest.json", "signature"},
+            )
+            pass_data = _json.loads(zf.read("pass.json"))
+            self.assertEqual(pass_data["passTypeIdentifier"], "pass.com.example.membership")
+            self.assertEqual(pass_data["teamIdentifier"], "ABCDE12345")
+            self.assertEqual(pass_data["serialNumber"], f"member-{self.member.pk}")
+            self.assertEqual(pass_data["barcode"]["message"], str(self.member.membership_number))
+            # Manifest must list a sha1 for every payload file (not itself, not signature).
+            manifest = _json.loads(zf.read("manifest.json"))
+            self.assertEqual(set(manifest.keys()), {"pass.json", "icon.png", "icon@2x.png", "logo.png"})
+
+    def test_is_configured_false_when_settings_missing(self):
+        from . import apple_wallet
+
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="",
+            APPLE_WALLET_WWDR_FILE="",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="",
+            APPLE_WALLET_TEAM_IDENTIFIER="",
+        ):
+            self.assertFalse(apple_wallet.is_configured())
+
+    def test_pkpass_download_requires_owner(self):
+        """Only the owning user may download; UUID-link visitors / other users get 403."""
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.member.pk})
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="cert.p12",
+            APPLE_WALLET_CERT_PASSWORD="",
+            APPLE_WALLET_WWDR_FILE="wwdr.pem",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+            APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+        ):
+            # Wrong user → 403.
+            self.client.force_login(self.other_user)
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 403)
+            # Anonymous → redirect to login (LoginRequiredMixin).
+            self.client.logout()
+            response = self.client.get(url)
+            self.assertIn(response.status_code, (302, 401, 403))
+
+    def test_pkpass_download_404_when_not_configured(self):
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.member.pk})
+        self.client.force_login(self.user)
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="",
+            APPLE_WALLET_WWDR_FILE="",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="",
+            APPLE_WALLET_TEAM_IDENTIFIER="",
+        ):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 404)
+
+
+class MembershipNumberModeTests(TestCase):
+    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+
+    def setUp(self):
+        import datetime as _dt
+
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="mn_user", password="x", email="m@b.c")
+        self.club = Club.objects.create(name="Mode Test Club")
+        self.club.membership_system = "rolling"
+        self.club.save()
+        # Two members: one paid (expires in 30 days), one not.
+        self.paid = ClubMember.objects.create(
+            club=self.club,
+            name="Paid",
+            user=self.user,
+            membership_last_paid=timezone.now().date(),
+            membership_expiration_date=timezone.now().date() + _dt.timedelta(days=30),
+        )
+        self.unpaid = ClubMember.objects.create(club=self.club, name="Unpaid")
+
+    def test_is_paid_member_property(self):
+        self.assertTrue(self.paid.is_paid_member)
+        self.assertFalse(self.unpaid.is_paid_member)
+
+    def test_visibility_all_members(self):
+        self.club.membership_number_mode = "all_members"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertTrue(self.paid.membership_number_visible)
+        self.assertTrue(self.unpaid.membership_number_visible)
+
+    def test_visibility_paid_only(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertTrue(self.paid.membership_number_visible)
+        self.assertFalse(self.unpaid.membership_number_visible)
+
+    def test_visibility_disabled(self):
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.paid.refresh_from_db()
+        self.unpaid.refresh_from_db()
+        self.assertFalse(self.paid.membership_number_visible)
+        self.assertFalse(self.unpaid.membership_number_visible)
+
+    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        # Unpaid user logged in as themselves → 404 (number isn't visible).
+        unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
+        self.unpaid.user = unpaid_user
+        self.unpaid.save()
+        url = reverse("club_member_apple_wallet", kwargs={"pk": self.unpaid.pk})
+        self.client.force_login(unpaid_user)
+        with self.settings(
+            APPLE_WALLET_CERT_FILE="cert.p12",
+            APPLE_WALLET_CERT_PASSWORD="",
+            APPLE_WALLET_WWDR_FILE="wwdr.pem",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+            APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+        ):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 404)
+
+    def test_google_wallet_url_empty_when_number_hidden(self):
+        from .templatetags.membership_tags import google_wallet_save_url
+
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.paid.refresh_from_db()
+        # Should bail out before ever touching settings/JWT.
+        self.assertEqual(google_wallet_save_url(self.paid), "")
+
+    def test_admin_membership_number_view_404_when_disabled(self):
+        from .models import ClubMember
+
+        # Give the user admin permissions on the club so the perm check passes.
+        admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
+        ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
+        self.club.membership_number_mode = "disabled"
+        self.club.save()
+        self.client.force_login(admin)
+        url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "disabled"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "paid_only"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
+
+    def test_signal_no_revoke_when_loosening_to_all_members(self):
+        self.club.membership_number_mode = "paid_only"
+        self.club.save()
+        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.membership_number_mode = "all_members"
+                self.club.save()
+            delay.assert_not_called()
+
+    def test_expire_task_only_targets_unpaid_when_flagged(self):
+        """The bulk task respects unpaid_only and skips paid members."""
+        from .tasks import expire_google_wallet_objects_for_club
+
+        with patch("auctions.google_wallet.is_configured", return_value=True):
+            with patch("auctions.google_wallet.expire_generic_object_for_member") as expire:
+                expire_google_wallet_objects_for_club.apply(args=[self.club.pk], kwargs={"unpaid_only": True})
+        targeted_pks = {call.args[0].pk for call in expire.call_args_list}
+        self.assertEqual(targeted_pks, {self.unpaid.pk})
+
+
+class ClubIconWalletTests(TestCase):
+    """The uploaded Club.icon must flow into the Google Wallet class and Apple pkpass."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import tempfile
+
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
+
+    def _png_bytes(self, size=(64, 64), color=(220, 30, 30)):
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.new("RGB", size, color)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def setUp(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="icon_user", password="x", email="i@b.c")
+        self.club = Club.objects.create(name="Iconed Club")
+        self.club.icon = SimpleUploadedFile("test.png", self._png_bytes(), content_type="image/png")
+        self.club.save()
+        self.member = ClubMember.objects.create(club=self.club, user=self.user, name="M")
+
+    def test_google_wallet_class_body_includes_logo_when_icon_set(self):
+        from .google_wallet import _class_body
+
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(self.club)
+        self.assertIn("logo", body)
+        self.assertTrue(body["logo"]["sourceUri"]["uri"].startswith("https://"))
+        self.assertIn("/media/", body["logo"]["sourceUri"]["uri"])
+
+    def test_google_wallet_class_body_omits_logo_when_no_icon(self):
+        from .google_wallet import _class_body
+        from .models import Club
+
+        no_icon = Club.objects.create(name="Bare Club")
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(no_icon)
+        self.assertNotIn("logo", body)
+
+    def test_icon_change_redispatches_wallet_class_task(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        # Flip the flag manually so we'd normally skip — the change-detection
+        # logic must override and dispatch anyway.
+        from .models import Club
+
+        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
+        self.club.refresh_from_db()
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.icon = SimpleUploadedFile(
+                    "new.png", self._png_bytes(color=(0, 255, 0)), content_type="image/png"
+                )
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_unchanged_icon_does_not_redispatch(self):
+        from .models import Club
+
+        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
+        self.club.refresh_from_db()
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.name = "Renamed"
+                self.club.save()
+            delay.assert_not_called()
+
+    def test_club_rename_dispatches_wallet_object_sync(self):
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.club.name = "Renamed Club"
+                self.club.save()
+            delay.assert_called_once_with(self.club.pk)
+
+    def test_update_generic_object_for_member_patches_with_current_club_name(self):
+        from unittest.mock import MagicMock
+
+        from .google_wallet import update_generic_object_for_member
+
+        patch_resp = MagicMock(status_code=200, text="patched")
+        with self.settings(
+            GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+        ):
+            with patch("auctions.google_wallet.get_access_token", return_value="t"):
+                with patch("auctions.google_wallet.requests.patch", return_value=patch_resp) as patch_mock:
+                    self.assertTrue(update_generic_object_for_member(self.member))
+        payload = patch_mock.call_args.kwargs["json"]
+        self.assertEqual(payload["cardTitle"]["defaultValue"]["value"], self.club.name)
+
+    def test_apple_wallet_icon_png_uses_club_icon(self):
+        from .apple_wallet import _icon_png
+
+        png = _icon_png(self.club, (29, 29))
+        # Decode the PNG and confirm it's the requested size — proves it ran
+        # through the icon-rendering branch (not the placeholder text fallback).
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.open(_io.BytesIO(png))
+        self.assertEqual(img.size, (29, 29))
+
+    def test_apple_wallet_icon_png_falls_back_to_placeholder_without_icon(self):
+        from .apple_wallet import _icon_png
+        from .models import Club
+
+        no_icon = Club.objects.create(name="No Icon Club")
+        png = _icon_png(no_icon, (29, 29))
+        import io as _io
+
+        from PIL import Image as _Image
+
+        img = _Image.open(_io.BytesIO(png))
+        self.assertEqual(img.size, (29, 29))
+
+    def test_create_generic_class_patches_on_409(self):
+        """409 from POST must trigger a PATCH so icon updates propagate to existing classes."""
+        from unittest.mock import MagicMock
+
+        from .google_wallet import create_generic_class
+
+        post_resp = MagicMock(status_code=409, text="exists")
+        patch_resp = MagicMock(status_code=200, text="patched")
+        with self.settings(
+            GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+        ):
+            with patch("auctions.google_wallet.get_access_token", return_value="t"):
+                with patch("auctions.google_wallet.requests.post", return_value=post_resp) as post_mock:
+                    with patch("auctions.google_wallet.requests.patch", return_value=patch_resp) as patch_mock:
+                        self.assertTrue(create_generic_class(self.club))
+        self.assertEqual(post_mock.call_count, 1)
+        self.assertEqual(patch_mock.call_count, 1)

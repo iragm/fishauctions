@@ -23,6 +23,7 @@ from .models import (
     Auction,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Category,
     ClubHistory,
     ClubMember,
@@ -230,7 +231,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
         if not match_names_only:
             # Apply filters based on patterns
             for keyword, filter_data in invoice_patterns.items():
-                pattern = re.compile(rf"^{keyword}|\s{keyword}\s|\s{keyword}$")
+                keyword_pattern = re.escape(keyword)
+                pattern = re.compile(rf"^{keyword_pattern}|\s{keyword_pattern}\s|\s{keyword_pattern}$")
                 if pattern.search(value):
                     value = pattern.sub("", value)
                     qs = qs.filter(**filter_data)
@@ -997,7 +999,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, source...",
+                "placeholder": "Filter by name, email, source, expired, expiring, never paid...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1012,7 +1014,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         fields = []
 
     def clubmember_search(self, queryset, name, value):
-        """Support text search including special tokens: discord, current, expired"""
+        """Support text search including special tokens: discord, current, expired, expiring, never paid"""
         tokens = value.lower().split()
         source_filter = None
         status_filter = None
@@ -1024,7 +1026,11 @@ class ClubMemberFilter(django_filters.FilterSet):
                 status_filter = "current"
             elif token == "expired":
                 status_filter = "expired"
-            elif token in ("joined", "website"):
+            elif token in ("expiring", "soon"):
+                status_filter = "expiring"
+            elif token in ("never", "unpaid", "never_paid"):
+                status_filter = "never_paid"
+            elif token in ("joined", "website", "navbar"):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
                 source_filter = "manually_added"
@@ -1033,21 +1039,24 @@ class ClubMemberFilter(django_filters.FilterSet):
 
         if source_filter:
             queryset = queryset.filter(source=source_filter)
-        membership_validity_days = 365
-        if status_filter in ("current", "expired"):
-            one_year_ago = timezone.now().date() - datetime.timedelta(days=membership_validity_days)
+        if status_filter:
+            today = timezone.now().date()
             if status_filter == "current":
-                queryset = queryset.filter(membership_last_paid__gte=one_year_ago)
-            else:
+                queryset = queryset.filter(membership_expiration_date__gte=today)
+            elif status_filter == "expired":
                 queryset = queryset.filter(
-                    Q(membership_last_paid__lt=one_year_ago) | Q(membership_last_paid__isnull=True)
+                    Q(membership_expiration_date__lt=today) | Q(membership_expiration_date__isnull=True)
                 )
+            elif status_filter == "expiring":
+                soon = today + datetime.timedelta(days=30)
+                queryset = queryset.filter(membership_expiration_date__gte=today, membership_expiration_date__lte=soon)
+            elif status_filter == "never_paid":
+                queryset = queryset.filter(membership_expiration_date__isnull=True)
 
         text = " ".join(remaining)
         if text:
             queryset = queryset.filter(
-                Q(first_name__icontains=text)
-                | Q(last_name__icontains=text)
+                Q(name__icontains=text)
                 | Q(email__icontains=text)
                 | Q(user__email__icontains=text)
                 | Q(discord_username__icontains=text)
@@ -1088,6 +1097,45 @@ class ClubHistoryFilter(django_filters.FilterSet):
         return self.generic(queryset, value)
 
 
+class BapAwardFilter(django_filters.FilterSet):
+    """Filter for the BAP awarded-points table."""
+
+    query = django_filters.CharFilter(
+        method="filter_query",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by member name, email, lot name, or notes...",
+                "hx-get": "",
+                "hx-target": "#awards-table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "innerHTML",
+            }
+        ),
+    )
+
+    class Meta:
+        model = BapAward
+        fields = []
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        self.helper.form_id = "awards-filter-form"
+
+    def filter_query(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(
+            Q(club_member__name__icontains=value)
+            | Q(club_member__email__icontains=value)
+            | Q(lot__lot_name__icontains=value)
+            | Q(notes__icontains=value)
+        )
+
+
 class ClubBapLotFilter(django_filters.FilterSet):
     """Filter for the BAP lot review table (club admin, permission_manage_bap only).
 
@@ -1102,9 +1150,9 @@ class ClubBapLotFilter(django_filters.FilterSet):
             attrs={
                 "placeholder": "Filter by lot name or seller...",
                 "hx-get": "",
-                "hx-target": "div.table-container",
+                "hx-target": "#lots-table-container",
                 "hx-trigger": "keyup changed delay:300ms",
-                "hx-swap": "outerHTML",
+                "hx-swap": "innerHTML",
             }
         ),
     )
@@ -1113,36 +1161,35 @@ class ClubBapLotFilter(django_filters.FilterSet):
         model = Lot
         fields = []
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, data=None, *args, **kwargs):
+        # Seed "pending" when the page loads with no params so django-filter treats the
+        # filterset as bound and actually calls filter_queryset (unbound = no filtering).
+        if not data:
+            data = {"query": "pending"}
+        super().__init__(data, *args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
         self.helper.form_id = "filter-form"
-        if not self.data.get("query"):
-            self.form.initial["query"] = "pending"
-
-    def filter_queryset(self, queryset):
-        # When no query submitted apply the pending default without going through CharField
-        if not self.data.get("query"):
-            return self._apply_query(queryset, "pending")
-        return super().filter_queryset(queryset)
 
     def filter_query(self, queryset, name, value):
         return self._apply_query(queryset, value)
 
     def _apply_query(self, queryset, value):
         tokens = value.lower().split()
-        status_keywords = {"pending", "approved"}
+        status_keywords = {"pending", "approved", "rejected"}
         status = next((t for t in tokens if t in status_keywords), None)
         search_tokens = [t for t in tokens if t not in status_keywords]
         search = " ".join(search_tokens)
 
         if status == "pending":
-            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False, manually_approved=False)
+            # Not yet reviewed: no BapAward and not manually dismissed
+            queryset = queryset.filter(bap_award__isnull=True, manually_approved=False)
         elif status == "approved":
-            queryset = queryset.filter(bap_points_awarded__gt=0)
-        else:
-            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False)
+            queryset = queryset.filter(bap_award__isnull=False)
+        elif status == "rejected":
+            # Manually dismissed with no BapAward
+            queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
+        # no status keyword = show all sold lots (no extra filter)
 
         if search:
             queryset = queryset.filter(

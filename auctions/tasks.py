@@ -8,6 +8,7 @@ Each task wraps a management command to maintain backward compatibility.
 import json
 import logging
 
+import requests
 from celery import shared_task
 from django.contrib.sites.models import Site
 from django.core.management import call_command
@@ -19,6 +20,9 @@ STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to
 STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking for new auctions
 STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
 AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off scheduled task
+
+# Constants for BAP recalculation scheduling
+BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +223,112 @@ def cleanup_old_invoice_notification_tasks(self):
         clocked__clocked_time__lt=cutoff_time,
     )
     old_tasks.delete()
+
+
+@shared_task(bind=True, ignore_result=True)
+def update_expired_membership_discord_roles(self):
+    """
+    Re-evaluate and update Discord roles for all members whose auto-managed role
+    no longer matches what was last assigned (e.g. after membership expiration or renewal).
+
+    Also sends membership expiration reminder emails.
+
+    Runs daily. Only members whose computed role differs from last_discord_role_assigned
+    will trigger Discord API calls.
+    """
+    from django.conf import settings
+    from django.contrib.sites.models import Site
+    from django.urls import reverse
+    from django.utils import timezone
+    from post_office import mail
+
+    from auctions.models import ClubMember, Invoice
+
+    members = (
+        ClubMember.objects.filter(
+            discord_id__isnull=False,
+            discord_role_auto_managed=True,
+            is_deleted=False,
+            club__discord_server_id__isnull=False,
+        )
+        .select_related("club", "last_discord_role_assigned")
+        .prefetch_related("club__discord_roles")
+    )
+
+    for member in members:
+        if member.discord_role != member.last_discord_role_assigned:
+            member.maybe_assign_discord_role()
+
+    # Zero out YTD BAP/HAP/CAP counters at the start of each new year
+    import datetime
+
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    if today.month == 1 and today.day == 1:
+        ClubMember.objects.filter(
+            is_deleted=False,
+            club__enable_breeder_award_program=True,
+        ).update(bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0)
+
+    # Send membership expiration reminder emails
+    reminder_qs = (
+        ClubMember.objects.filter(
+            is_deleted=False,
+            club__send_membership_expiration_reminders=True,
+            club__membership_annual_fee__gt=0,
+            membership_expiration_date__isnull=False,
+            membership_expiration_reminder_due__lte=timezone.now(),
+            email__isnull=False,
+        )
+        .exclude(email="")
+        .exclude(contact_status="do_not_contact")
+        .select_related("club")
+    )
+    current_site = Site.objects.get_current()
+    for member in reminder_qs:
+        club = member.club
+        # Find or create an unpaid membership invoice for this member so the
+        # no-login link lets them pay without signing in.
+        invoice = Invoice.objects.filter(
+            club=club,
+            auction=None,
+            auctiontos_user__email__iexact=member.email,
+            renewal_processed=False,
+            status="UNPAID",
+        ).first()
+        if invoice is None and member.user:
+            invoice = Invoice.objects.filter(
+                club=club,
+                auction=None,
+                buyer=member.user,
+                renewal_processed=False,
+                status="UNPAID",
+            ).first()
+        if invoice is None:
+            invoice = Invoice.objects.create(
+                club=club,
+                buyer=member.user or None,
+                status="UNPAID",
+                renewal_needed=True,
+            )
+        renew_url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        fallback_reply_to = settings.DEFAULT_FROM_EMAIL
+        if settings.ADMINS:
+            fallback_reply_to = settings.ADMINS[0][1]
+        mail.send(
+            member.email,
+            template="club_membership_expiring",
+            headers={"Reply-to": (club.contact_email or fallback_reply_to)},
+            context={
+                "name": member.display_name,
+                "club": club,
+                "domain": current_site.domain,
+                "navbar_brand": settings.NAVBAR_BRAND,
+                "renew_link": f"https://{current_site.domain}{renew_url}",
+                "member": member,
+            },
+        )
+        member.membership_expiration_reminder_due = None
+        member.save(update_fields=["membership_expiration_reminder_due"])
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -429,59 +539,38 @@ def update_auction_stats(self):
         schedule_auction_stats_update(fallback_time)
 
 
-# Constants for BAP recalculation scheduling
-BAP_RECALCULATION_TASK_PREFIX = "bap_recalculate_club_"
-BAP_RECALCULATION_INTERVAL_DAYS = 30
+def schedule_bap_recalculation(club_pk, run_at):
+    """
+    Schedule a one-off BAP recalculation task for a club.
 
-
-def bootstrap_bap_recalculation_tasks(run_at=None):
-    """Ensure each already-initialized BAP club has an enabled recalculation task.
+    If a task already exists for this club:
+    - Same run_at: re-enable it in place (no delete/recreate).
+    - Different run_at: delete the task; delete the ClockedSchedule only if no other
+      task still references it (prevents disrupting sibling club tasks).
 
     Args:
-        run_at: Datetime to use for startup bootstrap. If None, uses the current
-            time. Clubs with a saved next_bap_recalculation in the past are
-            rescheduled to run at this time immediately.
+        club_pk: Primary key of the Club to recalculate.
+        run_at: datetime when the recalculation should run.
     """
-
-    from django.utils import timezone
-
-    from auctions.models import Club
-
-    if run_at is None:
-        run_at = timezone.now()
-
-    clubs = Club.objects.filter(enable_breeder_award_program=True, next_bap_recalculation__isnull=False).only(
-        "pk", "next_bap_recalculation"
-    )
-
-    for club in clubs:
-        club_run_at = club.next_bap_recalculation
-        if club_run_at < run_at:
-            club_run_at = run_at
-        schedule_bap_recalculation(club.pk, run_at=club_run_at)
-
-
-def schedule_bap_recalculation(club_pk, run_at=None):
-    """Schedule a one-off BAP points recalculation task for a specific club.
-
-    Each club gets its own named PeriodicTask so schedules are independent.
-    Uses the same atomic delete-and-recreate pattern as schedule_auction_stats_update.
-    """
-
     from django.db import transaction
-    from django.utils import timezone
-
-    if run_at is None:
-        run_at = timezone.now()
 
     task_name = f"{BAP_RECALCULATION_TASK_PREFIX}{club_pk}"
 
     with transaction.atomic():
+        old_task = PeriodicTask.objects.filter(name=task_name).select_related("clocked").first()
+        if old_task:
+            old_schedule = old_task.clocked
+            if old_schedule and old_schedule.clocked_time == run_at:
+                old_task.enabled = True
+                old_task.save(update_fields=["enabled"])
+                return
+            is_shared = old_schedule and PeriodicTask.objects.filter(clocked=old_schedule).count() > 1
+            old_task.delete()
+            if old_schedule and not is_shared:
+                ClockedSchedule.objects.filter(pk=old_schedule.pk).delete()
+
         schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
-        old_tasks = PeriodicTask.objects.filter(name=task_name)
-        old_schedule_ids = [t.clocked_id for t in old_tasks if t.clocked_id and t.clocked_id != schedule.id]
-        old_tasks.delete()
-        task = PeriodicTask.objects.create(
+        PeriodicTask.objects.create(
             name=task_name,
             task="auctions.tasks.recalculate_club_bap_points",
             clocked=schedule,
@@ -489,103 +578,131 @@ def schedule_bap_recalculation(club_pk, run_at=None):
             enabled=True,
             kwargs=json.dumps({"club_pk": club_pk}),
         )
-        if old_schedule_ids:
-            active_schedule_ids = set(
-                PeriodicTask.objects.filter(clocked_id__in=old_schedule_ids).values_list("clocked_id", flat=True)
-            )
-            orphaned_schedule_ids = set(old_schedule_ids) - active_schedule_ids
-            if orphaned_schedule_ids:
-                ClockedSchedule.objects.filter(id__in=orphaned_schedule_ids).delete()
 
-    logger.info("Scheduled BAP recalculation for club %s (task id=%s) at %s", club_pk, task.id, run_at)
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def create_google_wallet_class_for_club(self, club_pk):
+    """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK).
+
+    On success (Wallet confirms the class exists), flips the club's
+    `google_wallet_class_created` flag so the post_save signal stops re-dispatching
+    this task on every edit.
+    """
+    from auctions.google_wallet import create_generic_class, is_configured
+    from auctions.models import Club
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    if create_generic_class(club) and not club.google_wallet_class_created:
+        # update() avoids re-firing the signal we're inside.
+        Club.objects.filter(pk=club.pk).update(google_wallet_class_created=True)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def update_google_wallet_objects_for_club(self, club_pk):
+    """Patch existing Google Wallet objects for all active members in a club."""
+    from auctions.google_wallet import is_configured, update_generic_object_for_member
+    from auctions.models import Club, ClubMember
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    members = ClubMember.objects.filter(club=club, is_deleted=False).select_related("user", "club")
+    for member in members:
+        try:
+            update_generic_object_for_member(member)
+        except requests.RequestException:
+            logger.exception(
+                "Google Wallet object refresh failed for club=%s member=%s",
+                club.pk,
+                member.pk,
+            )
+            raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
+    """Expire (state=EXPIRED) every active Wallet pass for a club's members.
+
+    When `unpaid_only=True` only members whose dues are currently lapsed are
+    touched — used when the club switches to "paid members only" mode.
+    """
+    from auctions.google_wallet import expire_generic_object_for_member, is_configured
+    from auctions.models import Club, ClubMember
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    members = ClubMember.objects.filter(club=club, is_deleted=False)
+    for member in members:
+        if unpaid_only and member.is_paid_member:
+            continue
+        try:
+            expire_generic_object_for_member(member)
+        except requests.RequestException:
+            # Let Celery's autoretry handle transient failures on the outer task.
+            raise
 
 
 @shared_task(bind=True, ignore_result=True)
 def recalculate_club_bap_points(self, club_pk):
-    """Recalculate BAP, HAP, and Culture points for all members of a club.
+    """Recalculate BAP/HAP/CAP point totals for all active members of a club."""
+    from auctions.models import BapAward, Club, ClubMember
 
-    Iterates all lots with bap_points_awarded > 0 in this club's auctions,
-    resolves the seller to a ClubMember by user or email, and accumulates
-    totals (all-time and year-to-date) into the appropriate fields.
-    After saving, assigns Discord roles where applicable.
-    Self-schedules to run again in BAP_RECALCULATION_INTERVAL_DAYS days.
-    """
-    import datetime
-
-    from django.utils import timezone
-
-    from auctions.models import Club, ClubMember, Lot
-
-    logger.info("BAP recalculation started for club pk=%s", club_pk)
-
-    try:
-        club = Club.objects.get(pk=club_pk)
-    except Club.DoesNotExist:
-        logger.warning("BAP recalculation: club pk=%s not found, skipping", club_pk)
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
         return
+    for member in ClubMember.objects.filter(club=club, is_deleted=False):
+        BapAward.recalculate_member_points(member)
 
-    this_year = timezone.now().year
 
-    members = list(ClubMember.objects.filter(club=club, is_deleted=False).select_related("club"))
-    for m in members:
-        m.bap_points = 0
-        m.hap_points = 0
-        m.culture_points = 0
-        m.bap_points_ytd = 0
-        m.hap_points_ytd = 0
-        m.culture_points_ytd = 0
+def bootstrap_bap_recalculation_tasks(run_at):
+    """
+    Schedule BAP recalculation tasks for all eligible clubs on worker startup.
 
-    user_map = {m.user_id: m for m in members if m.user_id}
-    email_map = {m.email.lower(): m for m in members if m.email}
+    Only clubs with enable_breeder_award_program=True and next_bap_recalculation
+    set are scheduled. Overdue clubs are scheduled to run at run_at; future clubs
+    are scheduled at their next_bap_recalculation time.
 
-    lots = Lot.objects.filter(
-        auction__club=club, bap_points_awarded__gt=0, is_deleted=False, banned=False
-    ).select_related("auctiontos_seller__user", "species_category", "auction__club")
+    Args:
+        run_at: datetime representing "now" — overdue clubs use this as their run time.
+    """
+    from auctions.models import Club
 
-    for lot in lots:
-        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
-        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
-
-        member = None
-        if seller_user and seller_user.pk in user_map:
-            member = user_map[seller_user.pk]
-        elif seller_email.lower() in email_map:
-            member = email_map[seller_email.lower()]
-        if not member:
-            continue
-
-        pts = lot.bap_points_awarded
-        program = lot.bap_placeholder  # "BAP", "HAP", or "Culture"
-        is_ytd = bool(lot.date_end and lot.date_end.year == this_year)
-
-        if program == "Culture":
-            member.culture_points += pts
-            if is_ytd:
-                member.culture_points_ytd += pts
-        elif program == "HAP":
-            member.hap_points += pts
-            if is_ytd:
-                member.hap_points_ytd += pts
+    clubs = Club.objects.filter(
+        enable_breeder_award_program=True,
+        next_bap_recalculation__isnull=False,
+    )
+    for club in clubs:
+        if club.next_bap_recalculation <= run_at:
+            schedule_bap_recalculation(club.pk, run_at=run_at)
         else:
-            member.bap_points += pts
-            if is_ytd:
-                member.bap_points_ytd += pts
-
-    update_fields = [
-        "bap_points",
-        "hap_points",
-        "culture_points",
-        "bap_points_ytd",
-        "hap_points_ytd",
-        "culture_points_ytd",
-    ]
-    for m in members:
-        m.save(update_fields=update_fields)
-        m.maybe_assign_discord_role()
-
-    now = timezone.now()
-    next_run = now + datetime.timedelta(days=BAP_RECALCULATION_INTERVAL_DAYS)
-    Club.objects.filter(pk=club_pk).update(last_bap_recalculation=now, next_bap_recalculation=next_run)
-
-    logger.info("BAP recalculation complete for club pk=%s, next run at %s", club_pk, next_run)
-    schedule_bap_recalculation(club_pk, run_at=next_run)
+            schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
 from decimal import Decimal, InvalidOperation
@@ -106,6 +107,7 @@ from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
     AuctionTOSFilter,
+    BapAwardFilter,
     ClubBapLotFilter,
     ClubHistoryFilter,
     ClubMemberFilter,
@@ -124,6 +126,7 @@ from .forms import (
     AuctionNoShowForm,
     AuctionTOSMergeReviewForm,
     AuctionTOSMergeTargetForm,
+    BapAwardForm,
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
@@ -135,6 +138,7 @@ from .forms import (
     ClubMemberMergeTargetForm,
     ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
+    ClubMembershipSettingsForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
     CreateImageForm,
@@ -167,6 +171,7 @@ from .models import (
     AuctionHistory,
     AuctionIgnore,
     AuctionTOS,
+    BapAward,
     Bid,
     BlogPost,
     Category,
@@ -207,6 +212,7 @@ from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
     AuctionTOSHTMxTable,
+    BapAwardHTMxTable,
     ClubBapLotHTMxTable,
     ClubHistoryHTMxTable,
     ClubMemberHTMxTable,
@@ -264,7 +270,7 @@ class AuctionViewMixin:
         Returns False on no permission or True if the user has permission to access the auction"""
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            raise Exception(msg)
+            raise requests.HTTPError(msg) from None
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
@@ -294,6 +300,208 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+def _invoice_membership_lookup_email(invoice):
+    """Return a usable lookup email for the buyer on this invoice, or empty string."""
+    if not invoice:
+        return ""
+    tos = invoice.auctiontos_user
+    candidates = []
+    if tos:
+        candidates.append(tos.email)
+        if tos.user:
+            candidates.append(tos.user.email)
+    if invoice.buyer:
+        candidates.append(invoice.buyer.email)
+    for email in candidates:
+        if email and email.strip():
+            return email.strip()
+    return ""
+
+
+def _find_club_member(club, user, email):
+    """Match an existing (non-deleted) ClubMember by user link first, then by email."""
+    if not club:
+        return None
+    member = None
+    if user:
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member and email:
+        member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
+    return member
+
+
+def _invoice_membership_candidate(invoice):
+    if not invoice or not invoice.auction or not invoice.auction.club or not invoice.auctiontos_user:
+        return None
+    if not invoice.auction.add_people_from_auction_to_club:
+        return None
+    user = invoice.auctiontos_user.user
+    email = _invoice_membership_lookup_email(invoice)
+    if not user and not email:
+        return None
+    return _find_club_member(invoice.auction.club, user, email)
+
+
+def _should_mark_invoice_renewal_needed(invoice):
+    if not invoice or not invoice.auction or not invoice.auction.club:
+        return False
+    auction = invoice.auction
+    club = auction.club
+    if not auction.add_people_from_auction_to_club:
+        return False
+    if not auction.add_membership_fee_to_invoices_for_expired_members:
+        return False
+    if not club.membership_annual_fee:
+        return False
+    # Without a usable email we cannot reliably look up or create a ClubMember;
+    # don't auto-add the fee in that case (an admin can still toggle it on manually).
+    if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
+        return False
+    member = _invoice_membership_candidate(invoice)
+    if not member:
+        return True
+    expiration_date = member.membership_expiration_date
+    if not expiration_date:
+        return True
+    return expiration_date <= timezone.now().date() + timedelta(days=14)
+
+
+def _ensure_invoice_renewal_state(invoice):
+    if not invoice or invoice.renewal_processed:
+        return
+    should_need = _should_mark_invoice_renewal_needed(invoice)
+    if invoice.renewal_needed != should_need:
+        invoice.renewal_needed = should_need
+        invoice.save(update_fields=["renewal_needed"])
+
+
+def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
+    """Process a membership renewal triggered by an invoice payment.
+
+    Wrapped in a try/except + atomic block so a failure (e.g. Discord API outage)
+    cannot bubble out and break the caller that just marked the invoice paid.
+    """
+    if not invoice or not invoice.renewal_needed:
+        return
+    try:
+        with transaction.atomic():
+            # Re-fetch under the row lock so concurrent webhooks can't double-process.
+            locked = Invoice.objects.select_for_update().filter(pk=invoice.pk).first()
+            if not locked or not locked.renewal_needed or locked.renewal_processed:
+                return
+            club = locked.club or (locked.auction.club if locked.auction else None)
+            if not club:
+                return
+            user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
+            email = _invoice_membership_lookup_email(locked)
+            if not user and not email:
+                # Nothing reliable to identify the buyer by; do not create a junk member.
+                logger.warning(
+                    "Skipping renewal on invoice %s: no linked user and no email available",
+                    locked.pk,
+                )
+                return
+            member = _find_club_member(club, user, email)
+            if not member:
+                if locked.auctiontos_user:
+                    name = locked.auctiontos_user.name or (
+                        f"{user.first_name} {user.last_name}".strip() if user else ""
+                    )
+                    member_email = locked.auctiontos_user.email or (user.email if user else "") or email
+                    source = "auction_invoice"
+                else:
+                    name = f"{user.first_name} {user.last_name}".strip() if user else ""
+                    member_email = (user.email if user else "") or email
+                    source = "membership_payment"
+                member = ClubMember.objects.create(
+                    club=club,
+                    user=user,
+                    name=name,
+                    email=member_email,
+                    source=source,
+                )
+            elif user and not member.user:
+                # Link the existing email-only member to the user now that we know them.
+                member.user = user
+                member.save(update_fields=["user"])
+            today = timezone.now().date()
+            current_exp = member.membership_expiration_date
+            base = max(current_exp, today) if current_exp else today
+            if club.membership_system == "january_first":
+                member.membership_expiration_date = date_type(base.year + 1, 1, 1)
+            else:
+                member.membership_expiration_date = date_type(base.year + 1, 12, 31)
+            member.membership_last_paid = today
+            if member.email:
+                member.email_address_status = "VALID"
+            member.save(
+                update_fields=[
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "membership_expiration_reminder_due",
+                    "email_address_status",
+                ]
+            )
+            InvoicePayment.objects.create(
+                invoice=None,
+                club_member=member,
+                payment_target="CLUB_MEMBER",
+                amount=Decimal(club.membership_annual_fee or 0),
+                amount_available_to_refund=Decimal("0.00"),
+                currency=locked.currency,
+                payment_method=payment_method,
+                memo=f"Renewal from invoice #{locked.pk}",
+            )
+            locked.renewal_processed = True
+            locked.save(update_fields=["renewal_processed"])
+            # Keep the in-memory invoice in sync for the caller.
+            invoice.renewal_processed = True
+    except Exception:
+        logger.exception("Failed to process membership renewal for invoice %s", invoice.pk)
+        return
+    # Discord role assignment is best-effort: a network/API failure must not
+    # roll back the renewal nor crash the caller.
+    try:
+        member.maybe_assign_discord_role()
+    except Exception:
+        logger.exception("Failed to assign Discord role for club member %s", getattr(member, "pk", None))
+    payer_email = (
+        (invoice.buyer.email if invoice.buyer else None)
+        or (invoice.auctiontos_user.email if invoice.auctiontos_user else None)
+        or ""
+    )
+    id_suffix = f" (ID: {external_id})" if external_id else ""
+    payer_prefix = f"User {payer_email} " if payer_email else ""
+    action = f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{id_suffix}"
+    try:
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=action,
+            applies_to="MEMBERSHIP",
+        )
+    except Exception:
+        logger.exception("Failed to record ClubHistory for renewal of invoice %s", invoice.pk)
+
+
+def _disable_integrated_payments_if_only_method(user, method_label):
+    """If user is the payment_user for any clubs and has no remaining payment methods, disable integrated payments."""
+    has_paypal = PayPalSeller.objects.filter(user=user).exists()
+    has_square = SquareSeller.objects.filter(user=user).exists()
+    if has_paypal or has_square:
+        return
+    affected_clubs = Club.objects.filter(payment_user=user, allow_integrated_payments=True)
+    for club in affected_clubs:
+        club.allow_integrated_payments = False
+        club.save(update_fields=["allow_integrated_payments"])
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Integrated payments disabled: payment account unlinked {method_label}",
+            applies_to="SETTINGS",
+        )
 
 
 def club_ids_available_for_contact_autofill(user):
@@ -346,6 +554,7 @@ class ClubViewMixin:
 
     allow_non_admins = False
     club = None
+    active_tab = None
 
     def get_club(self, slug):
         if not self.club and slug:
@@ -360,6 +569,22 @@ class ClubViewMixin:
     def user_has_club_permission(self, permission_name):
         """Check if the current user has a specific permission for self.club"""
         return check_club_permission(self.request.user, self.club, permission_name)
+
+    @property
+    def can_edit_settings(self):
+        return self.user_has_club_permission("permission_edit_club")
+
+    @property
+    def can_manage_bap(self):
+        return self.user_has_club_permission("permission_manage_bap")
+
+    @property
+    def can_access_admin(self):
+        return self.user_has_club_permission("permission_admin") or self.user_has_club_permission("permission_view")
+
+    @property
+    def can_add_edit(self):
+        return self.user_has_club_permission("permission_add_edit")
 
 
 class AdminOnlyViewMixin:
@@ -662,6 +887,26 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         if self.q:
             qs = AuctionTOSFilter.generic(self, qs, self.q)
         return qs.order_by("-name")
+
+
+class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Autocomplete for ClubMember — scoped to a forwarded club slug, BAP admins only."""
+
+    def get_result_label(self, result):
+        email = f" ({result.email})" if result.email else ""
+        return format_html("{}{}", str(result), email)
+
+    def get_queryset(self):
+        slug = self.forwarded.get("club_slug", "")
+        if not slug:
+            return ClubMember.objects.none()
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
+        if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
+            return ClubMember.objects.none()
+        qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("name")
+        if self.q:
+            qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
+        return qs
 
 
 class AuctionAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
@@ -1450,24 +1695,39 @@ class InvoicePaid(APIView):
             if not auction.permission_check(request.user):
                 raise PermissionDenied()
         new_status = kwargs["status"]
+        # Core: persist the new invoice status. Everything else is "extra"
+        # and must not be allowed to block the status change.
         invoice.status = new_status
-        # Set or clear invoice_notification_due based on status change
+        run_at = None
         if new_status in ("UNPAID", "PAID"):
-            # Schedule notification in the future to allow for undo
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
             invoice.invoice_notification_due = run_at
-            schedule_invoice_notification(invoice.pk, run_at)
         elif new_status == "DRAFT":
-            # Cancel scheduled notification when setting to open
             invoice.invoice_notification_due = None
-            cancel_invoice_notification(invoice.pk)
         invoice.save()
+        try:
+            if run_at:
+                schedule_invoice_notification(invoice.pk, run_at)
+            elif new_status == "DRAFT":
+                cancel_invoice_notification(invoice.pk)
+        except Exception:
+            logger.exception("schedule/cancel invoice notification failed for invoice %s", invoice.pk)
+        if new_status == "PAID":
+            try:
+                _process_invoice_membership_renewal(
+                    invoice, acting_user=request.user if request.user.is_authenticated else None
+                )
+            except Exception:
+                logger.exception("invoice membership renewal failed for invoice %s", invoice.pk)
         user = request.user if request.user.is_authenticated else None
-        auction.create_history(
-            applies_to="INVOICES",
-            action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
-            user=user,
-        )
+        try:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
+                user=user,
+            )
+        except Exception:
+            logger.exception("create_history failed for invoice %s", invoice.pk)
         return HttpResponse(
             render_to_string("invoice_buttons.html", {"invoice": invoice}),
             status=200,
@@ -1482,6 +1742,43 @@ class APIPostView(APIView):
 
     def post(self, request, *args, **kwargs):
         raise NotImplementedError()
+
+
+class InvoiceRenewalNeededToggleView(APIView):
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        invoice = get_object_or_404(Invoice, pk=pk)
+        if not invoice.auction or not invoice.auction.permission_check(request.user):
+            raise PermissionDenied()
+        if invoice.renewal_processed:
+            return HttpResponseBadRequest("Renewal already processed for this invoice.")
+        renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
+        invoice.renewal_needed = renewal_needed
+        invoice.save(update_fields=["renewal_needed"])
+        invoice.recalculate()
+        ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
+        body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
+        # OOB swaps so the invoice fee row, tax row, final total, and quick-checkout summary
+        # all update in real time when the box is toggled.
+        fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
+        tax_row = render_to_string("auctions/partials/invoice_tax_row.html", ctx, request=request)
+        total_row = render_to_string("auctions/partials/invoice_final_total_row.html", ctx, request=request)
+        oob_fee = fee_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_tax = tax_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        # Wrap <tr> OOB swaps in <table> so the browser's HTML parser does not discard
+        # them when they appear outside a table context, while still letting htmx find
+        # and process the hx-swap-oob attribute (unlike <template>, whose content is
+        # inert and not reachable by querySelectorAll).
+        oob_fee = f"<table>{oob_fee}</table>"
+        oob_tax = f"<table>{oob_tax}</table>"
+        oob_total = f"<table>{oob_total}</table>"
+        oob_summary = (
+            f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
+        )
+        return HttpResponse(body + oob_fee + oob_tax + oob_total + oob_summary)
 
 
 class UpdateLotPushNotificationsView(APIPostView):
@@ -2877,9 +3174,15 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         lot.date_end = timezone.now()
         lot.active = False
         lot.save()
-        lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        try:
+            lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        except Exception:
+            logger.exception("add_winner_message failed for lot %s", lot.pk)
         if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
-            lot.auto_award_bap_points()
+            try:
+                lot.auto_award_bap_points()
+            except Exception:
+                logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def post(self, request, *args, **kwargs):
@@ -2902,23 +3205,32 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if lot and not lot_error and action == "to_online_high_bidder":
             result["success_message"] = lot.sell_to_online_high_bidder
             result["last_sold_lot_number"] = lot.lot_number_display
-            lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
-            lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Sold lot {lot.lot_number_display} to online high bidder",
-                user=self.request.user,
-            )
+            try:
+                lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            except Exception:
+                logger.exception("add_winner_message failed for lot %s", lot.pk)
+            try:
+                lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Sold lot {lot.lot_number_display} to online high bidder",
+                    user=self.request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for lot %s", lot.pk)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
             result["success_message"] = self.end_unsold(lot)
             result["last_sold_lot_number"] = lot.lot_number_display
-            lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Marked lot {lot.lot_number_display} as ended without being sold",
-                user=self.request.user,
-            )
+            try:
+                lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+                    user=self.request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for lot %s", lot.pk)
             return JsonResponse(result)
         if (
             not price_error
@@ -2941,11 +3253,14 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
-                lot.auction.create_history(
-                    applies_to="LOTS",
-                    action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
-                    user=self.request.user,
-                )
+                try:
+                    lot.auction.create_history(
+                        applies_to="LOTS",
+                        action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
+                        user=self.request.user,
+                    )
+                except Exception:
+                    logger.exception("create_history failed for lot %s", lot.pk)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -3053,6 +3368,76 @@ class CSVContactImportMixin:
     MEMO_FIELD_NAMES = ["memo", "note", "notes"]
     FIRST_NAME_FIELD_NAMES = ["first name", "firstname", "first"]
     LAST_NAME_FIELD_NAMES = ["last name", "lastname", "last", "surname"]
+    MEMBERSHIP_LAST_PAID_FIELD_NAMES = [
+        "membership last paid",
+        "membership_last_paid",
+        "last paid",
+        "paid date",
+        "paid",
+    ]
+    MEMBERSHIP_EXPIRATION_FIELD_NAMES = [
+        "membership expiration date",
+        "membership_expiration_date",
+        "expiration date",
+        "expiration",
+        "expires",
+        "membership expires",
+    ]
+    DISCORD_ID_FIELD_NAMES = ["discord id", "discord_id", "discord"]
+    CONTACT_STATUS_FIELD_NAMES = ["contact status", "contact_status", "contact"]
+    DATE_JOINED_FIELD_NAMES = ["date joined", "createdon", "created on", "joined", "join date", "date_joined"]
+
+    # Maps human-readable contact status values (lowercased) to model values
+    CONTACT_STATUS_MAP = {
+        "contact": "contact",
+        "contact normally": "contact",
+        "non_essential": "non_essential",
+        "non essential": "non_essential",
+        "no non-essential emails": "non_essential",
+        "no non essential emails": "non_essential",
+        "do_not_contact": "do_not_contact",
+        "do not contact": "do_not_contact",
+        "dnc": "do_not_contact",
+    }
+
+    @staticmethod
+    def parse_contact_status(value):
+        """Map a CSV contact status value to a model value, or return None if not recognized."""
+        if not value or not value.strip():
+            return None
+        return CSVContactImportMixin.CONTACT_STATUS_MAP.get(value.strip().lower())
+
+    @staticmethod
+    def parse_flexible_date(value):
+        """Parse a date string, supporting incomplete formats: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
+        if not value or not value.strip():
+            return None
+        value = value.strip()
+        if re.match(r"^\d{4}$", value):
+            return date_type(int(value), 1, 1)
+        m = re.match(r"^(\d{4})[-/](\d{1,2})$", value)
+        if m:
+            return date_type(int(m.group(1)), int(m.group(2)), 1)
+        # ISO format: YYYY-MM-DD
+        try:
+            return date_type.fromisoformat(value)
+        except ValueError:
+            pass
+        # US format: MM/DD/YYYY or MM-DD-YYYY
+        m = re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$", value)
+        if m:
+            try:
+                return date_type(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+            except ValueError:
+                pass
+        # YYYY/MM/DD
+        m = re.match(r"^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})$", value)
+        if m:
+            try:
+                return date_type(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                pass
+        return None
 
     @staticmethod
     def extract_csv_field(row, field_name_list, default_response=""):
@@ -4110,8 +4495,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
 
         except json.JSONDecodeError:
             return JsonResponse({"success": False, "error": "Invalid JSON data"})
-        except Exception as e:
-            return JsonResponse({"success": False, "error": str(e)})
+        except Exception:
+            logger.exception("Failed to save lot via lot modal for auction %s", self.auction.pk)
+            return JsonResponse({"success": False, "error": "Unable to save lot."})
 
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.pop("slug", ""))
@@ -4685,6 +5071,11 @@ class ViewLot(DetailView):
                 context["bap_eligible_reason"] = reason
                 if reason:
                     context["bap_eligible_reason_display"] = dict(lot.BAP_REASON_CHOICES).get(reason, reason)
+            context["viewer_has_bap"] = viewer_has_bap
+            if viewer_has_bap and lot.sold:
+                club = lot.auction.club
+                context["bap_club"] = club
+                context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
@@ -5462,13 +5853,19 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
-                    obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
+                    try:
+                        obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
+                    except Exception:
+                        logger.exception("add_winner_message failed for lot %s", obj.pk)
                     if not obj.date_end:
                         obj.date_end = timezone.now()
                         obj.active = False
                         obj.save()
                     if obj.auction and obj.auction.club and not obj.bap_points_awarded and not obj.manually_approved:
-                        obj.auto_award_bap_points()
+                        try:
+                            obj.auto_award_bap_points()
+                        except Exception:
+                            logger.exception("auto_award_bap_points failed for lot %s", obj.pk)
             return HttpResponse("<script>location.reload();</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
@@ -6124,6 +6521,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "enable_square_payments",
+                "add_people_from_auction_to_club",
+                "add_membership_fee_to_invoices_for_expired_members",
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
@@ -6988,14 +7387,19 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 return redirect(auction.get_absolute_url())
             raise Http404
         mark_invoice_viewed_by_user = False
-        self.auction = invoice.auctiontos_user.auction
-        if self.is_auction_admin:
+        self.auction = invoice.auction or (invoice.auctiontos_user.auction if invoice.auctiontos_user else None)
+        if self.auction and self.is_auction_admin:
             auth = True
             self.is_admin = True
-        if self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
+        if self.auction and self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user:
+            if invoice.club and invoice.buyer == request.user:
+                mark_invoice_viewed_by_user = True
+                auth = True
+            elif invoice.auctiontos_user and (
+                invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+            ):
                 mark_invoice_viewed_by_user = True
                 auth = True
         if not auth:
@@ -7015,6 +7419,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
 
     def get_context_data(self, **kwargs):
         invoice = self.get_object()
+        _ensure_invoice_renewal_state(invoice)
         context = {}
         context["debug"] = settings.DEBUG
         context["using_no_login_link"] = self.using_no_login_link
@@ -7030,7 +7435,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             context["show_links"] = True
         context["location"] = invoice.location
         context["print_label_link"] = None
-        if invoice.auction.is_online:
+        if invoice.auction and invoice.auctiontos_user and invoice.auction.is_online:
             context["print_label_link"] = reverse(
                 "print_labels_by_bidder_number",
                 kwargs={
@@ -7038,12 +7443,14 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                     "bidder_number": invoice.auctiontos_user.bidder_number,
                 },
             )
-        context["is_auction_admin"] = self.is_auction_admin
+        context["is_auction_admin"] = self.auction and self.is_auction_admin
         context["website_focus"] = settings.WEBSITE_FOCUS
         club = invoice.auction.club if invoice.auction else None
         context["viewer_has_bap"] = club is not None and check_club_permission(
             self.request.user, club, "permission_manage_bap"
         )
+        if context["viewer_has_bap"] and club:
+            context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
         return context
 
     def get_success_url(self):
@@ -7064,11 +7471,12 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 adjustment.save()
             if adjustments:
                 messages.success(self.request, "Invoice adjusted")
-                self.auction.create_history(
-                    applies_to="INVOICES",
-                    action=f"Adjusted invoice for {self.get_object().auctiontos_user.name}",
-                    user=request.user,
-                )
+                if self.auction:
+                    self.auction.create_history(
+                        applies_to="INVOICES",
+                        action=f"Adjusted invoice for {self.get_object().auctiontos_user.name if self.get_object().auctiontos_user else self.get_object()}",
+                        user=request.user,
+                    )
             for form in adjustment_formset.deleted_forms:
                 if form.instance.pk:
                     form.instance.delete()
@@ -7079,7 +7487,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         return self.render_to_response(context)
 
     def get(self, request, *args, **kwargs):
-        if self.get_object().unsold_lot_warning and self.is_auction_admin:
+        if self.get_object().unsold_lot_warning and self.auction and self.is_auction_admin:
             messages.info(
                 self.request,
                 "This user still has unsold lots, make sure to sell all non-donation lots before marking this ready or paid.",
@@ -7116,8 +7524,15 @@ class InvoiceNoLoginView(InvoiceView):
         invoice = self.get_object()
         invoice.opened = True
         invoice.save()
-        invoice.auctiontos_user.email_address_status = "VALID"
-        invoice.auctiontos_user.save()
+        if invoice.auctiontos_user:
+            invoice.auctiontos_user.email_address_status = "VALID"
+            invoice.auctiontos_user.save()
+        if invoice.club and not invoice.auction:
+            return render(
+                request,
+                "auctions/club_membership_payment.html",
+                {"club": invoice.club, "invoice": invoice},
+            )
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -7546,14 +7961,24 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         form = self.get_form()
         if form.is_valid():
             for lot in self.queryset:
-                lot.sell_to_online_high_bidder
+                try:
+                    lot.sell_to_online_high_bidder
+                except Exception:
+                    logger.exception("sell_to_online_high_bidder failed for lot %s", lot.pk)
+                    continue
                 if lot.auctiontos_winner:
-                    lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
-            self.auction.create_history(
-                applies_to="LOTS",
-                action=f"Sold {self.queryset.count()} lots to online high bidder",
-                user=request.user,
-            )
+                    try:
+                        lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+                    except Exception:
+                        logger.exception("add_winner_message failed for lot %s", lot.pk)
+            try:
+                self.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Sold {self.queryset.count()} lots to online high bidder",
+                    user=request.user,
+                )
+            except Exception:
+                logger.exception("create_history failed for auction %s", self.auction.pk)
             return HttpResponse("<script>location.reload();</script>", status=200)
         return self.form_invalid(form)
 
@@ -7614,21 +8039,39 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         if self.new_invoice_status in ("UNPAID", "PAID"):
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
-            invoice.status = self.new_invoice_status
-            invoice.invoice_notification_due = run_at
-            invoice.recalculate()
-            invoice.save()
-            # Schedule or cancel notification for each invoice
-            if run_at:
-                schedule_invoice_notification(invoice.pk, run_at)
-            else:
-                cancel_invoice_notification(invoice.pk)
+            # Core: change the status and save. Extras follow, each guarded.
+            try:
+                invoice.status = self.new_invoice_status
+                invoice.invoice_notification_due = run_at
+                invoice.save()
+            except Exception:
+                logger.exception("Failed to update invoice %s to %s in bulk", invoice.pk, self.new_invoice_status)
+                continue
+            try:
+                invoice.recalculate()
+            except Exception:
+                logger.exception("recalculate failed for invoice %s in bulk", invoice.pk)
+            if self.new_invoice_status == "PAID":
+                try:
+                    _process_invoice_membership_renewal(invoice, acting_user=request.user)
+                except Exception:
+                    logger.exception("membership renewal failed for invoice %s in bulk", invoice.pk)
+            try:
+                if run_at:
+                    schedule_invoice_notification(invoice.pk, run_at)
+                else:
+                    cancel_invoice_notification(invoice.pk)
+            except Exception:
+                logger.exception("schedule/cancel notification failed for invoice %s in bulk", invoice.pk)
         action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
-        self.auction.create_history(
-            applies_to="INVOICES",
-            action=action,
-            user=request.user,
-        )
+        try:
+            self.auction.create_history(
+                applies_to="INVOICES",
+                action=action,
+                user=request.user,
+            )
+        except Exception:
+            logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
         return HttpResponse("<script>location.reload();</script>", status=200)
 
 
@@ -7814,6 +8257,10 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
         return context
 
 
+class PayPalRequestError(Exception):
+    """Raised when a PayPal API request fails in a recoverable way for the caller."""
+
+
 class PayPalAPIMixin:
     """PayPal API methods for platform partner integration.
 
@@ -7890,7 +8337,7 @@ class PayPalAPIMixin:
                 resp.text[:1000],
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
-            raise Exception(msg)
+            raise PayPalRequestError(msg)
 
     def post_to_paypal(self, endpoint, payload, include_bn_code=True):
         """POST JSON to a PayPal API endpoint and return parsed JSON."""
@@ -7903,7 +8350,7 @@ class PayPalAPIMixin:
     def create_order(self, invoice):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
-        currency = invoice.auction.created_by.userdata.currency
+        currency = invoice.currency
 
         items = []
         for lot in invoice.bought_lots_queryset:
@@ -7954,8 +8401,14 @@ class PayPalAPIMixin:
         if discount_value > 0:
             breakdown["discount"] = {"currency_code": currency, "value": f"{discount_value:.2f}"}
 
+        if invoice.club:
+            description = f"Club membership fee for {invoice.club.name}"[:127]
+        elif invoice.auctiontos_user and invoice.auction:
+            description = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:127]
+        else:
+            description = "Membership fee"[:127]
         purchase_unit = {
-            "description": f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:127],
+            "description": description,
             "reference_id": str(invoice.pk),
             "amount": {
                 "currency_code": currency,
@@ -7966,9 +8419,23 @@ class PayPalAPIMixin:
         }
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
-        if invoice.auction.paypal_information and invoice.auction.paypal_information != "admin":
+        if invoice.club:
+            from auctions.models import PayPalSeller
+
+            club_seller = PayPalSeller.objects.filter(user=invoice.club.payment_user).first()
+            if club_seller and club_seller.paypal_merchant_id:
+                paypal_merchant_id = club_seller.paypal_merchant_id
+            elif invoice.club.payment_user and invoice.club.payment_user.is_superuser:
+                paypal_merchant_id = "admin"
+            else:
+                paypal_merchant_id = None
+        elif invoice.auction:
+            paypal_merchant_id = invoice.auction.paypal_information
+        else:
+            paypal_merchant_id = None
+        if paypal_merchant_id and paypal_merchant_id != "admin":
             # if this is not set, payment will go to the platform account whose keys are in the .env
-            purchase_unit["payee"] = {"merchant_id": invoice.auction.paypal_information}
+            purchase_unit["payee"] = {"merchant_id": paypal_merchant_id}
             if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
                 amt_value = Decimal(purchase_unit["amount"]["value"])
                 fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal(0.01))
@@ -7999,7 +8466,9 @@ class PayPalAPIMixin:
                 "brand_name": settings.NAVBAR_BRAND,
                 "return_url": self.request.build_absolute_uri(reverse("paypal_success")),
                 "cancel_url": self.request.build_absolute_uri(
-                    reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+                    reverse("club_detail", kwargs={"slug": invoice.club.slug})
+                    if invoice.club and not invoice.auction
+                    else reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
                 ),
             },
         }
@@ -8096,28 +8565,28 @@ class PayPalAPIMixin:
             if parts:
                 payer_address = ", ".join(parts)
 
-        if payer_email and not invoice.auctiontos_user.email:
-            invoice.auctiontos_user.email = payer_email
-            invoice.auctiontos_user.save()
-            invoice.auction.create_history(
-                applies_to="USERS",
-                action=f"Added email {payer_email} to user {invoice.auctiontos_user.name} from PayPal payment",
-                user=None,
-            )
-        if payer_address and payer_address != invoice.auctiontos_user.address:
-            # always overwrite the address with the one from PayPal
-            invoice.auction.create_history(
-                applies_to="USERS",
-                action=f"Updated address for user {invoice.auctiontos_user.name} from PayPal payment.  Old address {invoice.auctiontos_user.address}",
-                user=None,
-            )
-            invoice.auctiontos_user.address = payer_address[:500]
-            invoice.auctiontos_user.save()
-
-            # also save the address site-wide
-            if invoice.auctiontos_user.user and not invoice.auctiontos_user.user.userdata.address:
-                invoice.auctiontos_user.user.userdata.address = payer_address[:500]
-                invoice.auctiontos_user.user.userdata.save()
+        if invoice.auctiontos_user:
+            if payer_email and not invoice.auctiontos_user.email:
+                invoice.auctiontos_user.email = payer_email
+                invoice.auctiontos_user.save()
+                if invoice.auction:
+                    invoice.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Added email {payer_email} to user {invoice.auctiontos_user.name} from PayPal payment",
+                        user=None,
+                    )
+            if payer_address and payer_address != invoice.auctiontos_user.address:
+                if invoice.auction:
+                    invoice.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Updated address for user {invoice.auctiontos_user.name} from PayPal payment.  Old address {invoice.auctiontos_user.address}",
+                        user=None,
+                    )
+                invoice.auctiontos_user.address = payer_address[:500]
+                invoice.auctiontos_user.save()
+                if invoice.auctiontos_user.user and not invoice.auctiontos_user.user.userdata.address:
+                    invoice.auctiontos_user.user.userdata.address = payer_address[:500]
+                    invoice.auctiontos_user.user.userdata.save()
 
         amt = Decimal(str(amount_value)) if amount_value else Decimal("0.00")
         if not amt:
@@ -8138,25 +8607,43 @@ class PayPalAPIMixin:
                 "amount_available_to_refund": amt,
             },
         )
-        invoice.recalculate()
-        if created:
-            action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
-            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+        try:
+            invoice.recalculate()
+        except Exception:
+            logger.exception("recalculate failed for invoice %s after PayPal payment", invoice.pk)
+        if created and invoice.auctiontos_user and invoice.auction:
+            try:
+                action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
+                invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+            except Exception:
+                logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
         # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
         if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             invoice.status = "PAID"
             invoice.save()
-            invoice.auction.create_history(
-                applies_to="INVOICES",
-                action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
-            )
+            try:
+                _process_invoice_membership_renewal(invoice, payment_method="PayPal", external_id=payment.external_id)
+            except Exception:
+                logger.exception("membership renewal failed after PayPal payment on invoice %s", invoice.pk)
+            if invoice.auction and invoice.auctiontos_user:
+                try:
+                    invoice.auction.create_history(
+                        applies_to="INVOICES",
+                        action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
+                    )
+                except Exception:
+                    logger.exception("create_history failed after PayPal payment on invoice %s", invoice.pk)
             # I have given some thought to putting this in a model property instead
             # Putting it here only sends the message when an invoice is paid via PayPal
-            channel_layer = channels.layers.get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f"auctions_{invoice.auction.pk}",
-                {"type": "invoice_paid", "pk": invoice.pk},
-            )
+            if invoice.auction:
+                try:
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"auctions_{invoice.auction.pk}",
+                        {"type": "invoice_paid", "pk": invoice.pk},
+                    )
+                except Exception:
+                    logger.exception("Failed to send invoice_paid websocket for invoice %s (PayPal)", invoice.pk)
 
         return None, invoice
 
@@ -8372,24 +8859,31 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
 class CreatePayPalOrderView(PayPalAPIMixin, View):
     """Create a PayPal order for an invoice and redirect to PayPal checkout"""
 
+    def _invoice_error_redirect(self, invoice):
+        if invoice.club:
+            return redirect(reverse("club_membership_pay", kwargs={"slug": invoice.club.slug}))
+        return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
+
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
         error = self.invoice.reason_for_payment_not_available
         if not self.invoice.show_payment_button:
-            error = "PayPal payments are not possible in this auction"
+            error = "PayPal payments are not available"
         if error:
             messages.error(request, error)
-            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+            return self._invoice_error_redirect(self.invoice)
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
         """Create the order"""
-        approval_url = self.create_order(self.invoice)
+        try:
+            approval_url = self.create_order(self.invoice)
+        except (requests.RequestException, PayPalRequestError):
+            messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
+            return self._invoice_error_redirect(self.invoice)
         if not approval_url:
-            messages.error(
-                request, "Payment provider rejected the order. Contact the auction administrator to confirm payment."
-            )
-            return redirect(self.invoice.get_absolute_url())
+            messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
+            return self._invoice_error_redirect(self.invoice)
         return redirect(approval_url)
 
 
@@ -8403,6 +8897,8 @@ class PayPalSuccessView(PayPalAPIMixin, View):
             messages.error(request, error)
         else:
             messages.success(request, "Payment completed successfully. Thank you!")
+        if invoice and invoice.club:
+            return redirect(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
         if invoice:
             return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
         return redirect(reverse("home"))
@@ -8429,6 +8925,10 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
     def get_object(self, queryset=None):
         return get_object_or_404(PayPalSeller, user=self.request.user)
 
+    def form_valid(self, form):
+        _disable_integrated_payments_if_only_method(self.request.user, "PayPal")
+        return super().form_valid(form)
+
     def get_success_url(self):
         return reverse("paypal_seller")
 
@@ -8444,9 +8944,14 @@ class SquareAPIMixin:
         """
         from auctions.models import SquareSeller
 
-        seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        seller_user = (
+            invoice.club.payment_user if invoice.club else (invoice.auction.created_by if invoice.auction else None)
+        )
+        if not seller_user:
+            return None, "No seller account configured"
+        seller = SquareSeller.objects.filter(user=seller_user).first()
         if not seller:
-            logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
+            logger.error("No SquareSeller for user %s", seller_user.pk)
             return None, "Seller has not connected their Square account"
 
         return seller.create_payment_link(invoice, self.request)
@@ -8600,11 +9105,16 @@ class SquareCallbackView(LoginRequiredMixin, View):
 class CreateSquarePaymentLinkView(SquareAPIMixin, View):
     """Create a Square payment link for an invoice"""
 
+    def _invoice_error_redirect(self, invoice):
+        if invoice.club:
+            return redirect(reverse("club_membership_pay", kwargs={"slug": invoice.club.slug}))
+        return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
+
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
         if not self.invoice.show_square_button:
             messages.error(request, "Square payments are not available for this invoice")
-            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+            return self._invoice_error_redirect(self.invoice)
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -8614,7 +9124,7 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
             messages.error(
                 request, error_message or "Failed to create Square payment link. Please try again or contact support."
             )
-            return redirect(self.invoice.get_absolute_url())
+            return self._invoice_error_redirect(self.invoice)
 
         # Add processing message and redirect to invoice to show status
         messages.info(
@@ -8658,6 +9168,10 @@ class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):
 
     def get_object(self, queryset=None):
         return get_object_or_404(SquareSeller, user=self.request.user)
+
+    def form_valid(self, form):
+        _disable_integrated_payments_if_only_method(self.request.user, "Square")
+        return super().form_valid(form)
 
     def get_success_url(self):
         return reverse("square_seller")
@@ -8893,12 +9407,9 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
 
         for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
             changes = []
-            if club_member.first_name != user.first_name:
-                changes.append(f"first name to '{user.first_name}'")
-                club_member.first_name = user.first_name
-            if club_member.last_name != user.last_name:
-                changes.append(f"last name to '{user.last_name}'")
-                club_member.last_name = user.last_name
+            if club_member.name != new_name:
+                changes.append(f"name to '{new_name}'")
+                club_member.name = new_name
             if club_member.phone_number != new_phone:
                 changes.append(f"phone to '{new_phone}'")
                 club_member.phone_number = new_phone
@@ -9428,7 +9939,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False, enable_club_page=True)
+        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
         context["location_message"] = "Set your location to see clubs near you"
         latitude_cookie = self.request.COOKIES.get("latitude")
         longitude_cookie = self.request.COOKIES.get("longitude")
@@ -9496,8 +10007,11 @@ class DeleteUserIgnoreCategory(APIView):
             exists = UserIgnoreCategory.objects.get(category=category, user=request.user)
             exists.delete()
             return JsonResponse(data={"result": "deleted"})
-        except Exception as e:
-            return JsonResponse(data={"error": str(e)})
+        except UserIgnoreCategory.DoesNotExist:
+            return JsonResponse(data={"error": "Category was not ignored."}, status=404)
+        except Exception:
+            logger.exception("Failed deleting ignored category for user %s", request.user.pk)
+            return JsonResponse(data={"error": "Unable to update ignored categories."}, status=500)
 
 
 class GetUserIgnoreCategory(APIView):
@@ -11449,6 +11963,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             if merchant_id_in_paypal:
                 seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
             if seller:
+                _disable_integrated_payments_if_only_method(seller.user, "PayPal")
                 seller.delete()
                 logger.info("Revoked selling for merchant_id=%s", merchant_id_in_paypal)
             else:
@@ -11648,30 +12163,47 @@ class SquareWebhookView(SquareAPIMixin, View):
                             if receipt_number and not payment_record.receipt_number:
                                 payment_record.receipt_number = receipt_number
                             payment_record.save()
-                        action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
-                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                        if invoice.auctiontos_user and invoice.auction:
+                            try:
+                                action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
+                                invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                            except Exception:
+                                logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
                             invoice.save()
+                            try:
+                                _process_invoice_membership_renewal(
+                                    invoice, payment_method="Square", external_id=payment_id
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "membership renewal failed after Square payment on invoice %s", invoice.pk
+                                )
 
                             # Send websocket notification for payment completion
-                            channel_layer = channels.layers.get_channel_layer()
-                            # Send to invoice-specific group for invoice detail pages
-                            async_to_sync(channel_layer.group_send)(
-                                f"invoice_{invoice.pk}",
-                                {
-                                    "type": "invoice_status",
-                                    "message": "paid",
-                                },
-                            )
-                            # Send to auction group for quick checkout page
-                            async_to_sync(channel_layer.group_send)(
-                                f"auctions_{invoice.auction.pk}",
-                                {
-                                    "type": "invoice_paid",
-                                    "pk": invoice.pk,
-                                },
-                            )
+                            try:
+                                channel_layer = channels.layers.get_channel_layer()
+                                async_to_sync(channel_layer.group_send)(
+                                    f"invoice_{invoice.pk}",
+                                    {
+                                        "type": "invoice_status",
+                                        "message": "paid",
+                                    },
+                                )
+                                if invoice.auction:
+                                    async_to_sync(channel_layer.group_send)(
+                                        f"auctions_{invoice.auction.pk}",
+                                        {
+                                            "type": "invoice_paid",
+                                            "pk": invoice.pk,
+                                        },
+                                    )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send websocket notification for Square payment on invoice %s",
+                                    invoice.pk,
+                                )
                         logger.info("Square payment completed for invoice %s", invoice.pk)
                     else:
                         logger.warning("Square webhook: Invoice not found for reference_id: %s", reference_id)
@@ -11713,6 +12245,7 @@ class SquareWebhookView(SquareAPIMixin, View):
             if merchant_id:
                 square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
+                    _disable_integrated_payments_if_only_method(square_seller.user, "Square")
                     square_seller.delete()
         return HttpResponse(status=200)
 
@@ -11748,6 +12281,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
             if context["tos"]:
                 invoice = context["tos"].invoice
                 context["invoice"] = invoice
+                _ensure_invoice_renewal_state(invoice)
             if invoice:
                 # Generate PayPal QR code if available
                 if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
@@ -11769,6 +12303,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
 class ClubDetailView(ClubViewMixin, TemplateView):
     """User self-service page for a club"""
 
+    active_tab = "home"
     template_name = "auctions/club_detail.html"
     allow_non_admins = True
 
@@ -11800,7 +12335,19 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         member = None
         if self.request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        requested_member_uuid = self.request.GET.get("user", "")
+        if requested_member_uuid:
+            member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
+        # Only the actual owner — not a holder of the UUID renewal link — may see the
+        # Google Wallet save button, since adding to a wallet should never be done on
+        # behalf of someone else.
+        context["is_membership_owner"] = bool(
+            member and self.request.user.is_authenticated and member.user_id == self.request.user.id
+        )
+        from auctions.apple_wallet import is_configured as _apple_configured
+
+        context["apple_wallet_enabled"] = _apple_configured()
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
         club = self.club
@@ -11819,6 +12366,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 _bap_leaderboard(club, "culture_points_ytd", member) if club.separate_cap else []
             )
             context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+            if member:
+                context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:30]
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -11843,6 +12392,21 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_manage_auctions"
         )
         context["can_manage_auctions"] = can_manage_auctions
+        membership_expiration_date = member.membership_expiration_date if member else None
+        context["membership_expiration_date"] = membership_expiration_date
+        renewal_soon = False
+        if membership_expiration_date:
+            renewal_soon = membership_expiration_date <= timezone.now().date() + timedelta(days=30)
+        elif member and self.club.membership_annual_fee and not member.membership_expiration_date:
+            renewal_soon = True
+        context["show_membership_payment_button"] = bool(
+            self.club.enable_club_page
+            and self.club.allow_integrated_payments
+            and self.club.membership_annual_fee
+            and self.club.payment_user
+            and member
+            and renewal_soon
+        )
         if can_manage_auctions:
             context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")
         else:
@@ -11874,8 +12438,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             ClubMember.objects.create(
                 club=self.club,
                 user=request.user,
-                first_name=request.user.first_name,
-                last_name=request.user.last_name,
+                name=f"{request.user.first_name} {request.user.last_name}".strip(),
                 email=request.user.email,
                 source="joined",
             )
@@ -11892,18 +12455,21 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """Admin panel for a club"""
 
+    active_tab = "members"
     model = ClubMember
     table_class = ClubMemberHTMxTable
     filterset_class = ClubMemberFilter
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
-            raise PermissionDenied()
+        if request.user.is_authenticated and not request.user.is_superuser:
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if not member or not member.has_any_permission:
+                raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("last_name", "first_name")
+        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("name")
 
     def get_template_names(self):
         if self.request.htmx:
@@ -11923,6 +12489,14 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
+        # Column visibility uses direct field checks — permission_admin alone doesn't reveal all columns
+        if self.request.user.is_superuser:
+            kwargs["can_manage_bap"] = True
+            kwargs["can_manage_membership"] = True
+        else:
+            member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+            kwargs["can_manage_bap"] = bool(member and member.permission_manage_bap)
+            kwargs["can_manage_membership"] = bool(member and member.permission_add_edit)
         return kwargs
 
 
@@ -11944,12 +12518,10 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             pk = int(request.POST.get("pk") or 0) or None
         except (ValueError, TypeError):
             pk = None
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
+        name = request.POST.get("name", "").strip()
         email = request.POST.get("email", "").strip()
         result = {
-            "id_first_name": "",
-            "id_last_name": "",
+            "id_name": "",
             "id_email": "",
             "id_phone_number": "",
             "id_address": "",
@@ -11960,37 +12532,32 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
         # Auto-fill from manageable club members or auction histories when name typed without email.
-        if (first_name or last_name) and not email and not pk:
-            full_name = f"{first_name} {last_name}".strip()
+        if name and not email and not pk:
             member_match = (
                 ClubMember.objects.filter(
                     club_id__in=club_ids_available_for_contact_autofill(request.user), is_deleted=False
                 )
-                .filter(first_name__iexact=first_name, last_name__iexact=last_name)
+                .filter(name__iexact=name)
                 .order_by("-createdon")
                 .first()
             )
             if member_match:
-                result["id_first_name"] = member_match.first_name
-                result["id_last_name"] = member_match.last_name
+                result["id_name"] = member_match.name
                 result["id_email"] = member_match.email or ""
                 result["id_phone_number"] = member_match.phone_number or ""
                 result["id_address"] = member_match.address or ""
             else:
                 old_auctions = auctions_available_for_contact_autofill(request.user)
                 tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
-                old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+                old_tos = AuctionTOSFilter.generic(None, tos_qs, name, match_names_only=True).first()
                 if old_tos:
-                    # Split the single AuctionTOS name field into first/last
-                    parts = old_tos.name.strip().split(" ", 1)
-                    result["id_first_name"] = parts[0]
-                    result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                    result["id_name"] = old_tos.name
                     result["id_email"] = old_tos.email
                     result["id_phone_number"] = old_tos.phone_number or ""
                     result["id_address"] = old_tos.address or ""
         # Duplicate name check within this club
-        if first_name or last_name:
-            dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
+        if name:
+            dup = base_qs.filter(name__iexact=name).first()
             if dup:
                 result["name_tooltip"] = f"{dup} is already in this club"
         # Duplicate email check within this club
@@ -12009,10 +12576,8 @@ class ClubMemberAdminView(APIView):
 
     @staticmethod
     def _redirect_to_club_admin(club):
-        """Return an HTMX full-page redirect response to the club admin page."""
-        response = HttpResponse(status=200)
-        response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": club.slug})
-        return response
+        """Close the modal and reload the page to reflect changes."""
+        return HttpResponse("<script>location.reload();</script>", status=200)
 
     def _get_member_and_check_permission(self, request, pk):
         try:
@@ -12066,11 +12631,11 @@ function cmSetFieldInvalid(fieldId, message, is_invalid) {{
 }}
 
 function cmShowAutocomplete(response, remove) {{
-    var feedback = document.getElementById('id_first_name_feedback');
+    var feedback = document.getElementById('id_name_feedback');
     if (feedback) feedback.remove();
     if (remove) return;
     feedback = document.createElement("div");
-    feedback.id = "id_first_name_feedback";
+    feedback.id = "id_name_feedback";
     feedback.className = "valid-feedback d-block cursor-pointer";
     var btn = document.createElement("button");
     btn.role = "button";
@@ -12079,7 +12644,7 @@ function cmShowAutocomplete(response, remove) {{
     btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
     feedback.appendChild(btn);
     var autocomplete = response;
-    document.getElementById('id_first_name').parentNode.appendChild(feedback);
+    document.getElementById('id_name').parentNode.appendChild(feedback);
     var link = document.getElementById('autocompleteMemberForm');
     link.addEventListener('click', function(event) {{
         event.preventDefault();
@@ -12096,7 +12661,7 @@ function cmShowAutocomplete(response, remove) {{
 }}
 
 function cmHasAutocompleteData(response) {{
-    return !!(response.id_email || response.id_phone_number || response.id_address || response.id_last_name);
+    return !!(response.id_email || response.id_phone_number || response.id_address);
 }}
 
 function cmSetFieldNote(fieldId, message) {{
@@ -12116,8 +12681,7 @@ function cmSetFieldNote(fieldId, message) {{
 function cmValidateField() {{
     var data = {{
         pk: member_pk,
-        first_name: $("#id_first_name").val(),
-        last_name: $("#id_last_name").val(),
+        name: $("#id_name").val(),
         email: $("#id_email").val(),
     }};
     $.ajax({{
@@ -12127,13 +12691,13 @@ function cmValidateField() {{
         headers: {{ "X-CSRFToken": clubmember_csrf_token }},
         success: function(response) {{
             if (response.name_tooltip) {{
-                cmSetFieldNote("id_first_name", response.name_tooltip);
+                cmSetFieldNote("id_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
             }} else if (cmHasAutocompleteData(response)) {{
                 cmShowAutocomplete(response);
-                cmSetFieldNote("id_first_name", "");
+                cmSetFieldNote("id_name", "");
             }} else {{
-                cmSetFieldNote("id_first_name", "");
+                cmSetFieldNote("id_name", "");
                 cmShowAutocomplete(response, true);
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
@@ -12141,7 +12705,7 @@ function cmValidateField() {{
     }});
 }}
 
-$("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+$("#id_name, #id_email").on("blur", cmValidateField);
 
 (function() {{
     var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
@@ -12181,11 +12745,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
             )
             messages.success(request, f"{saved} updated.")
             # Reassign Discord role whenever the record is saved from the admin UI
-            if saved.discord_id and saved.club.discord_server_id:
-                role = saved.discord_role
-                if role and role.role_id:
-                    if not assign_discord_role(saved.club.discord_server_id, saved.discord_id, role.role_id):
-                        messages.warning(request, f"{saved} updated but Discord role assignment failed.")
+            saved.maybe_assign_discord_role()
             return self._redirect_to_club_admin(member.club)
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
@@ -12206,7 +12766,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "title": f"Permissions — {member.display_name}"},
+            {"form": form, "modal_title": f"Permissions — {member.display_name}"},
         )
 
     def post(self, request, pk):
@@ -12218,16 +12778,14 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
             ClubHistory.objects.create(
                 club=member.club,
                 user=request.user,
-                action=f"Updated permissions for {member}",
+                action=f"Updated roles for {member}",
                 applies_to="MEMBERS",
             )
-            response = HttpResponse(status=204)
-            response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": member.club.slug})
-            return response
+            return ClubMemberAdminView._redirect_to_club_admin(member.club)
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "title": f"Permissions — {member.display_name}"},
+            {"form": form, "modal_title": f"Permissions — {member.display_name}"},
         )
 
 
@@ -12288,20 +12846,58 @@ class ClubMemberCreateView(APIView):
 
 
 class ClubMemberRenewView(APIView):
-    """Renew a club member's membership by setting membership_last_paid to today."""
+    """Renew a club member's membership, extending the current expiration by one year."""
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, pk):
+    def _get_member(self, pk, request):
         try:
             member = ClubMember.objects.get(pk=pk)
         except ClubMember.DoesNotExist:
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        member.membership_last_paid = timezone.now().date()
-        member.save(update_fields=["membership_last_paid"])
+        return member
+
+    def _new_expiration(self, member, today):
+        """Compute the new expiration.
+
+        Rolling memberships always extend one year from today. For non-rolling
+        clubs, extend one year from the current expiration if it is still in
+        the future; otherwise extend one year from today.
+        """
+        club = member.club
+        current_exp = member.membership_expiration_date
+        if club.membership_system != "rolling" and current_exp and current_exp > today:
+            base = current_exp
+        else:
+            base = today
+        try:
+            return base.replace(year=base.year + 1)
+        except ValueError:
+            # Feb 29 in a non-leap-year target
+            return base.replace(month=2, day=28, year=base.year + 1)
+
+    def get(self, request, pk):
+        member = self._get_member(pk, request)
+        today = timezone.now().date()
+        context = {
+            "member": member,
+            "new_expiration": self._new_expiration(member, today),
+            "renew_url": reverse("club_member_renew", kwargs={"pk": pk}),
+        }
+        return render(request, "auctions/club_member_renew_confirm.html", context)
+
+    def post(self, request, pk):
+        member = self._get_member(pk, request)
+        today = timezone.now().date()
+        member.membership_expiration_date = self._new_expiration(member, today)
+        member.membership_last_paid = today
+        member.save(
+            update_fields=["membership_last_paid", "membership_expiration_date", "membership_expiration_reminder_due"]
+        )
+        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
@@ -12309,6 +12905,70 @@ class ClubMemberRenewView(APIView):
             applies_to="MEMBERSHIP",
         )
         return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+
+
+class ClubMembershipNumberView(APIView):
+    """Show a modal with the member's membership number and allow resetting it."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_member(self, pk, request):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if member.club.membership_number_mode == "disabled":
+            # Feature is off for this club — admin endpoint should not be reachable.
+            raise Http404
+        return member
+
+    def get(self, request, pk):
+        member = self._get_member(pk, request)
+        return render(request, "auctions/club_membership_number.html", {"member": member})
+
+    def post(self, request, pk):
+        from auctions.models import _pick_unique_membership_number
+
+        member = self._get_member(pk, request)
+        member.membership_number = _pick_unique_membership_number()
+        member.save(update_fields=["membership_number"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Reset membership number for {member}",
+            applies_to="MEMBERS",
+        )
+        return render(request, "auctions/club_membership_number.html", {"member": member})
+
+
+class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
+    """Serve a signed .pkpass file for a member.
+
+    Only the member's owning account may download — UUID renewal links must NOT
+    be able to download someone else's wallet card. We use the same identity
+    check as the Google Wallet save URL: request.user.id == member.user_id.
+    """
+
+    def get(self, request, pk):
+        from auctions.apple_wallet import generate_pkpass_for_member, is_configured
+
+        if not is_configured():
+            raise Http404
+        member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
+        if not request.user.is_authenticated or member.user_id != request.user.id:
+            raise PermissionDenied()
+        # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
+        if not member.membership_number_visible:
+            raise Http404
+        pkpass_bytes = generate_pkpass_for_member(member)
+        response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
+        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
+        # Wallet passes are personalized — don't cache them at intermediaries.
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 class ClubMemberDeleteView(APIView):
@@ -12363,7 +13023,7 @@ class ClubMemberConfirmView(APIView):
 
 
 class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
-    """Dedicated page for renewing a club member's membership."""
+    """Set a club member's expiration date directly (manual override)."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -12372,36 +13032,77 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def _get_member(self, pk):
-        member = get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
-        return member
+        return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
     def get(self, request, slug, pk):
         member = self._get_member(pk)
-        default_date = timezone.now().date()
         context = {
             "club": self.club,
             "member": member,
-            "default_date": default_date,
+            "default_date": member.membership_expiration_date or timezone.now().date(),
         }
         return render(request, "auctions/club_member_renew_page.html", context)
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
-        paid_date_str = request.POST.get("membership_last_paid", "")
+        date_str = request.POST.get("membership_expiration_date", "")
         try:
-            paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+            new_expiration = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
-            paid_date = timezone.now().date()
-        member.membership_last_paid = paid_date
-        member.save(update_fields=["membership_last_paid"])
+            messages.error(request, "Invalid date.")
+            return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
+        member.membership_expiration_date = new_expiration
+        member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
+        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Renewed membership for {member} (paid {paid_date})",
+            action=f"Set membership expiration for {member} to {new_expiration}",
             applies_to="MEMBERSHIP",
         )
-        messages.success(request, f"Membership renewed for {member}.")
+        messages.success(request, f"Expiration date updated for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Self-service membership payment page for club members.
+
+    Creates a pending club membership Invoice and shows PayPal/Square payment buttons.
+    """
+
+    template_name = "auctions/club_membership_payment.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not (
+            self.club.enable_club_page
+            and self.club.allow_integrated_payments
+            and self.club.membership_annual_fee
+            and self.club.payment_user
+        ):
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        invoice = Invoice.objects.filter(
+            club=self.club,
+            buyer=self.request.user,
+            renewal_processed=False,
+            status="UNPAID",
+        ).first()
+        if invoice is None:
+            invoice = Invoice.objects.create(
+                club=self.club,
+                buyer=self.request.user,
+                status="UNPAID",
+                renewal_needed=True,
+            )
+        context["club"] = self.club
+        context["member"] = member
+        context["invoice"] = invoice
+        return context
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12484,7 +13185,13 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 with transaction.atomic():
                     target = review_form.save()
                     update_fields = set(review_form.changed_data)
-                    for field in ["discord_id", "bap_points", "hap_points", "membership_last_paid"]:
+                    for field in [
+                        "discord_id",
+                        "bap_points",
+                        "hap_points",
+                        "membership_last_paid",
+                        "membership_expiration_date",
+                    ]:
                         source_val = getattr(source, field, None)
                         target_val = getattr(target, field, None)
                         if source_val is not None and not target_val:
@@ -12543,6 +13250,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit club info"""
 
+    active_tab = "edit"
     template_name = "auctions/club_edit.html"
     form_class = ClubEditForm
 
@@ -12580,9 +13288,54 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
+class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    """Edit membership and payment settings for a club."""
+
+    active_tab = "membership"
+    template_name = "auctions/club_membership_settings.html"
+    form_class = ClubMembershipSettingsForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "Membership settings saved.")
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["current_user"] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated membership settings",
+            applies_to="SETTINGS",
+        )
+        return result
+
+
 class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit BAP (Breeder Award Program) settings for a club. Requires permission_manage_bap."""
 
+    active_tab = "bap_settings"
     template_name = "auctions/club_bap_settings.html"
     form_class = ClubBapSettingsForm
 
@@ -12619,9 +13372,50 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
-class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
-    """HTMx table of lots from this club's auctions for BAP admins to review and approve."""
+class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """Main BAP admin page — awarded points tab."""
 
+    active_tab = "bap_awards"
+    model = BapAward
+    table_class = BapAwardHTMxTable
+    filterset_class = BapAwardFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        if not self.club.enable_breeder_award_program:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return (
+            BapAward.objects.filter(club_member__club=self.club, club_member__is_deleted=False)
+            .select_related("club_member", "lot")
+            .order_by("-date")
+        )
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_bap.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["club"] = self.club
+        return kwargs
+
+
+class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """Pending BAP page — lots from this club's auctions awaiting point assignment."""
+
+    active_tab = "bap_lots"
     model = Lot
     table_class = ClubBapLotHTMxTable
     filterset_class = ClubBapLotFilter
@@ -12635,23 +13429,40 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        cutoff = timezone.now() - timedelta(days=365)
+        matching_member = ClubMember.objects.filter(
+            club=self.club,
+            is_deleted=False,
+        ).filter(
+            Q(user=OuterRef("auctiontos_seller__user"))
+            | Q(user=OuterRef("user"))
+            | Q(email__iexact=OuterRef("auctiontos_seller__email"))
+        )
         return (
-            Lot.objects.filter(auction__club=self.club, date_end__gte=cutoff, is_deleted=False)
-            .select_related("auctiontos_seller__user", "auction", "species_category")
+            Lot.objects.filter(
+                auction__club=self.club,
+                is_deleted=False,
+                active=False,
+                auctiontos_winner__isnull=False,
+                winning_price__isnull=False,
+                i_bred_this_fish=True,
+            )
+            .filter(Exists(matching_member))
+            .select_related("auctiontos_seller__user", "auction__club", "species_category")
+            .prefetch_related("bap_award")
             .order_by("-date_end")
         )
 
     def get_template_names(self):
         if self.request.htmx:
-            return "tables/table_generic.html"
+            hx_target = self.request.headers.get("HX-Target", "")
+            if hx_target == "lots-table-container":
+                return "tables/table_generic.html"
+            return "auctions/club_bap_lots_fragment.html"
         return "auctions/club_bap_lots.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
-        context["last_run"] = self.club.last_bap_recalculation
-        context["next_run"] = self.club.next_bap_recalculation
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -12660,20 +13471,229 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return kwargs
 
 
-class ClubBapRecalculateView(LoginRequiredMixin, ClubViewMixin, View):
-    """POST-only endpoint to trigger a BAP points recalculation Celery task for a club."""
+class BapAwardAdminView(APIView):
+    """HTMX modal for creating or editing a BapAward."""
 
-    def post(self, request, *args, **kwargs):
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_club_and_award(self, request, slug=None, pk=None):
+        if pk:
+            award = get_object_or_404(BapAward, pk=pk)
+            club = award.club_member.club
+        else:
+            award = None
+            club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_manage_bap"):
+            raise PermissionDenied()
+        return club, award
+
+    @staticmethod
+    def _lot_initial(lot, club):
+        initial = {}
+        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
+        member = None
+        if seller_user:
+            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member and seller_email:
+            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+        if member:
+            initial["club_member"] = member
+        if lot.date_end:
+            initial["date"] = lot.date_end.date()
+        points = club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 0)
+        placeholder = lot.bap_placeholder
+        if placeholder == "HAP":
+            initial["hap_points"] = points
+        elif placeholder == "Culture":
+            initial["cap_points"] = points
+        else:
+            initial["points"] = points
+        return initial
+
+    def _build_form(self, request_data=None, *, club, award, lot, post_url, delete_url=None):
+        kwargs = {
+            "post_url": post_url,
+            "delete_url": delete_url,
+            "club": club,
+            "show_hap": club.separate_hap,
+            "show_cap": club.separate_cap,
+            "lot": lot if not award else None,
+        }
+        if request_data is not None:
+            return BapAwardForm(request_data, instance=award, **kwargs)
+        if award:
+            return BapAwardForm(instance=award, **kwargs)
+        return BapAwardForm(initial=self._lot_initial(lot, club) if lot else {}, **kwargs)
+
+    def _build_context(self, club, award, form):
+        title = f"Edit award for {award.club_member}" if award else f"Add points — {club.name}"
+        return {"modal_title": title, "form": form}
+
+    def get(self, request, slug=None, pk=None):
+        club, award = self._get_club_and_award(request, slug=slug, pk=pk)
+        lot = None
+        if not award:
+            lot_pk = request.GET.get("lot_pk")
+            if lot_pk:
+                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        post_url = (
+            reverse("bapaward_admin", kwargs={"pk": award.pk})
+            if award
+            else reverse("bapaward_create", kwargs={"slug": club.slug}) + (f"?lot_pk={lot.pk}" if lot else "")
+        )
+        delete_url = reverse("bapaward_delete", kwargs={"pk": award.pk}) if award else None
+        form = self._build_form(club=club, award=award, lot=lot, post_url=post_url, delete_url=delete_url)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
+
+    def post(self, request, slug=None, pk=None):
+        club, award = self._get_club_and_award(request, slug=slug, pk=pk)
+        lot = None
+        if not award:
+            lot_pk = request.GET.get("lot_pk")
+            if lot_pk:
+                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        post_url = (
+            reverse("bapaward_admin", kwargs={"pk": award.pk})
+            if award
+            else reverse("bapaward_create", kwargs={"slug": club.slug}) + (f"?lot_pk={lot.pk}" if lot else "")
+        )
+        delete_url = reverse("bapaward_delete", kwargs={"pk": award.pk}) if award else None
+        form = self._build_form(request.POST, club=club, award=award, lot=lot, post_url=post_url, delete_url=delete_url)
+        if form.is_valid():
+            award_obj = form.save(commit=False)
+            award_obj.awarded_by = request.user
+            if lot and not award:
+                award_obj.lot = lot
+            award_obj.save()
+            if lot:
+                placeholder = lot.bap_placeholder
+                lot.bap_points_awarded = (
+                    award_obj.hap_points
+                    if placeholder == "HAP"
+                    else (award_obj.cap_points if placeholder == "Culture" else award_obj.points)
+                )
+                lot.manually_approved = True
+                lot.bap_auto_reason = ""
+                lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
+                applies_to="BAP",
+            )
+            return HttpResponse(
+                "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
+                "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+            )
+        return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
+
+
+class BapAwardDeleteView(APIView):
+    """HTMX endpoint to delete a BapAward and trigger table refresh."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        award = get_object_or_404(BapAward, pk=pk)
+        club = award.club_member.club
+        if not check_club_permission(request.user, club, "permission_manage_bap"):
+            raise PermissionDenied()
+        member_name = str(award.club_member)
+        lot = award.lot
+        award.delete()
+        if lot:
+            lot.bap_points_awarded = 0
+            lot.manually_approved = False
+            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Deleted BAP award for {member_name}",
+            applies_to="BAP",
+        )
+        return HttpResponse(
+            "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
+            "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+        )
+
+
+class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create-only CSV import for BapAward records (never updates or deletes)."""
+
+    def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not self.user_has_club_permission("permission_manage_bap"):
-            return HttpResponse(status=403)
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
         if not self.club.enable_breeder_award_program:
             raise Http404
-        from auctions.tasks import schedule_bap_recalculation
+        return super().dispatch(request, *args, **kwargs)
 
-        schedule_bap_recalculation(self.club.pk)
-        messages.success(request, "Points recalculation scheduled.")
-        return redirect(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file")
+        if not csv_file:
+            messages.error(request, "No file uploaded.")
+            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+        total_added = total_skipped = 0
+        try:
+            reader = csv.DictReader(TextIOWrapper(csv_file, encoding="utf-8-sig", errors="replace"))
+            for row in reader:
+                row_lower = {k.lower().strip(): v.strip() for k, v in row.items() if k}
+                email = row_lower.get("email", "")
+                if not email:
+                    total_skipped += 1
+                    continue
+                member = ClubMember.objects.filter(club=self.club, email__iexact=email, is_deleted=False).first()
+                if not member:
+                    total_skipped += 1
+                    continue
+                bap = self._parse_int(row_lower.get("bap", ""))
+                hap = self._parse_int(row_lower.get("hap", ""))
+                cap = self._parse_int(row_lower.get("cap", ""))
+                if bap == 0 and hap == 0 and cap == 0:
+                    total_skipped += 1
+                    continue
+                notes = row_lower.get("notes", "")
+                award_date = (
+                    CSVContactImportMixin.parse_flexible_date(row_lower.get("date", "")) or timezone.now().date()
+                )
+                BapAward.objects.create(
+                    club_member=member,
+                    date=award_date,
+                    points=bap,
+                    hap_points=hap,
+                    cap_points=cap,
+                    notes=notes[:500] if notes else "",
+                    awarded_by=request.user,
+                )
+                total_added += 1
+        except Exception as e:
+            messages.error(request, f"Error processing CSV: {e}")
+            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+        msg_parts = []
+        if total_added:
+            msg_parts.append(f"{total_added} award(s) added")
+        if total_skipped:
+            msg_parts.append(f"{total_skipped} rows skipped")
+        messages.success(request, ", ".join(msg_parts) or "No awards imported.")
+        if total_added:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"BAP CSV import: {', '.join(msg_parts)}",
+                applies_to="BAP",
+            )
+        return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+
+    @staticmethod
+    def _parse_int(value):
+        try:
+            return max(0, int(value)) if value else 0
+        except (ValueError, TypeError):
+            return 0
 
 
 class ClubMemberIngestAPIView(APIView):
@@ -12713,6 +13733,7 @@ class ClubMemberIngestAPIView(APIView):
 class ClubAPIKeyListView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """List all API keys for a club (requires permission_edit_club)."""
 
+    active_tab = "api_keys"
     template_name = "auctions/club_api_keys.html"
 
     def dispatch(self, request, *args, **kwargs):
@@ -12831,7 +13852,11 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
         external_field = request.POST.get("external_field", "").strip()
         internal_field = request.POST.get("internal_field", "").strip()
-        if external_field and internal_field and (internal_field == "name" or internal_field in INGEST_ALLOWED_FIELDS):
+        if (
+            external_field
+            and internal_field
+            and (internal_field in INGEST_ALLOWED_FIELDS or internal_field in ("first_name", "last_name"))
+        ):
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
                 external_field=external_field,
@@ -12858,6 +13883,7 @@ class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """History log for a club"""
 
+    active_tab = "history"
     model = ClubHistory
     table_class = ClubHistoryHTMxTable
     filterset_class = ClubHistoryFilter
@@ -12892,7 +13918,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_export"):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
@@ -12918,45 +13944,57 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                     continue
                 first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
                 last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
-                if not first_name and not last_name:
-                    full_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES)
-                    if full_name:
-                        parts = full_name.split(" ", 1)
-                        first_name = parts[0]
-                        last_name = parts[1] if len(parts) > 1 else ""
+                if first_name or last_name:
+                    member_name = f"{first_name} {last_name}".strip()
+                else:
+                    member_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES) or ""
                 phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
                 address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
                 memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
+                discord_id = self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES)
+                contact_status = self.parse_contact_status(self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES))
+                membership_last_paid = self.parse_flexible_date(
+                    self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)
+                )
+                membership_expiration_date = self.parse_flexible_date(
+                    self.extract_csv_field(row, self.MEMBERSHIP_EXPIRATION_FIELD_NAMES)
+                )
+                date_joined = self.parse_flexible_date(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES))
                 existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
                 if existing:
-                    changed = False
-                    if first_name and existing.first_name != first_name[:100]:
-                        existing.first_name = first_name[:100]
-                        changed = True
-                    if last_name and existing.last_name != last_name[:100]:
-                        existing.last_name = last_name[:100]
-                        changed = True
-                    if phone and existing.phone_number != phone[:20]:
-                        existing.phone_number = phone[:20]
-                        changed = True
-                    if address and existing.address != address[:500]:
-                        existing.address = address[:500]
-                        changed = True
-                    if changed:
-                        existing.save()
-                        total_updated += 1
+                    existing.name = member_name[:200] if member_name else existing.name
+                    existing.phone_number = phone[:20]
+                    existing.address = address[:500]
+                    existing.memo = memo[:500]
+                    if discord_id:
+                        existing.discord_id = discord_id[:100]
+                    if contact_status is not None:
+                        existing.contact_status = contact_status
+                    if membership_last_paid is not None:
+                        existing.membership_last_paid = membership_last_paid
+                    if membership_expiration_date is not None:
+                        existing.membership_expiration_date = membership_expiration_date
+                    existing.save()
+                    if date_joined is not None:
+                        ClubMember.objects.filter(pk=existing.pk).update(createdon=date_joined)
+                    total_updated += 1
                 else:
-                    ClubMember.objects.create(
+                    new_member = ClubMember.objects.create(
                         club=self.club,
                         email=email[:254],
-                        first_name=first_name[:100] if first_name else "",
-                        last_name=last_name[:100] if last_name else "",
+                        name=member_name[:200] if member_name else "",
                         phone_number=phone[:20] if phone else "",
                         address=address[:500] if address else "",
                         memo=memo[:500] if memo else "",
-                        source="manually_added",
+                        discord_id=discord_id[:100] if discord_id else None,
+                        contact_status=contact_status or "contact",
+                        membership_last_paid=membership_last_paid,
+                        membership_expiration_date=membership_expiration_date,
+                        source="csv",
                         added_by=self.request.user,
                     )
+                    if date_joined is not None:
+                        ClubMember.objects.filter(pk=new_member.pk).update(createdon=date_joined)
                     total_added += 1
 
             msg_parts = []
@@ -12997,44 +14035,47 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
         writer = csv.writer(response)
-        writer.writerow(
-            [
-                "First Name",
-                "Last Name",
-                "Email",
-                "Phone",
-                "Address",
-                "BAP Points",
-                "HAP Points",
-                "Membership Last Paid",
-                "Date Joined",
-                "Source",
-                "Contact Status",
-                "Discord ID",
-                "Memo",
-            ]
-        )
+        # Omit the Membership Number column entirely when the club has the
+        # feature disabled — user asked for "no UI" referencing those numbers.
+        include_membership_number = self.club.membership_number_mode != "disabled"
+        header = [
+            "Name",
+            "Email",
+            "Phone",
+            "Address",
+            "BAP Points",
+            "HAP Points",
+            "Membership Last Paid",
+            "Date Joined",
+            "Source",
+            "Contact Status",
+            "Discord ID",
+            "Memo",
+        ]
+        if include_membership_number:
+            header.append("Membership Number")
+        writer.writerow(header)
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         filterset = ClubMemberFilter(request.GET, queryset=base_qs)
         qs = filterset.qs
         for member in qs:
-            writer.writerow(
-                [
-                    member.first_name,
-                    member.last_name,
-                    member.email or "",
-                    member.phone_as_string,
-                    member.address,
-                    member.bap_points,
-                    member.hap_points,
-                    member.membership_last_paid or "",
-                    member.createdon.date(),
-                    member.source,
-                    member.contact_status,
-                    member.discord_id or "",
-                    member.memo,
-                ]
-            )
+            row = [
+                member.name,
+                member.email or "",
+                member.phone_as_string,
+                member.address,
+                member.bap_points,
+                member.hap_points,
+                member.membership_last_paid or "",
+                member.createdon.date(),
+                member.source,
+                member.contact_status,
+                member.discord_id or "",
+                member.memo,
+            ]
+            if include_membership_number:
+                row.append(member.membership_number)
+            writer.writerow(row)
         query_filter = request.GET.get("query", "all")
         ClubHistory.objects.create(
             club=self.club,
@@ -13188,35 +14229,94 @@ def _discord_ephemeral(content):
     )
 
 
+_DISCORD_PERMISSION_MANAGE_GUILD = 1 << 5
+
+
+def _has_discord_manage_guild(data):
+    member_data = data.get("member") or {}
+    try:
+        return bool(int(member_data.get("permissions", "0")) & _DISCORD_PERMISSION_MANAGE_GUILD)
+    except (ValueError, TypeError):
+        return False
+
+
 def _sync_discord_roles(club, bot_token):
     """Fetch roles from Discord and upsert ClubDiscordRole objects.
 
+    Also fetches the bot's own member record to determine its highest role position.
+    Roles at or above that position have bot_can_manage=False.
+
     Returns the number of roles synced, or None if the API call failed.
     """
-    url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
+    headers = {"Authorization": f"Bot {bot_token}"}
+    guild_id = club.discord_server_id
+
+    # Fetch all guild roles
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/roles"
     try:
-        resp = requests.get(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
     except requests.RequestException as exc:
         logger.exception("Error fetching Discord roles: %s", exc)
         return None
     if resp.status_code != 200:
         logger.warning("Discord roles fetch failed: status=%s response=%s", resp.status_code, resp.text)
         return None
+
+    all_roles = resp.json()
+    # Build a position lookup by role ID
+    position_by_id = {r["id"]: r.get("position", 0) for r in all_roles}
+
+    # Fetch the bot's own guild member to find its highest role position.
+    # /members/@me only works with OAuth2 bearer tokens, not bot tokens.
+    # Instead: resolve the bot's user ID first, then fetch its guild member by ID.
+    bot_max_position = 0
+    try:
+        user_resp = requests.get("https://discord.com/api/v10/users/@me", headers=headers, timeout=10)
+        if user_resp.status_code == 200:
+            bot_user_id = user_resp.json().get("id")
+            if bot_user_id:
+                member_resp = requests.get(
+                    f"https://discord.com/api/v10/guilds/{guild_id}/members/{bot_user_id}",
+                    headers=headers,
+                    timeout=10,
+                )
+                if member_resp.status_code == 200:
+                    bot_role_ids = member_resp.json().get("roles", [])
+                    if bot_role_ids:
+                        bot_max_position = max(position_by_id.get(rid, 0) for rid in bot_role_ids)
+                    logger.info(
+                        "Discord bot position resolved: user_id=%s bot_max_position=%s", bot_user_id, bot_max_position
+                    )
+                else:
+                    logger.warning("Discord guild member fetch failed: status=%s", member_resp.status_code)
+        else:
+            logger.warning("Discord users/@me fetch failed: status=%s", user_resp.status_code)
+    except requests.RequestException as exc:
+        logger.exception("Error fetching bot's own member record: %s", exc)
+
     updated = 0
     fetched_role_ids = set()
-    for role in resp.json():
+    for role in all_roles:
         role_id = role.get("id", "")
         role_name = role.get("name", "")
-        if role_id == club.discord_server_id or role.get("managed"):
+        if role_id == guild_id or role.get("managed"):
             continue
+        role_position = role.get("position", 0)
+        can_manage = bot_max_position > role_position
         fetched_role_ids.add(role_id)
         obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
         if obj:
+            update_fields = []
             if obj.role_name != role_name:
                 obj.role_name = role_name
-                obj.save(update_fields=["role_name"])
+                update_fields.append("role_name")
+            if obj.bot_can_manage != can_manage:
+                obj.bot_can_manage = can_manage
+                update_fields.append("bot_can_manage")
+            if update_fields:
+                obj.save(update_fields=update_fields)
         else:
-            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
+            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name, bot_can_manage=can_manage)
         updated += 1
     # Remove roles that no longer exist in Discord (only those with a non-empty role_id;
     # preserve placeholder rows without a Discord ID)
@@ -13273,53 +14373,7 @@ class DiscordInteractionsView(View):
         if interaction_type == _DISCORD_TYPE_COMPONENT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_button":
-                return JsonResponse(
-                    {
-                        "type": _DISCORD_TYPE_MODAL,
-                        "data": {
-                            "custom_id": "join_modal",
-                            "title": "Enter your contact information",
-                            "components": [
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "first_name",
-                                            "label": "First name",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "last_name",
-                                            "label": "Last name",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                                {
-                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
-                                    "components": [
-                                        {
-                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
-                                            "custom_id": "email",
-                                            "label": "Email address",
-                                            "style": 1,
-                                            "required": True,
-                                        }
-                                    ],
-                                },
-                            ],
-                        },
-                    }
-                )
+                return self._join_modal_response()
             return _discord_ephemeral("Unsupported interaction")
 
         # Type 2 – Application command (slash command)
@@ -13333,6 +14387,8 @@ class DiscordInteractionsView(View):
                 return self._handle_membership_command(data)
             if command_name == "bap":
                 return self._handle_bap_command(data)
+            if command_name == "join":
+                return self._handle_join_command(data)
             return _discord_ephemeral("❌ Unknown command.")
 
         # Type 5 – Modal submit
@@ -13343,6 +14399,50 @@ class DiscordInteractionsView(View):
             return _discord_ephemeral("Unsupported interaction")
 
         return _discord_ephemeral("Unsupported interaction")
+
+    def _join_modal_response(self):
+        """Return a Discord modal response for joining the club."""
+        return JsonResponse(
+            {
+                "type": _DISCORD_TYPE_MODAL,
+                "data": {
+                    "custom_id": "join_modal",
+                    "title": "Enter your contact information",
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                    "custom_id": "name",
+                                    "label": "Name",
+                                    "style": 1,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                    "custom_id": "email",
+                                    "label": "Email address",
+                                    "style": 1,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                    ],
+                },
+            }
+        )
+
+    def _handle_join_command(self, data):
+        guild_id = data.get("guild_id", "")
+        if not guild_id or not Club.objects.filter(discord_server_id=guild_id).exists():
+            return _discord_ephemeral("❌ No club is configured for this Discord server.")
+        return self._join_modal_response()
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
@@ -13357,8 +14457,12 @@ class DiscordInteractionsView(View):
             for comp in row.get("components", []):
                 fields[comp.get("custom_id", "")] = comp.get("value", "")
 
-        first_name = fields.get("first_name", "").strip()
-        last_name = fields.get("last_name", "").strip()
+        # Accept either a single ``name`` field or ``first_name`` / ``last_name``.
+        name = fields.get("name", "").strip()
+        if not name:
+            first_name = fields.get("first_name", "").strip()
+            last_name = fields.get("last_name", "").strip()
+            name = f"{first_name} {last_name}".strip()
         email = fields.get("email", "").strip()
 
         if not guild_id or not discord_id:
@@ -13393,9 +14497,7 @@ class DiscordInteractionsView(View):
                     existing_by_email.discord_username = discord_username
                     update_fields.append("discord_username")
                 existing_by_email.save(update_fields=update_fields)
-                role = existing_by_email.discord_role
-                if role and role.role_id:
-                    assign_discord_role(guild_id, discord_id, role.role_id)
+                existing_by_email.maybe_assign_discord_role()
                 ClubHistory.objects.create(
                     club=club,
                     user=None,
@@ -13407,17 +14509,14 @@ class DiscordInteractionsView(View):
         # Create a new club member
         new_member = ClubMember(
             club=club,
-            first_name=first_name,
-            last_name=last_name,
+            name=name,
             email=email or None,
             discord_id=discord_id,
             discord_username=discord_username or None,
             source="discord",
         )
         new_member.save()
-        role = new_member.discord_role
-        if role and role.role_id:
-            assign_discord_role(guild_id, discord_id, role.role_id)
+        new_member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=club,
             user=None,
@@ -13434,20 +14533,16 @@ class DiscordInteractionsView(View):
         options = {o["name"]: o["value"] for o in data.get("data", {}).get("options", [])}
         club_uuid = options.get("club_uuid", "").strip()
 
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
         if not guild_id or not club_uuid:
             return _discord_ephemeral("❌ Missing guild ID or club UUID.")
 
         try:
             club = Club.objects.get(uuid=club_uuid)
-        except (Club.DoesNotExist, ValueError):
-            return _discord_ephemeral("❌ No club found with that UUID.")
-
-        # If the club is already connected to a Discord server, require the caller to be
-        # a club member with admin permissions (looked up by their Discord ID).
-        if club.discord_server_id:
-            caller_member = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
-            if not caller_member or not (caller_member.permission_admin or caller_member.permission_edit_club):
-                return _discord_ephemeral("❌ You must be a club admin to reconnect this server.")
+        except (Club.DoesNotExist, ValueError, ValidationError):
+            return _discord_ephemeral("❌ This isn't a valid club connection code.")
 
         # Reject if another club already owns this guild
         if Club.objects.filter(discord_server_id=guild_id).exclude(pk=club.pk).exists():
@@ -13496,16 +14591,15 @@ class DiscordInteractionsView(View):
         user_data = member_data.get("user") or data.get("user") or {}
         caller_discord_id = user_data.get("id", "")
 
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
         if not guild_id or not channel_id:
             return _discord_ephemeral("❌ Missing guild or channel ID.")
 
         club = Club.objects.filter(discord_server_id=guild_id).first()
         if not club:
             return _discord_ephemeral("❌ This server is not connected to a club. Run /connect first.")
-
-        caller = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
-        if not caller or not (caller.permission_admin or caller.permission_manage_auctions):
-            return _discord_ephemeral("❌ You must be a club admin or auction manager to run this command.")
 
         club.auction_channel_id = channel_id
         club.save(update_fields=["auction_channel_id"])
@@ -13533,39 +14627,29 @@ class DiscordInteractionsView(View):
 
         member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
         if not member:
-            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+            return self._join_modal_response()
 
         lines = [f"**{club.name}** — Your membership"]
         lines.append(f"Member since: {member.createdon.strftime('%B %d, %Y')}")
 
-        if not member.membership_last_paid:
+        expiry = member.membership_expiration_date
+        if not expiry:
             lines.append("Status: No paid membership on record")
         else:
             today = timezone.now().date()
-            if club.membership_system == "january_first":
-                current_year_start = today.replace(month=1, day=1)
-                if member.membership_last_paid >= current_year_start:
-                    expiry = today.replace(year=today.year + 1, month=1, day=1)
-                    expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
-                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
-                else:
-                    lines.append("Status: ❌ Expired — please renew your membership")
-            elif club.membership_system == "rolling":
-                expiry = member.membership_last_paid + timedelta(days=365)
-                expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
-                if expiry >= today:
-                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
-                else:
-                    lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
+            expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
+            if expiry >= today:
+                lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
             else:
-                paid_ts = int(
-                    datetime.combine(member.membership_last_paid, datetime.min.time(), date_tz.utc).timestamp()
-                )
-                lines.append(f"Last paid: <t:{paid_ts}:D>")
+                lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
+
+        if club.enable_club_page:
+            current_site = Site.objects.get_current()
+            lines.append(f"\n[View your membership](https://{current_site.domain}{member.member_page_url})")
 
         return _discord_ephemeral("\n".join(lines))
 
-    def _handle_bap_command(self, data):
+    def _handle_bap_command(self, data):  # noqa: C901 (kept intentional)
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
@@ -13583,7 +14667,7 @@ class DiscordInteractionsView(View):
 
         member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
         if not member:
-            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+            return self._join_modal_response()
 
         lines = [f"**{club.name}** — Your points"]
 
@@ -13605,44 +14689,127 @@ class DiscordInteractionsView(View):
                 f"Culture: {member.culture_points} pts (#{cap_rank}) — {member.culture_points_ytd} pts this year"
             )
 
+        recent_awards = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:5]
+        if recent_awards:
+            lines.append("\n**Recent awards:**")
+            for award in recent_awards:
+                lines.append(f"• {award.date} — {award}")
+
         return _discord_ephemeral("\n".join(lines))
 
 
 class LotBapPointsView(LoginRequiredMixin, View):
-    """AJAX endpoint to update BAP points awarded for a lot. BAP admins only."""
+    """Inline BAP approve/reject/undo endpoint for the Pending BAP table."""
+
+    def _seller_name(self, lot):
+        if lot.auctiontos_seller:
+            return lot.auctiontos_seller.name
+        if lot.user:
+            return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
+        return f"lot #{lot.pk}"
+
+    def _resolve_member(self, lot, club):
+        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
+        member = None
+        if seller_user:
+            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member and seller_email:
+            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+        return member
+
+    def _render_buttons(self, request, lot, club):
+        lot.refresh_from_db()
+        try:
+            award = lot.bap_award
+        except Exception:
+            award = None
+        lot.bap_award_cached = award
+        default_points = club.points_per_lot if club.points_per_lot > 0 else 5
+        return render(
+            request,
+            "auctions/bap_lot_buttons.html",
+            {"lot": lot, "club": club, "default_points": default_points},
+        )
 
     def post(self, request, pk):
         lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
         club = lot.auction.club if lot.auction else None
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
-        try:
-            points = int(request.POST.get("bap_points_awarded", 0))
-            if points < 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            return HttpResponse(status=400)
-        lot.bap_points_awarded = points
-        lot.manually_approved = True
-        lot.bap_auto_reason = ""
-        lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-        if lot.auctiontos_seller:
-            name = lot.auctiontos_seller.name
-        elif lot.user:
-            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
-        else:
-            name = f"lot #{lot.pk}"
-        ClubHistory.objects.create(
-            club=club,
-            user=request.user,
-            action=f"Awarded {points} BAP point(s) to {name} for lot {lot.lot_name}",
-            applies_to="BAP",
-        )
-        return HttpResponse(status=204)
+
+        action = request.POST.get("action", "approve")
+
+        if action == "undo":
+            existing = BapAward.objects.filter(lot=lot).first()
+            if existing:
+                existing.delete()
+            lot.bap_points_awarded = 0
+            lot.manually_approved = False
+            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            return self._render_buttons(request, lot, club)
+
+        if action == "reject":
+            existing = BapAward.objects.filter(lot=lot).first()
+            if existing:
+                existing.delete()
+            lot.bap_points_awarded = 0
+            lot.manually_approved = True
+            # Leave bap_auto_reason as-is: it reflects the system's eligibility verdict,
+            # which is still useful to show even when an admin explicitly rejects.
+            lot.save(update_fields=["bap_points_awarded", "manually_approved"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Rejected BAP points for {self._seller_name(lot)}: {lot.lot_name}",
+                applies_to="BAP",
+            )
+            return self._render_buttons(request, lot, club)
+
+        # action == "approve"
+        def _parse_pts(key):
+            try:
+                return max(0, int(str(request.POST.get(key, 0)).strip() or 0))
+            except (ValueError, TypeError):
+                return 0
+
+        bap_pts = _parse_pts("bap_points")
+        hap_pts = _parse_pts("hap_points")
+        cap_pts = _parse_pts("cap_points")
+
+        member = self._resolve_member(lot, club)
+        award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
+
+        if (bap_pts or hap_pts or cap_pts) and member:
+            BapAward.objects.update_or_create(
+                lot=lot,
+                defaults={
+                    "club_member": member,
+                    "date": award_date,
+                    "points": bap_pts,
+                    "hap_points": hap_pts,
+                    "cap_points": cap_pts,
+                    "awarded_by": request.user,
+                },
+            )
+            lot.bap_points_awarded = bap_pts + hap_pts + cap_pts
+            lot.manually_approved = True
+            lot.bap_auto_reason = ""
+            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {self._seller_name(lot)} for {lot.lot_name}",
+                applies_to="BAP",
+            )
+        return self._render_buttons(request, lot, club)
 
 
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
     """Full-page Discord settings for a club."""
+
+    active_tab = "discord"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -13662,13 +14829,13 @@ class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
             if client_id
             else ""
         )
-        # Build the UUID-based join command that club admins paste into Discord
         club_uuid = str(self.club.uuid)
         return {
             "club": self.club,
             "roles": roles,
             "oauth_url": oauth_url,
             "club_uuid": club_uuid,
+            "view": self,
         }
 
 
@@ -13711,10 +14878,20 @@ class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
 
     def get(self, request, slug, pk, *args, **kwargs):
         role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        if not role.bot_can_manage:
+            messages.error(
+                request,
+                f'"{role.role_name}" is at or above the bot\'s role in the Discord hierarchy. '
+                "Move the bot's role above it in Discord before configuring it here.",
+            )
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
         return render(request, "auctions/club_discord_role_edit.html", {"club": self.club, "role": role})
 
     def post(self, request, slug, pk, *args, **kwargs):
         role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        if not role.bot_can_manage:
+            messages.error(request, f'"{role.role_name}" cannot be edited — the bot\'s role is not above it.')
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
         is_paid = "is_paid_role" in request.POST
         is_unpaid = "is_unpaid_role" in request.POST
         try:

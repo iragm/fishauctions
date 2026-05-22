@@ -415,6 +415,11 @@ THUMBNAIL_ALIASES = {
         "ad": {"size": (250, 150), "crop": False},
         "lot_list": {"size": (250, 150), "crop": "smart"},
         # 'lot_full': {'size': (600, 600), 'crop': False},
+        # Club icon: used inline next to club names and as logo/icon on wallet
+        # passes. Square crop, sized to be retina-friendly (Apple wants up to 58px,
+        # Google's logo recommendation is ~660x660 source).
+        "club_icon": {"size": (128, 128), "crop": "smart"},
+        "club_icon_small": {"size": (32, 32), "crop": "smart"},
     },
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
@@ -764,6 +769,46 @@ FIELD_ENCRYPTION_KEY = _encryption_key
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 DISCORD_BOT_CLIENT_ID = os.environ.get("DISCORD_BOT_CLIENT_ID", "")
+
+# Google Wallet membership card integration (optional). See readme.md.
+# Set GOOGLE_WALLET_KEYFILE in .env to the filename of your Google service account
+# JSON key. The file must live in the same directory as .env (the project BASE_DIR).
+# If either the issuer ID or the keyfile is missing/unreadable, the "Add to Google
+# Wallet" button is hidden and the auto-create-class signal no-ops.
+GOOGLE_WALLET_ISSUER_ID = os.environ.get("GOOGLE_WALLET_ISSUER_ID", "")
+GOOGLE_WALLET_KEYFILE = os.environ.get("GOOGLE_WALLET_KEYFILE", "")
+GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = ""
+GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = ""
+if GOOGLE_WALLET_KEYFILE:
+    import json as _json
+
+    _wallet_keyfile_path = BASE_DIR / GOOGLE_WALLET_KEYFILE
+    try:
+        with _wallet_keyfile_path.open() as _f:
+            _wallet_key = _json.load(_f)
+        GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = _wallet_key.get("client_email", "")
+        GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = _wallet_key.get("private_key", "")
+    except (OSError, ValueError):
+        # File missing or invalid JSON — leave email/key empty so is_configured() returns False.
+        # We intentionally don't raise so a misconfigured prod box still boots; the wallet
+        # button just won't appear and the create-class signal no-ops.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "GOOGLE_WALLET_KEYFILE=%s could not be loaded; Google Wallet disabled.",
+            _wallet_keyfile_path,
+        )
+
+# Apple Wallet membership card integration (optional). See readme.md.
+# Drop your Pass Type ID .p12 cert and the Apple WWDR intermediate .pem next to .env
+# and point these settings at the filenames. If any one is missing the "Add to
+# Apple Wallet" button is hidden and pkpass downloads return 404.
+APPLE_WALLET_CERT_FILE = os.environ.get("APPLE_WALLET_CERT_FILE", "")
+APPLE_WALLET_CERT_PASSWORD = os.environ.get("APPLE_WALLET_CERT_PASSWORD", "")
+APPLE_WALLET_WWDR_FILE = os.environ.get("APPLE_WALLET_WWDR_FILE", "")
+APPLE_WALLET_PASS_TYPE_IDENTIFIER = os.environ.get("APPLE_WALLET_PASS_TYPE_IDENTIFIER", "")
+APPLE_WALLET_TEAM_IDENTIFIER = os.environ.get("APPLE_WALLET_TEAM_IDENTIFIER", "")
+APPLE_WALLET_ORGANIZATION_NAME = os.environ.get("APPLE_WALLET_ORGANIZATION_NAME", "")
 
 REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {

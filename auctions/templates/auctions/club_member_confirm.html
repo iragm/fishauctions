@@ -11,26 +11,28 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn btn-danger"
-          hx-post="{{ action_url }}">Confirm</button>
+          hx-post="{{ action_url }}"
+          hx-on::after-request="closeModal()">Confirm</button>
       </div>
     </div>
   </div>
 </div>
 <script>
-function closeModal() {
-  var container = document.getElementById("modals-here");
-  var backdrop = document.getElementById("modal-backdrop");
-  var modal = document.getElementById("modal");
-  if (modal) {
-    modal.classList.remove("show");
-    modal.style.pointerEvents = "none";
+(function() {
+  clearTimeout(window._modalCloseTimer);
+  function closeModal() {
+    var container = document.getElementById("modals-here");
+    var backdrop = document.getElementById("modal-backdrop");
+    var modal = document.getElementById("modal");
+    if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
+    if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
+    document.removeEventListener("keydown", escHandler);
+    window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
   }
-  if (backdrop) {
-    backdrop.classList.remove("show");
-    backdrop.style.pointerEvents = "none";
-  }
-  setTimeout(function() {
-    if (container) container.innerHTML = "";
-  }, 300);
-}
+  window.closeModal = closeModal;
+  function escHandler(e) { if (e.key === "Escape") closeModal(); }
+  document.addEventListener("keydown", escHandler);
+  var bd = document.getElementById("modal-backdrop");
+  if (bd) bd.addEventListener("click", closeModal);
+})();
 </script>

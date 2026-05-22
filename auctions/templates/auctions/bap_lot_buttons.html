@@ -1,0 +1,53 @@
+{% with award=lot.bap_award_cached|default:lot.bap_award %}
+<div class="bap-actions d-flex align-items-center flex-wrap gap-1" id="bap-actions-{{ lot.pk }}">
+{% if lot.manually_approved and not award %}
+  <span class="badge bg-secondary">Rejected</span>
+  <button type="button"
+    hx-post="{% url 'lot_bap_points' pk=lot.pk %}"
+    hx-vals='{"action": "undo"}'
+    hx-target="#bap-actions-{{ lot.pk }}"
+    hx-swap="outerHTML"
+    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
+{% elif award %}
+  {% if award.points %}<span class="badge bg-success">{{ award.points }} BAP</span>{% endif %}
+  {% if award.hap_points %}<span class="badge bg-primary">{{ award.hap_points }} HAP</span>{% endif %}
+  {% if award.cap_points %}<span class="badge bg-info text-dark">{{ award.cap_points }} CAP</span>{% endif %}
+  <button type="button"
+    hx-post="{% url 'lot_bap_points' pk=lot.pk %}"
+    hx-vals='{"action": "undo"}'
+    hx-target="#bap-actions-{{ lot.pk }}"
+    hx-swap="outerHTML"
+    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
+{% else %}
+  {% with placeholder=lot.bap_placeholder %}
+  {% if placeholder == "HAP" %}
+    <input type="text" name="hap_points" value="{{ default_points }}"
+      class="form-control form-control-sm" style="width:4.5rem" placeholder="HAP" title="HAP points">
+  {% elif placeholder == "Culture" %}
+    <input type="text" name="cap_points" value="{{ default_points }}"
+      class="form-control form-control-sm" style="width:4.5rem" placeholder="CAP" title="CAP points">
+  {% else %}
+    <input type="text" name="bap_points" value="{{ default_points }}"
+      class="form-control form-control-sm" style="width:4.5rem" placeholder="BAP" title="BAP points">
+  {% endif %}
+  {% endwith %}
+  <button type="button"
+    hx-post="{% url 'lot_bap_points' pk=lot.pk %}"
+    hx-include="closest .bap-actions"
+    hx-vals='{"action": "approve"}'
+    hx-target="#bap-actions-{{ lot.pk }}"
+    hx-swap="outerHTML"
+    class="btn btn-sm btn-success" title="Award points">
+    <i class="bi bi-check-lg"></i>
+  </button>
+  <button type="button"
+    hx-post="{% url 'lot_bap_points' pk=lot.pk %}"
+    hx-vals='{"action": "reject"}'
+    hx-target="#bap-actions-{{ lot.pk }}"
+    hx-swap="outerHTML"
+    class="btn btn-sm btn-outline-danger" title="Reject">
+    <i class="bi bi-x-lg"></i>
+  </button>
+{% endif %}
+</div>
+{% endwith %}

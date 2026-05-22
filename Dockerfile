@@ -92,6 +92,7 @@ RUN mkdir -p $APP_HOME/staticfiles
 RUN mkdir -p $APP_HOME/mediafiles
 RUN mkdir -p $APP_HOME/mediafiles/images
 RUN mkdir /home/app/.cache
+RUN mkdir /home/app/.gunicorn
 
 WORKDIR $APP_HOME
 
@@ -139,6 +140,7 @@ RUN chown -R app:app /home/app/web/mediafiles
 RUN chown -R app:app /home/app/web/mediafiles/images
 RUN chown -R app:app /home/app/web/staticfiles
 RUN chown -R app:app /home/app/.cache
+RUN chown -R app:app /home/app/.gunicorn
 USER app
 
 EXPOSE 8000

@@ -224,7 +224,7 @@ function deactivate_lot() {
                     {% endif %}
                     <h3>{{ lot.lot_name }}</h3>
                     {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="{% url 'edit_lot' pk=lot.pk %}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
-                    {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{% if show_bap_badge %}{% if bap_eligible_reason %}<span class="badge bg-secondary ms-1">Breeder points: {{ bap_eligible_reason_display }}</span>{% else %}<span class="badge bg-success ms-1">Breeder points eligible</span>{% endif %}{% endif %}{%endif%}
+                    {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{% if show_bap_badge %}{% if bap_eligible_reason %}<span class="badge bg-secondary ms-1">Breeder points: {{ bap_eligible_reason_display }}</span>{% else %}<span class="badge bg-success ms-1">Breeder points eligible</span>{% endif %}{% endif %}{% if viewer_has_bap and lot.sold %}{% include "auctions/bap_lot_buttons.html" with default_points=bap_default_points %}{% endif %}{%endif%}
                     {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
                     {% if lot.image_count or lot.video_link %}
                     <div>

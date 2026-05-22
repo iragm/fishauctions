@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Pay Membership &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<div class="card mb-4" style="max-width: 480px;">
+  <div class="card-header">Club membership payment</div>
+  <div class="card-body">
+    <p class="mb-1"><strong>Club:</strong> {{ club.name }}</p>
+    <p class="mb-3"><strong>Annual membership fee:</strong> {{ invoice.currency_symbol }}{{ club.membership_annual_fee }}</p>
+
+    {% if invoice.show_paypal_button or invoice.show_square_button %}
+      <p class="text-muted small">Select a payment method to pay your membership dues.</p>
+      {% if invoice.show_paypal_button %}
+      <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" class="d-inline me-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-paypal"></i> Pay with PayPal
+        </button>
+      </form>
+      {% endif %}
+      {% if invoice.show_square_button %}
+      <form action="{% url 'create_square_payment_link' uuid=invoice.no_login_link %}" method="post" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-credit-card"></i> Pay with Square
+        </button>
+      </form>
+      {% endif %}
+    {% else %}
+      <p class="text-warning">Online payment is not currently available. Please contact the club for payment arrangements.</p>
+    {% endif %}
+
+    <div class="mt-3">
+      <a href="{% url 'club_detail' club.slug %}" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Back to club
+      </a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

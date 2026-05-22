@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Awarded Points — {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if can_manage_bap %}
+  <button class="btn btn-sm btn-info"
+    hx-get="{% url 'bapaward_create' club.slug %}"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+    <i class="bi bi-plus-circle"></i> Add points
+  </button>
+  <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportBap" aria-expanded="false">
+    <i class="bi bi-upload"></i> Import CSV
+  </button>
+  {% endif %}
+</div>
+
+{% if can_manage_bap %}
+<div class="collapse mb-3" id="csvImportBap">
+  <div class="card card-body">
+    <h6>Import points from CSV</h6>
+    <small class="text-muted">Fields: <strong>Email</strong> (required, matches a club member), BAP, HAP, CAP, Date, Notes. Rows create new award records — existing awards are never modified or deleted.</small>
+    <form method="POST" action="{% url 'club_bap_import' club.slug %}" enctype="multipart/form-data" class="mt-2">
+      {% csrf_token %}
+      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
+      <button type="submit" class="btn btn-primary btn-sm">Upload CSV</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<form id="awards-filter-form" class="col-sm-12 mt-2" method="get">
+  {% crispy filter.form %}
+</form>
+
+<div id="awards-table-container"
+     hx-get=""
+     hx-trigger="bapAwardListChanged from:body"
+     hx-swap="innerHTML">
+  {% render_table table %}
+</div>
+
+<script>
+(function () {
+  var qInput = document.getElementById('id_query');
+  if (qInput) {
+    qInput.addEventListener('input', function () {
+      var newUrl = new URL(window.location);
+      if (this.value) newUrl.searchParams.set('query', this.value);
+      else newUrl.searchParams.delete('query');
+      history.replaceState({}, '', newUrl);
+    });
+  }
+})();
+
+// Define closeModal at page level so Cancel always works, even before the modal script runs.
+window.closeModal = function () {
+  var container = document.getElementById('modals-here');
+  var backdrop = document.getElementById('modal-backdrop');
+  var modal = document.getElementById('modal');
+  if (backdrop) { backdrop.classList.remove('show'); backdrop.style.pointerEvents = 'none'; }
+  if (modal) { modal.classList.remove('show'); modal.style.pointerEvents = 'none'; }
+  window._modalCloseTimer = setTimeout(function () { if (container) container.innerHTML = ''; }, 300);
+};
+</script>
+{% endblock %}
