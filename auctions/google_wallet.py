@@ -1,0 +1,140 @@
+"""Helpers for talking to the Google Wallet REST API.
+
+This module handles the OAuth2 access-token dance against
+``https://oauth2.googleapis.com/token`` using the JWT-bearer assertion flow,
+so we don't need ``google-auth`` as a dependency. PyJWT (already a project
+dep) plus ``requests`` is enough.
+
+Public entry points:
+    is_configured()                       -> bool
+    get_access_token()                    -> str | None  (cached in-memory)
+    create_generic_class(club)            -> bool         (True on 200/409)
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+import jwt
+import requests
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - not a secret
+WALLET_API_BASE = "https://walletobjects.googleapis.com/walletobjects/v1"
+ISSUER_SCOPE = "https://www.googleapis.com/auth/wallet_object.issuer"
+
+# Default class background — neutral dark, looks readable with white text.
+DEFAULT_HEX_BG = "#1f2937"
+
+_token_lock = threading.Lock()
+_cached_token: dict = {"value": None, "expires_at": 0.0}
+
+
+def is_configured() -> bool:
+    return bool(
+        getattr(settings, "GOOGLE_WALLET_ISSUER_ID", "")
+        and getattr(settings, "GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "")
+        and getattr(settings, "GOOGLE_WALLET_SERVICE_ACCOUNT_KEY", "")
+    )
+
+
+def _build_assertion() -> str:
+    now = int(time.time())
+    payload = {
+        "iss": settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL,
+        "scope": ISSUER_SCOPE,
+        "aud": TOKEN_URL,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    return jwt.encode(payload, settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY, algorithm="RS256")
+
+
+def get_access_token() -> str | None:
+    """Return a cached OAuth2 access token, refreshing on demand.
+
+    Tokens are valid for one hour; we cache slightly less and refresh with a
+    60s safety margin. Returns None when Wallet is not configured.
+    """
+    if not is_configured():
+        return None
+    with _token_lock:
+        now = time.time()
+        if _cached_token["value"] and _cached_token["expires_at"] - 60 > now:
+            return _cached_token["value"]
+        assertion = _build_assertion()
+        resp = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "assertion": assertion,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        _cached_token["value"] = body["access_token"]
+        _cached_token["expires_at"] = now + float(body.get("expires_in", 3600))
+        return _cached_token["value"]
+
+
+def _class_id_for_club(club) -> str:
+    return f"{settings.GOOGLE_WALLET_ISSUER_ID}.membership_{club.pk}"
+
+
+def _class_body(club) -> dict:
+    body: dict = {
+        "id": _class_id_for_club(club),
+        "classTemplateInfo": {
+            "cardTemplateOverride": {
+                "cardRowTemplateInfos": [
+                    {
+                        "oneItem": {
+                            "item": {"firstValue": {"fields": [{"fieldPath": "object.textModulesData['member_id']"}]}}
+                        }
+                    }
+                ]
+            }
+        },
+        "hexBackgroundColor": DEFAULT_HEX_BG,
+    }
+    # Add a logo only when the club has a publicly reachable image URL.
+    logo_url = getattr(club, "logo_url", "") or ""
+    if logo_url.startswith("https://"):
+        body["logo"] = {"sourceUri": {"uri": logo_url}}
+    return body
+
+
+def create_generic_class(club) -> bool:
+    """Create the GenericClass for this club on Google Wallet.
+
+    Returns True if the class exists on Google's side after this call (200 created
+    or 409 already exists). Raises on transport errors so Celery can retry.
+    """
+    if not is_configured():
+        logger.info("Google Wallet not configured; skipping class creation for club %s", club.pk)
+        return False
+    token = get_access_token()
+    if not token:
+        return False
+    body = _class_body(club)
+    resp = requests.post(
+        f"{WALLET_API_BASE}/genericClass",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if resp.status_code == 200:
+        logger.info("Created Google Wallet class %s for club %s", body["id"], club.pk)
+        return True
+    if resp.status_code == 409:
+        logger.info("Google Wallet class %s already exists for club %s", body["id"], club.pk)
+        return True
+    # 4xx other than 409 indicates a config / data problem the caller must see.
+    logger.error("Google Wallet class create failed for club %s: %s %s", club.pk, resp.status_code, resp.text)
+    resp.raise_for_status()
+    return False

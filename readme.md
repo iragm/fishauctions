@@ -259,17 +259,24 @@ Adds an *Add to Google Wallet* button on each club member's self-service page so
    - In the Cloud console, IAM & Admin → Service Accounts → **Create service account**.
    - Skip optional roles; create the account, then open it and go to the **Keys** tab → **Add key** → **Create new key** → **JSON**. Download the key file and keep it private.
    - Back in the Wallet console, **Users** → invite the service account email with the *Developer* role.
-5. Create a Generic Pass class for each club (one-time, per club). Easiest path is the Wallet REST API — POST to `https://walletobjects.googleapis.com/walletobjects/v1/genericClass` with body `{"id": "<ISSUER_ID>.membership_<club-slug>", "classTemplateInfo": {...}}` authenticated with the service account. The site uses the class ID format `<ISSUER_ID>.membership_<club-slug>`; class creation only needs to happen once per club (passes can be styled later in the console).
-6. Add the credentials to your `.env` file:
+5. Add the credentials to your `.env` file:
    ```
    GOOGLE_WALLET_ISSUER_ID=3388000000022XXXXXX
    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL=wallet-signer@your-project.iam.gserviceaccount.com
    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
    ```
    The private key is the `private_key` field from the JSON keyfile you downloaded in step 4. Keep the literal `\n` escape sequences if you put it on one line in `.env`, or use `.env`-style multi-line if your loader supports it.
-7. Make sure `fishauctions/settings.py` reads those three variables from the environment (mirroring the pattern used for Square / Discord settings). If any one is missing the button is automatically hidden, so partial config is safe.
+6. Make sure `fishauctions/settings.py` reads those three variables from the environment (mirroring the pattern used for Square / Discord settings). If any one is missing the button is automatically hidden, so partial config is safe.
+
+Wallet GenericClass records (one per club) are created automatically — a `post_save` signal on `Club` dispatches a Celery task on creation, and the class ID is keyed off `club.pk` (not the slug) so renames don't churn Wallet identities. To backfill existing clubs after enabling Wallet, run:
+```
+docker exec -it django python3 manage.py sync_google_wallet_classes
+```
+Pass `--sync` to run inline instead of dispatching to Celery. The task is idempotent (409 *already exists* is treated as success).
 
 When everything is wired up, members visiting their club page (`/clubs/<slug>/`) while signed in will see the *Add to Google Wallet* badge below their membership number, QR code and barcode.
+
+**Note on the demo / unapproved issuer:** Google caps unapproved issuers at ~5 generic classes total. Auto-creation will start failing once you exceed that. The Celery task logs a clear 4xx error and retries on transient failures; in practice you'll want to wait until your issuer is approved before enabling the integration site-wide.
 
 #### Discord bot integration (optional)
 

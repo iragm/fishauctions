@@ -61,7 +61,9 @@ def google_wallet_save_url(member):
         return ""
     try:
         club = member.club
-        class_id = f"{issuer_id}.membership_{club.slug}"
+        # Wallet class IDs are immutable, so we use club.pk (stable) instead of
+        # club.slug (mutable via AutoSlugField with always_update=True).
+        class_id = f"{issuer_id}.membership_{club.pk}"
         object_id = f"{issuer_id}.member_{member.pk}"
         member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
         generic_object = {

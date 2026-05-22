@@ -213,6 +213,20 @@ def create_user_userdata(sender, instance, created, **kwargs):
         UserData.objects.create(user=instance)
 
 
+@receiver(post_save, sender="auctions.Club")
+def ensure_google_wallet_class(sender, instance, created, **kwargs):
+    """Auto-create the Google Wallet GenericClass for a new club.
+
+    Only fires on create — slug renames must NOT re-trigger this, because Wallet
+    class IDs are immutable and we key them off the (stable) club PK.
+    """
+    if not created:
+        return
+    from .tasks import create_google_wallet_class_for_club
+
+    create_google_wallet_class_for_club.delay(instance.pk)
+
+
 @receiver(bounce_received)
 def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     recipient_list = mail_obj["destination"]

@@ -16689,3 +16689,89 @@ class ClubMemberIngestNameTests(TestCase):
         s = ClubMemberIngestSerializer(data={"first_name": "A", "last_name": "B"})
         self.assertTrue(s.is_valid(), s.errors)
         self.assertEqual(s.validated_data["name"], "A B")
+
+
+@override_settings(
+    GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+)
+class GoogleWalletClassCreateTests(TestCase):
+    """Verify the Wallet class create task: idempotent, configured-gated, correct body."""
+
+    def setUp(self):
+        from .models import Club
+
+        self.club = Club.objects.create(name="Wallet Test Club")
+
+    def _mock_response(self, status_code, json_body=None, text=""):
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = json_body or {}
+        resp.text = text
+        if status_code >= 400:
+            from requests.exceptions import HTTPError
+
+            resp.raise_for_status.side_effect = HTTPError(f"{status_code}")
+        else:
+            resp.raise_for_status.return_value = None
+        return resp
+
+    @override_settings(
+        GOOGLE_WALLET_ISSUER_ID="",
+        GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="",
+        GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="",
+    )
+    def test_no_op_when_not_configured(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.requests.post") as post:
+            self.assertFalse(create_generic_class(self.club))
+            post.assert_not_called()
+
+    def test_sends_pk_based_class_id(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(200, {"id": "ok"}),
+            ) as post:
+                self.assertTrue(create_generic_class(self.club))
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["id"], f"3388000000022XXXXXX.membership_{self.club.pk}")
+
+    def test_409_is_treated_as_success(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(409, text="already exists"),
+            ):
+                self.assertTrue(create_generic_class(self.club))
+
+    def test_400_raises(self):
+        from .google_wallet import create_generic_class
+
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch(
+                "auctions.google_wallet.requests.post",
+                return_value=self._mock_response(400, text="bad request"),
+            ):
+                with self.assertRaises(Exception):
+                    create_generic_class(self.club)
+
+    def test_signal_dispatches_on_create_only(self):
+        from .models import Club
+
+        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+            club = Club.objects.create(name="Another")
+            delay.assert_called_once_with(club.pk)
+            delay.reset_mock()
+            # Rename — slug regenerates from AutoSlugField, but signal must NOT re-fire.
+            club.name = "Another Renamed"
+            club.save()
+            delay.assert_not_called()

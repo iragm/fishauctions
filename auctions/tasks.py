@@ -8,6 +8,7 @@ Each task wraps a management command to maintain backward compatibility.
 import json
 import logging
 
+import requests
 from celery import shared_task
 from django.contrib.sites.models import Site
 from django.core.management import call_command
@@ -577,6 +578,27 @@ def schedule_bap_recalculation(club_pk, run_at):
             enabled=True,
             kwargs=json.dumps({"club_pk": club_pk}),
         )
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def create_google_wallet_class_for_club(self, club_pk):
+    """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK)."""
+    from auctions.google_wallet import create_generic_class, is_configured
+    from auctions.models import Club
+
+    if not is_configured():
+        return
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club:
+        return
+    create_generic_class(club)
 
 
 @shared_task(bind=True, ignore_result=True)
