@@ -1,11 +1,19 @@
 import io
 import logging
 
-import barcode
-from barcode.writer import SVGWriter
 from django import template
 from django.conf import settings
 from django.utils.safestring import mark_safe
+
+# python-barcode is an optional runtime dep. Import lazily-but-eagerly here and
+# tolerate ImportError so a missing wheel doesn't bring down everything that
+# loads this template-tag library (e.g. the Celery worker's Django checks).
+try:
+    import barcode
+    from barcode.writer import SVGWriter
+except ImportError:  # pragma: no cover
+    barcode = None
+    SVGWriter = None
 
 register = template.Library()
 logger = logging.getLogger(__name__)
@@ -18,7 +26,7 @@ def membership_barcode(value, barcode_type="code128"):
     Uses python-barcode with the SVG writer. Returns an empty string on failure
     so a misconfigured pass cannot break the page.
     """
-    if not value:
+    if not value or barcode is None:
         return ""
     try:
         cls = barcode.get_barcode_class(barcode_type)

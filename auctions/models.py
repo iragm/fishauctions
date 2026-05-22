@@ -660,6 +660,10 @@ class Club(models.Model):
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
+    google_wallet_class_created = models.BooleanField(
+        default=False,
+        help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",
+    )
     allow_joining = models.BooleanField(default=False)
     allow_integrated_payments = models.BooleanField(default=False)
     description = models.TextField(verbose_name="About this club", default="", blank=True)

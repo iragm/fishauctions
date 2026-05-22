@@ -62,10 +62,8 @@
         {% google_wallet_save_url member as wallet_url %}
         {% if wallet_url %}
         <div class="mt-3">
-          <a href="{{ wallet_url }}" target="_blank" rel="noopener">
-            <img alt="Add to Google Wallet"
-              src="https://developers.google.com/static/wallet/generic/resources/add_to_google_wallet_add-wallet-badge.svg"
-              style="height: 48px;">
+          <a class="btn btn-dark btn-sm" href="{{ wallet_url }}" target="_blank" rel="noopener">
+            <i class="bi bi-google"></i> Add to Google Wallet
           </a>
         </div>
         {% endif %}

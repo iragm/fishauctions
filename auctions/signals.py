@@ -216,15 +216,17 @@ def create_user_userdata(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def ensure_google_wallet_class(sender, instance, created, **kwargs):
-    """Auto-create the Google Wallet GenericClass for a new club.
+    """Ensure the Google Wallet GenericClass exists for this club.
 
-    Only fires on create — slug renames must NOT re-trigger this, because Wallet
-    class IDs are immutable and we key them off the (stable) club PK.
+    Fires whenever a Club is saved and its Wallet class has not yet been confirmed
+    created. Once `google_wallet_class_created` is True, this is a no-op so routine
+    name/slug edits don't spam Google's API. The task itself is idempotent
+    (409 already-exists = treated as success) so even a stale flag is safe.
 
     Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't
     leak a task that then tries to create a Wallet class for a nonexistent club.
     """
-    if not created:
+    if instance.google_wallet_class_created:
         return
     from .tasks import create_google_wallet_class_for_club
 

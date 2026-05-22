@@ -16764,7 +16764,7 @@ class GoogleWalletClassCreateTests(TestCase):
                 with self.assertRaises(Exception):
                     create_generic_class(self.club)
 
-    def test_signal_dispatches_on_create_only(self):
+    def test_signal_dispatches_when_class_not_yet_created(self):
         from .models import Club
 
         # transaction.on_commit callbacks do not fire inside TestCase's atomic block
@@ -16775,11 +16775,32 @@ class GoogleWalletClassCreateTests(TestCase):
                 club = Club.objects.create(name="Another")
             delay.assert_called_once_with(club.pk)
             delay.reset_mock()
-            # Rename — slug regenerates from AutoSlugField, but signal must NOT re-fire.
+            # Subsequent edits while the flag is still False — dispatch again so legacy
+            # clubs that pre-date the integration get their class on next save.
             with self.captureOnCommitCallbacks(execute=True):
                 club.name = "Another Renamed"
                 club.save()
+            delay.assert_called_once_with(club.pk)
+            delay.reset_mock()
+            # Once Google confirms the class exists, the flag is flipped and further
+            # saves must NOT re-dispatch (don't spam Google's API on every edit).
+            club.google_wallet_class_created = True
+            club.save()
+            with self.captureOnCommitCallbacks(execute=True):
+                club.name = "Renamed Again"
+                club.save()
             delay.assert_not_called()
+
+    def test_task_flips_flag_on_success(self):
+        from .models import Club
+        from .tasks import create_google_wallet_class_for_club
+
+        club = Club.objects.create(name="Flag flip test")
+        self.assertFalse(club.google_wallet_class_created)
+        with patch("auctions.google_wallet.create_generic_class", return_value=True):
+            create_google_wallet_class_for_club.apply(args=[club.pk])
+        club.refresh_from_db()
+        self.assertTrue(club.google_wallet_class_created)
 
 
 class MembershipNumberUniquenessTests(TestCase):

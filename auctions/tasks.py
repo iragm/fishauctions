@@ -589,7 +589,12 @@ def schedule_bap_recalculation(club_pk, run_at):
     max_retries=5,
 )
 def create_google_wallet_class_for_club(self, club_pk):
-    """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK)."""
+    """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK).
+
+    On success (Wallet confirms the class exists), flips the club's
+    `google_wallet_class_created` flag so the post_save signal stops re-dispatching
+    this task on every edit.
+    """
     from auctions.google_wallet import create_generic_class, is_configured
     from auctions.models import Club
 
@@ -598,7 +603,9 @@ def create_google_wallet_class_for_club(self, club_pk):
     club = Club.objects.filter(pk=club_pk).first()
     if not club:
         return
-    create_generic_class(club)
+    if create_generic_class(club) and not club.google_wallet_class_created:
+        # update() avoids re-firing the signal we're inside.
+        Club.objects.filter(pk=club.pk).update(google_wallet_class_created=True)
 
 
 @shared_task(bind=True, ignore_result=True)
