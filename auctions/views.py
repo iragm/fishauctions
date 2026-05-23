@@ -921,6 +921,39 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         return qs
 
 
+class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Autocomplete for the club-member merge target selector.
+
+    Forwards: club_slug, exclude_member (pk of the source being merged away).
+    Includes both active and deactivated members; labels deactivated ones.
+    Requires permission_add_edit on the club.
+    """
+
+    def get_result_label(self, result):
+        label = str(result)
+        email = f" ({result.email})" if result.email else ""
+        suffix = " (Deactivated)" if result.is_deleted else ""
+        return format_html("{}{}{}", label, email, suffix)
+
+    def get_queryset(self):
+        slug = self.forwarded.get("club_slug", "")
+        exclude_pk = self.forwarded.get("exclude_member")
+        if not slug:
+            return ClubMember.objects.none()
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
+        if not club or not check_club_permission(self.request.user, club, "permission_add_edit"):
+            return ClubMember.objects.none()
+        qs = ClubMember.objects.filter(club=club).order_by("is_deleted", "name")
+        if exclude_pk:
+            try:
+                qs = qs.exclude(pk=int(exclude_pk))
+            except (ValueError, TypeError):
+                pass
+        if self.q:
+            qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
+        return qs
+
+
 class AuctionAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     """Autocomplete for auctions that the current user is an admin of"""
 
@@ -13190,7 +13223,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
-    """Merge two club members: keep target, soft-delete source, copy non-empty fields."""
+    """Merge two club members: keep target, hard-delete source, copy non-empty fields."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -13234,15 +13267,15 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 for name, field in review_form.fields.items()
             ],
             "summary_lines": [
-                f"{source} will be deleted.",
+                f"{source} will be permanently removed.",
                 f"{target} will be kept.",
-                "Permission flags on the deleted member will be kept on the surviving member.",
+                "Permission flags from the removed member will be merged into the surviving member.",
                 "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
             ],
             "target_field_name": "target",
             "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
-            "save_button_label": f"Save and delete {source}",
+            "save_button_label": f"Save and remove {source}",
         }
 
     def get(self, request, slug, pk):
@@ -13298,12 +13331,12 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         update_fields.add("is_deleted")
                     if update_fields:
                         target.save(update_fields=list(update_fields))
-                    source.is_deleted = True
-                    source.save(update_fields=["is_deleted"])
+                    source_name = str(source)
+                    source.delete()
                     ClubHistory.objects.create(
                         club=self.club,
                         user=request.user,
-                        action=f"Merged member {source} into {target}",
+                        action=f"Merged member {source_name} into {target}",
                         applies_to="MEMBERS",
                     )
                 messages.success(request, f"Merged {source} into {target}.")

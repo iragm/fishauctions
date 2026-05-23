@@ -3901,28 +3901,40 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         )
 
 
-class _ClubMemberMergeTargetField(forms.ModelChoiceField):
-    """ModelChoiceField that appends '(Deactivated)' to the label of deleted members."""
-
-    def label_from_instance(self, obj):
-        label = super().label_from_instance(obj)
-        if obj.is_deleted:
-            label = f"{label} (Deactivated)"
-        return label
-
-
 class ClubMemberMergeTargetForm(forms.Form):
-    target = _ClubMemberMergeTargetField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
+    target = forms.CharField(
+        widget=autocomplete.Select2(
+            url="club-member-merge-autocomplete",
+            forward=["club_slug", "exclude_member"],
+            attrs={
+                "data-html": True,
+                "data-container-css-class": "",
+            },
+        )
+    )
+    club_slug = forms.CharField(widget=HiddenInput())
+    exclude_member = forms.IntegerField(widget=HiddenInput(), required=False)
 
     def __init__(self, club, source, *args, **kwargs):
         self.club = club
         self.source = source
         super().__init__(*args, **kwargs)
-        self.fields["target"].queryset = (
-            ClubMember.objects.filter(club=club).exclude(pk=source.pk).order_by("is_deleted", "name")
-        )
         self.fields["target"].label = f"Merge {self.source} with"
+        self.fields["club_slug"].initial = club.slug
+        self.fields["exclude_member"].initial = source.pk
         add_bootstrap_classes(self)
+
+    def clean_target(self):
+        target_pk = self.cleaned_data["target"]
+        try:
+            target = ClubMember.objects.get(pk=target_pk, club=self.club)
+        except ClubMember.DoesNotExist as exc:
+            msg = "Select a member from this club"
+            raise forms.ValidationError(msg) from exc
+        if target == self.source:
+            msg = "You can't merge a member with themselves"
+            raise forms.ValidationError(msg)
+        return target
 
 
 class ClubMemberMergeReviewForm(forms.ModelForm):

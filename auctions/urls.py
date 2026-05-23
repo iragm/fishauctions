@@ -26,6 +26,11 @@ urlpatterns = [
         views.ClubMemberAutocomplete.as_view(),
         name="club-member-autocomplete",
     ),
+    path(
+        "api/club-member-merge-autocomplete/",
+        views.ClubMemberMergeAutocomplete.as_view(),
+        name="club-member-merge-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
