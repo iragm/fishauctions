@@ -10,9 +10,9 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="button" class="btn btn-danger"
+        <button id="confirm-action-btn" type="button" class="btn btn-danger"
           hx-post="{{ action_url }}"
-          hx-on::after-request="closeModal()">Confirm</button>
+          hx-swap="none">{{ confirm_button_label|default:"Confirm" }}</button>
       </div>
     </div>
   </div>
@@ -34,5 +34,18 @@
   document.addEventListener("keydown", escHandler);
   var bd = document.getElementById("modal-backdrop");
   if (bd) bd.addEventListener("click", closeModal);
+
+  // Close the modal and refresh the table after the confirm request completes (HTMX 1.8 compatible).
+  // hx-swap="none" keeps the button in the DOM so htmx:afterRequest fires correctly; we then
+  // dispatch clubMemberListChanged ourselves so the table container reloads.
+  var btn = document.getElementById("confirm-action-btn");
+  if (btn) {
+    btn.addEventListener("htmx:afterRequest", function(evt) {
+      if (evt.detail.successful) {
+        closeModal();
+        document.body.dispatchEvent(new CustomEvent("clubMemberListChanged"));
+      }
+    });
+  }
 })();
 </script>

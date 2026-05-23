@@ -3901,14 +3901,26 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         )
 
 
+class _ClubMemberMergeTargetField(forms.ModelChoiceField):
+    """ModelChoiceField that appends '(Deactivated)' to the label of deleted members."""
+
+    def label_from_instance(self, obj):
+        label = super().label_from_instance(obj)
+        if obj.is_deleted:
+            label = f"{label} (Deactivated)"
+        return label
+
+
 class ClubMemberMergeTargetForm(forms.Form):
-    target = forms.ModelChoiceField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
+    target = _ClubMemberMergeTargetField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
 
     def __init__(self, club, source, *args, **kwargs):
         self.club = club
         self.source = source
         super().__init__(*args, **kwargs)
-        self.fields["target"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).exclude(pk=source.pk)
+        self.fields["target"].queryset = (
+            ClubMember.objects.filter(club=club).exclude(pk=source.pk).order_by("is_deleted", "name")
+        )
         self.fields["target"].label = f"Merge {self.source} with"
         add_bootstrap_classes(self)
 

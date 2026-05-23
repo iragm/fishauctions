@@ -12481,7 +12481,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("name")
+        # is_deleted filtering is handled by ClubMemberFilter.filter_queryset (default: hide deactivated)
+        return ClubMember.objects.filter(club=self.club).order_by("name")
 
     def get_template_names(self):
         if self.request.htmx:
@@ -12541,8 +12542,10 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             "email_tooltip": "",
         }
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        deactivated_qs = ClubMember.objects.filter(club=self.club, is_deleted=True)
         if pk:
             base_qs = base_qs.exclude(pk=pk)
+            deactivated_qs = deactivated_qs.exclude(pk=pk)
         # Auto-fill from manageable club members or auction histories when name typed without email.
         if name and not email and not pk:
             member_match = (
@@ -12567,16 +12570,20 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                     result["id_email"] = old_tos.email
                     result["id_phone_number"] = old_tos.phone_number or ""
                     result["id_address"] = old_tos.address or ""
-        # Duplicate name check within this club
+        # Duplicate name check within this club (active and deactivated)
         if name:
             dup = base_qs.filter(name__iexact=name).first()
             if dup:
                 result["name_tooltip"] = f"{dup} is already in this club"
-        # Duplicate email check within this club
+            elif deactivated_qs.filter(name__iexact=name).exists():
+                result["name_tooltip"] = "Name matches a deactivated member"
+        # Duplicate email check within this club (active and deactivated)
         if email:
             dup = base_qs.filter(email=email).first()
             if dup:
                 result["email_tooltip"] = "Email is already in this club"
+            elif deactivated_qs.filter(email=email).exists():
+                result["email_tooltip"] = "Email matches a deactivated member"
         return JsonResponse(result)
 
 
@@ -13001,10 +13008,63 @@ class ClubMemberDeleteView(APIView):
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
-            action=f"Removed member {member}",
+            action=f"Deactivated member {member}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+        return HttpResponse(status=204)
+
+
+class ClubMemberReactivateView(APIView):
+    """Reactivate a deactivated (soft-deleted) club member."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        member.is_deleted = False
+        member.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Reactivated member {member}",
+            applies_to="MEMBERS",
+        )
+        # Return 200 with HX-Trigger so the event fires on the link element (which stays in the DOM)
+        # and bubbles to body where the table container is listening.
+        return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
+
+
+class ClubMemberPermanentDeleteView(APIView):
+    """Hard-delete a club member that has already been deactivated (is_deleted=True)."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if not member.is_deleted:
+            raise PermissionDenied()
+        club = member.club
+        member_name = str(member)
+        member.delete()
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Permanently deleted member {member_name}",
+            applies_to="MEMBERS",
+        )
+        return HttpResponse(status=204)
 
 
 class ClubMemberConfirmView(APIView):
@@ -13021,16 +13081,28 @@ class ClubMemberConfirmView(APIView):
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
         if action == "delete":
-            title = "Remove member"
-            body = f"Remove {member} from this club?"
+            title = "Deactivate member"
+            body = mark_safe(
+                f"<small>Disable this member's membership.  They won't appear in searches, or be able to view/renew their membership.  You can reactivate or permanently delete them later.</small><br>Deactivate {member}?"
+            )
             action_url = reverse("club_member_delete", kwargs={"pk": pk})
+            context = {
+                "title": title,
+                "body": body,
+                "action_url": action_url,
+            }
+        elif action == "permanent_delete":
+            if not member.is_deleted:
+                raise Http404
+            action_url = reverse("club_member_permanent_delete", kwargs={"pk": pk})
+            context = {
+                "title": f"Delete {member}?",
+                "body": "This cannot be undone.",
+                "action_url": action_url,
+                "confirm_button_label": "Delete",
+            }
         else:
             raise Http404
-        context = {
-            "title": title,
-            "body": body,
-            "action_url": action_url,
-        }
         return render(request, "auctions/club_member_confirm.html", context)
 
 
@@ -13191,7 +13263,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug, pk):
         source = self._get_member(pk)
         if request.POST.get("step") == "review":
-            target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club, is_deleted=False)
+            target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club)
             review_form = ClubMemberMergeReviewForm(request.POST, instance=target)
             if review_form.is_valid():
                 with transaction.atomic():
@@ -13221,6 +13293,9 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
                             setattr(target, perm_field, True)
                             update_fields.add(perm_field)
+                    if target.is_deleted:
+                        target.is_deleted = False
+                        update_fields.add("is_deleted")
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source.is_deleted = True

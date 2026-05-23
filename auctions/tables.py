@@ -463,6 +463,8 @@ class ClubMemberHTMxTable(tables.Table):
             icon,
             name,
         )
+        if record.is_deleted:
+            result += format_html(" <span class='badge bg-secondary'>Deactivated</span>")
         if record.email_address_status == "BAD":
             result += format_html(
                 "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
@@ -520,7 +522,7 @@ class ClubMemberHTMxTable(tables.Table):
         name = record.display_name
 
         permissions_item = format_html("")
-        if self.can_manage_permissions:
+        if self.can_manage_permissions and not record.is_deleted:
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
                 '<li><a class="dropdown-item" href="javascript:void(0)"'
@@ -533,56 +535,73 @@ class ClubMemberHTMxTable(tables.Table):
 
         edit_items = format_html("")
         if self.can_add_edit:
-            renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
-            set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
-            confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
-            merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
-            email_item = format_html("")
-            if record.email:
-                icon_class = "bi bi-envelope"
-                if record.email_address_status == "BAD":
-                    icon_class = "bi bi-envelope-exclamation-fill text-danger"
-                elif record.email_address_status == "VALID":
-                    icon_class = "bi bi-envelope-check-fill"
-                email_item = format_html(
-                    '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
-                    record.email,
-                    icon_class,
+            if record.is_deleted:
+                # Deactivated member: offer reactivate (no confirm) and permanent delete
+                reactivate_url = reverse("club_member_reactivate", kwargs={"pk": record.pk})
+                perm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "permanent_delete"})
+                edit_items = format_html(
+                    '<li><a class="dropdown-item" href="javascript:void(0)"'
+                    ' hx-post="{}" hx-target="#modals-here" hx-swap="innerHTML">'
+                    '<i class="bi bi-person-check me-1"></i>Reactivate</a></li>'
+                    '<li><hr class="dropdown-divider"></li>'
+                    '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
+                    ' hx-get="{}" hx-target="#modals-here"'
+                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-trash me-1"></i>Permanently delete</a></li>',
+                    reactivate_url,
+                    perm_delete_url,
                 )
-            # Member-number action is hidden entirely when the club has the feature disabled.
-            membership_number_item = format_html("")
-            if record.club.membership_number_mode != "disabled":
-                membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
-                membership_number_item = format_html(
+            else:
+                renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+                confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
+                merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+                email_item = format_html("")
+                if record.email:
+                    icon_class = "bi bi-envelope"
+                    if record.email_address_status == "BAD":
+                        icon_class = "bi bi-envelope-exclamation-fill text-danger"
+                    elif record.email_address_status == "VALID":
+                        icon_class = "bi bi-envelope-check-fill"
+                    email_item = format_html(
+                        '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
+                        record.email,
+                        icon_class,
+                    )
+                # Member-number action is hidden entirely when the club has the feature disabled.
+                membership_number_item = format_html("")
+                if record.club.membership_number_mode != "disabled":
+                    membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
+                    membership_number_item = format_html(
+                        '<li><a class="dropdown-item" href="javascript:void(0)"'
+                        ' hx-get="{}" hx-target="#modals-here"'
+                        ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                        '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
+                        membership_number_url,
+                    )
+                edit_items = format_html(
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
                     ' hx-get="{}" hx-target="#modals-here"'
                     ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                    '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
-                    membership_number_url,
+                    '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
+                    '<li><a class="dropdown-item" href="{}">'
+                    '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
+                    '<li><a class="dropdown-item" href="{}">'
+                    '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+                    "{}"
+                    "{}"
+                    '<li><hr class="dropdown-divider"></li>'
+                    '<li><a class="dropdown-item" href="javascript:void(0)"'
+                    ' hx-get="{}" hx-target="#modals-here"'
+                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-person-dash me-1"></i>Deactivate</a></li>',
+                    renew_confirm_url,
+                    set_expiry_url,
+                    merge_url,
+                    membership_number_item,
+                    email_item,
+                    confirm_delete_url,
                 )
-            edit_items = format_html(
-                '<li><a class="dropdown-item" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
-                '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
-                '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
-                "{}"
-                "{}"
-                '<li><hr class="dropdown-divider"></li>'
-                '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
-                renew_confirm_url,
-                set_expiry_url,
-                merge_url,
-                membership_number_item,
-                email_item,
-                confirm_delete_url,
-            )
 
         django_admin_item = format_html("")
         if self.request and getattr(self.request.user, "is_staff", False):

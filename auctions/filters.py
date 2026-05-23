@@ -999,7 +999,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, source, expired, expiring, never paid...",
+                "placeholder": "Filter by name, email, source, expired, expiring, never paid, deactivated...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1013,8 +1013,30 @@ class ClubMemberFilter(django_filters.FilterSet):
         model = ClubMember
         fields = []
 
+    def __init__(self, data=None, *args, **kwargs):
+        # FilterView passes `request.GET or None`, so an empty GET dict becomes None and the
+        # filterset is treated as unbound — filter_queryset is never called and all members
+        # (including deactivated) leak through.  Seed an empty query so the filterset is always
+        # bound and our filter_queryset override can apply the is_deleted=False default.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+
+    def filter_queryset(self, queryset):
+        """Apply is_deleted default before delegating to field-level filters.
+
+        Deactivated members are hidden unless the user explicitly types 'deactivated'.
+        """
+        query_value = (self.data.get("query") or "").lower()
+        show_deactivated = "deactivated" in query_value.split()
+        if show_deactivated:
+            queryset = queryset.filter(is_deleted=True)
+        else:
+            queryset = queryset.filter(is_deleted=False)
+        return super().filter_queryset(queryset)
+
     def clubmember_search(self, queryset, name, value):
-        """Support text search including special tokens: discord, current, expired, expiring, never paid"""
+        """Support text search including special tokens: discord, current, expired, expiring, never paid, deactivated"""
         tokens = value.lower().split()
         source_filter = None
         status_filter = None
@@ -1034,6 +1056,8 @@ class ClubMemberFilter(django_filters.FilterSet):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
                 source_filter = "manually_added"
+            elif token == "deactivated":
+                pass  # handled in filter_queryset
             else:
                 remaining.append(token)
 
