@@ -35,6 +35,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import (
     Avg,
+    BooleanField,
     Case,
     Count,
     Exists,
@@ -1111,13 +1112,21 @@ class MyLots(SingleTableMixin, FilterView):
         return template_name
 
     def dispatch(self, request, *args, **kwargs):
-        self.queryset = UserLotFilter(request=request).qs
+        qs = UserLotFilter(request=request).qs
+        if request.GET.get("filter") == "bap":
+            qs = (
+                qs.filter(bap_award__isnull=False)
+                .select_related("bap_award__club_member__club")
+                .annotate(show_bap_badge=Value(True, output_field=BooleanField()))
+            )
+        self.queryset = qs
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
+        context["filter_bap"] = self.request.GET.get("filter") == "bap"
         return context
 
     def get(self, *args, **kwargs):
@@ -1975,9 +1984,9 @@ class MyLotReportView(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
-                is_deleted=True
-            )
+            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
+            .exclude(is_deleted=True)
+            .select_related("bap_award__club_member__club")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -1985,7 +1994,9 @@ class MyLotReportView(LoginRequiredMixin, View):
             f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
         writer = csv.writer(response)
-        writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
+        writer.writerow(
+            ["Lot number", "Name", "Auction", "Status", "Winning price", "My cut", "BAP points", "HAP points", "Culture points", "Points reason", "Points club"]
+        )
         for lot in lots:
             status = "Unsold"
             if lot.banned:
@@ -1994,6 +2005,16 @@ class MyLotReportView(LoginRequiredMixin, View):
                 status = "Deactivated"
             elif lot.winner or lot.auctiontos_winner:
                 status = "Sold"
+            bap_pts = hap_pts = cap_pts = points_reason = points_club = ""
+            try:
+                award = lot.bap_award
+                bap_pts = award.points or ""
+                hap_pts = award.hap_points or ""
+                cap_pts = award.cap_points or ""
+                points_reason = award.notes or ""
+                points_club = award.club_member.club.name if award.club_member_id and award.club_member.club_id else ""
+            except Exception:
+                pass
             writer.writerow(
                 [
                     lot.lot_number_display,
@@ -2002,6 +2023,11 @@ class MyLotReportView(LoginRequiredMixin, View):
                     status,
                     lot.winning_price,
                     lot.your_cut,
+                    bap_pts,
+                    hap_pts,
+                    cap_pts,
+                    points_reason,
+                    points_club,
                 ]
             )
         return response

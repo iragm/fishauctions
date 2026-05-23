@@ -363,6 +363,27 @@ class LotHTMxTableForUsers(tables.Table):
         if record.owner_chats:
             result += f" <span style='color:black;font-weight:900' class='badge bg-warning'>{record.owner_chats}</span>"
         result += "</a>"
+        if getattr(record, "show_bap_badge", False):
+            try:
+                award = record.bap_award
+                parts = []
+                if award.points:
+                    parts.append(f"{award.points} BAP")
+                if award.hap_points:
+                    parts.append(f"{award.hap_points} HAP")
+                if award.cap_points:
+                    parts.append(f"{award.cap_points} CAP")
+                pts = "/".join(parts) if parts else "0 pts"
+                club_name = award.club_member.club.name if award.club_member_id and award.club_member.club_id else ""
+                notes = award.notes or ""
+                badge_parts = [pts]
+                if club_name:
+                    badge_parts.append(club_name)
+                if notes:
+                    badge_parts.append(notes)
+                result += f' <span class="badge bg-success">{" · ".join(badge_parts)}</span>'
+            except Exception:
+                pass
         return mark_safe(result)
 
     def render_auction(self, value, record):
