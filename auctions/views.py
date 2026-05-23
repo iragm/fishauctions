@@ -1112,12 +1112,17 @@ class MyLots(SingleTableMixin, FilterView):
         return template_name
 
     def dispatch(self, request, *args, **kwargs):
+        # "filter" is the bookmarkable URL param; "query" is what the HTMX form posts.
+        # When both are present (every HTMX refresh), "query" reflects the actual current input
+        # and must take precedence — otherwise ?filter=bap stays truthy even after the user clears it.
+        if "query" in request.GET:
+            filter_value = request.GET["query"].strip().lower()
+        else:
+            filter_value = request.GET.get("filter", "").strip().lower()
         qs = UserLotFilter(request=request).qs
-        if request.GET.get("filter") == "bap":
-            qs = (
-                qs.filter(bap_award__isnull=False)
-                .select_related("bap_award__club_member__club")
-                .annotate(show_bap_badge=Value(True, output_field=BooleanField()))
+        if filter_value == "bap":
+            qs = qs.select_related("bap_award__club_member__club").annotate(
+                show_bap_badge=Value(True, output_field=BooleanField())
             )
         self.queryset = qs
         return super().dispatch(request, *args, **kwargs)
@@ -1126,7 +1131,11 @@ class MyLots(SingleTableMixin, FilterView):
         context = super().get_context_data(**kwargs)
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
-        context["filter_bap"] = self.request.GET.get("filter") == "bap"
+        if "query" in self.request.GET:
+            filter_value = self.request.GET["query"].strip().lower()
+        else:
+            filter_value = self.request.GET.get("filter", "").strip().lower()
+        context["filter_bap"] = filter_value == "bap"
         return context
 
     def get(self, *args, **kwargs):

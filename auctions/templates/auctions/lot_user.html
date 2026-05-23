@@ -16,6 +16,36 @@ $.ajax({
   }
 });
 </script>
+<script>
+(function () {
+  // The form uses ?query= internally; the bookmarkable URL uses ?filter=
+  // Translate on load and keep them in sync.
+  const filterInput = document.getElementById('id_query');
+  if (!filterInput) return;
+
+  // Pre-fill input from ?filter= on page load, then trigger HTMX refresh
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialFilter = urlParams.get('filter') || '';
+  if (initialFilter) {
+    filterInput.value = initialFilter;
+    htmx.trigger(filterInput, 'keyup');
+  }
+
+  // As the user types, keep ?filter= in the URL in sync
+  filterInput.addEventListener('input', function (event) {
+    const q = event.target.value.trim();
+    const newUrl = new URL(window.location);
+    if (q) {
+      newUrl.searchParams.set('filter', q);
+    } else {
+      newUrl.searchParams.delete('filter');
+    }
+    // Remove the raw ?query= param the HTMX form may have added
+    newUrl.searchParams.delete('query');
+    history.replaceState({}, '', newUrl);
+  });
+})();
+</script>
 {% endblock %}
 {% block content %}
     <span class="">Looking to sell {{ website_focus }}?  Use this page to quickly create and manage your lots.</span><br><br>

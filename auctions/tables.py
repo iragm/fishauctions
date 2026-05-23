@@ -381,7 +381,7 @@ class LotHTMxTableForUsers(tables.Table):
                     badge_parts.append(club_name)
                 if notes:
                     badge_parts.append(notes)
-                result += f' <span class="badge bg-success">{" · ".join(badge_parts)}</span>'
+                result += f' <span class="badge bg-success text-dark">{" · ".join(badge_parts)}</span>'
             except Exception:
                 pass
         return mark_safe(result)

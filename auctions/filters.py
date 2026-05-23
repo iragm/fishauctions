@@ -339,6 +339,9 @@ class LotAdminFilter(django_filters.FilterSet):
             if value == "broken":
                 return queryset.filter(auctiontos_winner__isnull=True, winner__isnull=False)
 
+            if value == "bap":
+                return queryset.filter(bap_award__isnull=False)
+
             if value == "unsold":
                 return queryset.filter(auctiontos_winner__isnull=True)
             if value == "removed":
