@@ -42,7 +42,6 @@ class ClubMemberSerializer(serializers.ModelSerializer):
         model = ClubMember
         fields = [
             "id",
-            "user",
             "club",
             "name",
             "email",
@@ -59,8 +58,9 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "source",
             "is_deleted",
             "memo",
+            "membership_number",
         ]
-        read_only_fields = ["id", "user", "createdon", "club", "is_deleted"]
+        read_only_fields = ["id", "createdon", "club", "is_deleted", "membership_number"]
 
 
 class ClubMemberIngestSerializer(serializers.Serializer):
