@@ -264,22 +264,15 @@ def create_user_userdata(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def ensure_google_wallet_class(sender, instance, created, **kwargs):
-    """Ensure the Google Wallet GenericClass exists / is current for this club.
+    """Create the Google Wallet GenericClass once per club.
 
-    Fires when:
-      * the class hasn't been confirmed created yet (`google_wallet_class_created` False), or
-      * the club icon was just changed (so the new logo propagates to existing passes).
-
-    The task itself is upsert (POST → PATCH on 409) so re-running it is always safe.
+    The class is essentially a static template (per-pass visuals live on the
+    GenericObject, not here), so we only need to create it the first time —
+    icon / name changes are handled by refresh_google_wallet_objects_for_club.
     Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't leak
     a task that then tries to create a Wallet class for a nonexistent club.
     """
-    icon_changed = False
-    prev_icon = getattr(instance, "_previous_icon_name", "")
-    current_icon = instance.icon.name if instance.icon else ""
-    if prev_icon != current_icon:
-        icon_changed = True
-    if instance.google_wallet_class_created and not icon_changed:
+    if instance.google_wallet_class_created:
         return
     from .tasks import create_google_wallet_class_for_club
 
@@ -287,12 +280,18 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender="auctions.Club")
-def refresh_google_wallet_objects_for_club_name_change(sender, instance, created, **kwargs):
-    """Patch member wallet object metadata when a club is renamed."""
+def refresh_google_wallet_objects_for_club(sender, instance, created, **kwargs):
+    """Patch all member wallet objects when the club's name or icon changes.
+
+    Logo and background color are GenericObject fields (per-pass), not class
+    fields, so a club-level visual change requires PATCHing every active member.
+    """
     if created:
         return
     prev_name = getattr(instance, "_previous_name", "")
-    if prev_name == instance.name:
+    prev_icon = getattr(instance, "_previous_icon_name", "")
+    current_icon = instance.icon.name if instance.icon else ""
+    if prev_name == instance.name and prev_icon == current_icon:
         return
     from .tasks import update_google_wallet_objects_for_club
 

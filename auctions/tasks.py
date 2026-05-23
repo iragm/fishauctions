@@ -592,8 +592,7 @@ def create_google_wallet_class_for_club(self, club_pk):
     """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK).
 
     On success (Wallet confirms the class exists), flips the club's
-    `google_wallet_class_created` flag so the post_save signal stops re-dispatching
-    this task on every edit.
+    `google_wallet_class_created` flag so we don't re-run on every save.
     """
     from auctions.google_wallet import create_generic_class, is_configured
     from auctions.models import Club

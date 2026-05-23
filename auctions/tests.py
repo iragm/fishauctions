@@ -17321,34 +17321,44 @@ class ClubIconWalletTests(TestCase):
         self.club.save()
         self.member = ClubMember.objects.create(club=self.club, user=self.user, name="M")
 
-    def test_google_wallet_class_body_includes_logo_when_icon_set(self):
-        from .google_wallet import _class_body
+    def test_object_visuals_includes_logo_when_icon_set(self):
+        """Logo lives on GenericObject (not GenericClass) per Google Wallet REST schema."""
+        from .google_wallet import _object_visuals
 
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
-            body = _class_body(self.club)
-        self.assertIn("logo", body)
-        self.assertTrue(body["logo"]["sourceUri"]["uri"].startswith("https://"))
-        self.assertIn("/media/", body["logo"]["sourceUri"]["uri"])
+            visuals = _object_visuals(self.club)
+        self.assertIn("logo", visuals)
+        self.assertIn("hexBackgroundColor", visuals)
+        self.assertTrue(visuals["logo"]["sourceUri"]["uri"].startswith("https://"))
+        self.assertIn("/media/", visuals["logo"]["sourceUri"]["uri"])
+        # contentDescription is required by Google for accessibility
+        self.assertIn("contentDescription", visuals["logo"])
 
-    def test_google_wallet_class_body_omits_logo_when_no_icon(self):
-        from .google_wallet import _class_body
+    def test_object_visuals_omits_logo_when_no_icon(self):
+        from .google_wallet import _object_visuals
         from .models import Club
 
         no_icon = Club.objects.create(name="Bare Club")
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
-            body = _class_body(no_icon)
-        self.assertNotIn("logo", body)
+            visuals = _object_visuals(no_icon)
+        self.assertNotIn("logo", visuals)
+        # Background color is still set even without an icon
+        self.assertIn("hexBackgroundColor", visuals)
 
-    def test_icon_change_redispatches_wallet_class_task(self):
+    def test_class_body_never_contains_logo_or_hex_bg(self):
+        """Google silently ignores logo/hexBackgroundColor on GenericClass — keep them out."""
+        from .google_wallet import _class_body
+
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(self.club)
+        self.assertNotIn("logo", body)
+        self.assertNotIn("hexBackgroundColor", body)
+
+    def test_icon_change_dispatches_object_refresh(self):
+        """Icon change must refresh every member's GenericObject (logo lives there)."""
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        # Flip the flag manually so we'd normally skip — the change-detection
-        # logic must override and dispatch anyway.
-        from .models import Club
-
-        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
-        self.club.refresh_from_db()
-        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 self.club.icon = SimpleUploadedFile(
                     "new.png", self._png_bytes(color=(0, 255, 0)), content_type="image/png"
@@ -17356,30 +17366,29 @@ class ClubIconWalletTests(TestCase):
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_unchanged_icon_does_not_redispatch(self):
+    def test_unchanged_club_does_not_redispatch(self):
+        """Saving without changing name or icon must not dispatch an object refresh."""
         from .models import Club
 
         Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
         self.club.refresh_from_db()
-        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.name = "Renamed"
                 self.club.save()
             delay.assert_not_called()
 
-    def test_adding_icon_to_initialized_club_dispatches_wallet_class_task(self):
-        """Adding an icon for the first time to an already-initialized club must re-push the class."""
+    def test_adding_icon_to_initialized_club_dispatches_object_refresh(self):
+        """Adding an icon for the first time must refresh every member's wallet object."""
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         from .models import Club
 
-        # Club starts with no icon, class already confirmed on Google's side.
         no_icon_club = Club.objects.create(name="No Icon Yet")
         Club.objects.filter(pk=no_icon_club.pk).update(google_wallet_class_created=True)
         no_icon_club.refresh_from_db()
         self.assertFalse(bool(no_icon_club.icon))
 
-        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 no_icon_club.icon = SimpleUploadedFile("first.png", self._png_bytes(), content_type="image/png")
                 no_icon_club.save()
@@ -17392,7 +17401,7 @@ class ClubIconWalletTests(TestCase):
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_update_generic_object_for_member_patches_with_current_club_name(self):
+    def test_update_generic_object_for_member_patches_with_logo_and_bg(self):
         from unittest.mock import MagicMock
 
         from .google_wallet import update_generic_object_for_member
@@ -17408,6 +17417,9 @@ class ClubIconWalletTests(TestCase):
                     self.assertTrue(update_generic_object_for_member(self.member))
         payload = patch_mock.call_args.kwargs["json"]
         self.assertEqual(payload["cardTitle"]["defaultValue"]["value"], self.club.name)
+        # Logo + background must be on the GenericObject PATCH — not the class.
+        self.assertIn("logo", payload)
+        self.assertIn("hexBackgroundColor", payload)
 
     def test_apple_wallet_icon_png_uses_club_icon(self):
         from .apple_wallet import _icon_png
@@ -17436,17 +17448,18 @@ class ClubIconWalletTests(TestCase):
         self.assertEqual(img.size, (29, 29))
 
     def test_create_generic_class_patches_on_409(self):
-        """409 from POST must trigger a PATCH so icon updates propagate to existing classes.
-
-        The PATCH body must include the logo when the club has an icon, so that adding
-        an icon after the class was initially created (without one) propagates correctly.
-        """
+        """409 from POST must trigger a PATCH to keep the class definition current."""
         from unittest.mock import MagicMock
 
         from .google_wallet import create_generic_class
 
         post_resp = MagicMock(status_code=409, text="exists")
-        patch_resp = MagicMock(status_code=200, text="patched")
+        patch_resp = MagicMock(
+            status_code=200,
+            text="patched",
+            json=lambda: {"id": "x.membership_1", "classTemplateInfo": {}},
+        )
+        patch_resp.headers = {"content-type": "application/json"}
         with self.settings(
             GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
             GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
@@ -17458,7 +17471,7 @@ class ClubIconWalletTests(TestCase):
                         self.assertTrue(create_generic_class(self.club))
         self.assertEqual(post_mock.call_count, 1)
         self.assertEqual(patch_mock.call_count, 1)
-        # The PATCH body must contain the logo so that clubs which set their icon
-        # after the class was first created (without a logo) get the logo on their passes.
+        # logo/hexBackgroundColor are NOT valid GenericClass fields — keep them out.
         patch_body = patch_mock.call_args.kwargs["json"]
-        self.assertIn("logo", patch_body)
+        self.assertNotIn("logo", patch_body)
+        self.assertNotIn("hexBackgroundColor", patch_body)

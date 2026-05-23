@@ -62,7 +62,7 @@ def google_wallet_save_url(member):
     # Google Wallet URL should be exposed.
     if not member.membership_number_visible:
         return ""
-    from auctions.google_wallet import is_configured
+    from auctions.google_wallet import _object_visuals, is_configured
 
     if not is_configured():
         return ""
@@ -99,6 +99,7 @@ def google_wallet_save_url(member):
                 "value": str(member.membership_number),
                 "alternateText": str(member.membership_number),
             },
+            **_object_visuals(club),
         }
         if member.membership_expiration_date:
             generic_object["validTimeInterval"] = {

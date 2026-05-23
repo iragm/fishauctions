@@ -101,7 +101,7 @@ def _absolute_icon_url(club) -> str:
         from easy_thumbnails.files import get_thumbnailer
 
         thumbnailer = get_thumbnailer(club.icon)
-        thumb = thumbnailer["club_icon"]
+        thumb = thumbnailer["google_wallet_logo"]
         domain = Site.objects.get_current().domain
         return f"https://{domain}{thumb.url}"
     except Exception:
@@ -110,7 +110,10 @@ def _absolute_icon_url(club) -> str:
 
 
 def _class_body(club) -> dict:
-    body: dict = {
+    # Note: per Google Wallet REST docs, `logo` and `hexBackgroundColor` are NOT
+    # fields on GenericClass — they live on GenericObject. Setting them here is
+    # silently ignored. See _object_visuals() and update_generic_object_for_member().
+    return {
         "id": _class_id_for_club(club),
         "classTemplateInfo": {
             "cardTemplateOverride": {
@@ -123,12 +126,24 @@ def _class_body(club) -> dict:
                 ]
             }
         },
-        "hexBackgroundColor": DEFAULT_HEX_BG,
     }
+
+
+def _object_visuals(club) -> dict:
+    """Logo + background color fields for a GenericObject, derived from the club.
+
+    These belong on the per-member GenericObject (not the GenericClass), so they
+    must be merged into both the initial save-to-wallet JWT payload and any
+    subsequent PATCH that refreshes member metadata.
+    """
+    visuals: dict = {"hexBackgroundColor": DEFAULT_HEX_BG}
     icon_url = _absolute_icon_url(club)
     if icon_url:
-        body["logo"] = {"sourceUri": {"uri": icon_url}}
-    return body
+        visuals["logo"] = {
+            "sourceUri": {"uri": icon_url},
+            "contentDescription": {"defaultValue": {"language": "en-US", "value": f"{club.name} logo"}},
+        }
+    return visuals
 
 
 def _object_id_for_member(member) -> str:
@@ -167,6 +182,7 @@ def update_generic_object_for_member(member) -> bool:
             "value": str(member.membership_number),
             "alternateText": str(member.membership_number),
         },
+        **_object_visuals(member.club),
     }
     if member.membership_expiration_date:
         body["validTimeInterval"] = {"end": {"date": f"{member.membership_expiration_date.isoformat()}T23:59:59"}}
@@ -221,12 +237,11 @@ def expire_generic_object_for_member(member) -> bool:
 def create_generic_class(club) -> bool:
     """Create-or-update the GenericClass for this club on Google Wallet.
 
-    Tries POST first. On 409 (already exists) issues a PATCH with the same body,
-    so re-running the task after the club icon / metadata changes will push the
-    update to existing wallet passes. Raises on transport / 5xx for Celery retry.
+    Tries POST first; on 409 (already exists) PATCHes the same body. The class
+    only carries the template / structural fields — per-pass visuals (logo,
+    background) live on each member's GenericObject. Raises on 5xx for retry.
     """
     if not is_configured():
-        logger.info("Google Wallet not configured; skipping class creation for club %s", club.pk)
         return False
     token = get_access_token()
     if not token:
@@ -238,8 +253,6 @@ def create_generic_class(club) -> bool:
         logger.info("Created Google Wallet class %s for club %s", body["id"], club.pk)
         return True
     if resp.status_code == 409:
-        # Class already exists — PATCH it so newly-set fields (e.g. logo) propagate
-        # to passes already on user devices.
         patch_resp = requests.patch(
             f"{WALLET_API_BASE}/genericClass/{body['id']}", json=body, headers=headers, timeout=20
         )
@@ -254,7 +267,6 @@ def create_generic_class(club) -> bool:
         )
         patch_resp.raise_for_status()
         return False
-    # 4xx other than 409 indicates a config / data problem the caller must see.
     logger.error("Google Wallet class create failed for club %s: %s %s", club.pk, resp.status_code, resp.text)
     resp.raise_for_status()
     return False

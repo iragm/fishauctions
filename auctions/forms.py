@@ -3485,7 +3485,7 @@ class ClubEditForm(forms.ModelForm):
             "location_coordinates",
         ]
         help_texts = {
-            "name": "Changing this will change the URL for your club's page.",
+            "name": "Changing this will change the URL for your club's page, as well as any API keys you're using.",
             "allow_joining": "Let members self-join via the public club page.",
             "enable_breeder_award_program": "Track when users breed fish and show a leaderboard of top breeders.",
         }
