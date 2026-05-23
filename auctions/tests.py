@@ -15159,7 +15159,9 @@ class ClubAPIKeyMemberPermissionTests(TestCase):
         self.assertEqual(response.json()[0]["email"], "existing@example.com")
 
     def test_api_key_create_supports_extended_field_mapping(self):
-        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="discord_user", internal_field="discord_id")
+        ClubAPIKeyFieldMap.objects.create(
+            api_key=self.api_key, external_field="discord_user", internal_field="discord_id"
+        )
         response = self.client.post(
             self.list_url,
             {"email": "mappedmember@example.com", "discord_user": "12345"},
@@ -15885,8 +15887,8 @@ class ClubAPIKeyModelTests(TestCase):
         self.assertIsNone(ClubAPIKey.verify(""))
 
 
-class ClubMemberIngestAPITests(TestCase):
-    """Integration tests for ClubMemberIngestAPIView."""
+class ClubMemberCreateAPITests(TestCase):
+    """Integration tests for POST /api/v1/clubs/<slug>/members/ via API key."""
 
     def setUp(self):
         self.owner = User.objects.create_user(
@@ -15895,10 +15897,15 @@ class ClubMemberIngestAPITests(TestCase):
         self.club = Club.objects.create(name="Ingest Club")
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         self.api_key = ClubAPIKey.objects.create(
-            club=self.club, name="Test Integration", prefix=prefix, key_hash=key_hash, created_by=self.owner
+            club=self.club,
+            name="Test Integration",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+            can_add_club_members=True,
         )
         self.raw_key = raw_key
-        self.url = reverse("api_club_member_ingest", kwargs={"slug": self.club.slug})
+        self.url = reverse("api_club_members", kwargs={"slug": self.club.slug})
 
     def _post(self, data, key=None):
         headers = {}
@@ -15916,7 +15923,7 @@ class ClubMemberIngestAPITests(TestCase):
 
     def test_wrong_slug_returns_403(self):
         other_club = Club.objects.create(name="Other Club")
-        wrong_url = reverse("api_club_member_ingest", kwargs={"slug": other_club.slug})
+        wrong_url = reverse("api_club_members", kwargs={"slug": other_club.slug})
         response = self.client.post(
             wrong_url, {"email": "test@example.com"}, content_type="application/json", HTTP_X_API_KEY=self.raw_key
         )
@@ -15925,7 +15932,8 @@ class ClubMemberIngestAPITests(TestCase):
     def test_valid_key_creates_member(self):
         response = self._post({"email": "new@example.com", "first_name": "Alice"})
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["status"], "created")
+        data = response.json()
+        self.assertEqual(data["email"], "new@example.com")
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="new@example.com").exists())
 
     def test_add_member_permission_required(self):
@@ -15936,29 +15944,17 @@ class ClubMemberIngestAPITests(TestCase):
         self.assertFalse(ClubMember.objects.filter(club=self.club, email="blocked@example.com").exists())
 
     def test_email_lowercased_on_creation(self):
-        self._post({"email": "UPPER@Example.COM"})
+        response = self._post({"email": "UPPER@Example.COM"})
+        self.assertEqual(response.status_code, 201)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
-
-    def test_duplicate_email_returns_200(self):
-        self._post({"email": "dup@example.com"})
-        response = self._post({"email": "dup@example.com"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "duplicate")
-        self.assertEqual(ClubMember.objects.filter(club=self.club, email="dup@example.com").count(), 1)
 
     def test_invalid_payload_returns_400(self):
         response = self._post({})
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["status"], "error")
 
     def test_club_history_created_on_success(self):
         before = ClubHistory.objects.filter(club=self.club).count()
         self._post({"email": "hist@example.com"})
-        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
-
-    def test_club_history_created_on_failure(self):
-        before = ClubHistory.objects.filter(club=self.club).count()
-        self._post({})
         self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
 
     def test_field_mapping_applied(self):
@@ -15973,9 +15969,24 @@ class ClubMemberIngestAPITests(TestCase):
         self.api_key.refresh_from_db()
         self.assertIsNotNone(self.api_key.last_used_at)
 
+    def test_last_used_at_updated_on_get(self):
+        """last_used_at is touched even on read-only GET requests."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        self.assertIsNone(self.api_key.last_used_at)
+        self.client.get(self.url, HTTP_X_API_KEY=self.raw_key)
+        self.api_key.refresh_from_db()
+        self.assertIsNotNone(self.api_key.last_used_at)
+
     def test_member_source_is_api_key_name(self):
         self._post({"email": "source@example.com"})
         member = ClubMember.objects.get(club=self.club, email="source@example.com")
+        self.assertEqual(member.source, self.api_key.name)
+
+    def test_source_cannot_be_overridden_by_caller(self):
+        """Clients cannot set source — it is always the API key name."""
+        self._post({"email": "srcoverride@example.com", "source": "hacked"})
+        member = ClubMember.objects.get(club=self.club, email="srcoverride@example.com")
         self.assertEqual(member.source, self.api_key.name)
 
     def test_first_name_alias_stored_as_name(self):
@@ -16003,6 +16014,30 @@ class ClubMemberIngestAPITests(TestCase):
         self._post({"email": "mapped@example.com", "given": "Mapped", "surname": "User"})
         member = ClubMember.objects.get(club=self.club, email="mapped@example.com")
         self.assertEqual(member.name, "Mapped User")
+
+    def test_filter_by_name_param(self):
+        """GET ?name=alice returns only matching members."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        ClubMember.objects.create(club=self.club, name="Alice Smith", email="alice@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Jones", email="bob@example.com")
+        response = self.client.get(self.url + "?name=alice", HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        results = response.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], "alice@example.com")
+
+    def test_filter_by_filter_param(self):
+        """GET ?filter=<token> applies the same search logic as the admin member list."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        ClubMember.objects.create(club=self.club, name="Alice Smith", email="alice@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Jones", email="bob@example.com")
+        response = self.client.get(self.url + "?filter=alice", HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        results = response.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], "alice@example.com")
 
 
 class ClubAPIKeyUITests(TestCase):

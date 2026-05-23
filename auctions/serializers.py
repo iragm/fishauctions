@@ -15,6 +15,7 @@ CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
         "last_discord_role_assigned",
         "discord_role_override",
         "membership_number",
+        "source",  # set server-side from the API key name; not caller-writable
         "permission_admin",
         "permission_view",
         "permission_export",
@@ -103,12 +104,14 @@ class ClubMemberAPIKeySerializer(serializers.ModelSerializer):
     """Writable serializer for ClubMember records created or updated via API keys."""
 
     id = serializers.IntegerField(read_only=True)
+    # source is set server-side from the API key name and must not be overridden by callers
+    source = serializers.CharField(read_only=True)
     first_name = serializers.CharField(max_length=100, required=False, allow_blank=True, write_only=True)
     last_name = serializers.CharField(max_length=100, required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = ClubMember
-        fields = ["id", *CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_name", "last_name"]
+        fields = ["id", "source", *CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_name", "last_name"]
 
     def validate(self, data):
         first = (data.pop("first_name", "") or "").strip()
@@ -127,7 +130,6 @@ class ClubMemberAPIKeySerializer(serializers.ModelSerializer):
             "address",
             "memo",
             "phone_number",
-            "source",
             "discord_id",
             "discord_username",
         ):

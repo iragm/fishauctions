@@ -2,7 +2,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("auctions", "0270_enable_category_field_for_all_auctions"),
     ]

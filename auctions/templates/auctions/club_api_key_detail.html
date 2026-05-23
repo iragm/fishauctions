@@ -44,21 +44,38 @@
 </table>
 
 <h5>Example endpoints</h5>
-<div class="mb-4 small text-muted">
+<div class="mb-3 small text-muted">
   Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
+  For write requests, also include <code>Content-Type: application/json</code> and send a JSON body.
 </div>
 <div class="small text-muted mb-4">
   {% if api_key.can_add_club_members %}
-  <div><strong>Add club member:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+  <div class="mb-2">
+    <strong>Add club member:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code><br>
+    <span class="ms-3 text-muted">Example body: <code>{"name":"Mike","email":"mike@example.com"}</code></span>
+  </div>
   {% endif %}
   {% if api_key.can_read_club_member_list %}
-  <div><strong>Read club member list:</strong> <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+  <div class="mb-2">
+    <strong>Read club member list:</strong> <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code><br>
+    <span class="ms-3 text-muted">
+      Filter by name: <code>?name=mike</code> &mdash;
+      or use the same text filter as the admin member list: <code>?filter=expired</code>, <code>?filter=mike</code>, etc.
+      (tokens: <code>discord</code>, <code>current</code>, <code>expired</code>, <code>expiring</code>, <code>never paid</code>, or any name/email text)
+    </span>
+  </div>
   {% endif %}
   {% if api_key.can_update_club_members %}
-  <div><strong>Update club member:</strong> <code>PATCH https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/</code></div>
+  <div class="mb-2">
+    <strong>Update club member:</strong> <code>PATCH https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/</code><br>
+    <span class="ms-3 text-muted">Example body: <code>{"email":"mike@example.com"}</code></span>
+  </div>
   {% endif %}
   {% if api_key.can_add_bap_points %}
-  <div><strong>Add BAP points:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/bap-awards/</code></div>
+  <div class="mb-2">
+    <strong>Add BAP points:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/bap-awards/</code><br>
+    <span class="ms-3 text-muted">Example body: <code>{"points":5,"notes":"Bred angelfish","email":"mike@example.com"}</code></span>
+  </div>
   {% endif %}
 </div>
 

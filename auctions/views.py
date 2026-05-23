@@ -14148,6 +14148,13 @@ class ClubAPIViewMixin:
     def is_api_key_request(self):
         return hasattr(self.request, "api_key")
 
+    def initial(self, request, *args, **kwargs):
+        """Touch last_used_at on every successful API key request."""
+        super().initial(request, *args, **kwargs)
+        if self.is_api_key_request():
+            request.api_key.last_used_at = timezone.now()
+            request.api_key.save(update_fields=["last_used_at"])
+
     def require_club_permission(self, user_permission, api_key_permission, message):
         club = self.get_club()
         if self.is_api_key_request():
@@ -14180,6 +14187,19 @@ class ClubAPIViewMixin:
 class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
     """List and create club members via REST API"""
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        name = params.get("name", "").strip()
+        filter_query = params.get("filter", "").strip()
+        if name:
+            qs = qs.filter(name__icontains=name)
+        if filter_query:
+            from .filters import ClubMemberFilter
+
+            qs = ClubMemberFilter({"query": filter_query}, queryset=qs).qs
+        return qs
+
     def create(self, request, *args, **kwargs):
         if not self.is_api_key_request():
             return super().create(request, *args, **kwargs)
@@ -14198,8 +14218,7 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
         save_kwargs = {"club": club}
         if self.is_api_key_request():
             save_kwargs["added_by"] = None
-            if not serializer.validated_data.get("source"):
-                save_kwargs["source"] = self.request.api_key.name
+            save_kwargs["source"] = self.request.api_key.name
         else:
             save_kwargs["added_by"] = self.request.user
         member = serializer.save(**save_kwargs)

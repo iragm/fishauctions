@@ -1,13 +1,12 @@
+import requests as http_requests
 from django.core.management.base import BaseCommand
 
-import requests as http_requests
 from auctions.google_wallet import (
     WALLET_API_BASE,
     _object_id_for_member,
     _object_visuals,
     get_access_token,
     is_configured,
-    update_generic_object_for_member,
 )
 from auctions.models import Club, ClubMember
 from auctions.tasks import create_google_wallet_class_for_club, update_google_wallet_objects_for_club
@@ -98,10 +97,7 @@ class Command(BaseCommand):
                     obj = resp.json()
                     logo_uri = obj.get("logo", {}).get("sourceUri", {}).get("uri", None)
                     hex_bg = obj.get("hexBackgroundColor", None)
-                    self.stdout.write(
-                        f"  member={member.pk} ({member.name or '?'}): "
-                        f"logo={logo_uri!r}  hex={hex_bg!r}"
-                    )
+                    self.stdout.write(f"  member={member.pk} ({member.name or '?'}): logo={logo_uri!r}  hex={hex_bg!r}")
                 else:
                     self.stdout.write(self.style.ERROR(f"  member={member.pk}: HTTP {resp.status_code}"))
 
