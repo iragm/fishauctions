@@ -7545,6 +7545,19 @@ class UserData(models.Model):
         self.has_unsubscribed = True
         self.last_activity = timezone.now()
         self.save()
+        # Also mark any club members whose email matches as do not contact
+        email = self.user.email
+        if email:
+            members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="do_not_contact")
+            for member in members:
+                member.contact_status = "do_not_contact"
+                member.save(update_fields=["contact_status"])
+                ClubHistory.objects.create(
+                    club=member.club,
+                    user=None,
+                    action=f"{member} marked do not contact after unsubscribing from all emails",
+                    applies_to="MEMBERS",
+                )
 
     @property
     def currency(self):

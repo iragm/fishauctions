@@ -2004,7 +2004,19 @@ class MyLotReportView(LoginRequiredMixin, View):
         )
         writer = csv.writer(response)
         writer.writerow(
-            ["Lot number", "Name", "Auction", "Status", "Winning price", "My cut", "BAP points", "HAP points", "Culture points", "Points reason", "Points club"]
+            [
+                "Lot number",
+                "Name",
+                "Auction",
+                "Status",
+                "Winning price",
+                "My cut",
+                "BAP points",
+                "HAP points",
+                "Culture points",
+                "Points reason",
+                "Points club",
+            ]
         )
         for lot in lots:
             status = "Unsold"
