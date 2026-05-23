@@ -14658,6 +14658,8 @@ class DiscordInteractionsView(View):
         if interaction_type == _DISCORD_TYPE_COMPONENT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_button":
+                if self._already_joined(data):
+                    return _discord_ephemeral("✅ You've already joined!")
                 return self._join_modal_response()
             return _discord_ephemeral("Unsupported interaction")
 
@@ -14700,8 +14702,9 @@ class DiscordInteractionsView(View):
                                 {
                                     "type": _DISCORD_COMPONENT_TEXT_INPUT,
                                     "custom_id": "name",
-                                    "label": "Name",
+                                    "label": "Full name",
                                     "style": 1,
+                                    "placeholder": "John Smith",
                                     "required": True,
                                 }
                             ],
@@ -14714,6 +14717,7 @@ class DiscordInteractionsView(View):
                                     "custom_id": "email",
                                     "label": "Email address",
                                     "style": 1,
+                                    "placeholder": "john@example.com",
                                     "required": True,
                                 }
                             ],
@@ -14727,7 +14731,24 @@ class DiscordInteractionsView(View):
         guild_id = data.get("guild_id", "")
         if not guild_id or not Club.objects.filter(discord_server_id=guild_id).exists():
             return _discord_ephemeral("❌ No club is configured for this Discord server.")
+        if self._already_joined(data):
+            return _discord_ephemeral("✅ You've already joined!")
         return self._join_modal_response()
+
+    def _already_joined(self, data):
+        """Return True if the Discord user is already a member of the club for this server."""
+        guild_id = data.get("guild_id", "")
+        if not guild_id:
+            return False
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        discord_id = user_data.get("id", "")
+        if not discord_id:
+            return False
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return False
+        return ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).exists()
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
@@ -15104,6 +15125,15 @@ class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
     def get(self, request, *args, **kwargs):
         return render(request, "auctions/club_discord_settings.html", self._context(request))
+
+    def post(self, request, *args, **kwargs):
+        club = self.club
+        club.create_events_for_auctions = "create_events_for_auctions" in request.POST
+        club.save(update_fields=["create_events_for_auctions"])
+        if request.headers.get("HX-Request"):
+            return HttpResponse(status=204)
+        messages.success(request, "Discord event settings saved.")
+        return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
     def _context(self, request):
         roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")

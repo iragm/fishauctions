@@ -999,7 +999,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, source, expired, expiring, never paid, deactivated...",
+                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, deactivated...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1079,11 +1079,17 @@ class ClubMemberFilter(django_filters.FilterSet):
 
         text = " ".join(remaining)
         if text:
+            number_q = Q()
+            try:
+                number_q = Q(membership_number=int(text))
+            except (ValueError, TypeError):
+                pass
             queryset = queryset.filter(
                 Q(name__icontains=text)
                 | Q(email__icontains=text)
                 | Q(user__email__icontains=text)
                 | Q(discord_username__icontains=text)
+                | number_q
             )
         return queryset
 

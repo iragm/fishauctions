@@ -681,6 +681,10 @@ class Club(models.Model):
         null=True,
         help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
     )
+    create_events_for_auctions = models.BooleanField(
+        default=False,
+        help_text="Automatically create a Discord scheduled event for each promoted auction.",
+    )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     icon = ThumbnailerImageField(
@@ -1372,6 +1376,7 @@ class Auction(models.Model):
     watch_warning_email_sent = models.BooleanField(default=False)
     first_discord_sent = models.BooleanField(default=False)
     second_discord_sent = models.BooleanField(default=False)
+    discord_event_created = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")

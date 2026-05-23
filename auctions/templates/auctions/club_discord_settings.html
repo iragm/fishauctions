@@ -108,16 +108,30 @@
       To have announcements about upcoming auctions in a channel, you can use the slash command <code>/auctions_here</code>. This only works <strong>after</strong> you have connected your Discord server to a club.
     </p>
     {% if club.auction_channel_id %}
-      <p class="text-success mb-0">
+      <p class="text-success mb-3">
         <i class="bi bi-check-circle-fill"></i>
         Auction announcements channel is set. Run <code>/auctions_here</code> in a different channel to change it.
       </p>
     {% else %}
-      <p class="text-muted mb-0">
+      <p class="text-muted mb-3">
         <i class="bi bi-x-circle"></i>
         No auction announcements channel set. Run <code>/auctions_here</code> in the channel where you want announcements posted.
       </p>
     {% endif %}
+    <form hx-post="{% url 'club_discord_config' club.slug %}" hx-trigger="change" hx-swap="none">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" name="create_events_for_auctions" id="createEventsCheck"
+               {% if club.create_events_for_auctions %}checked{% endif %}>
+        <label class="form-check-label" for="createEventsCheck">
+          Automatically create a Discord scheduled event for each promoted auction
+        </label>
+      </div>
+      <div class="text-muted small mt-1">
+        Events are created once an auction is at least 24 hours old. In-person auctions span the start time
+        to two hours later; online auctions span bidding open to bidding close. The event location links to
+        the auction rules page.
+      </div>
+    </form>
   </div>
 </div>
 
