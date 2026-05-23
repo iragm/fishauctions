@@ -1900,6 +1900,12 @@ class AuctionEditForm(forms.ModelForm):
         help_text="This plus the alternate club cut must be 100%",
         label="Alternate user cut",
     )
+    club = forms.ModelChoiceField(
+        queryset=Club.objects.none(),
+        required=False,
+        empty_label="None",
+        help_text="Associate this auction with a club.  Enables club member discounts and automatic club member syncing.",
+    )
 
     class Meta:
         model = Auction
@@ -1941,6 +1947,7 @@ class AuctionEditForm(forms.ModelForm):
             "use_seller_dash_lot_numbering",
             "enable_online_payments",
             "enable_square_payments",
+            "club",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1968,24 +1975,55 @@ class AuctionEditForm(forms.ModelForm):
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
-        paypal_seller = PayPalSeller.objects.filter(user=self.instance.created_by).first()
+
+        # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
+        if self.user.is_superuser:
+            permitted_club_ids = list(Club.objects.values_list("pk", flat=True))
+        else:
+            permitted_club_ids = list(
+                ClubMember.objects.filter(
+                    user=self.user,
+                    is_deleted=False,
+                )
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+                .values_list("club_id", flat=True)
+            )
+        # Always include the currently saved club so admins without club membership can still edit
+        club_id_set = set(permitted_club_ids)
+        if self.instance and self.instance.pk and self.instance.club_id:
+            club_id_set.add(self.instance.club_id)
+        self.fields["club"].queryset = Club.objects.filter(pk__in=club_id_set).order_by("name")
+        self.fields["club"].initial = self.instance.club if (self.instance and self.instance.pk) else None
+
+        # Determine effective payment user (club's payment_user if integrated payments are on)
+        payment_user = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
+        if (
+            self.instance
+            and self.instance.club
+            and self.instance.club.allow_integrated_payments
+            and self.instance.club.payment_user
+        ):
+            payment_user = self.instance.club.payment_user
+
+        paypal_seller = PayPalSeller.objects.filter(user=payment_user).first()
         if paypal_seller:
             self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
         else:
-            if self.instance.created_by.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
+            effective_creator = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
+            if effective_creator.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
                 # show payments option for superusers with site-wide PayPal configured
                 pass
             else:
-                # Hide the field if user doesn't have PayPal connected and isn't a superuser
+                # Hide the field if no PayPal is connected
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
-        square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()
+        square_seller = SquareSeller.objects.filter(user=payment_user).first()
         if square_seller:
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
             # Square requires OAuth - no fallback for superusers
-            # Hide the field if seller hasn't linked their Square account
-            if not self.instance.created_by.userdata.square_enabled:
+            # Hide the field if the effective payment user hasn't linked their Square account
+            if not payment_user.userdata.square_enabled:
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
         if not self.instance.club:
@@ -2180,6 +2218,14 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
+            HTML("<h4>Club</h4>"),
+            Div(
+                Div(
+                    "club",
+                    css_class="col-md-6",
+                ),
+                css_class="row",
+            ),
             HTML("<h4>General</h4>"),
             Div(
                 Div(
@@ -2299,7 +2345,7 @@ class AuctionEditForm(forms.ModelForm):
         if (
             cleaned_data.get("add_people_from_auction_to_club")
             or cleaned_data.get("add_membership_fee_to_invoices_for_expired_members")
-        ) and not self.instance.club:
+        ) and not cleaned_data.get("club"):
             self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 

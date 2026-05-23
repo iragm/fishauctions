@@ -1632,16 +1632,26 @@ class Auction(models.Model):
         return settings.UNTRUSTED_MESSAGE
 
     @property
+    def effective_payment_user(self):
+        """Return the user whose payment accounts should be used for this auction.
+        If the auction belongs to a club with integrated payments and a payment_user set,
+        that user's accounts are used instead of the auction creator's."""
+        if self.club and self.club.allow_integrated_payments and self.club.payment_user:
+            return self.club.payment_user
+        return self.created_by
+
+    @property
     def paypal_information(self):
         """
         Return the merchant ID for PayPal payments
-        Fallback for admin users to use the site-wide api keys
+        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
+        Fallback for admin users to use the site-wide api keys.
         """
-
-        seller = PayPalSeller.objects.filter(user=self.created_by).first()
+        user = self.effective_payment_user
+        seller = PayPalSeller.objects.filter(user=user).first()
         if seller:
             return seller.paypal_merchant_id
-        if self.created_by.is_superuser:
+        if self.created_by and self.created_by.is_superuser:
             return "admin"
         return None
 
@@ -1649,11 +1659,13 @@ class Auction(models.Model):
     def square_information(self):
         """
         Return the merchant ID for Square payments
-        Only returns ID if seller has linked their Square account via OAuth
+        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
+        Only returns ID if the effective user has linked their Square account via OAuth.
         """
         from auctions.models import SquareSeller
 
-        seller = SquareSeller.objects.filter(user=self.created_by).first()
+        user = self.effective_payment_user
+        seller = SquareSeller.objects.filter(user=user).first()
         if seller:
             return seller.square_merchant_id
         return None
@@ -1662,7 +1674,10 @@ class Auction(models.Model):
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
-        this banner should only be shown to the auction creator"""
+        this banner should only be shown to the auction creator.
+        Hidden when the club manages payments (banner doesn't apply to the creator)."""
+        if self.club and self.club.allow_integrated_payments:
+            return False
         if self.dismissed_paypal_banner:
             return False
         if not self.created_by.userdata.paypal_enabled:
@@ -1681,9 +1696,12 @@ class Auction(models.Model):
     def show_square_banner(self):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
-        this banner should only be shown to the auction creator"""
+        this banner should only be shown to the auction creator.
+        Hidden when the club manages payments (banner doesn't apply to the creator)."""
         from auctions.models import SquareSeller
 
+        if self.club and self.club.allow_integrated_payments:
+            return False
         if self.dismissed_square_banner:
             return False
         if not self.created_by.userdata.square_enabled:

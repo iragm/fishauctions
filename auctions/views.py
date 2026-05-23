@@ -2213,6 +2213,70 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         return response
 
 
+class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
+    """Add all auction participants (with email) to the auction's associated club.
+
+    Only creates new ClubMember records — never updates existing ones.
+    Skips participants without an email address.
+    """
+
+    def post(self, request, *args, **kwargs):
+        auction = self.auction
+        club = auction.club
+        if not club:
+            messages.error(request, "This auction is not associated with a club.")
+            return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+
+        # Permission check: must have add_edit permission on the club or be the auction creator
+        if (
+            not request.user.is_superuser
+            and not check_club_permission(request.user, club, "permission_add_edit")
+            and not check_club_permission(request.user, club, "permission_manage_auctions")
+        ):
+            messages.error(request, "You don't have permission to add members to that club.")
+            return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+
+        tos_qs = AuctionTOS.objects.filter(auction=auction).exclude(email="").filter(email__isnull=False)
+        added_count = 0
+        skipped_count = 0
+        for tos in tos_qs:
+            existing = _find_club_member(club, tos.user, tos.email)
+            if existing:
+                skipped_count += 1
+                continue
+            ClubMember.objects.create(
+                club=club,
+                user=tos.user,
+                name=tos.name or "",
+                email=tos.email,
+                phone_number=tos.phone_number or "",
+                address=tos.address or "",
+                source=str(auction.title)[:200],
+                added_by=request.user,
+            )
+            added_count += 1
+
+        if added_count:
+            messages.success(
+                request,
+                f"Added {added_count} user{'s' if added_count != 1 else ''} to {club.name}."
+                + (f"  {skipped_count} already in club." if skipped_count else ""),
+            )
+            auction.create_history(
+                applies_to="USERS",
+                action=f"Added {added_count} auction participants to club '{club.name}' ({skipped_count} already members).",
+                user=request.user,
+            )
+        else:
+            messages.info(
+                request,
+                f"No new users to add — all {skipped_count} participant{'s' if skipped_count != 1 else ''} with an email are already in {club.name}."
+                if skipped_count
+                else "No participants with email addresses found.",
+            )
+        return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+
+
 class ComposeEmailToUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
@@ -2783,6 +2847,23 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
         return context
 
     def form_valid(self, form, **kwargs):
+        # Server-side club permission check: only allow associating with clubs the user
+        # has admin/edit/manage_auctions permission in (or the club already saved).
+        new_club = form.cleaned_data.get("club")
+        if new_club:
+            auction = self.get_object()
+            current_club_id = auction.club_id
+            if new_club.pk != current_club_id:
+                # User is changing the club — verify they have permission in the new club
+                has_permission = (
+                    self.request.user.is_superuser
+                    or check_club_permission(self.request.user, new_club, "permission_manage_auctions")
+                    or check_club_permission(self.request.user, new_club, "permission_edit_club")
+                    or check_club_permission(self.request.user, new_club, "permission_admin")
+                )
+                if not has_permission:
+                    form.add_error("club", "You don't have permission to associate this auction with that club.")
+                    return self.form_invalid(form)
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
         form = super().form_valid(form)
@@ -2831,6 +2912,11 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
                 self.request,
                 f"Don't set your {'end' if self.get_object().is_online else 'start'} time to midnight, users will find it confusing.  Use 23:59 instead.",
             )
+
+        # If club was just set (or changed), auto-add club admins as auction TOS admins
+        new_club = self.get_object().club
+        if new_club:
+            _add_club_admins_as_auction_tos(self.get_object(), self.request.user)
 
         return form
 

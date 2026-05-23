@@ -344,6 +344,11 @@ urlpatterns = [
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
     path("auctions/<slug:slug>/report/", views.AuctionReportView.as_view(), name="user_list"),
     path(
+        "auctions/<slug:slug>/add-to-club/",
+        views.AddAuctionUsersToClub.as_view(),
+        name="auction_add_users_to_club",
+    ),
+    path(
         "auctions/<slug:slug>/email-users/",
         views.ComposeEmailToUsers.as_view(),
         name="compose_email_to_users",

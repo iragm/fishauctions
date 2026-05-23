@@ -52,6 +52,12 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" id="user_csv_export" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
+        {% if auction.club %}
+        <form method="POST" action="{% url 'auction_add_users_to_club' slug=auction.slug %}" style="margin: 0;">
+          {% csrf_token %}
+          <button type="submit" class="dropdown-item"><i class="bi bi-person-fill-add"></i> Add all users to {{ auction.club }}</button>
+        </form>
+        {% endif %}
 
         <!-- Stable container: swap only inner HTML; re-fetch on input changes -->
         <span
