@@ -7068,6 +7068,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         # Initialize existingTos and i_agree for form
         existingTos = None
         i_agree = False
+        existing_club_member = None
 
         if self.request.user.is_authenticated:
             tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
@@ -7088,7 +7089,6 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 i_agree = True
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
-            existing_club_member = None
         context["joining_adds_to_club"] = bool(
             self.auction.is_club_managed and self.auction.club and not existing_club_member
         )

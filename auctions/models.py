@@ -749,13 +749,6 @@ class Club(models.Model):
 
     class Meta:
         ordering = ["name"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["club", "bidder_number"],
-                condition=~Q(bidder_number=""),
-                name="unique_bidder_number_per_club",
-            ),
-        ]
 
     def __str__(self):
         return str(self.name)
@@ -1171,6 +1164,13 @@ class ClubMember(ContactRecord):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "bidder_number"],
+                condition=~Q(bidder_number=""),
+                name="unique_bidder_number_per_club",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         # Belt-and-suspenders uniqueness for membership_number: the DB has a unique
