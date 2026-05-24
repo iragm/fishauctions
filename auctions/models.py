@@ -4063,7 +4063,8 @@ class AuctionTOS(models.Model):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
         preserves any non-empty fields from duplicate that are missing on self,
-        creates an AuctionHistory entry, then deletes the duplicate.
+        creates an AuctionHistory (or ClubHistory for club-managed auctions) entry, then deletes the duplicate.
+        For club-managed auctions, also merges the associated ClubMember records.
         Pass user=request.user when this is triggered by an admin action.
         """
         if duplicate == self:
@@ -4108,12 +4109,49 @@ class AuctionTOS(models.Model):
             InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
             InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
         invoice.recalculate()
-        # Create auction history entry
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}",
-            user=user,
-        )
+        # For club-managed auctions, also merge the associated ClubMember records
+        merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
+        if self.auction.is_club_managed and self.auction.club_id:
+            self_club_member = self.clubmember
+            dup_club_member = duplicate.clubmember
+            if dup_club_member and dup_club_member != self_club_member:
+                if self_club_member:
+                    # Merge: move all other TOS records that point to the duplicate ClubMember
+                    AuctionTOS.objects.filter(clubmember=dup_club_member).exclude(pk=duplicate.pk).update(
+                        clubmember=self_club_member
+                    )
+                    # Preserve contact info on the surviving ClubMember
+                    for field in ("name", "email", "phone_number", "address"):
+                        self_val = getattr(self_club_member, field, None)
+                        dup_val = getattr(dup_club_member, field, None)
+                        if (self_val is None or self_val == "") and dup_val:
+                            setattr(self_club_member, field, dup_val)
+                    self_club_member.save()
+                    ClubHistory.objects.create(
+                        club=self.auction.club,
+                        user=user,
+                        action=f"Merged club member {dup_club_member} into {self_club_member}: {reason}",
+                        applies_to="MEMBERS",
+                    )
+                    dup_club_member.is_deleted = True
+                    dup_club_member.save()
+                else:
+                    # self TOS has no club member yet — adopt the duplicate's
+                    self.clubmember = dup_club_member
+                    AuctionTOS.objects.filter(pk=self.pk).update(clubmember=dup_club_member)
+            ClubHistory.objects.create(
+                club=self.auction.club,
+                user=user,
+                action=merge_action,
+                applies_to="MEMBERS",
+            )
+        else:
+            # Standard auction — record in AuctionHistory
+            self.auction.create_history(
+                applies_to="USERS",
+                action=merge_action,
+                user=user,
+            )
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 

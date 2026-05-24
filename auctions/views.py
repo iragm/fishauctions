@@ -6342,6 +6342,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             # In club-managed mode, member details are edited in the club admin, not here.
             if self.is_edit_form and self.auctiontos and self.auctiontos.clubmember_id:
                 target = reverse("clubmember_admin", kwargs={"pk": self.auctiontos.clubmember_id})
+                target += f"?tos={self.auctiontos.pk}"
                 return redirect(target)
             target = reverse("clubmember_create", kwargs={"slug": self.auction.club.slug})
             return redirect(target)
@@ -6782,6 +6783,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "google_drive_link",
                 "only_whole_dollar_bids",
                 "club",
+                "manage_users_through_club",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -12884,7 +12886,14 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
 
 
 class ClubMemberAdminView(APIView):
-    """DRF-based HTMX view for editing a club member"""
+    """DRF-based HTMX view for editing a club member.
+
+    Supports an optional ``tos`` query-string parameter with an AuctionTOS pk.
+    When present the form shows auction-scoped fields (pickup_location,
+    is_club_member) and hides club-wide fields (contact_status, Discord).
+    Saving writes TOS-specific fields to the AuctionTOS and everything else to
+    the ClubMember.
+    """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -12903,13 +12912,28 @@ class ClubMemberAdminView(APIView):
             raise PermissionDenied()
         return member
 
-    def _build_context(self, request, member, form, read_only=False):
+    def _get_auctiontos(self, request, member):
+        """Return the AuctionTOS from the ``tos`` query param, or None."""
+        tos_pk = request.query_params.get("tos") or request.POST.get("_tos_pk")
+        if not tos_pk:
+            return None
+        try:
+            tos = AuctionTOS.objects.select_related("auction").get(pk=tos_pk, clubmember=member)
+        except AuctionTOS.DoesNotExist:
+            return None
+        return tos
+
+    def _build_context(self, request, member, form, read_only=False, auctiontos=None):
         validation_url = reverse("clubmember_validation", kwargs={"slug": member.club.slug})
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
+        # Header: "{name} - {member_number}" when the club uses membership numbers
+        title = str(member)
+        if member.club.membership_number_mode != "off" and member.membership_number:
+            title = f"{member} — #{member.membership_number}"
         return {
             "club": member.club,
             "club_member": member,
-            "modal_title": str(member),
+            "modal_title": title,
             "form": form,
             "extra_script": mark_safe(extra_script),
             "read_only": read_only,
@@ -13037,34 +13061,65 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
 }})();
 </script>"""
 
+    def _post_url(self, member, auctiontos=None):
+        url = reverse("clubmember_admin", kwargs={"pk": member.pk})
+        if auctiontos:
+            url += f"?tos={auctiontos.pk}"
+        return url
+
     def get(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
+        auctiontos = self._get_auctiontos(request, member)
         read_only = not check_club_permission(request.user, member.club, "permission_add_edit")
-        post_url = None if read_only else reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only, club=member.club)
+        post_url = None if read_only else self._post_url(member, auctiontos)
+        form = ClubMemberAdminForm(
+            instance=member, post_url=post_url, read_only=read_only, club=member.club, auctiontos=auctiontos
+        )
         return render(
-            request, "auctions/generic_admin_form.html", self._build_context(request, member, form, read_only=read_only)
+            request,
+            "auctions/generic_admin_form.html",
+            self._build_context(request, member, form, read_only=read_only, auctiontos=auctiontos),
         )
 
     def post(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url, club=member.club)
+        auctiontos = self._get_auctiontos(request, member)
+        post_url = self._post_url(member, auctiontos)
+        form = ClubMemberAdminForm(
+            request.POST, instance=member, post_url=post_url, club=member.club, auctiontos=auctiontos
+        )
         if form.is_valid():
             saved = form.save()
-            ClubHistory.objects.create(
-                club=member.club,
-                user=request.user,
-                action=f"Updated member {saved}",
-                applies_to="MEMBERS",
-            )
+            # If in auction context, also save TOS-specific fields to the AuctionTOS
+            if auctiontos:
+                if form.cleaned_data.get("pickup_location") is not None:
+                    auctiontos.pickup_location = form.cleaned_data["pickup_location"]
+                auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
+                auctiontos.save(update_fields=["pickup_location_id", "is_club_member"])
+                ClubHistory.objects.create(
+                    club=member.club,
+                    user=request.user,
+                    action=f"Updated member {saved} via auction {auctiontos.auction}",
+                    applies_to="MEMBERS",
+                )
+            else:
+                ClubHistory.objects.create(
+                    club=member.club,
+                    user=request.user,
+                    action=f"Updated member {saved}",
+                    applies_to="MEMBERS",
+                )
             messages.success(request, f"{saved} updated.")
             # Reassign Discord role whenever the record is saved from the admin UI
             saved.maybe_assign_discord_role()
             return self._redirect_to_club_admin(member.club)
-        return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
+        return render(
+            request,
+            "auctions/generic_admin_form.html",
+            self._build_context(request, member, form, auctiontos=auctiontos),
+        )
 
 
 class ClubMemberPermissionsView(LoginRequiredMixin, View):
