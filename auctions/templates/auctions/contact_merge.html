@@ -23,7 +23,11 @@
 
         <div class="alert alert-warning text-dark">
           <i class="bi bi-exclamation-triangle me-1"></i>
-          This will delete <strong>{{ source_label }}</strong> and keep <strong>{{ target_label }}</strong>.
+          <ul class="mb-0">
+            {% for line in summary_lines %}
+              <li>{{ line }}</li>
+            {% endfor %}
+          </ul>
         </div>
 
         <div class="table-responsive mb-4">
