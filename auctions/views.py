@@ -380,7 +380,8 @@ def _invoice_membership_candidate(invoice):
 def _compute_member_renewal_expiration(club, member, today):
     """Compute the new membership expiration date when renewing.
 
-    - Rolling clubs: extend exactly one year from today (same month/day).
+    - Rolling clubs: extend one year from the current expiration if it is
+      still in the future; otherwise extend from today (same month/day).
     - January-1st clubs: extend one year from the current expiration if it is
       still in the future; otherwise extend from today.  Either way the result
       always lands on January 1 so the whole-club calendar stays aligned.
@@ -389,7 +390,10 @@ def _compute_member_renewal_expiration(club, member, today):
 
     current_exp = member.membership_expiration_date
     if club.membership_system == "rolling":
-        base = today
+        if current_exp and current_exp > today:
+            base = current_exp
+        else:
+            base = today
         try:
             return base.replace(year=base.year + 1)
         except ValueError:
