@@ -7089,7 +7089,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 i_agree = True
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
-        context["joining_adds_to_club"] = bool(
+        context["show_club_join_message"] = bool(
             self.auction.is_club_managed and self.auction.club and not existing_club_member
         )
         context["active_tab"] = "main"
