@@ -119,6 +119,7 @@ from .filters import (
     UserWatchLotFilter,
     UserWonLotFilter,
     get_recommended_lots,
+    rhyming_name_q,
 )
 from .forms import (
     AuctionCustomFieldsForm,
@@ -12802,10 +12803,12 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         if self.request.user.is_superuser:
             kwargs["can_manage_bap"] = True
             kwargs["can_manage_membership"] = True
+            kwargs["can_manage_auctions"] = True
         else:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
             kwargs["can_manage_bap"] = bool(member and member.permission_manage_bap)
             kwargs["can_manage_membership"] = bool(member and member.permission_add_edit)
+            kwargs["can_manage_auctions"] = bool(member and member.permission_manage_auctions)
         return kwargs
 
 
@@ -12827,6 +12830,12 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             pk = int(request.POST.get("pk") or 0) or None
         except (ValueError, TypeError):
             pk = None
+        # In check-in create mode the form has no pk but may carry the pk of an already-matched
+        # existing member; exclude that member so its own bidder_number/email don't flag as duplicates.
+        try:
+            existing_member_pk = int(request.POST.get("existing_member_pk") or 0) or None
+        except (ValueError, TypeError):
+            existing_member_pk = None
         name = request.POST.get("name", "").strip()
         email = request.POST.get("email", "").strip()
         result = {
@@ -12844,6 +12853,14 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
             deactivated_qs = deactivated_qs.exclude(pk=pk)
+        # For email/bidder_number duplicate checks only, also exclude the already-matched existing
+        # member so its own values don't flag as duplicates. The name check intentionally still
+        # finds that member to keep returning id_existing_member_pk on later blurs.
+        contact_base_qs = base_qs
+        contact_deactivated_qs = deactivated_qs
+        if existing_member_pk and not pk:
+            contact_base_qs = contact_base_qs.exclude(pk=existing_member_pk)
+            contact_deactivated_qs = contact_deactivated_qs.exclude(pk=existing_member_pk)
         # Auto-fill from manageable club members or auction histories when name typed without email.
         if name and not email and not pk:
             member_match = (
@@ -12868,25 +12885,34 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                     result["id_email"] = old_tos.email
                     result["id_phone_number"] = old_tos.phone_number or ""
                     result["id_address"] = old_tos.address or ""
-        # Duplicate name check within this club (active and deactivated)
+        # Duplicate name check within this club (active and deactivated). Use the same exact-or-rhyming
+        # match as AuctionTOSFilter.generic so e.g. "Dave Banks" surfaces an existing "David Banks".
         if name:
-            dup = base_qs.filter(name__iexact=name).first()
+            name_q = Q(name__iexact=name) | rhyming_name_q(name)
+            dup = base_qs.filter(name_q).first()
             if dup:
                 result["name_tooltip"] = f"{dup} is already in this club"
-            elif deactivated_qs.filter(name__iexact=name).exists():
+                # Return full member data so the create form can pre-fill and check in
+                result["id_existing_member_pk"] = dup.pk
+                result["id_name"] = dup.name
+                result["id_email"] = dup.email or ""
+                result["id_phone_number"] = dup.phone_number or ""
+                result["id_address"] = dup.address or ""
+                result["id_bidder_number"] = dup.bidder_number or ""
+            elif deactivated_qs.filter(name_q).exists():
                 result["name_tooltip"] = "Name matches a deactivated member"
         # Duplicate email check within this club (active and deactivated)
         if email:
-            dup = base_qs.filter(email=email).first()
+            dup = contact_base_qs.filter(email=email).first()
             if dup:
                 result["email_tooltip"] = "Email is already in this club"
-            elif deactivated_qs.filter(email=email).exists():
+            elif contact_deactivated_qs.filter(email=email).exists():
                 result["email_tooltip"] = "Email matches a deactivated member"
         if bidder_number:
-            dup = base_qs.filter(bidder_number=bidder_number).first()
+            dup = contact_base_qs.filter(bidder_number=bidder_number).first()
             if dup:
                 result["bidder_number_tooltip"] = "Bidder number is already in this club"
-            elif deactivated_qs.filter(bidder_number=bidder_number).exists():
+            elif contact_deactivated_qs.filter(bidder_number=bidder_number).exists():
                 result["bidder_number_tooltip"] = "Bidder number matches a deactivated member"
         return JsonResponse(result)
 
@@ -12914,7 +12940,10 @@ class ClubMemberAdminView(APIView):
             member = ClubMember.objects.get(pk=pk)
         except ClubMember.DoesNotExist:
             raise Http404
-        if not check_club_permission(request.user, member.club, "permission_view"):
+        if not (
+            check_club_permission(request.user, member.club, "permission_view")
+            or check_club_permission(request.user, member.club, "permission_manage_auctions")
+        ):
             raise PermissionDenied()
         return member
 
@@ -12946,13 +12975,16 @@ class ClubMemberAdminView(APIView):
         }
 
     @staticmethod
-    def _get_validation_script(request, pk, validation_url):
+    def _get_validation_script(request, pk, validation_url, checkin_auction=None):
         pk_js = f"var member_pk={pk};" if pk else "var member_pk=null;"
         csrf = get_token(request)
+        # In check-in create mode (no pk, auction present) we support selecting existing members
+        is_checkin_create_js = "true" if (not pk and checkin_auction) else "false"
         return f"""<script>
 {pk_js}
 var clubmember_validation_url = '{validation_url}';
 var clubmember_csrf_token = '{csrf}';
+var cm_is_checkin_create = {is_checkin_create_js};
 
 function cmSetFieldInvalid(fieldId, message, is_invalid) {{
     var field = document.getElementById(fieldId);
@@ -12975,6 +13007,13 @@ function cmSetFieldInvalid(fieldId, message, is_invalid) {{
     }}
 }}
 
+function cmClearExistingMemberPk() {{
+    var nameField = document.getElementById('id_name');
+    var modalForm = nameField ? nameField.closest('form') : document.querySelector('#modal form');
+    var hidden = modalForm ? modalForm.querySelector('input[name="_existing_member_pk"]') : null;
+    if (hidden) hidden.value = '';
+}}
+
 function cmShowAutocomplete(response, remove) {{
     var feedback = document.getElementById('id_name_feedback');
     if (feedback) feedback.remove();
@@ -12986,7 +13025,14 @@ function cmShowAutocomplete(response, remove) {{
     btn.role = "button";
     btn.className = "btn btn-sm btn-info";
     btn.id = "autocompleteMemberForm";
-    btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
+    var isCheckinExisting = cm_is_checkin_create && !!response.id_existing_member_pk;
+    if (isCheckinExisting) {{
+        btn.textContent = "Click to check in " + (response.id_name || "this member");
+        btn.classList.add("btn-success");
+        btn.classList.remove("btn-info");
+    }} else {{
+        btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
+    }}
     feedback.appendChild(btn);
     var autocomplete = response;
     document.getElementById('id_name').parentNode.appendChild(feedback);
@@ -12994,19 +13040,35 @@ function cmShowAutocomplete(response, remove) {{
     link.addEventListener('click', function(event) {{
         event.preventDefault();
         for (var key in autocomplete) {{
-            if (autocomplete.hasOwnProperty(key)) {{
+            if (autocomplete.hasOwnProperty(key) && key.startsWith('id_')) {{
                 var element = document.getElementById(key);
-                if (element && element.type !== "checkbox" && element.value === "") {{
+                if (element && element.type !== "checkbox") {{
                     element.value = autocomplete[key] || '';
                 }}
             }}
+        }}
+        // In check-in mode with an existing member, store their pk for the POST handler.
+        // Anchor to the form that actually contains id_name (the modal form) — the page may
+        // have other forms (filter on auction_users, search on club_admin) that would otherwise
+        // win document.querySelector('form').
+        if (isCheckinExisting) {{
+            var nameField = document.getElementById('id_name');
+            var modalForm = nameField ? nameField.closest('form') : document.querySelector('#modal form');
+            var hidden = modalForm ? modalForm.querySelector('input[name="_existing_member_pk"]') : null;
+            if (!hidden && modalForm) {{
+                hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.name = '_existing_member_pk';
+                modalForm.appendChild(hidden);
+            }}
+            if (hidden) hidden.value = autocomplete.id_existing_member_pk || '';
         }}
     }});
     link.focus();
 }}
 
 function cmHasAutocompleteData(response) {{
-    return !!(response.id_email || response.id_phone_number || response.id_address);
+    return !!(response.id_email || response.id_phone_number || response.id_address || response.id_existing_member_pk);
 }}
 
 function cmSetFieldNote(fieldId, message) {{
@@ -13024,11 +13086,15 @@ function cmSetFieldNote(fieldId, message) {{
 }}
 
 function cmValidateField() {{
+    var nameField = document.getElementById('id_name');
+    var modalForm = nameField ? nameField.closest('form') : document.querySelector('#modal form');
+    var existingHidden = modalForm ? modalForm.querySelector('input[name="_existing_member_pk"]') : null;
     var data = {{
         pk: member_pk,
         name: $("#id_name").val(),
         email: $("#id_email").val(),
         bidder_number: $("#id_bidder_number").val(),
+        existing_member_pk: existingHidden ? existingHidden.value : "",
     }};
     $.ajax({{
         url: clubmember_validation_url,
@@ -13036,15 +13102,22 @@ function cmValidateField() {{
         data: data,
         headers: {{ "X-CSRFToken": clubmember_csrf_token }},
         success: function(response) {{
-            if (response.name_tooltip) {{
+            if (response.name_tooltip && !cm_is_checkin_create) {{
+                // Non-checkin context: just show warning, no autocomplete
                 cmSetFieldNote("id_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
+            }} else if (response.name_tooltip && cm_is_checkin_create && response.id_existing_member_pk) {{
+                // Check-in context: existing member found — show check-in button, clear warning
+                cmSetFieldNote("id_name", "");
+                cmShowAutocomplete(response, false);
             }} else if (cmHasAutocompleteData(response)) {{
                 cmShowAutocomplete(response);
                 cmSetFieldNote("id_name", "");
+                cmClearExistingMemberPk();
             }} else {{
                 cmSetFieldNote("id_name", "");
                 cmShowAutocomplete(response, true);
+                cmClearExistingMemberPk();
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
             cmSetFieldInvalid("id_bidder_number", response.bidder_number_tooltip, !!response.bidder_number_tooltip);
@@ -13215,8 +13288,10 @@ class ClubMemberCreateView(APIView):
         auction = self._get_auction_context(request, club)
         post_url = self._post_url(slug, auction)
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(post_url=post_url, club=club)
-        extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
+        form = ClubMemberAdminForm(post_url=post_url, club=club, auction=auction)
+        extra_script = ClubMemberAdminView._get_validation_script(
+            request, pk=None, validation_url=validation_url, checkin_auction=auction
+        )
         title = f"Add member to {club.name}"
         if auction:
             title += f" — {auction}"
@@ -13228,11 +13303,86 @@ class ClubMemberCreateView(APIView):
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
+    @staticmethod
+    def _create_auction_tos(auction, member, form_cleaned_data):
+        """Create an AuctionTOS for *member* in *auction*, applying form overrides."""
+        if not member.bidder_number:
+            member.generate_bidder_number(save=True)
+        default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+        if not default_location:
+            return None
+        pickup_location = form_cleaned_data.get("pickup_location") or default_location
+        is_club_member = form_cleaned_data.get("is_club_member", False)
+        bidding_allowed = member.bidding_allowed
+        selling_allowed = member.selling_allowed
+        if auction.only_approved_bidders and "bidding_allowed" in form_cleaned_data:
+            bidding_allowed = form_cleaned_data["bidding_allowed"]
+        if auction.only_approved_sellers and "selling_allowed" in form_cleaned_data:
+            selling_allowed = form_cleaned_data["selling_allowed"]
+        return AuctionTOS.objects.create(
+            user=member.user,
+            auction=auction,
+            pickup_location=pickup_location,
+            clubmember=member,
+            bidder_number=member.bidder_number,
+            bidding_allowed=bidding_allowed,
+            selling_allowed=selling_allowed,
+            is_club_member=is_club_member,
+            name=member.name or "",
+            email=member.email or "",
+            phone_number=member.phone_number or "",
+            address=member.address or "",
+            manually_added=True,
+        )
+
     def post(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
         auction = self._get_auction_context(request, club)
         post_url = self._post_url(slug, auction)
-        form = ClubMemberAdminForm(request.POST, post_url=post_url, club=club)
+
+        # Check if the user is checking in an existing club member
+        existing_pk = request.POST.get("_existing_member_pk")
+        existing_member = None
+        if existing_pk and auction:
+            try:
+                existing_member = ClubMember.objects.get(pk=existing_pk, club=club, is_deleted=False)
+            except ClubMember.DoesNotExist:
+                pass
+
+        if existing_member:
+            # Existing member check-in: create AuctionTOS without creating a new ClubMember.
+            # We still validate auction-specific fields via a partial form.
+            form = ClubMemberAdminForm(
+                request.POST, instance=existing_member, post_url=post_url, club=club, auction=auction
+            )
+            if form.is_valid():
+                # Don't save the ClubMember itself (no changes intended from check-in form)
+                tos = self._create_auction_tos(auction, existing_member, form.cleaned_data)
+                action_detail = f"Checked in existing member {existing_member} to auction {auction}"
+                if not tos:
+                    messages.warning(request, f"{existing_member} could not be added — no pickup location found.")
+                else:
+                    messages.success(request, f"{existing_member} checked in to {auction}.")
+                ClubHistory.objects.create(club=club, user=request.user, action=action_detail, applies_to="MEMBERS")
+                return ClubMemberAdminView._redirect_to_club_admin(club)
+            extra_script = ClubMemberAdminView._get_validation_script(
+                request,
+                pk=None,
+                validation_url=reverse("clubmember_validation", kwargs={"slug": slug}),
+                checkin_auction=auction,
+            )
+            title = f"Add member to {club.name}"
+            if auction:
+                title += f" — {auction}"
+            context = {
+                "club": club,
+                "modal_title": title,
+                "form": form,
+                "extra_script": mark_safe(extra_script),
+            }
+            return render(request, "auctions/generic_admin_form.html", context)
+
+        form = ClubMemberAdminForm(request.POST, post_url=post_url, club=club, auction=auction)
         if form.is_valid():
             member = form.save(commit=False)
             member.club = club
@@ -13247,28 +13397,21 @@ class ClubMemberCreateView(APIView):
             )
             # In check-in mode, also create a linked AuctionTOS for this auction
             if auction:
-                if not member.bidder_number:
-                    member.generate_bidder_number(save=True)
-                default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
-                if default_location:
-                    AuctionTOS.objects.create(
-                        user=member.user,
-                        auction=auction,
-                        pickup_location=default_location,
-                        clubmember=member,
-                        bidder_number=member.bidder_number,
-                        bidding_allowed=member.bidding_allowed,
-                        selling_allowed=member.selling_allowed,
-                        name=member.name or "",
-                        email=member.email or "",
-                        phone_number=member.phone_number or "",
-                        address=member.address or "",
-                        manually_added=True,
+                tos = self._create_auction_tos(auction, member, form.cleaned_data)
+                if not tos:
+                    messages.warning(
+                        request, f"{member} added to {club.name}, but no pickup location found for {auction}."
                     )
-            messages.success(request, f"{member} added to {club.name}.")
+                else:
+                    messages.success(request, f"{member} added to {club.name} and checked in to {auction}.")
+            else:
+                messages.success(request, f"{member} added to {club.name}.")
             return ClubMemberAdminView._redirect_to_club_admin(club)
         extra_script = ClubMemberAdminView._get_validation_script(
-            request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
+            request,
+            pk=None,
+            validation_url=reverse("clubmember_validation", kwargs={"slug": slug}),
+            checkin_auction=auction,
         )
         title = f"Add member to {club.name}"
         if auction:

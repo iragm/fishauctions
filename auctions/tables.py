@@ -424,6 +424,7 @@ _PERMISSION_BADGES = [
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
     name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
+    bidder_number = tables.Column(accessor="bidder_number", verbose_name="Bidder", orderable=True)
     bap_points = tables.Column(
         accessor="bap_points",
         verbose_name="BAP",
@@ -651,6 +652,7 @@ class ClubMemberHTMxTable(tables.Table):
         template_name = "tables/bootstrap_htmx.html"
         fields = (
             "name",
+            "bidder_number",
             "bap_points",
             "hap_points",
             "membership_last_paid",
@@ -666,11 +668,14 @@ class ClubMemberHTMxTable(tables.Table):
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
+        can_manage_auctions = kwargs.pop("can_manage_auctions", False)
         exclude = list(kwargs.pop("exclude", None) or [])
         if not can_manage_bap:
             exclude += ["bap_points", "hap_points"]
         if not can_manage_membership:
             exclude += ["membership_last_paid", "membership_expiration_date"]
+        if not can_manage_auctions:
+            exclude += ["bidder_number"]
         super().__init__(*args, exclude=exclude, **kwargs)
 
 

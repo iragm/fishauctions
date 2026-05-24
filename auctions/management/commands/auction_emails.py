@@ -91,7 +91,7 @@ class Command(BaseCommand):
                     and auction.admin_checklist_rules_updated
                     and auction.admin_checklist_joined
                 ):
-                    subject = f"Don't forget to finish setting up {auction}!"
+                    subject = f"Finish setting up {auction}!"
                 else:
                     subject = f"Thanks for creating {auction}!"
 

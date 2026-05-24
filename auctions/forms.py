@@ -1910,7 +1910,7 @@ class AuctionEditForm(forms.ModelForm):
         queryset=Club.objects.none(),
         required=False,
         empty_label="None",
-        help_text="Associate this auction with a club.  Enables club member discounts and automatic club member syncing.",
+        help_text="Associate this auction with a club.",
     )
 
     class Meta:
@@ -2439,13 +2439,17 @@ class AuctionEditForm(forms.ModelForm):
         was_only_whole_dollar_bids = bool(
             self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
         )
-        was_managed_through_club = bool(
-            self.initial.get("manage_users_through_club", self.instance.manage_users_through_club)
-        )
+        # self.initial is populated from model_to_dict(instance) by BaseModelForm.__init__
+        # BEFORE _post_clean() mutates self.instance, so it holds the original DB values.
+        # Never read self.instance.<field> here — it already has the new POST value.
+        old_manage_value = self.initial.get("manage_users_through_club") or ""
+        was_managed_through_club = bool(old_manage_value)
+        was_manage_all = old_manage_value == "all"
         target_manage_value = self.cleaned_data.get("manage_users_through_club") or ""
         target_managed_through_club = bool(target_manage_value)
         target_manage_all = target_manage_value == "all"
-        was_club_id = self.instance.club_id
+        # self.initial["club"] is the old club pk (int/None) from model_to_dict
+        was_club_id = self.initial.get("club")
         target_club = self.cleaned_data.get("club")
         target_club_id = target_club.pk if target_club else None
 
@@ -2462,13 +2466,23 @@ class AuctionEditForm(forms.ModelForm):
             and target_managed_through_club
             and target_club_id != was_club_id
         )
-        # Also rebuild when switching to "all" from "checkin" (or from any non-all managed state)
+        # Rebuild from club when switching to "all" from "checkin" (or any non-all managed state)
         switching_to_all = (
             commit
             and self.instance.pk
             and was_managed_through_club
             and target_manage_all
-            and self.instance.manage_users_through_club != "all"
+            and not was_manage_all
+            and not club_changed_while_managed
+        )
+        # Switching from "all" → "checkin": clear auto-added TOS records
+        switching_to_checkin = (
+            commit
+            and self.instance.pk
+            and was_managed_through_club
+            and target_managed_through_club
+            and not target_manage_all
+            and was_manage_all
             and not club_changed_while_managed
         )
 
@@ -2518,6 +2532,12 @@ class AuctionEditForm(forms.ModelForm):
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
                 auction = super().save(commit=commit)
                 self._rebuild_auctiontos_from_club(auction)
+        elif switching_to_checkin:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                # Clear auto-added TOS records; check-in mode populates them one at a time
+                AuctionTOS.objects.filter(auction=locked).delete()
+                auction = super().save(commit=commit)
         else:
             auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
@@ -4007,7 +4027,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         # All help texts stripped; only is_club_member retains its help text (set dynamically below)
         help_texts = dict.fromkeys(fields, "")
 
-    def __init__(self, *args, post_url=None, read_only=False, club=None, auctiontos=None, **kwargs):
+    def __init__(self, *args, post_url=None, read_only=False, club=None, auctiontos=None, auction=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -4020,14 +4040,15 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
         # --- Auction-context extra fields ---
-        auction = auctiontos.auction if auctiontos else None
+        # auctiontos is set when editing; auction is set when creating in check-in mode
+        auction = auctiontos.auction if auctiontos else auction
         show_pickup = bool(auction and auction.multi_location)
-        show_alt_fees = bool(auctiontos)
-        in_auction_context = bool(auctiontos)
+        show_alt_fees = bool(auction)  # show whenever we have auction context, create or edit
+        in_auction_context = bool(auctiontos or auction)
 
         if show_pickup:
             self.fields["pickup_location"].queryset = auction.location_qs
-            self.fields["pickup_location"].initial = auctiontos.pickup_location_id
+            self.fields["pickup_location"].initial = auctiontos.pickup_location_id if auctiontos else None
         else:
             self.fields["pickup_location"].widget = forms.HiddenInput()
 
@@ -4047,21 +4068,41 @@ class ClubMemberAdminForm(forms.ModelForm):
             )
             self.fields["is_club_member"].help_text = help_text
             self.fields["is_club_member"].label = label
-            self.fields["is_club_member"].initial = auctiontos.is_club_member
+            if auctiontos:
+                self.fields["is_club_member"].initial = auctiontos.is_club_member
         else:
             self.fields["is_club_member"].widget = forms.HiddenInput()
 
-        # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them
+        # contact_status is excluded from the layout in auction context but is still a required field
+        # (no blank=True). Make it a hidden input so a valid value is always submitted.
+        if in_auction_context:
+            self.fields["contact_status"].widget = forms.HiddenInput()
+            self.fields["contact_status"].initial = (
+                self.instance.contact_status if self.instance and self.instance.pk else "contact"
+            )
+
+        # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them.
+        # BooleanField has required=True by default; set required=False so an absent/False value
+        # doesn't fail validation when the field is hidden.
         if in_auction_context and auction:
             if not auction.only_approved_sellers:
                 self.fields["selling_allowed"].widget = forms.HiddenInput()
+                self.fields["selling_allowed"].required = False
             if not auction.only_approved_bidders:
                 self.fields["bidding_allowed"].widget = forms.HiddenInput()
+                self.fields["bidding_allowed"].required = False
+            # Initialise from auctiontos when editing; default to member/True for new check-ins.
             if auctiontos:
                 self.fields["selling_allowed"].initial = auctiontos.selling_allowed
                 self.fields["bidding_allowed"].initial = auctiontos.bidding_allowed
+            else:
+                instance_obj = self.instance if self.instance and self.instance.pk else None
+                self.fields["selling_allowed"].initial = instance_obj.selling_allowed if instance_obj else True
+                self.fields["bidding_allowed"].initial = instance_obj.bidding_allowed if instance_obj else True
 
-        # Hide Discord role fields when the club has no Discord server, or in auction context
+        # Hide Discord role fields when the club has no Discord server, or in auction context.
+        # discord_role_auto_managed is a BooleanField — set required=False and a sensible initial
+        # so HiddenInput doesn't trigger a spurious required-field validation error.
         discord_fields = []
         if has_discord and not in_auction_context:
             discord_fields = [
@@ -4073,7 +4114,14 @@ class ClubMemberAdminForm(forms.ModelForm):
             ]
         else:
             self.fields["discord_role_auto_managed"].widget = forms.HiddenInput()
+            self.fields["discord_role_auto_managed"].required = False
+            instance_obj = self.instance if self.instance and self.instance.pk else None
+            self.fields["discord_role_auto_managed"].initial = (
+                instance_obj.discord_role_auto_managed if instance_obj else True
+            )
             self.fields["discord_role_override"].widget = forms.HiddenInput()
+            # discord_role_auto_managed must appear in the layout for crispy to render it as hidden
+            discord_fields = [Field("discord_role_auto_managed"), Field("discord_role_override")]
 
         # Layout:
         #   Row: bidder_number (left) | memo (right)
@@ -4084,8 +4132,11 @@ class ClubMemberAdminForm(forms.ModelForm):
         #   Row: bidding_allowed | selling_allowed  (hidden when not applicable)
         #   is_club_member (alt fees, auction context only)
         #   pickup_location (multi-location auction only)
+        # In auction context contact_status and discord_role_auto_managed are hidden but still
+        # in the form — they MUST appear in the layout so crispy renders them as hidden inputs
+        # (crispy only auto-renders hidden fields that are somewhere in the layout).
         if in_auction_context:
-            contact_status_fields: list = []
+            contact_status_fields: list = [Field("contact_status")]
         else:
             contact_status_fields = ["contact_status"]
 
