@@ -4217,7 +4217,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         if not club:
             return bidder_number
         clash = (
-            ClubMember.objects.filter(club=club, bidder_number=bidder_number, is_deleted=False)
+            ClubMember.objects.filter(club=club, bidder_number=bidder_number)
             .exclude(pk=self.instance.pk or 0)
             .exists()
         )
