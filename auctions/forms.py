@@ -2028,7 +2028,8 @@ class AuctionEditForm(forms.ModelForm):
         if square_seller:
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
-            # Square requires OAuth - no fallback for superusers
+            # Square requires an actual linked seller record; the userdata flag alone
+            # is not enough because it can remain set after a disconnected/stale auth.
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
         if not self.instance.club:
