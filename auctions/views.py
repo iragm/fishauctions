@@ -13647,7 +13647,7 @@ class ClubMemberConfirmView(APIView):
             raise PermissionDenied()
         if action == "delete":
             body = format_html(
-                "<small>Disable this member's membership.  They won't appear in searches, or be able to view/renew their membership.  You can reactivate or permanently delete them later.</small><br>Deactivate {}?",
+                "<small>Disable this member's membership. They won't appear in searches, or be able to view/renew their membership. You can reactivate or permanently delete them later.</small><br>Deactivate {}?",
                 member,
             )
             action_url = reverse("club_member_delete", kwargs={"pk": pk})
