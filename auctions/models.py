@@ -1477,13 +1477,20 @@ class Auction(models.Model):
         default=False,
         help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
     )
-    manage_users_through_club = models.BooleanField(
-        default=False,
+    MANAGE_USERS_CHOICES = [
+        ("", "Off"),
+        ("all", "Automatically add all club members"),
+        ("checkin", "Add on user check-in"),
+    ]
+    manage_users_through_club = models.CharField(
+        max_length=20,
+        choices=MANAGE_USERS_CHOICES,
+        default="",
+        blank=True,
         help_text=(
             "Manage participants as members of the associated club. "
-            "Once enabled, this cannot be disabled. "
             "Requires an associated club and an empty auction (no lots, no invoices). "
-            "Enabling this deletes existing per-auction participant records."
+            "Changing this deletes existing per-auction participant records."
         ),
     )
     location = models.CharField(max_length=300, null=True, blank=True)
@@ -2092,7 +2099,12 @@ class Auction(models.Model):
     @property
     def is_club_managed(self):
         """True when this auction manages its participants via the associated club's ClubMember records."""
-        return self.manage_users_through_club and bool(self.club_id)
+        return bool(self.manage_users_through_club) and bool(self.club_id)
+
+    @property
+    def manage_users_auto_add(self):
+        """True when club members are automatically added as AuctionTOS participants."""
+        return self.manage_users_through_club == "all" and bool(self.club_id)
 
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""

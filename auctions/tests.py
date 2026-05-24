@@ -4506,13 +4506,13 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
 
-    def test_manage_users_through_club_field_stays_visible_without_club(self):
+    def test_manage_users_through_club_field_hidden_without_club(self):
         self.online_auction.club = None
         self.online_auction.save()
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+        self.assertIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
 
     def test_membership_fee_field_hidden_for_free_club(self):
         free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
@@ -4529,7 +4529,7 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
     def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
         paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
         self.online_auction.club = paid_club
-        self.online_auction.manage_users_through_club = True
+        self.online_auction.manage_users_through_club = "all"
         self.online_auction.save()
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
@@ -5269,7 +5269,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         from auctions.views import _should_mark_invoice_renewal_needed
 
         self.online_auction.add_people_from_auction_to_club = False
-        self.online_auction.manage_users_through_club = True
+        self.online_auction.manage_users_through_club = "all"
         self.online_auction.save(update_fields=["add_people_from_auction_to_club", "manage_users_through_club"])
         self.assertTrue(_should_mark_invoice_renewal_needed(self.invoice))
 
@@ -17627,7 +17627,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
 
     def _enable_club_managed(self):
-        self.auction.manage_users_through_club = True
+        self.auction.manage_users_through_club = "all"
         self.auction.save()
 
     def _auction_form_data(self):
@@ -17664,17 +17664,17 @@ class ManageUsersThroughClubTests(TestCase):
             date_start=timezone.now(),
             date_end=timezone.now() + datetime.timedelta(days=1),
         )
-        a.manage_users_through_club = True
+        a.manage_users_through_club = "all"
         a.save()
         self.assertFalse(a.is_club_managed)
-        self.auction.manage_users_through_club = True
+        self.auction.manage_users_through_club = "all"
         self.auction.save()
         self.assertTrue(self.auction.is_club_managed)
 
     def test_cannot_enable_when_lots_exist(self):
         Lot.objects.create(lot_name="x", auction=self.auction, quantity=1)
         form = AuctionEditForm(
-            data={"manage_users_through_club": True, "club": str(self.club.pk)},
+            data={"manage_users_through_club": "all", "club": str(self.club.pk)},
             instance=self.auction,
             user=self.creator,
             cloned_from=None,
@@ -17688,7 +17688,7 @@ class ManageUsersThroughClubTests(TestCase):
         tos = AuctionTOS.objects.create(user=self.creator, auction=self.auction, pickup_location=self.location)
         Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
         form = AuctionEditForm(
-            data={"manage_users_through_club": True, "club": str(self.club.pk)},
+            data={"manage_users_through_club": "all", "club": str(self.club.pk)},
             instance=self.auction,
             user=self.creator,
             cloned_from=None,
@@ -17697,7 +17697,8 @@ class ManageUsersThroughClubTests(TestCase):
         form.is_valid()
         self.assertIn("manage_users_through_club", form.errors)
 
-    def test_cannot_disable_once_enabled(self):
+    def test_can_disable_without_activity(self):
+        """Disabling club-managed mode is allowed when there are no lots or invoices."""
         self._enable_club_managed()
         form = AuctionEditForm(
             instance=self.auction,
@@ -17705,19 +17706,30 @@ class ManageUsersThroughClubTests(TestCase):
             cloned_from=None,
             user_timezone="UTC",
         )
-        # UI-level: field is rendered disabled so users cannot post a False value.
+        # Without activity the field is NOT disabled — the admin may toggle it.
+        self.assertFalse(form.fields["manage_users_through_club"].disabled)
+
+    def test_cannot_disable_once_lots_exist(self):
+        """Disabling is blocked once lots have been added."""
+        self._enable_club_managed()
+        Lot.objects.create(lot_name="x", auction=self.auction, quantity=1)
+        form = AuctionEditForm(
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # UI-level: field is disabled so users cannot post an empty value.
         self.assertTrue(form.fields["manage_users_through_club"].disabled)
-        # Defense-in-depth: the validator also rejects an attempt to set False.
-        # Construct a fresh form without the disabled flag and exercise the cleaner directly.
+        # Defense-in-depth: the validator also rejects an attempt to turn it off.
         form2 = AuctionEditForm(
-            data={"manage_users_through_club": False, "club": str(self.club.pk)},
+            data={"manage_users_through_club": "", "club": str(self.club.pk)},
             instance=self.auction,
             user=self.creator,
             cloned_from=None,
             user_timezone="UTC",
         )
         form2.fields["manage_users_through_club"].disabled = False
-        # is_valid triggers clean_manage_users_through_club
         form2.is_valid()
         self.assertIn("manage_users_through_club", form2.errors)
 
@@ -17726,7 +17738,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
         form = AuctionEditForm(
-            data={**self._auction_form_data(), "manage_users_through_club": True},
+            data={**self._auction_form_data(), "manage_users_through_club": "all"},
             instance=self.auction,
             user=self.creator,
             cloned_from=None,
@@ -17745,7 +17757,7 @@ class ManageUsersThroughClubTests(TestCase):
         form = AuctionEditForm(
             data={
                 **self._auction_form_data(),
-                "manage_users_through_club": True,
+                "manage_users_through_club": "all",
                 "add_membership_fee_to_invoices_for_expired_members": True,
             },
             instance=self.auction,

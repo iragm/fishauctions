@@ -245,7 +245,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
 
     shadows = AuctionTOS.objects.filter(
         clubmember=instance,
-        auction__manage_users_through_club=True,
+        auction__manage_users_through_club__in=["all", "checkin"],
         auction__invoiced=False,
     )
 

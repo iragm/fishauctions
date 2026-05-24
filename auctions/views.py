@@ -6344,7 +6344,10 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 target = reverse("clubmember_admin", kwargs={"pk": self.auctiontos.clubmember_id})
                 target += f"?tos={self.auctiontos.pk}"
                 return redirect(target)
+            # In check-in mode, pass the auction slug so the create form can link the new member
             target = reverse("clubmember_create", kwargs={"slug": self.auction.club.slug})
+            if self.auction.manage_users_through_club == "checkin":
+                target += f"?auction={self.auction.slug}"
             return redirect(target)
         return super().dispatch(request, *args, **kwargs)
 
@@ -12008,6 +12011,9 @@ class AddTosMemo(APIView, AuctionViewMixin):
         if memo or memo == "":
             self.auctiontos.memo = memo
             self.auctiontos.save()
+            # Sync memo back to the linked ClubMember when the auction manages users through the club
+            if self.auction.is_club_managed and self.auctiontos.clubmember_id:
+                ClubMember.objects.filter(pk=self.auctiontos.clubmember_id).update(memo=memo)
             return JsonResponse({"result": "ok"})
         raise Http404
 
@@ -13094,10 +13100,20 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
             saved = form.save()
             # If in auction context, also save TOS-specific fields to the AuctionTOS
             if auctiontos:
+                auction = auctiontos.auction
+                tos_update_fields = ["is_club_member"]
                 if form.cleaned_data.get("pickup_location") is not None:
                     auctiontos.pickup_location = form.cleaned_data["pickup_location"]
+                    tos_update_fields.append("pickup_location_id")
                 auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
-                auctiontos.save(update_fields=["pickup_location_id", "is_club_member"])
+                # Sync bidding/selling permissions to AuctionTOS when the auction uses them
+                if auction.only_approved_sellers and "selling_allowed" in form.cleaned_data:
+                    auctiontos.selling_allowed = form.cleaned_data["selling_allowed"]
+                    tos_update_fields.append("selling_allowed")
+                if auction.only_approved_bidders and "bidding_allowed" in form.cleaned_data:
+                    auctiontos.bidding_allowed = form.cleaned_data["bidding_allowed"]
+                    tos_update_fields.append("bidding_allowed")
+                auctiontos.save(update_fields=tos_update_fields)
                 ClubHistory.objects.create(
                     club=member.club,
                     user=request.user,
@@ -13162,7 +13178,12 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
 
 
 class ClubMemberCreateView(APIView):
-    """DRF-based HTMX view for creating a new club member"""
+    """DRF-based HTMX view for creating a new club member.
+
+    Supports an optional ``auction`` query-string parameter (auction slug).
+    When present and the auction is in check-in mode, a linked AuctionTOS is
+    created automatically after the ClubMember is saved.
+    """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -13173,15 +13194,35 @@ class ClubMemberCreateView(APIView):
             raise PermissionDenied()
         return club
 
+    def _get_auction_context(self, request, club):
+        """Return an Auction if the ?auction= param is set and valid for this club."""
+        auction_slug = request.query_params.get("auction") or request.POST.get("_auction_slug")
+        if not auction_slug:
+            return None
+        auction = Auction.objects.filter(
+            slug=auction_slug, club=club, is_deleted=False, manage_users_through_club="checkin"
+        ).first()
+        return auction
+
+    def _post_url(self, slug, auction=None):
+        url = reverse("clubmember_create", kwargs={"slug": slug})
+        if auction:
+            url += f"?auction={auction.slug}"
+        return url
+
     def get(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
-        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        auction = self._get_auction_context(request, club)
+        post_url = self._post_url(slug, auction)
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
         form = ClubMemberAdminForm(post_url=post_url, club=club)
         extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
+        title = f"Add member to {club.name}"
+        if auction:
+            title += f" — {auction}"
         context = {
             "club": club,
-            "modal_title": f"Add member to {club.name}",
+            "modal_title": title,
             "form": form,
             "extra_script": mark_safe(extra_script),
         }
@@ -13189,7 +13230,8 @@ class ClubMemberCreateView(APIView):
 
     def post(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
-        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        auction = self._get_auction_context(request, club)
+        post_url = self._post_url(slug, auction)
         form = ClubMemberAdminForm(request.POST, post_url=post_url, club=club)
         if form.is_valid():
             member = form.save(commit=False)
@@ -13203,14 +13245,37 @@ class ClubMemberCreateView(APIView):
                 action=f"Added member {member}",
                 applies_to="MEMBERS",
             )
+            # In check-in mode, also create a linked AuctionTOS for this auction
+            if auction:
+                if not member.bidder_number:
+                    member.generate_bidder_number(save=True)
+                default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+                if default_location:
+                    AuctionTOS.objects.create(
+                        user=member.user,
+                        auction=auction,
+                        pickup_location=default_location,
+                        clubmember=member,
+                        bidder_number=member.bidder_number,
+                        bidding_allowed=member.bidding_allowed,
+                        selling_allowed=member.selling_allowed,
+                        name=member.name or "",
+                        email=member.email or "",
+                        phone_number=member.phone_number or "",
+                        address=member.address or "",
+                        manually_added=True,
+                    )
             messages.success(request, f"{member} added to {club.name}.")
             return ClubMemberAdminView._redirect_to_club_admin(club)
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
         )
+        title = f"Add member to {club.name}"
+        if auction:
+            title += f" — {auction}"
         context = {
             "club": club,
-            "modal_title": f"Add member to {club.name}",
+            "modal_title": title,
             "form": form,
             "extra_script": mark_safe(extra_script),
         }
