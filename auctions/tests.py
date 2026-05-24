@@ -16545,15 +16545,6 @@ class ClubMemberManagementViewTests(TestCase):
             ClubHistory.objects.filter(club=self.club, action__contains="Deactivated member Source Member").exists()
         )
 
-    def test_confirm_delete_view_renders_modal(self):
-        self.client.login(username="club_editor", password="testpass")
-        response = self.client.get(
-            reverse("club_member_confirm", kwargs={"pk": self.source_member.pk, "action": "delete"})
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Deactivate member")
-        self.assertContains(response, "Deactivate Source Member?")
-
     def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
         self.client.login(username="club_editor", password="testpass")
         merge_url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})

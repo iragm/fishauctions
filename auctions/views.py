@@ -377,6 +377,32 @@ def _invoice_membership_candidate(invoice):
     return _find_club_member(invoice.auction.club, user, email)
 
 
+def _compute_member_renewal_expiration(club, member, today):
+    """Compute the new membership expiration date when renewing.
+
+    - Rolling clubs: extend exactly one year from today (same month/day).
+    - January-1st clubs: extend one year from the current expiration if it is
+      still in the future; otherwise extend from today.  Either way the result
+      always lands on January 1 so the whole-club calendar stays aligned.
+    """
+    import datetime as _dt
+
+    current_exp = member.membership_expiration_date
+    if club.membership_system == "rolling":
+        base = today
+        try:
+            return base.replace(year=base.year + 1)
+        except ValueError:
+            # Feb 29 → Feb 28 in a non-leap-year target
+            return base.replace(month=2, day=28, year=base.year + 1)
+    else:  # january_first
+        if current_exp and current_exp > today:
+            base = current_exp
+        else:
+            base = today
+        return _dt.date(base.year + 1, 1, 1)
+
+
 def _should_mark_invoice_renewal_needed(invoice):
     if not invoice or not invoice.auction or not invoice.auction.club:
         return False
@@ -460,12 +486,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 member.user = user
                 member.save(update_fields=["user"])
             today = timezone.now().date()
-            current_exp = member.membership_expiration_date
-            base = max(current_exp, today) if current_exp else today
-            if club.membership_system == "january_first":
-                member.membership_expiration_date = date_type(base.year + 1, 1, 1)
-            else:
-                member.membership_expiration_date = date_type(base.year + 1, 12, 31)
+            member.membership_expiration_date = _compute_member_renewal_expiration(club, member, today)
             member.membership_last_paid = today
             if member.email:
                 member.email_address_status = "VALID"
@@ -13475,23 +13496,7 @@ class ClubMemberRenewView(APIView):
         return member
 
     def _new_expiration(self, member, today):
-        """Compute the new expiration.
-
-        Rolling memberships always extend one year from today. For non-rolling
-        clubs, extend one year from the current expiration if it is still in
-        the future; otherwise extend one year from today.
-        """
-        club = member.club
-        current_exp = member.membership_expiration_date
-        if club.membership_system != "rolling" and current_exp and current_exp > today:
-            base = current_exp
-        else:
-            base = today
-        try:
-            return base.replace(year=base.year + 1)
-        except ValueError:
-            # Feb 29 in a non-leap-year target
-            return base.replace(month=2, day=28, year=base.year + 1)
+        return _compute_member_renewal_expiration(member.club, member, today)
 
     def get(self, request, pk):
         member = self._get_member(pk, request)
@@ -13518,7 +13523,9 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
-        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+        return HttpResponse(
+            '<script>closeModal(); document.body.dispatchEvent(new CustomEvent("clubMemberListChanged"));</script>'
+        )
 
 
 class ClubMembershipNumberView(APIView):
