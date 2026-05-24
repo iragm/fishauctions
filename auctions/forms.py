@@ -2029,24 +2029,18 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
             # Square requires OAuth - no fallback for superusers
-            # Hide the field if the effective payment user hasn't linked their Square account
-            if not payment_user.userdata.square_enabled:
-                self.fields["enable_square_payments"].widget = forms.HiddenInput()
+            self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
         if not self.instance.club:
             self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
-            self.fields["manage_users_through_club"].widget = forms.HiddenInput()
         elif not self.instance.club.membership_annual_fee:
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         if self.instance.pk and self.instance.manage_users_through_club:
             # Already enabled; cannot be turned off and other club-sync settings are redundant
             self.fields["manage_users_through_club"].disabled = True
-            self.fields["manage_users_through_club"].help_text = (
-                "Already enabled. This cannot be disabled."
-            )
+            self.fields["manage_users_through_club"].help_text = "Already enabled. This cannot be disabled."
             self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -2355,12 +2349,12 @@ class AuctionEditForm(forms.ModelForm):
                     cleaned_data["minimum_bid"] = round_to_whole_dollar(minimum_bid)
                 else:
                     self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
-        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not cleaned_data.get(
-            "add_people_from_auction_to_club"
+        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not (
+            cleaned_data.get("add_people_from_auction_to_club") or cleaned_data.get("manage_users_through_club")
         ):
             self.add_error(
                 "add_membership_fee_to_invoices_for_expired_members",
-                "Enable adding people from this auction to the club before enabling membership fees.",
+                "Enable adding people from this auction to the club or manage users through the club before enabling membership fees.",
             )
         if (
             cleaned_data.get("add_people_from_auction_to_club")
@@ -2374,20 +2368,22 @@ class AuctionEditForm(forms.ModelForm):
         instance = self.instance
         currently_enabled = bool(instance and instance.pk and instance.manage_users_through_club)
         if currently_enabled and not target:
-            raise forms.ValidationError("This setting cannot be disabled once enabled.")
+            msg = "This setting cannot be disabled once enabled."
+            raise forms.ValidationError(msg)
         if target and not currently_enabled:
             club = self.cleaned_data.get("club") or (instance.club if instance and instance.pk else None)
             if not club:
-                raise forms.ValidationError("Associate this auction with a club before enabling this option.")
+                msg = "Associate this auction with a club before enabling this option."
+                raise forms.ValidationError(msg)
             if instance and instance.pk:
                 if Lot.objects.filter(auction=instance, is_deleted=False).exists():
-                    raise forms.ValidationError(
-                        "This auction already has lots. Club-managed mode can only be enabled on an empty auction."
-                    )
+                    msg = "This auction already has lots. Club-managed mode can only be enabled on an empty auction."
+                    raise forms.ValidationError(msg)
                 if Invoice.objects.filter(auction=instance).exists():
-                    raise forms.ValidationError(
+                    msg = (
                         "This auction already has invoices. Club-managed mode can only be enabled on an empty auction."
                     )
+                    raise forms.ValidationError(msg)
         return target
 
     def save(self, commit=True):
@@ -2407,15 +2403,35 @@ class AuctionEditForm(forms.ModelForm):
             with db_transaction.atomic():
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
                 if Lot.objects.filter(auction=locked, is_deleted=False).exists():
-                    raise forms.ValidationError(
-                        "Cannot enable club-managed mode: lots were added while the form was open."
-                    )
+                    msg = "Cannot enable club-managed mode: lots were added while the form was open."
+                    raise forms.ValidationError(msg)
                 if Invoice.objects.filter(auction=locked).exists():
-                    raise forms.ValidationError(
-                        "Cannot enable club-managed mode: invoices were added while the form was open."
-                    )
+                    msg = "Cannot enable club-managed mode: invoices were added while the form was open."
+                    raise forms.ValidationError(msg)
                 AuctionTOS.objects.filter(auction=locked).delete()
                 auction = super().save(commit=commit)
+                default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+                if default_location and auction.club_id:
+                    club_members = ClubMember.objects.filter(club_id=auction.club_id, is_deleted=False).order_by(
+                        "createdon", "pk"
+                    )
+                    for club_member in club_members:
+                        if not club_member.bidder_number:
+                            club_member.generate_bidder_number(save=True)
+                        AuctionTOS.objects.create(
+                            user=club_member.user,
+                            auction=auction,
+                            pickup_location=default_location,
+                            clubmember=club_member,
+                            bidder_number=club_member.bidder_number,
+                            bidding_allowed=club_member.bidding_allowed,
+                            selling_allowed=club_member.selling_allowed,
+                            name=club_member.name or "",
+                            email=club_member.email or "",
+                            phone_number=club_member.phone_number or "",
+                            address=club_member.address or "",
+                            manually_added=True,
+                        )
         else:
             auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
@@ -3993,9 +4009,8 @@ class ClubMemberAdminForm(forms.ModelForm):
             .exists()
         )
         if clash:
-            raise forms.ValidationError(
-                f"Bidder number '{bidder_number}' is already used by another member in this club."
-            )
+            msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
+            raise forms.ValidationError(msg)
         return bidder_number
 
 

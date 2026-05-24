@@ -1,4 +1,5 @@
-{% if invoice.auction and invoice.auction.club and invoice.auction.add_people_from_auction_to_club and invoice.auction.club.membership_annual_fee %}
+{% if invoice.auction and invoice.auction.club and invoice.auction.club.membership_annual_fee %}
+{% if invoice.auction.is_club_managed or invoice.auction.add_people_from_auction_to_club %}
 <div id="invoice-membership-renewal" class="alert alert-secondary py-2">
   <div class="form-check">
     <input
@@ -26,4 +27,5 @@
   <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
   {% endif %}
 </div>
+{% endif %}
 {% endif %}

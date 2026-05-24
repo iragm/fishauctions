@@ -749,6 +749,13 @@ class Club(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "bidder_number"],
+                condition=~Q(bidder_number=""),
+                name="unique_bidder_number_per_club",
+            ),
+        ]
 
     def __str__(self):
         return str(self.name)
@@ -1265,9 +1272,11 @@ class ClubMember(ContactRecord):
             except Exception:
                 preferred = None
         self.bidder_number = _generate_unique_bidder_number(
-            is_taken=lambda n: ClubMember.objects.filter(club_id=self.club_id, bidder_number=n, is_deleted=False)
-            .exclude(pk=self.pk or 0)
-            .exists(),
+            is_taken=lambda n: (
+                ClubMember.objects.filter(club_id=self.club_id, bidder_number=n, is_deleted=False)
+                .exclude(pk=self.pk or 0)
+                .exists()
+            ),
             preferred=preferred,
             phone=self.phone_number,
             address=self.address,
@@ -1275,15 +1284,6 @@ class ClubMember(ContactRecord):
         if save:
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["club", "bidder_number"],
-                condition=~Q(bidder_number=""),
-                name="unique_bidder_number_per_club",
-            ),
-        ]
 
 
 class ClubHistory(models.Model):
@@ -3895,9 +3895,9 @@ class AuctionTOS(models.Model):
                 preferred = user_data.preferred_bidder_number or None
 
             self.bidder_number = _generate_unique_bidder_number(
-                is_taken=lambda n: AuctionTOS.objects.filter(bidder_number=n, auction=self.auction)
-                .exclude(pk=self.pk or 0)
-                .exists(),
+                is_taken=lambda n: (
+                    AuctionTOS.objects.filter(bidder_number=n, auction=self.auction).exclude(pk=self.pk or 0).exists()
+                ),
                 preferred=preferred,
                 phone=self.phone_number,
                 address=self.address,

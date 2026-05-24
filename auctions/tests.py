@@ -4506,6 +4506,14 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
 
+    def test_manage_users_through_club_field_stays_visible_without_club(self):
+        self.online_auction.club = None
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+
     def test_membership_fee_field_hidden_for_free_club(self):
         free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
         self.online_auction.club = free_club
@@ -4517,6 +4525,26 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         self.assertIsInstance(
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
+
+    def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
+        paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
+        self.online_auction.club = paid_club
+        self.online_auction.manage_users_through_club = True
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertNotIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
+    def test_enable_square_payments_field_hidden_without_square_seller(self):
+        self.online_auction.created_by.userdata.square_enabled = True
+        self.online_auction.created_by.userdata.save(update_fields=["square_enabled"])
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertIsInstance(form.fields["enable_square_payments"].widget, forms.HiddenInput)
 
 
 class LotListViewTests(StandardTestCase):
@@ -5236,6 +5264,14 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
+
+    def test_club_managed_auction_can_mark_membership_renewal_needed(self):
+        from auctions.views import _should_mark_invoice_renewal_needed
+
+        self.online_auction.add_people_from_auction_to_club = False
+        self.online_auction.manage_users_through_club = True
+        self.online_auction.save(update_fields=["add_people_from_auction_to_club", "manage_users_through_club"])
+        self.assertTrue(_should_mark_invoice_renewal_needed(self.invoice))
 
     def test_membership_reminder_due_not_set_for_free_membership(self):
         self.club.membership_annual_fee = None
@@ -15353,6 +15389,12 @@ class ClubAuctionIntegrationTests(TestCase):
         actions = [h.action for h in history]
         self.assertTrue(any("Automatically associated with club" in a for a in actions))
 
+    def test_auction_creation_updates_last_auction_used(self):
+        self._create_auction_via_view(self.owner)
+        auction = Auction.objects.filter(created_by=self.owner).last()
+        self.owner.userdata.refresh_from_db()
+        self.assertEqual(self.owner.userdata.last_auction_used, auction)
+
     def test_no_club_association_when_no_permission(self):
         """Auction is not associated with club if user has no admin/manage_auctions permission"""
         user_no_perm = User.objects.create_user(username="no_perm", password="testpass", email="no_perm@example.com")
@@ -15394,6 +15436,28 @@ class ClubAuctionIntegrationTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(list(response.context["club_auctions"])), 0)
+
+    def test_club_detail_lists_newest_auctions_first(self):
+        older = Auction.objects.create(
+            title="Older Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=True,
+        )
+        newer = Auction.objects.create(
+            title="Newer Auction",
+            date_start=timezone.now() + timezone.timedelta(days=21),
+            date_end=timezone.now() + timezone.timedelta(days=28),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=True,
+        )
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        auctions = list(response.context["club_auctions"])
+        self.assertEqual([auction.pk for auction in auctions[:2]], [newer.pk, older.pk])
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
         """When a member gains manage_auctions permission, existing auctions get club filled in"""
@@ -16442,6 +16506,14 @@ class ClubMemberManagementViewTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["name_tooltip"], "Source Member is already in this club")
         self.assertEqual(payload["email_tooltip"], "Email is already in this club")
+
+    def test_member_validation_reports_duplicate_bidder_number(self):
+        self.source_member.bidder_number = "42"
+        self.source_member.save(update_fields=["bidder_number"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(self.validation_url, {"bidder_number": "42"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["bidder_number_tooltip"], "Bidder number is already in this club")
 
     def test_renew_endpoint_updates_membership_and_history(self):
         self.source_member.membership_last_paid = None
@@ -17520,7 +17592,9 @@ class ManageUsersThroughClubTests(TestCase):
         now = timezone.now()
         self.creator = User.objects.create_user(username="auction_creator", password="testpw", email="c@example.com")
         self.joiner = User.objects.create_user(username="joiner", password="testpw", email="j@example.com")
-        self.club_admin_user = User.objects.create_user(username="club_admin", password="testpw", email="ca@example.com")
+        self.club_admin_user = User.objects.create_user(
+            username="club_admin", password="testpw", email="ca@example.com"
+        )
         self.club_add_edit_user = User.objects.create_user(
             username="club_add_edit", password="testpw", email="cae@example.com"
         )
@@ -17555,6 +17629,32 @@ class ManageUsersThroughClubTests(TestCase):
     def _enable_club_managed(self):
         self.auction.manage_users_through_club = True
         self.auction.save()
+
+    def _auction_form_data(self):
+        return {
+            "title": self.auction.title,
+            "slug": self.auction.slug,
+            "date_start": self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_online_bidding_starts": "",
+            "date_online_bidding_ends": "",
+            "lot_submission_start_date": "",
+            "lot_submission_end_date": "",
+            "summernote_description": self.auction.summernote_description or "",
+            "online_bidding": self.auction.online_bidding,
+            "buy_now": self.auction.buy_now,
+            "reserve_price": self.auction.reserve_price,
+            "lot_entry_fee": self.auction.lot_entry_fee,
+            "unsold_lot_fee": self.auction.unsold_lot_fee,
+            "winning_bid_percent_to_club": self.auction.winning_bid_percent_to_club,
+            "pre_register_lot_discount_percent": self.auction.pre_register_lot_discount_percent,
+            "winning_bid_percent_to_club_for_club_members": self.auction.winning_bid_percent_to_club_for_club_members,
+            "lot_entry_fee_for_club_members": self.auction.lot_entry_fee_for_club_members,
+            "alternative_split_label": self.auction.alternative_split_label,
+            "minimum_bid": self.auction.minimum_bid,
+            "tax": self.auction.tax,
+            "club": str(self.club.pk),
+        }
 
     def test_is_club_managed_requires_club(self):
         a = Auction.objects.create(
@@ -17621,6 +17721,41 @@ class ManageUsersThroughClubTests(TestCase):
         form2.is_valid()
         self.assertIn("manage_users_through_club", form2.errors)
 
+    def test_enabling_club_management_syncs_existing_club_members(self):
+        self.joiner.userdata.preferred_bidder_number = "246"
+        self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        form = AuctionEditForm(
+            data={**self._auction_form_data(), "manage_users_through_club": True},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), msg=form.errors)
+        form.save()
+        member.refresh_from_db()
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertEqual(member.bidder_number, "246")
+        self.assertEqual(shadow.bidder_number, "246")
+
+    def test_membership_fee_can_be_enabled_with_club_managed_mode(self):
+        self.club.membership_annual_fee = Decimal("25.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        form = AuctionEditForm(
+            data={
+                **self._auction_form_data(),
+                "manage_users_through_club": True,
+                "add_membership_fee_to_invoices_for_expired_members": True,
+            },
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertNotIn("add_membership_fee_to_invoices_for_expired_members", form.errors)
+
     def test_permission_check_grants_club_admin_and_manage_auctions(self):
         self._enable_club_managed()
         self.assertTrue(self.auction.permission_check(self.club_admin_user))
@@ -17668,10 +17803,29 @@ class ManageUsersThroughClubTests(TestCase):
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.assertEqual(tos.bidder_number, cm.bidder_number)
 
+    def test_join_page_hides_club_add_message_for_existing_member(self):
+        self._enable_club_managed()
+        ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        self.client.force_login(self.joiner)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Joining this auction will also add you to")
+
+    def test_club_managed_auction_users_page_hides_import_and_add_to_club_actions(self):
+        self._enable_club_managed()
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Import members CSV")
+        self.assertNotContains(response, f"Add all users to {self.club}")
+
     def test_signal_propagates_clubmember_changes_to_shadow(self):
         self._enable_club_managed()
         cm = ClubMember.objects.create(
-            club=self.club, user=self.joiner, name="Joiner", bidder_number="42",
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="42",
         )
         tos = AuctionTOS.objects.create(
             user=self.joiner,
@@ -17694,7 +17848,10 @@ class ManageUsersThroughClubTests(TestCase):
     def test_signal_skips_bidder_number_when_auction_invoiced(self):
         self._enable_club_managed()
         cm = ClubMember.objects.create(
-            club=self.club, user=self.joiner, name="Joiner", bidder_number="55",
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="55",
         )
         tos = AuctionTOS.objects.create(
             user=self.joiner,
@@ -17713,7 +17870,10 @@ class ManageUsersThroughClubTests(TestCase):
     def test_validate_winner_resolves_via_clubmember(self):
         self._enable_club_managed()
         cm = ClubMember.objects.create(
-            club=self.club, user=self.joiner, name="Joiner", bidder_number="123",
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="123",
         )
         from auctions.views import DynamicSetLotWinner
 
@@ -17728,12 +17888,18 @@ class ManageUsersThroughClubTests(TestCase):
 
     def test_clubmember_generate_bidder_number_unique_per_club(self):
         cm1 = ClubMember.objects.create(
-            club=self.club, user=self.joiner, name="A", phone_number="555-111-2222",
+            club=self.club,
+            user=self.joiner,
+            name="A",
+            phone_number="555-111-2222",
         )
         cm1.generate_bidder_number()
         self.assertTrue(cm1.bidder_number)
         cm2 = ClubMember.objects.create(
-            club=self.club, user=self.club_add_edit_user, name="B", phone_number="555-111-2222",
+            club=self.club,
+            user=self.club_add_edit_user,
+            name="B",
+            phone_number="555-111-2222",
         )
         cm2.generate_bidder_number()
         self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)

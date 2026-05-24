@@ -306,8 +306,6 @@ class AuctionViewMixin:
         if self.auction and self.auction.is_club_managed:
             if check_club_permission(self.request.user, self.auction.club, "permission_add_edit"):
                 return True
-        if prev_allow_non_admins:
-            return False
         raise PermissionDenied()
 
 
@@ -369,7 +367,7 @@ def _find_club_member(club, user, email):
 def _invoice_membership_candidate(invoice):
     if not invoice or not invoice.auction or not invoice.auction.club or not invoice.auctiontos_user:
         return None
-    if not invoice.auction.add_people_from_auction_to_club:
+    if not (invoice.auction.add_people_from_auction_to_club or invoice.auction.manage_users_through_club):
         return None
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
@@ -383,7 +381,7 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     auction = invoice.auction
     club = auction.club
-    if not auction.add_people_from_auction_to_club:
+    if not (auction.add_people_from_auction_to_club or auction.manage_users_through_club):
         return False
     if not auction.add_membership_fee_to_invoices_for_expired_members:
         return False
@@ -2252,7 +2250,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
         club = auction.club
         if not club:
             messages.error(request, "This auction is not associated with a club.")
-            return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+            return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
         # Permission check: must have add_edit permission on the club or be the auction creator
         if (
@@ -2261,7 +2259,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
             and not check_club_permission(request.user, club, "permission_manage_auctions")
         ):
             messages.error(request, "You don't have permission to add members to that club.")
-            return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+            return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
         tos_qs = AuctionTOS.objects.filter(auction=auction).exclude(email="").filter(email__isnull=False)
         added_count = 0
@@ -2301,7 +2299,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 if skipped_count
                 else "No participants with email addresses found.",
             )
-        return redirect(reverse("auction_users", kwargs={"slug": auction.slug}))
+        return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
 
 class ComposeEmailToUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -3344,9 +3342,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             if not tos and winner and self.auction.is_club_managed:
                 # In club-managed mode, the source of truth for bidder numbers is ClubMember.
                 # Look up the member by bidder number; if found, ensure a shadow AuctionTOS exists.
-                cm = ClubMember.objects.filter(
-                    club=self.auction.club, bidder_number=winner, is_deleted=False
-                ).first()
+                cm = ClubMember.objects.filter(club=self.auction.club, bidder_number=winner, is_deleted=False).first()
                 if cm:
                     default_location = self.auction.location_qs.first()
                     if default_location:
@@ -5635,23 +5631,23 @@ class LotValidation(LoginRequiredMixin):
             # if this was cloned from another lot, get the images from that lot
             if form.cleaned_data["cloned_from"]:
                 try:
-                    originalLot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
-                    if (originalLot.user.pk == self.request.user.pk) or self.request.user.is_superuser:
-                        originalImages = LotImage.objects.filter(lot_number=originalLot.lot_number)
-                        for originalImage in originalImages:
-                            newImage = LotImage.objects.create(
-                                createdon=originalImage.createdon,
+                    original_lot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
+                    if original_lot.user_id == self.request.user.pk or self.request.user.is_superuser:
+                        original_images = LotImage.objects.filter(lot_number=original_lot.lot_number)
+                        for original_image in original_images:
+                            new_image = LotImage.objects.create(
+                                createdon=original_image.createdon,
                                 lot_number=lot,
-                                image_source=originalImage.image_source,
-                                is_primary=originalImage.is_primary,
-                                url=originalImage.url,
+                                image_source=original_image.image_source,
+                                is_primary=original_image.is_primary,
+                                url=original_image.url,
                             )
-                            if originalImage.image:
-                                newImage.image = get_thumbnailer(originalImage.image)
+                            if original_image.image:
+                                new_image.image = get_thumbnailer(original_image.image)
                             # if the original lot sold, this picture sure isn't of the actual item
-                            if originalLot.winner and originalImage.image_source == "ACTUAL":
-                                newImage.image_source = "REPRESENTATIVE"
-                            newImage.save()
+                            if original_lot.winner and original_image.image_source == "ACTUAL":
+                                new_image.image_source = "REPRESENTATIVE"
+                            new_image.save()
                         # we are only cloning images here, not watchers, views, or other related models
                 except Exception as e:
                     logger.exception(e)
@@ -6921,6 +6917,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
                     user=None,
                 )
+        self.request.user.userdata.last_auction_used = auction
+        self.request.user.userdata.save(update_fields=["last_auction_used"])
         # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
         # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
         _add_club_admins_as_auction_tos(auction, self.request.user)
@@ -7073,6 +7071,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
 
         if self.request.user.is_authenticated:
             tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+            existing_club_member = _find_club_member(self.auction.club, self.request.user, self.request.user.email)
             if tos:
                 existingTos = tos.pickup_location
                 i_agree = True
@@ -7089,6 +7088,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 i_agree = True
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
+            existing_club_member = None
+        context["joining_adds_to_club"] = bool(
+            self.auction.is_club_managed and self.auction.club and not existing_club_member
+        )
         context["active_tab"] = "main"
         # Check if user has lots in this auction
         if self.request.user.is_authenticated:
@@ -7223,6 +7226,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         club_member.bidding_allowed = False
                     club_member.save()
                     club_member_is_new = True
+                elif not club_member.user_id:
+                    club_member.user = self.request.user
+                    club_member.save(update_fields=["user"])
                 if not club_member.bidder_number:
                     club_member.generate_bidder_number(save=True)
                 obj.clubmember = club_member
@@ -12702,11 +12708,11 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             and renewal_soon
         )
         if can_manage_auctions:
-            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")
+            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")
         else:
             context["club_auctions"] = Auction.objects.filter(
                 club=self.club, promote_this_auction=True, is_deleted=False
-            ).order_by("date_start")
+            ).order_by("-date_start")
         return context
 
     def post(self, request, *args, **kwargs):
@@ -12822,7 +12828,9 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             "id_address": "",
             "name_tooltip": "",
             "email_tooltip": "",
+            "bidder_number_tooltip": "",
         }
+        bidder_number = request.POST.get("bidder_number", "").strip()
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         deactivated_qs = ClubMember.objects.filter(club=self.club, is_deleted=True)
         if pk:
@@ -12866,6 +12874,12 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                 result["email_tooltip"] = "Email is already in this club"
             elif deactivated_qs.filter(email=email).exists():
                 result["email_tooltip"] = "Email matches a deactivated member"
+        if bidder_number:
+            dup = base_qs.filter(bidder_number=bidder_number).first()
+            if dup:
+                result["bidder_number_tooltip"] = "Bidder number is already in this club"
+            elif deactivated_qs.filter(bidder_number=bidder_number).exists():
+                result["bidder_number_tooltip"] = "Bidder number matches a deactivated member"
         return JsonResponse(result)
 
 
@@ -12984,6 +12998,7 @@ function cmValidateField() {{
         pk: member_pk,
         name: $("#id_name").val(),
         email: $("#id_email").val(),
+        bidder_number: $("#id_bidder_number").val(),
     }};
     $.ajax({{
         url: clubmember_validation_url,
@@ -13002,11 +13017,12 @@ function cmValidateField() {{
                 cmShowAutocomplete(response, true);
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
+            cmSetFieldInvalid("id_bidder_number", response.bidder_number_tooltip, !!response.bidder_number_tooltip);
         }}
     }});
 }}
 
-$("#id_name, #id_email").on("blur", cmValidateField);
+$("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
 
 (function() {{
     var autoCheckbox = document.getElementById('id_discord_role_auto_managed');

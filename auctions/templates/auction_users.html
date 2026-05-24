@@ -14,7 +14,6 @@
       hx-trigger="click"
       _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add member</a>
     <a href="{% url 'club_admin' slug=auction.club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-people"></i> Manage club members</a>
-    <a href="{% url 'club_member_import' slug=auction.club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-upload"></i> Import members CSV</a>
   </div>
   {% else %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
@@ -65,7 +64,7 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" id="user_csv_export" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
-        {% if auction.club %}
+        {% if auction.club and not auction.is_club_managed %}
         <form method="POST" action="{% url 'auction_add_users_to_club' slug=auction.slug %}" style="margin: 0;">
           {% csrf_token %}
           <button type="submit" class="dropdown-item"><i class="bi bi-person-fill-add"></i> Add all users to {{ auction.club }}</button>

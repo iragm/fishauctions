@@ -315,7 +315,7 @@ function initMap() {
                             {% else %}
                             <p class="mb-3">To participate in this auction, please confirm that you've read the rules.</p>
                             {% endif %}
-                            {% if auction.is_club_managed and auction.club %}
+                            {% if joining_adds_to_club %}
                             <p class="mb-3"><small class="text-muted"><i class="bi bi-info-circle"></i> Joining this auction will also add you to <strong>{{ auction.club.name }}</strong>.</small></p>
                             {% endif %}
                             {% crispy form form.helper %}
