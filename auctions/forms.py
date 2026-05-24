@@ -2032,12 +2032,9 @@ class AuctionEditForm(forms.ModelForm):
             # is not enough because it can remain set after a disconnected/stale auth.
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
-        if not self.instance.club:
-            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
-            self.fields["manage_users_through_club"].widget = forms.HiddenInput()
-        elif not self.instance.club.membership_annual_fee:
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        # These three fields are shown/hidden via JavaScript based on the club selection.
+        # We always render real widgets so the JS can toggle them; server validation
+        # already rejects the combination of no-club + enabled flag.
         if self.instance.pk and self.instance.manage_users_through_club:
             self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             # When club-managed, copy_users is irrelevant — the new auction gets members from the club
@@ -4018,7 +4015,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
-            "memo": forms.Textarea(attrs={"placeholder": "Admin notes", "rows": 2}),
+            "memo": forms.TextInput(attrs={"placeholder": "Admin notes"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
             "address": forms.Textarea(attrs={"placeholder": "123 Main St, City, State", "rows": 3}),

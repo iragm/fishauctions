@@ -98,7 +98,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
 
 <h3>{{ invoice.auctiontos_user.name }}</h3>
-<small>{{ invoice.invoice_summary_short }} {% if invoice.status == "PAID" %}<span class="badge rounded-pill bg-success">Paid in full</span>{% endif %}</small>
+<small><span id="invoice-summary-short">{{ invoice.invoice_summary_short }}</span> {% if invoice.status == "PAID" %}<span class="badge rounded-pill bg-success">Paid in full</span>{% endif %}</small>
 {% if invoice.auction.multi_location %}
 {% if location == 'No location selected' %}{% else %}
 <h5>{{location}}</h5>

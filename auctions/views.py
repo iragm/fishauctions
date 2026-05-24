@@ -507,7 +507,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     )
     id_suffix = f" (ID: {external_id})" if external_id else ""
     payer_prefix = f"User {payer_email} " if payer_email else ""
-    action = f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{id_suffix}"
+    auction = invoice.auction if invoice else None
+    auction_suffix = f" for {auction}" if auction else ""
+    action = (
+        f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{auction_suffix}{id_suffix}"
+    )
     try:
         ClubHistory.objects.create(
             club=club,
@@ -1858,10 +1862,20 @@ class InvoiceRenewalNeededToggleView(APIView):
         oob_fee = f"<table>{oob_fee}</table>"
         oob_tax = f"<table>{oob_tax}</table>"
         oob_total = f"<table>{oob_total}</table>"
-        oob_summary = (
+        oob_summary_checkout = (
             f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
         )
-        return HttpResponse(body + oob_fee + oob_tax + oob_total + oob_summary)
+        # Also update the invoice-summary-short span on the full invoice page (invoice.html)
+        oob_summary_invoice = (
+            f'<span id="invoice-summary-short" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
+        )
+        # Update the modal title (generic_admin_form.html) when the renewal checkbox is toggled
+        # while the auctiontos/clubmember admin modal is open.
+        modal_name = invoice.invoice_summary
+        oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
+        return HttpResponse(
+            body + oob_fee + oob_tax + oob_total + oob_summary_checkout + oob_summary_invoice + oob_modal_title
+        )
 
 
 class UpdateLotPushNotificationsView(APIPostView):
@@ -6349,11 +6363,14 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 target = reverse("clubmember_admin", kwargs={"pk": self.auctiontos.clubmember_id})
                 target += f"?tos={self.auctiontos.pk}"
                 return redirect(target)
-            # In check-in mode, pass the auction slug so the create form can link the new member
-            target = reverse("clubmember_create", kwargs={"slug": self.auction.club.slug})
-            if self.auction.manage_users_through_club == "checkin":
-                target += f"?auction={self.auction.slug}"
-            return redirect(target)
+            if not self.is_edit_form:
+                # Creating a new user — redirect to club member create form.
+                target = reverse("clubmember_create", kwargs={"slug": self.auction.club.slug})
+                if self.auction.manage_users_through_club == "checkin":
+                    target += f"?auction={self.auction.slug}"
+                return redirect(target)
+            # Editing an existing TOS that has no club member link (e.g. added before club
+            # management was enabled) — fall through and show the regular AuctionTOS form.
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -12969,7 +12986,7 @@ class ClubMemberAdminView(APIView):
         title = str(member)
         if member.club.membership_number_mode != "off" and member.membership_number:
             title = f"{member} — #{member.membership_number}"
-        return {
+        ctx = {
             "club": member.club,
             "club_member": member,
             "modal_title": title,
@@ -12977,6 +12994,19 @@ class ClubMemberAdminView(APIView):
             "extra_script": mark_safe(extra_script),
             "read_only": read_only,
         }
+        # When opened from an auction's user list (via ?tos=), surface the invoice
+        # summary and status controls in the modal header exactly like AuctionTOSAdmin does.
+        if auctiontos:
+            try:
+                invoice = auctiontos.invoice
+                ctx["modal_title"] = f"{title} {invoice.invoice_summary_short}"
+                ctx["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
+                ctx["unsold_lot_warning"] = invoice.unsold_lot_warning
+                ctx["invoice"] = invoice
+                ctx["is_admin"] = True
+            except AttributeError:
+                pass
+        return ctx
 
     @staticmethod
     def _get_validation_script(request, pk, validation_url, checkin_auction=None):

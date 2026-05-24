@@ -24,9 +24,37 @@ var form_id = '#auction-form';
 
 $(document).ready(function() {
     change_bidding(document.getElementById('id_online_bidding').value);
+    // Show/hide club-dependent fields immediately based on whether a club is selected.
+    update_club_fields($('#id_club').val());
 });
 $('#id_online_bidding').change(function(data) {
     change_bidding(this.value);
+});
+function update_club_fields(club_val) {
+    var club_fields = [
+        '#div_id_add_people_from_auction_to_club',
+        '#div_id_add_membership_fee_to_invoices_for_expired_members',
+        '#div_id_manage_users_through_club',
+    ];
+    club_fields.forEach(function(sel) {
+        var $el = $(sel);
+        if ($el.length) {
+            if (club_val) {
+                $el.show();
+            } else {
+                $el.hide();
+            }
+        }
+    });
+}
+// Native select change (covers plain <select> and select2 hidden input)
+$('#id_club').on('change', function() {
+    update_club_fields($(this).val());
+});
+// select2 fires a custom event on the visible element; the underlying <select>
+// also gets 'change' so the above handler suffices, but add this as a fallback.
+$(document).on('select2:select select2:unselect select2:clear', '[name="club"]', function() {
+    update_club_fields($(this).val());
 });
 function change_bidding(value){
     if (value != 'disable') {

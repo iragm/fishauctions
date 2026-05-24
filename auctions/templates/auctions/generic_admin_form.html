@@ -6,11 +6,12 @@
 	<div class="modal-dialog modal-lg modal-dialog-centered">
 	  <div class="modal-content">
 		<div class="modal-header">
-		  <h5 class="modal-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
+		  <h5 class="modal-title" id="modal-invoice-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
 		</div>
 		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning text-dark'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip|safe }}</span>
+            {% if invoice %}{% include "auctions/partials/invoice_membership_renewal.html" %}{% endif %}
 			<p>{% crispy form form.helper %}</p>
 	  </div>
 	</div>
