@@ -23,11 +23,14 @@
 
         <div class="alert alert-warning text-dark">
           <i class="bi bi-exclamation-triangle me-1"></i>
-          <ul class="mb-0">
-            {% for line in summary_lines %}
-              <li>{{ line }}</li>
-            {% endfor %}
-          </ul>
+          <p class="mb-2">This will delete <strong>{{ source_label }}</strong> and keep <strong>{{ target_label }}</strong>.</p>
+          {% if summary_lines %}
+            <ul class="mb-0">
+              {% for line in summary_lines %}
+                <li>{{ line }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
         </div>
 
         <div class="table-responsive mb-4">
