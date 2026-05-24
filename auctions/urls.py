@@ -579,6 +579,16 @@ urlpatterns = [
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/",
+        views.ClubMemberByUUIDView.as_view(),
+        name="club_member_by_uuid",
+    ),
+    path(
+        "clubs/<slug:slug>/member-number/<int:number>/",
+        views.ClubMemberByNumberView.as_view(),
+        name="club_member_by_number",
+    ),
     path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
@@ -629,6 +639,11 @@ urlpatterns = [
         "api/clubmember/<int:pk>/apple-wallet.pkpass",
         views.ClubMemberAppleWalletPassView.as_view(),
         name="club_member_apple_wallet",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/apple-wallet.pkpass",
+        views.ClubMemberAppleWalletByUUIDView.as_view(),
+        name="club_member_apple_wallet_by_uuid",
     ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(

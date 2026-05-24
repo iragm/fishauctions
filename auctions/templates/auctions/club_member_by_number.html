@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% load qr_code %}
+{% block title %}Membership — {{ club.name }}{% endblock %}
+
+{% block content %}
+<div class="card mx-auto" style="max-width: 600px;">
+  <div class="card-body text-center">
+    <h3 class="card-title mb-1">{{ club.name }}</h3>
+    <p class="text-muted mb-3">{{ member.display_name }}</p>
+
+    {% if member.membership_number_visible %}
+      <div class="text-muted small mb-1">Membership number</div>
+      <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
+      <div class="d-flex justify-content-center mb-3">
+        {% qr_from_text member.membership_number|stringformat:"s" size="s" %}
+      </div>
+    {% endif %}
+
+    {% if expiration %}
+      {% if is_expired %}
+        <div class="alert alert-danger">
+          <strong>Expired</strong> on {{ expiration|date:"M j, Y" }}.
+        </div>
+      {% else %}
+        <div class="alert alert-success">
+          <strong>Active</strong> — expires {{ expiration|date:"M j, Y" }}.
+        </div>
+      {% endif %}
+    {% elif not is_paid_member %}
+      <div class="alert alert-warning">No paid membership on record.</div>
+    {% endif %}
+
+    {% if payment_link and is_expired or payment_link and not is_paid_member %}
+      <div class="mt-3">
+        <a class="btn btn-success" href="{{ payment_link }}">
+          <i class="bi bi-credit-card"></i> Pay membership
+        </a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

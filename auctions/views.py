@@ -12807,6 +12807,83 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
 
 
+class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
+    """Public, UUID-keyed page that shows a member's name and wallet-add buttons.
+
+    Anyone with the UUID link can view this page and add the membership to their
+    Google/Apple wallet — the UUID is the capability token.
+    """
+
+    template_name = "auctions/club_member_by_uuid.html"
+    allow_non_admins = True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        member = get_object_or_404(ClubMember, club=self.club, uuid=kwargs["uuid"], is_deleted=False)
+        from auctions.apple_wallet import is_configured as _apple_configured
+
+        context["club"] = self.club
+        context["member"] = member
+        context["apple_wallet_enabled"] = _apple_configured()
+        return context
+
+
+class ClubMemberByNumberView(ClubViewMixin, TemplateView):
+    """Public, number-keyed page showing membership number, expiration status, and a
+    payment button when applicable. Linked from Discord."""
+
+    template_name = "auctions/club_member_by_number.html"
+    allow_non_admins = True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        member = get_object_or_404(ClubMember, club=self.club, membership_number=kwargs["number"], is_deleted=False)
+        today = timezone.now().date()
+        expiration = member.membership_expiration_date
+        is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
+        can_pay = bool(
+            self.club.enable_club_page
+            and self.club.allow_integrated_payments
+            and self.club.membership_annual_fee
+            and self.club.payment_user
+        )
+        payment_link = ""
+        if can_pay:
+            # Find or create an unpaid membership invoice so payment can happen without login
+            invoice = None
+            if member.email:
+                invoice = Invoice.objects.filter(
+                    club=self.club,
+                    auction=None,
+                    auctiontos_user__email__iexact=member.email,
+                    renewal_processed=False,
+                    status="UNPAID",
+                ).first()
+            if invoice is None and member.user:
+                invoice = Invoice.objects.filter(
+                    club=self.club,
+                    auction=None,
+                    buyer=member.user,
+                    renewal_processed=False,
+                    status="UNPAID",
+                ).first()
+            if invoice is None:
+                invoice = Invoice.objects.create(
+                    club=self.club,
+                    buyer=member.user or None,
+                    status="UNPAID",
+                    renewal_needed=True,
+                )
+            payment_link = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        context["club"] = self.club
+        context["member"] = member
+        context["expiration"] = expiration
+        context["is_expired"] = is_expired
+        context["is_paid_member"] = member.is_paid_member
+        context["payment_link"] = payment_link
+        return context
+
+
 class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """Admin panel for a club"""
 
@@ -13592,6 +13669,27 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
         response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
         # Wallet passes are personalized — don't cache them at intermediaries.
+        response["Cache-Control"] = "private, no-store"
+        return response
+
+
+class ClubMemberAppleWalletByUUIDView(View):
+    """UUID-keyed Apple Wallet download — no login required.
+
+    Anyone with the UUID link can download the .pkpass; the UUID is the capability token.
+    """
+
+    def get(self, request, slug, uuid):
+        from auctions.apple_wallet import generate_pkpass_for_member, is_configured
+
+        if not is_configured():
+            raise Http404
+        member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
+        if not member.membership_number_visible:
+            raise Http404
+        pkpass_bytes = generate_pkpass_for_member(member)
+        response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
+        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
         response["Cache-Control"] = "private, no-store"
         return response
 
@@ -15525,8 +15623,7 @@ class DiscordInteractionsView(View):
                 lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
 
         if club.enable_club_page:
-            current_site = Site.objects.get_current()
-            lines.append(f"\n[View your membership](https://{current_site.domain}{member.member_page_url})")
+            lines.append(f"\n[View your membership]({member.simple_membership_link})")
 
         return _discord_ephemeral("\n".join(lines))
 

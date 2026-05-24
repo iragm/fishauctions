@@ -38,6 +38,9 @@ CLUB_MEMBER_API_KEY_MAPPING_FIELDS = (*CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_
 
 
 class ClubMemberSerializer(serializers.ModelSerializer):
+    wallet_link = serializers.ReadOnlyField()
+    simple_membership_link = serializers.ReadOnlyField()
+
     class Meta:
         model = ClubMember
         fields = [
@@ -52,13 +55,14 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "bap_points",
             "hap_points",
             "membership_last_paid",
-            "uuid",
             "membership_expiration_reminder_due",
             "createdon",
             "source",
             "is_deleted",
             "memo",
             "membership_number",
+            "wallet_link",
+            "simple_membership_link",
         ]
         read_only_fields = ["id", "createdon", "club", "is_deleted", "membership_number"]
 

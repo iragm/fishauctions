@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% load membership_tags qr_code %}
+{% block title %}{{ member.display_name }} — {{ club.name }}{% endblock %}
+
+{% block content %}
+<div class="card mx-auto" style="max-width: 600px;">
+  <div class="card-body text-center">
+    <h3 class="card-title mb-1">{{ member.display_name }}</h3>
+    <p class="text-muted mb-3">{{ club.name }}</p>
+
+    {% if member.membership_number_visible %}
+      <div class="text-muted small mb-1">Membership number</div>
+      <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
+      <div class="d-flex justify-content-center mb-3">
+        {% qr_from_text member.membership_number|stringformat:"s" size="s" %}
+      </div>
+    {% endif %}
+
+    {% if member.membership_expiration_date %}
+      <p class="mb-3">Membership expires: <strong>{{ member.membership_expiration_date|date:"M j, Y" }}</strong></p>
+    {% endif %}
+
+    {% google_wallet_save_url member as wallet_url %}
+    <div class="d-flex flex-wrap justify-content-center gap-2">
+      {% if wallet_url %}
+        <a class="btn btn-dark" href="{{ wallet_url }}" target="_blank" rel="noopener">
+          <i class="bi bi-google"></i> Add to Google Wallet
+        </a>
+      {% endif %}
+      {% if apple_wallet_enabled and member.membership_number_visible %}
+        <a class="btn btn-dark" href="{% url 'club_member_apple_wallet_by_uuid' slug=club.slug uuid=member.uuid %}">
+          <i class="bi bi-apple"></i> Add to Apple Wallet
+        </a>
+      {% endif %}
+    </div>
+
+    <div class="mt-4">
+      <a class="btn btn-link btn-sm" href="{{ member.simple_membership_link }}">View membership status</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
