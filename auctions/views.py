@@ -103,7 +103,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from .authentication import OptionalAPIKeyAuthentication
+from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
