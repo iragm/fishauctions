@@ -2892,7 +2892,11 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
                     return self.form_invalid(form)
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
-        form = super().form_valid(form)
+        try:
+            form = super().form_valid(form)
+        except ValidationError as exc:
+            form.add_error(None, exc)
+            return self.form_invalid(form)
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
