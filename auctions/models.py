@@ -1279,10 +1279,6 @@ class ClubMember(ContactRecord):
             phone=self.phone_number,
             address=self.address,
         )
-            preferred=preferred,
-            phone=self.phone_number,
-            address=self.address,
-        )
         if save:
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number

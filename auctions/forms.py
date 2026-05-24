@@ -4217,9 +4217,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         if not club:
             return bidder_number
         clash = (
-            ClubMember.objects.filter(club=club, bidder_number=bidder_number)
-            .exclude(pk=self.instance.pk or 0)
-            .exists()
+            ClubMember.objects.filter(club=club, bidder_number=bidder_number).exclude(pk=self.instance.pk or 0).exists()
         )
         if clash:
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."

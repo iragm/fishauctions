@@ -13652,7 +13652,7 @@ class ClubMemberConfirmView(APIView):
             )
             action_url = reverse("club_member_delete", kwargs={"pk": pk})
             context = {
-                "title": title,
+                "title": f"Deactivate {member}?",
                 "body": body,
                 "action_url": action_url,
             }
@@ -13755,7 +13755,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
-    """Merge two club members: keep target, hard-delete source, copy non-empty fields."""
+    """Merge two club members: keep target, soft-delete (deactivate) source, copy non-empty fields."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14775,6 +14775,7 @@ class ClubAPIViewMixin:
     serializer_class = ClubMemberSerializer
     authentication_classes = [TokenAuthentication, SessionAuthentication, OptionalAPIKeyAuthentication]
     permission_classes = [IsAuthenticatedOrAPIKey]
+    throttle_classes = [ApiKeyThrottle]
 
     def get_club(self):
         if not hasattr(self, "_club"):
