@@ -9177,7 +9177,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
             self.fail(f"square_payment_success URL pattern not configured: {e}")
 
 
-@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="")
+@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True)
 class SquareOAuthRevocationTests(StandardTestCase):
     """Tests for Square OAuth authorization revocation handling"""
 
@@ -15099,7 +15099,7 @@ class ClubMemberUpdateTests(TestCase):
 
         response = self.client.post(url, {"target": self.member.pk})
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "This will delete")
+        self.assertContains(response, "will be deactivated")
         self.assertContains(response, "Jane Doe")
 
         response = self.client.post(
@@ -16542,7 +16542,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(
-            ClubHistory.objects.filter(club=self.club, action__contains="Removed member Source Member").exists()
+            ClubHistory.objects.filter(club=self.club, action__contains="Deactivated member Source Member").exists()
         )
 
     def test_confirm_delete_view_renders_modal(self):
@@ -16551,8 +16551,8 @@ class ClubMemberManagementViewTests(TestCase):
             reverse("club_member_confirm", kwargs={"pk": self.source_member.pk, "action": "delete"})
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Remove member")
-        self.assertContains(response, "Remove Source Member from this club?")
+        self.assertContains(response, "Deactivate member")
+        self.assertContains(response, "Deactivate Source Member?")
 
     def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
         self.client.login(username="club_editor", password="testpass")

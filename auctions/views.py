@@ -13532,7 +13532,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 for name, field in review_form.fields.items()
             ],
             "summary_lines": [
-                f"{source} will be permanently removed.",
+                f"{source} will be deactivated.",
                 f"{target} will be kept.",
                 "Permission flags from the removed member will be merged into the surviving member.",
                 "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
@@ -13540,7 +13540,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "target_field_name": "target",
             "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
-            "save_button_label": f"Save and remove {source}",
+            "save_button_label": f"Merge and deactivate {source}",
         }
 
     def get(self, request, slug, pk):
@@ -13597,7 +13597,8 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source_name = str(source)
-                    source.delete()
+                    source.is_deleted = True
+                    source.save(update_fields=["is_deleted"])
                     ClubHistory.objects.create(
                         club=self.club,
                         user=request.user,
