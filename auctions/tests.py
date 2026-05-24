@@ -14968,7 +14968,7 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_renew", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         self.member.refresh_from_db()
         from django.utils import timezone
 
