@@ -38,6 +38,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
+    Invoice,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -1200,6 +1201,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.fields["bidder_number"].help_text = None
         self.fields["memo"].widget.attrs["placeholder"] = "Only visible to admins"
         self.fields["bidder_number"].widget.attrs["placeholder"] = "Auto generate"
+        if self.auction.is_club_managed:
+            # In club-managed mode, these fields live on ClubMember and are managed via the club admin.
+            for field_name in ("bidder_number", "bidding_allowed", "selling_allowed", "is_admin", "is_club_member"):
+                self.fields[field_name].disabled = True
+                self.fields[field_name].widget = HiddenInput()
 
     class Meta:
         model = AuctionTOS
@@ -1948,6 +1954,7 @@ class AuctionEditForm(forms.ModelForm):
             "enable_online_payments",
             "enable_square_payments",
             "club",
+            "manage_users_through_club",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -2029,7 +2036,16 @@ class AuctionEditForm(forms.ModelForm):
         if not self.instance.club:
             self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+            self.fields["manage_users_through_club"].widget = forms.HiddenInput()
         elif not self.instance.club.membership_annual_fee:
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        if self.instance.pk and self.instance.manage_users_through_club:
+            # Already enabled; cannot be turned off and other club-sync settings are redundant
+            self.fields["manage_users_through_club"].disabled = True
+            self.fields["manage_users_through_club"].help_text = (
+                "Already enabled. This cannot be disabled."
+            )
+            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
@@ -2224,6 +2240,10 @@ class AuctionEditForm(forms.ModelForm):
                     "club",
                     css_class="col-md-6",
                 ),
+                Div(
+                    "manage_users_through_club",
+                    css_class="col-md-6",
+                ),
                 css_class="row",
             ),
             HTML("<h4>General</h4>"),
@@ -2349,11 +2369,55 @@ class AuctionEditForm(forms.ModelForm):
             self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
+    def clean_manage_users_through_club(self):
+        target = self.cleaned_data.get("manage_users_through_club")
+        instance = self.instance
+        currently_enabled = bool(instance and instance.pk and instance.manage_users_through_club)
+        if currently_enabled and not target:
+            raise forms.ValidationError("This setting cannot be disabled once enabled.")
+        if target and not currently_enabled:
+            club = self.cleaned_data.get("club") or (instance.club if instance and instance.pk else None)
+            if not club:
+                raise forms.ValidationError("Associate this auction with a club before enabling this option.")
+            if instance and instance.pk:
+                if Lot.objects.filter(auction=instance, is_deleted=False).exists():
+                    raise forms.ValidationError(
+                        "This auction already has lots. Club-managed mode can only be enabled on an empty auction."
+                    )
+                if Invoice.objects.filter(auction=instance).exists():
+                    raise forms.ValidationError(
+                        "This auction already has invoices. Club-managed mode can only be enabled on an empty auction."
+                    )
+        return target
+
     def save(self, commit=True):
+        from django.db import transaction as db_transaction
+
         was_only_whole_dollar_bids = bool(
             self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
         )
-        auction = super().save(commit=commit)
+        was_managed_through_club = bool(
+            self.initial.get("manage_users_through_club", self.instance.manage_users_through_club)
+        )
+        target_managed_through_club = bool(self.cleaned_data.get("manage_users_through_club"))
+        enabling_club_management = (
+            commit and self.instance.pk and not was_managed_through_club and target_managed_through_club
+        )
+        if enabling_club_management:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                if Lot.objects.filter(auction=locked, is_deleted=False).exists():
+                    raise forms.ValidationError(
+                        "Cannot enable club-managed mode: lots were added while the form was open."
+                    )
+                if Invoice.objects.filter(auction=locked).exists():
+                    raise forms.ValidationError(
+                        "Cannot enable club-managed mode: invoices were added while the form was open."
+                    )
+                AuctionTOS.objects.filter(auction=locked).delete()
+                auction = super().save(commit=commit)
+        else:
+            auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
             lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
             lots_to_update = []
@@ -3813,6 +3877,9 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
+            "bidder_number",
+            "bidding_allowed",
+            "selling_allowed",
             "discord_role_auto_managed",
             "discord_role_override",
         ]
@@ -3821,6 +3888,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
             "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
+            "bidder_number": forms.TextInput(attrs={"placeholder": "Auto"}),
         }
         help_texts = {
             "contact_status": (
@@ -3834,6 +3902,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        self._club = club
 
         # Restrict discord_role_override queryset to roles the bot can actually assign
         has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
@@ -3851,12 +3920,22 @@ class ClubMemberAdminForm(forms.ModelForm):
                 ),
             ]
 
+        auction_fields = [
+            Div(
+                Div("bidder_number", css_class="col-md-4"),
+                Div("bidding_allowed", css_class="col-md-4"),
+                Div("selling_allowed", css_class="col-md-4"),
+                css_class="row",
+            ),
+        ]
+
         base_fields = [
             "name",
             "email",
             "phone_number",
             "address",
             "contact_status",
+            *auction_fields,
         ]
 
         if read_only:
@@ -3900,6 +3979,24 @@ class ClubMemberAdminForm(forms.ModelForm):
             msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
             raise forms.ValidationError(msg)
         return role
+
+    def clean_bidder_number(self):
+        bidder_number = (self.cleaned_data.get("bidder_number") or "").strip()
+        if not bidder_number:
+            return bidder_number
+        club = self._club or (self.instance.club if self.instance and self.instance.pk else None)
+        if not club:
+            return bidder_number
+        clash = (
+            ClubMember.objects.filter(club=club, bidder_number=bidder_number, is_deleted=False)
+            .exclude(pk=self.instance.pk or 0)
+            .exists()
+        )
+        if clash:
+            raise forms.ValidationError(
+                f"Bidder number '{bidder_number}' is already used by another member in this club."
+            )
+        return bidder_number
 
 
 class ClubMemberPermissionsForm(forms.ModelForm):

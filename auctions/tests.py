@@ -17510,3 +17510,230 @@ class ClubIconWalletTests(TestCase):
         patch_body = patch_mock.call_args.kwargs["json"]
         self.assertNotIn("logo", patch_body)
         self.assertNotIn("hexBackgroundColor", patch_body)
+
+
+class ManageUsersThroughClubTests(TestCase):
+    """Tests for the per-auction 'manage_users_through_club' setting that pivots auction
+    user management onto ClubMember records."""
+
+    def setUp(self):
+        now = timezone.now()
+        self.creator = User.objects.create_user(username="auction_creator", password="testpw", email="c@example.com")
+        self.joiner = User.objects.create_user(username="joiner", password="testpw", email="j@example.com")
+        self.club_admin_user = User.objects.create_user(username="club_admin", password="testpw", email="ca@example.com")
+        self.club_add_edit_user = User.objects.create_user(
+            username="club_add_edit", password="testpw", email="cae@example.com"
+        )
+        self.club_manage_auctions_user = User.objects.create_user(
+            username="club_manage_auctions", password="testpw", email="cma@example.com"
+        )
+        self.outsider = User.objects.create_user(username="outsider", password="testpw", email="o@example.com")
+        self.club = Club.objects.create(name="Test Club")
+        # Permission rows on the club
+        ClubMember.objects.create(club=self.club, user=self.club_admin_user, name="Admin", permission_admin=True)
+        ClubMember.objects.create(
+            club=self.club, user=self.club_add_edit_user, name="AddEdit", permission_add_edit=True
+        )
+        ClubMember.objects.create(
+            club=self.club,
+            user=self.club_manage_auctions_user,
+            name="ManageAuctions",
+            permission_manage_auctions=True,
+        )
+        self.auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Empty Auction",
+            is_online=False,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=10),
+            club=self.club,
+        )
+        self.location = PickupLocation.objects.create(
+            name="loc", auction=self.auction, pickup_time=now + datetime.timedelta(days=5)
+        )
+
+    def _enable_club_managed(self):
+        self.auction.manage_users_through_club = True
+        self.auction.save()
+
+    def test_is_club_managed_requires_club(self):
+        a = Auction.objects.create(
+            created_by=self.creator,
+            title="No club",
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        a.manage_users_through_club = True
+        a.save()
+        self.assertFalse(a.is_club_managed)
+        self.auction.manage_users_through_club = True
+        self.auction.save()
+        self.assertTrue(self.auction.is_club_managed)
+
+    def test_cannot_enable_when_lots_exist(self):
+        Lot.objects.create(lot_name="x", auction=self.auction, quantity=1)
+        form = AuctionEditForm(
+            data={"manage_users_through_club": True, "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Field-level cleaner triggers before full clean
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+
+    def test_cannot_enable_when_invoices_exist(self):
+        tos = AuctionTOS.objects.create(user=self.creator, auction=self.auction, pickup_location=self.location)
+        Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+        form = AuctionEditForm(
+            data={"manage_users_through_club": True, "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+
+    def test_cannot_disable_once_enabled(self):
+        self._enable_club_managed()
+        form = AuctionEditForm(
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # UI-level: field is rendered disabled so users cannot post a False value.
+        self.assertTrue(form.fields["manage_users_through_club"].disabled)
+        # Defense-in-depth: the validator also rejects an attempt to set False.
+        # Construct a fresh form without the disabled flag and exercise the cleaner directly.
+        form2 = AuctionEditForm(
+            data={"manage_users_through_club": False, "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form2.fields["manage_users_through_club"].disabled = False
+        # is_valid triggers clean_manage_users_through_club
+        form2.is_valid()
+        self.assertIn("manage_users_through_club", form2.errors)
+
+    def test_permission_check_grants_club_admin_and_manage_auctions(self):
+        self._enable_club_managed()
+        self.assertTrue(self.auction.permission_check(self.club_admin_user))
+        self.assertTrue(self.auction.permission_check(self.club_manage_auctions_user))
+        # add_edit alone does NOT grant general auction permission_check; it is gated
+        # specifically by can_add_edit_people on the view layer.
+        self.assertFalse(self.auction.permission_check(self.club_add_edit_user))
+        self.assertFalse(self.auction.permission_check(self.outsider))
+
+    def test_join_creates_clubmember_and_shadow_auctiontos(self):
+        self._enable_club_managed()
+        from unittest.mock import MagicMock
+
+        from auctions.forms import AuctionJoin
+        from auctions.views import AuctionInfo
+
+        # Drive AuctionInfo.post directly to avoid URL/host coupling and to assert form validity.
+        form = AuctionJoin(
+            data={
+                "i_agree": True,
+                "pickup_location": str(self.location.pk),
+                "time_spent_reading_rules": "5",
+            },
+            auction=self.auction,
+            user=self.joiner,
+        )
+        self.assertTrue(form.is_valid(), msg=f"Form errors: {form.errors}")
+        view = AuctionInfo()
+        view.auction = self.auction
+        view.kwargs = {}
+        view.object = self.auction
+        request = MagicMock()
+        request.user = self.joiner
+        view.request = request
+        view.get_form = lambda: form
+        view.form_valid = lambda f: None
+        view.form_invalid = lambda f: None
+        view.post(request)
+        cm = ClubMember.objects.get(club=self.club, user=self.joiner)
+        self.assertEqual(cm.source, "Empty Auction")
+        self.assertTrue(cm.bidder_number)
+        self.assertNotEqual(cm.bidder_number, "")
+        # AuctionTOS.save clears user when email changes for non-manually-added records;
+        # the user gets re-linked on next login via signals. Query by clubmember instead.
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
+        self.assertEqual(tos.bidder_number, cm.bidder_number)
+
+    def test_signal_propagates_clubmember_changes_to_shadow(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club, user=self.joiner, name="Joiner", bidder_number="42",
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="42",
+        )
+        cm.bidding_allowed = False
+        cm.selling_allowed = False
+        cm.save()
+        tos.refresh_from_db()
+        self.assertFalse(tos.bidding_allowed)
+        self.assertFalse(tos.selling_allowed)
+        cm.bidder_number = "77"
+        cm.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.bidder_number, "77")
+
+    def test_signal_skips_bidder_number_when_auction_invoiced(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club, user=self.joiner, name="Joiner", bidder_number="55",
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="55",
+        )
+        self.auction.invoiced = True
+        self.auction.save()
+        cm.bidder_number = "999"
+        cm.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.bidder_number, "55")
+
+    def test_validate_winner_resolves_via_clubmember(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club, user=self.joiner, name="Joiner", bidder_number="123",
+        )
+        from auctions.views import DynamicSetLotWinner
+
+        view = DynamicSetLotWinner()
+        view.request = type("R", (), {"user": self.creator})()
+        view.auction = self.auction
+        tos, error = view.validate_winner("123", "save")
+        self.assertIsNone(error)
+        self.assertIsNotNone(tos)
+        self.assertEqual(tos.clubmember_id, cm.pk)
+        self.assertEqual(tos.bidder_number, "123")
+
+    def test_clubmember_generate_bidder_number_unique_per_club(self):
+        cm1 = ClubMember.objects.create(
+            club=self.club, user=self.joiner, name="A", phone_number="555-111-2222",
+        )
+        cm1.generate_bidder_number()
+        self.assertTrue(cm1.bidder_number)
+        cm2 = ClubMember.objects.create(
+            club=self.club, user=self.club_add_edit_user, name="B", phone_number="555-111-2222",
+        )
+        cm2.generate_bidder_number()
+        self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)

@@ -289,6 +289,27 @@ class AuctionViewMixin:
             pass
         return result
 
+    @property
+    def can_add_edit_people(self):
+        """For club-managed auctions, gate people-management actions behind the club's
+        permission_add_edit (or permission_admin). Otherwise falls back to is_auction_admin.
+        Always allows the auction creator, superusers, and AuctionTOS admins through is_auction_admin.
+        Raises PermissionDenied when neither path grants access (matching is_auction_admin)."""
+        prev_allow_non_admins = self.allow_non_admins
+        self.allow_non_admins = True
+        try:
+            is_admin = self.is_auction_admin
+        finally:
+            self.allow_non_admins = prev_allow_non_admins
+        if is_admin:
+            return True
+        if self.auction and self.auction.is_club_managed:
+            if check_club_permission(self.request.user, self.auction.club, "permission_add_edit"):
+                return True
+        if prev_allow_non_admins:
+            return False
+        raise PermissionDenied()
+
 
 def check_club_permission(user, club, permission_name):
     """Check if a user has a specific permission for a club.
@@ -1954,6 +1975,12 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
             existing_tos_in_this_auction = base_qs.filter(bidder_number=bidder_number).first()
             if existing_tos_in_this_auction:
                 result["bidder_number_tooltip"] = "Bidder number in use"
+            elif self.auction.is_club_managed:
+                clash = ClubMember.objects.filter(
+                    club=self.auction.club, bidder_number=bidder_number, is_deleted=False
+                ).first()
+                if clash:
+                    result["bidder_number_tooltip"] = f"Bidder number in use by {clash.name}"
             else:
                 logger.info("no user found in this auction with email %s", email)
         return JsonResponse(result)
@@ -3090,9 +3117,11 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
+    allow_non_admins = True  # gated via can_add_edit_people for finer-grained club permission
     # paginate_by = 100
 
     def get_queryset(self):
+        _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
         return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
 
     def get_template_names(self):
@@ -3312,6 +3341,31 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             error = "Enter the winning bidder's number"
         else:
             tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner).order_by("-createdon").first()
+            if not tos and winner and self.auction.is_club_managed:
+                # In club-managed mode, the source of truth for bidder numbers is ClubMember.
+                # Look up the member by bidder number; if found, ensure a shadow AuctionTOS exists.
+                cm = ClubMember.objects.filter(
+                    club=self.auction.club, bidder_number=winner, is_deleted=False
+                ).first()
+                if cm:
+                    default_location = self.auction.location_qs.first()
+                    if default_location:
+                        tos = AuctionTOS.objects.filter(auction=self.auction, clubmember=cm).first()
+                        if not tos:
+                            tos = AuctionTOS.objects.create(
+                                user=cm.user,
+                                auction=self.auction,
+                                pickup_location=default_location,
+                                clubmember=cm,
+                                bidder_number=cm.bidder_number,
+                                bidding_allowed=cm.bidding_allowed,
+                                selling_allowed=cm.selling_allowed,
+                                name=cm.name or "",
+                                email=cm.email or "",
+                                phone_number=cm.phone_number or "",
+                                address=cm.address or "",
+                                manually_added=True,
+                            )
             if not tos and winner:
                 error = "No bidder found"
             else:
@@ -3659,8 +3713,22 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
     max_users_that_can_be_added_at_once = 200
     extra_rows = 5
     AuctionTOSFormSet = None
+    allow_non_admins = True
+
+    def _block_if_club_managed(self):
+        if self.auction and self.auction.is_club_managed:
+            messages.info(
+                self.request,
+                "This auction manages users through its club. Add or import members from the club admin page.",
+            )
+            return redirect(reverse("club_admin", kwargs={"slug": self.auction.club.slug}))
+        return None
 
     def get(self, *args, **kwargs):
+        _ = self.can_add_edit_people
+        redirected = self._block_if_club_managed()
+        if redirected is not None:
+            return redirected
         # first, try to read in a CSV file stored in session
         initial_formset_data = self.request.session.get("initial_formset_data", [])
         if initial_formset_data:
@@ -3972,6 +4040,10 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         # return redirect(reverse("bulk_add_users", kwargs={"slug": self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
+        _ = self.can_add_edit_people
+        redirected = self._block_if_club_managed()
+        if redirected is not None:
+            return redirected
         # Check for CSV file with multiple possible field names
         csv_file = None
         for field_name in ["csv_file", "csv_file_quick"]:
@@ -6057,6 +6129,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
     merge_template_name = "auctions/contact_merge.html"
     form_class = DeleteAuctionTOS
     model = AuctionTOS
+    allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.pop("pk")
@@ -6064,7 +6137,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         if not self.auctiontos:
             raise Http404
         self.auction = self.auctiontos.auction
-        self.is_auction_admin
+        _ = self.can_add_edit_people
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -6250,6 +6323,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
     template_name = "auctions/generic_admin_form.html"
     form_class = CreateEditAuctionTOS
     model = AuctionTOS
+    allow_non_admins = True  # we gate via can_add_edit_people for finer control
 
     def dispatch(self, request, *args, **kwargs):
         # this can be an int if we are updating, or a string (auction slug) if we are creating
@@ -6267,7 +6341,14 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 self.is_edit_form = False
             except Auction.DoesNotExist:
                 raise Http404
-        self.is_auction_admin
+        _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
+        if self.auction.is_club_managed:
+            # In club-managed mode, member details are edited in the club admin, not here.
+            if self.is_edit_form and self.auctiontos and self.auctiontos.clubmember_id:
+                target = reverse("clubmember_admin", kwargs={"pk": self.auctiontos.clubmember_id})
+                return redirect(target)
+            target = reverse("clubmember_create", kwargs={"slug": self.auction.club.slug})
+            return redirect(target)
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -7122,6 +7203,41 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 obj.phone_number = userData.phone_number
             if not obj.address:
                 obj.address = userData.address
+            if auction.is_club_managed:
+                club_member = _find_club_member(auction.club, user=self.request.user, email=obj.email)
+                club_member_is_new = False
+                if not club_member:
+                    club_member = ClubMember(
+                        club=auction.club,
+                        user=self.request.user,
+                        name=obj.name or self.request.user.get_full_name() or self.request.user.username,
+                        email=obj.email or self.request.user.email,
+                        phone_number=obj.phone_number or "",
+                        address=obj.address or "",
+                        source=str(auction.title)[:200],
+                        added_by=self.request.user,
+                    )
+                    if auction.only_approved_sellers:
+                        club_member.selling_allowed = False
+                    if auction.only_approved_bidders:
+                        club_member.bidding_allowed = False
+                    club_member.save()
+                    club_member_is_new = True
+                if not club_member.bidder_number:
+                    club_member.generate_bidder_number(save=True)
+                obj.clubmember = club_member
+                obj.bidder_number = club_member.bidder_number
+                obj.bidding_allowed = club_member.bidding_allowed
+                obj.selling_allowed = club_member.selling_allowed
+                if club_member_is_new:
+                    from .models import ClubHistory
+
+                    ClubHistory.objects.create(
+                        club=auction.club,
+                        user=self.request.user,
+                        applies_to="MEMBERS",
+                        action=f"{club_member.name} joined via auction '{auction.title}'",
+                    )
             obj.save()
             # also update userdata to reflect the last auction
             userData.last_auction_used = auction

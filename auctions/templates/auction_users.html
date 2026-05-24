@@ -5,6 +5,18 @@
 {% load static %}
 {% block content %}
   {% include 'auction_ribbon.html' %}
+  {% if auction.is_club_managed %}
+  <small>This auction's users are managed through <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a>. Edits sync to the club member record.<br></small>
+  <div class="btn-group">
+    <a class='btn btn-sm btn-info' href="{% url 'clubmember_create' slug=auction.club.slug %}"
+      hx-get="{% url 'clubmember_create' slug=auction.club.slug %}"
+      hx-target="#modals-here"
+      hx-trigger="click"
+      _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add member</a>
+    <a href="{% url 'club_admin' slug=auction.club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-people"></i> Manage club members</a>
+    <a href="{% url 'club_member_import' slug=auction.club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-upload"></i> Import members CSV</a>
+  </div>
+  {% else %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
   <div class="btn-group">
     <button class='btn btn-sm btn-info'
@@ -46,6 +58,7 @@
       {% endif %}
     </ul>
   </div>
+  {% endif %}
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
         <i class="bi bi-download"></i> Export

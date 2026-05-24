@@ -19,6 +19,8 @@ def backfill_bap_reasons(apps, schema_editor):
     # Import the live model so we can call its property methods (sold_lot_no_bap_reason).
     # This is intentional: the migration is a one-time backfill and the logic
     # lives on the model, so we accept the coupling to current model code.
+    from django.db.utils import OperationalError  # noqa: PLC0415
+
     from auctions.models import Lot  # noqa: PLC0415
 
     lots_to_check = (
@@ -38,11 +40,17 @@ def backfill_bap_reasons(apps, schema_editor):
     )
 
     updates = []
-    for lot in lots_to_check.iterator(chunk_size=500):
-        reason = lot.sold_lot_no_bap_reason  # None = eligible; non-None = ineligible key
-        if reason:  # only update ineligible lots; eligible ones are already correct ("")
-            lot.bap_auto_reason = reason
-            updates.append(lot)
+    try:
+        for lot in lots_to_check.iterator(chunk_size=500):
+            reason = lot.sold_lot_no_bap_reason  # None = eligible; non-None = ineligible key
+            if reason:  # only update ineligible lots; eligible ones are already correct ("")
+                lot.bap_auto_reason = reason
+                updates.append(lot)
+    except OperationalError:
+        # The live model may reference columns added by a later migration that aren't yet
+        # present in the DB during a fresh build. This is a best-effort backfill — fresh
+        # databases have no historical data to migrate, so skipping is safe.
+        return
 
     if updates:
         Lot.objects.bulk_update(updates, ["bap_auto_reason"], batch_size=500)

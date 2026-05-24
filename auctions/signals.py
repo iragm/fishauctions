@@ -206,6 +206,71 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
         transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk, unpaid_only=True))
 
 
+@receiver(pre_save, sender="auctions.ClubMember")
+def stash_previous_clubmember_state(sender, instance, **kwargs):
+    """Snapshot per-club auction-permission fields so post_save can detect changes
+    and propagate them to linked shadow AuctionTOS records."""
+    if instance.pk:
+        from .models import ClubMember
+
+        prev = (
+            ClubMember.objects.filter(pk=instance.pk)
+            .values("bidder_number", "bidding_allowed", "selling_allowed")
+            .first()
+            or {}
+        )
+        instance._previous_bidder_number = prev.get("bidder_number")
+        instance._previous_bidding_allowed = prev.get("bidding_allowed")
+        instance._previous_selling_allowed = prev.get("selling_allowed")
+    else:
+        instance._previous_bidder_number = None
+        instance._previous_bidding_allowed = None
+        instance._previous_selling_allowed = None
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
+    """When a ClubMember's bidder_number / bidding_allowed / selling_allowed change,
+    push the new values to linked shadow AuctionTOS records for club-managed auctions
+    that have not yet been invoiced. Bidder-number collisions are skipped per-row
+    (warning logged) rather than letting a unique-constraint violation crash the save.
+    """
+    if created:
+        return
+    from .models import AuctionTOS
+
+    prev_bidder = getattr(instance, "_previous_bidder_number", None)
+    prev_bidding = getattr(instance, "_previous_bidding_allowed", None)
+    prev_selling = getattr(instance, "_previous_selling_allowed", None)
+
+    shadows = AuctionTOS.objects.filter(
+        clubmember=instance,
+        auction__manage_users_through_club=True,
+        auction__invoiced=False,
+    )
+
+    if prev_bidding is not None and prev_bidding != instance.bidding_allowed:
+        shadows.update(bidding_allowed=instance.bidding_allowed)
+    if prev_selling is not None and prev_selling != instance.selling_allowed:
+        shadows.update(selling_allowed=instance.selling_allowed)
+    if prev_bidder is not None and prev_bidder != instance.bidder_number and instance.bidder_number:
+        for shadow in shadows:
+            collision = (
+                AuctionTOS.objects.filter(auction_id=shadow.auction_id, bidder_number=instance.bidder_number)
+                .exclude(pk=shadow.pk)
+                .exists()
+            )
+            if collision:
+                logging.getLogger(__name__).warning(
+                    "Skipped bidder_number sync for AuctionTOS pk=%s: '%s' already taken in auction pk=%s",
+                    shadow.pk,
+                    instance.bidder_number,
+                    shadow.auction_id,
+                )
+                continue
+            AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+
+
 @receiver(pre_save, sender="auctions.Lot")
 def update_lot_info(sender, instance, **kwargs):
     """Fill out the location and address from the user; set end date from auction."""
