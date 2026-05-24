@@ -1273,10 +1273,12 @@ class ClubMember(ContactRecord):
                 preferred = None
         self.bidder_number = _generate_unique_bidder_number(
             is_taken=lambda n: (
-                ClubMember.objects.filter(club_id=self.club_id, bidder_number=n, is_deleted=False)
-                .exclude(pk=self.pk or 0)
-                .exists()
+                ClubMember.objects.filter(club_id=self.club_id, bidder_number=n).exclude(pk=self.pk or 0).exists()
             ),
+            preferred=preferred,
+            phone=self.phone_number,
+            address=self.address,
+        )
             preferred=preferred,
             phone=self.phone_number,
             address=self.address,
