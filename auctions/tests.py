@@ -13091,7 +13091,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "This will delete")
+        self.assertContains(response, "This will deactivate")
         self.assertContains(response, "Kept User")
 
         response = self.client.post(
