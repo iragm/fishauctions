@@ -34,7 +34,7 @@ def google_analytics(request):
 
 def google_oauth(request):
     token = (settings.GOOGLE_OAUTH_LINK or "").strip()
-    # Treat known placeholder values from default/local setup as disabled login config.
+    return {"GOOGLE_OAUTH_LINK": token, "GOOGLE_LOGIN_ENABLED": google_login_enabled}
     google_login_enabled = bool(token) and token not in GOOGLE_OAUTH_PLACEHOLDER_VALUES
     return {"GOOGLE_OAUTH_LINK": settings.GOOGLE_OAUTH_LINK, "GOOGLE_LOGIN_ENABLED": google_login_enabled}
 
