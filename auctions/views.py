@@ -15123,7 +15123,16 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                 address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
                 memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
                 discord_id = self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES)
-                contact_status = self.parse_contact_status(self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES))
+                raw_contact_status = self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES)
+                contact_status = self.parse_contact_status(raw_contact_status)
+                mark_deleted = (raw_contact_status or "").strip().lower() in {
+                    "inactive past member",
+                    "disabled",
+                    "deleted",
+                    "deactivated",
+                }
+                if mark_deleted:
+                    contact_status = "do_not_contact"
                 membership_last_paid = self.parse_flexible_date(
                     self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)
                 )
@@ -15141,6 +15150,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         existing.discord_id = discord_id[:100]
                     if contact_status is not None:
                         existing.contact_status = contact_status
+                    if mark_deleted:
+                        existing.is_deleted = True
                     if membership_last_paid is not None:
                         existing.membership_last_paid = membership_last_paid
                     if membership_expiration_date is not None:
@@ -15163,6 +15174,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         membership_expiration_date=membership_expiration_date,
                         source="csv",
                         added_by=self.request.user,
+                        is_deleted=mark_deleted,
                     )
                     if date_joined is not None:
                         ClubMember.objects.filter(pk=new_member.pk).update(createdon=date_joined)
