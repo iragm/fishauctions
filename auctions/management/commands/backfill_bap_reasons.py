@@ -26,6 +26,15 @@ class Command(BaseCommand):
 
         updates = []
         checked = 0
+        updated = 0
+
+        def flush_updates():
+            nonlocal updated
+            if not updates:
+                return
+            Lot.objects.bulk_update(updates, ["bap_auto_reason"], batch_size=500)
+            updated += len(updates)
+            updates.clear()
 
         try:
             for lot in lots_to_check.iterator(chunk_size=500):
@@ -34,13 +43,12 @@ class Command(BaseCommand):
                 if reason:
                     lot.bap_auto_reason = reason
                     updates.append(lot)
+                    if len(updates) >= 500:
+                        flush_updates()
         except OperationalError:
-            self.stdout.write(self.style.WARNING("Skipped: database schema not ready for this backfill."))
+            self.stdout.write(self.style.WARNING("Skipped: run migrations before executing backfill_bap_reasons."))
             return
 
-        if updates:
-            Lot.objects.bulk_update(updates, ["bap_auto_reason"], batch_size=500)
+        flush_updates()
 
-        self.stdout.write(
-            self.style.SUCCESS(f"Backfill complete: checked {checked} lot(s), updated {len(updates)} lot(s).")
-        )
+        self.stdout.write(self.style.SUCCESS(f"Backfill complete: checked {checked} lot(s), updated {updated} lot(s)."))

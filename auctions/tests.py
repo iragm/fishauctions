@@ -3,6 +3,7 @@ import csv
 import datetime
 import hashlib
 import hmac
+import importlib
 import io
 import json
 from decimal import Decimal
@@ -15918,7 +15919,8 @@ class LotBapEligibilityTests(TestCase):
 
 class BapBackfillMigrationTests(TestCase):
     def test_0273_migration_has_no_operations(self):
-        migration_module = __import__("auctions.migrations.0273_backfill_bap_auto_reason", fromlist=["Migration"])
+        # Numeric migration module names require dynamic import syntax.
+        migration_module = importlib.import_module("auctions.migrations.0273_backfill_bap_auto_reason")
         self.assertEqual(migration_module.Migration.operations, [])
 
 
