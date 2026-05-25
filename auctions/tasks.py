@@ -646,6 +646,37 @@ def update_google_wallet_objects_for_club(self, club_pk):
     retry_backoff_max=600,
     max_retries=5,
 )
+def update_google_wallet_object_for_member(self, member_pk):
+    """Patch the Google Wallet GenericObject for a single club member.
+
+    Used when wallet-visible fields on ClubMember change (name,
+    membership_number, membership_expiration_date).  If the member has never
+    added the pass to their Wallet the object won't exist yet — that is fine,
+    update_generic_object_for_member returns False on 404 without raising.
+    """
+    from auctions.google_wallet import is_configured, update_generic_object_for_member
+    from auctions.models import ClubMember
+
+    if not is_configured():
+        return
+    member = ClubMember.objects.filter(pk=member_pk, is_deleted=False).select_related("user", "club").first()
+    if not member:
+        return
+    try:
+        update_generic_object_for_member(member)
+    except requests.RequestException:
+        logger.exception("Google Wallet object refresh failed for member=%s", member_pk)
+        raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
 def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     """Expire (state=EXPIRED) every active Wallet pass for a club's members.
 

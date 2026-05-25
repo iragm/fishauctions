@@ -247,6 +247,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "email good": {"email_address_status": "VALID"},
             "no email": {"email__isnull": True},
             "duplicate": {"possible_duplicate__isnull": False},
+            "not checked in": {"checked_in__isnull": True},
+            "checked in": {"checked_in__isnull": False},
         }
 
         if not match_names_only:
@@ -256,7 +258,19 @@ class AuctionTOSFilter(django_filters.FilterSet):
                 pattern = re.compile(rf"^{keyword_pattern}|\s{keyword_pattern}\s|\s{keyword_pattern}$")
                 if pattern.search(value):
                     value = pattern.sub("", value)
-                    qs = qs.filter(**filter_data)
+                    if keyword == "can bid":
+                        qs = qs.filter(
+                            Q(bidding_allowed=True)
+                            & (Q(auction__manage_users_through_club="") | Q(auction__manage_users_through_club="all"))
+                            | Q(bidding_allowed=True, checked_in__isnull=False)
+                        )
+                    elif keyword == "no bid":
+                        qs = qs.filter(
+                            Q(bidding_allowed=False)
+                            | Q(auction__manage_users_through_club="checkin", checked_in__isnull=True)
+                        )
+                    else:
+                        qs = qs.filter(**filter_data)
 
         # search by rhyming names
         qList = rhyming_name_q(value)

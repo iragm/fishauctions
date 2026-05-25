@@ -209,23 +209,41 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
 @receiver(pre_save, sender="auctions.ClubMember")
 def stash_previous_clubmember_state(sender, instance, **kwargs):
     """Snapshot per-club auction-permission fields so post_save can detect changes
-    and propagate them to linked shadow AuctionTOS records."""
+    and propagate them to linked shadow AuctionTOS records.
+
+    Also snapshots wallet-relevant fields (name, membership_number,
+    membership_expiration_date) so update_google_wallet_object_on_member_change
+    can detect when a PATCH to the member's Wallet pass is needed.
+    """
     if instance.pk:
         from .models import ClubMember
 
         prev = (
             ClubMember.objects.filter(pk=instance.pk)
-            .values("bidder_number", "bidding_allowed", "selling_allowed")
+            .values(
+                "bidder_number",
+                "bidding_allowed",
+                "selling_allowed",
+                "name",
+                "membership_number",
+                "membership_expiration_date",
+            )
             .first()
             or {}
         )
         instance._previous_bidder_number = prev.get("bidder_number")
         instance._previous_bidding_allowed = prev.get("bidding_allowed")
         instance._previous_selling_allowed = prev.get("selling_allowed")
+        instance._previous_name = prev.get("name") or ""
+        instance._previous_membership_number = prev.get("membership_number")
+        instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
     else:
         instance._previous_bidder_number = None
         instance._previous_bidding_allowed = None
         instance._previous_selling_allowed = None
+        instance._previous_name = ""
+        instance._previous_membership_number = None
+        instance._previous_membership_expiration_date = None
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -234,10 +252,45 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     push the new values to linked shadow AuctionTOS records for club-managed auctions
     that have not yet been invoiced. Bidder-number collisions are skipped per-row
     (warning logged) rather than letting a unique-constraint violation crash the save.
+
+    When a new member is created, auto-create shadow TOS records in any active
+    club-managed auctions that auto-add members ("all" or "checkin" mode).
     """
+    from .models import Auction, AuctionTOS, PickupLocation
+
     if created:
+        # Auto-create shadow TOS records in club-managed auctions for new members
+        managed_auctions = Auction.objects.filter(
+            club=instance.club,
+            is_deleted=False,
+            invoiced=False,
+            manage_users_through_club__in=["all", "checkin"],
+        )
+        for auction in managed_auctions:
+            default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+            if not default_location:
+                continue
+            already_exists = AuctionTOS.objects.filter(auction=auction, clubmember=instance).exists()
+            if already_exists:
+                continue
+            if not instance.bidder_number:
+                instance.generate_bidder_number(save=True)
+            bidding = False if auction.manage_users_through_club == "checkin" else instance.bidding_allowed
+            AuctionTOS.objects.create(
+                user=instance.user,
+                auction=auction,
+                pickup_location=default_location,
+                clubmember=instance,
+                bidder_number=instance.bidder_number,
+                bidding_allowed=bidding,
+                selling_allowed=instance.selling_allowed,
+                name=instance.name or "",
+                email=instance.email or "",
+                phone_number=instance.phone_number or "",
+                address=instance.address or "",
+                manually_added=True,
+            )
         return
-    from .models import AuctionTOS
 
     prev_bidder = getattr(instance, "_previous_bidder_number", None)
     prev_bidding = getattr(instance, "_previous_bidding_allowed", None)
@@ -269,6 +322,33 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 )
                 continue
             AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def update_google_wallet_object_on_member_change(sender, instance, created, **kwargs):
+    """When wallet-visible member fields change, PATCH the member's Wallet object.
+
+    Watches: name, membership_number, membership_expiration_date.
+    New members have no Wallet object yet (they haven't clicked "Add to Wallet"),
+    so update_generic_object_for_member silently skips 404s — no harm done.
+    """
+    if created:
+        return
+    prev_name = getattr(instance, "_previous_name", "")
+    prev_number = getattr(instance, "_previous_membership_number", None)
+    prev_expiry = getattr(instance, "_previous_membership_expiration_date", None)
+    current_expiry = instance.membership_expiration_date
+
+    if (
+        prev_name == (instance.name or "")
+        and prev_number == instance.membership_number
+        and prev_expiry == current_expiry
+    ):
+        return
+
+    from .tasks import update_google_wallet_object_for_member
+
+    transaction.on_commit(lambda: update_google_wallet_object_for_member.delay(instance.pk))
 
 
 @receiver(pre_save, sender="auctions.Lot")

@@ -1500,16 +1500,16 @@ class Auction(models.Model):
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
     add_people_from_auction_to_club = models.BooleanField(
         default=False,
-        help_text="Add auction participants to the associated club.",
+        help_text="Add auction participants to the associated club.  This is a one-way sync to the club and will only create new club members, not update existing ones.  To keep both auction and club records in sync, turn on Manage users through club instead -- there's a 99% chance that's what you want.",
     )
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
-        help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
+        help_text="And create membership if they don't have one.  You can turn this off on each invoice.",
     )
     MANAGE_USERS_CHOICES = [
         ("", "Off"),
         ("all", "Automatically add all club members"),
-        ("checkin", "Add on user check-in"),
+        ("checkin", "Automatically add, but require check-in"),
     ]
     manage_users_through_club = models.CharField(
         max_length=20,
@@ -2134,6 +2134,11 @@ class Auction(models.Model):
     def manage_users_auto_add(self):
         """True when club members are automatically added as AuctionTOS participants."""
         return self.manage_users_through_club == "all" and bool(self.club_id)
+
+    @property
+    def use_check_in_mode(self):
+        """True when this auction adds club members as they are checked in at an event."""
+        return self.manage_users_through_club == "checkin" and bool(self.club_id)
 
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
@@ -3659,6 +3664,8 @@ class AuctionTOS(models.Model):
     )
     possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
     add_to_calendar = models.CharField(max_length=20, blank=True, null=True)
+    checked_in = models.DateTimeField(blank=True, null=True, default=None)
+    door_prize_called = models.DateTimeField(blank=True, null=True, default=None)
     clubmember = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -3829,6 +3836,14 @@ class AuctionTOS(models.Model):
     @property
     def invoice(self):
         return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
+
+    @property
+    def requires_check_in_before_bidding(self):
+        return self.auction.use_check_in_mode and self.checked_in is None
+
+    @property
+    def can_bid_in_auction(self):
+        return self.bidding_allowed and not self.requires_check_in_before_bidding
 
     @property
     def invoice_link_html(self):
@@ -4099,6 +4114,44 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
+
+    def force_set_bidder_number(self, number, via_barcode=False, acting_user=None):
+        """Forcefully assign *number* to this TOS record, displacing any existing holder.
+
+        If another TOS in the same auction already has *number*, it is assigned a newly
+        generated unique number first. An AuctionHistory entry is created. The record is
+        saved via update_fields so no full-model side-effects (e.g. bidder-number
+        auto-generation) are triggered.
+        """
+        from django.db import transaction as _tx
+
+        number = str(number).strip()
+        if not number:
+            return
+        with _tx.atomic():
+            conflicting = (
+                AuctionTOS.objects.filter(auction=self.auction, bidder_number=number).exclude(pk=self.pk).first()
+            )
+            if conflicting:
+                new_number = _generate_unique_bidder_number(
+                    is_taken=lambda n: (
+                        AuctionTOS.objects.filter(bidder_number=n, auction=self.auction)
+                        .exclude(pk=conflicting.pk)
+                        .exists()
+                        or n == number
+                    ),
+                    phone=conflicting.phone_number,
+                    address=conflicting.address,
+                )
+                AuctionTOS.objects.filter(pk=conflicting.pk).update(bidder_number=new_number)
+            self.bidder_number = number
+            AuctionTOS.objects.filter(pk=self.pk).update(bidder_number=number)
+            source = " via barcode" if via_barcode else ""
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Assigned bidder number {number} to {self.name}{source}",
+                user=acting_user,
+            )
 
     def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
@@ -5399,7 +5452,11 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
-        if self.quantity < club.min_quantity:
+        category_name = self.species_category.name if self.species_category else None
+        ignore_quantity = (club.separate_hap and category_name == "Aquatic plants") or (
+            club.separate_cap and category_name == "Live food cultures"
+        )
+        if not ignore_quantity and self.quantity < club.min_quantity:
             return "low_quantity"
         if not self.species_category or self.species_category.bap_points == 0:
             return "category_not_eligible"

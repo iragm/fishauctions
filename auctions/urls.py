@@ -84,6 +84,11 @@ urlpatterns = [
         name="auctiontosmemo",
     ),
     path(
+        "api/auctiontos/<int:pk>/checkin/",
+        views.AuctionCheckIn.as_view(),
+        name="auction_check_in",
+    ),
+    path(
         "api/userignorecategory/create/<int:pk>/",
         views.CreateUserIgnoreCategory.as_view(),
     ),
@@ -241,6 +246,16 @@ urlpatterns = [
         name="auction_tos_list",
     ),
     path(
+        "auctions/<slug:slug>/users/disable-bidding/",
+        login_required(views.AuctionDisableBidding.as_view()),
+        name="auction_disable_bidding",
+    ),
+    path(
+        "auctions/<slug:slug>/door-prizes/",
+        login_required(views.AuctionDoorPrizes.as_view()),
+        name="auction_door_prizes",
+    ),
+    path(
         "auctions/<slug:slug>/help/",
         login_required(views.AuctionHelp.as_view()),
         name="auction_help",
@@ -319,6 +334,16 @@ urlpatterns = [
         "auctions/<slug:slug>/checkout",
         views.QuickCheckout.as_view(),
         name="auction_quick_checkout",
+    ),
+    path(
+        "auctions/<slug:slug>/quick-check-in/",
+        views.QuickCheckInUsers.as_view(),
+        name="auction_quick_check_in",
+    ),
+    path(
+        "api/auctions/<slug:slug>/quick-check-in/scan/",
+        views.QuickCheckInScan.as_view(),
+        name="auction_quick_check_in_scan",
     ),
     path(
         "api/auctions/<slug:slug>/checkout/<path:filter>/",

@@ -2404,8 +2404,12 @@ class AuctionEditForm(forms.ModelForm):
         return target
 
     @staticmethod
-    def _rebuild_auctiontos_from_club(auction):
-        """Delete existing AuctionTOS and recreate from club members (used when enabling or re-enabling club-managed mode)."""
+    def _rebuild_auctiontos_from_club(auction, bidding_allowed_override=None):
+        """Delete existing AuctionTOS and recreate from club members (used when enabling or re-enabling club-managed mode).
+
+        If bidding_allowed_override is False, all created TOS records will have bidding disabled (used for check-in mode).
+        If None (default), each member's own bidding_allowed setting is used.
+        """
         AuctionTOS.objects.filter(auction=auction).delete()
         default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
         if default_location and auction.club_id:
@@ -2415,13 +2419,14 @@ class AuctionEditForm(forms.ModelForm):
             for club_member in club_members:
                 if not club_member.bidder_number:
                     club_member.generate_bidder_number(save=True)
+                bidding = club_member.bidding_allowed if bidding_allowed_override is None else bidding_allowed_override
                 AuctionTOS.objects.create(
                     user=club_member.user,
                     auction=auction,
                     pickup_location=default_location,
                     clubmember=club_member,
                     bidder_number=club_member.bidder_number,
-                    bidding_allowed=club_member.bidding_allowed,
+                    bidding_allowed=bidding,
                     selling_allowed=club_member.selling_allowed,
                     name=club_member.name or "",
                     email=club_member.email or "",
@@ -2496,8 +2501,8 @@ class AuctionEditForm(forms.ModelForm):
                 if target_manage_all:
                     self._rebuild_auctiontos_from_club(auction)
                 else:
-                    # check-in mode: clear any existing TOS but don't auto-add
-                    AuctionTOS.objects.filter(auction=locked).delete()
+                    # check-in mode: add all members with bidding disabled until they check in
+                    self._rebuild_auctiontos_from_club(auction, bidding_allowed_override=False)
         elif disabling_club_management:
             with db_transaction.atomic():
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
@@ -2523,7 +2528,7 @@ class AuctionEditForm(forms.ModelForm):
                 if target_manage_all:
                     self._rebuild_auctiontos_from_club(auction)
                 else:
-                    AuctionTOS.objects.filter(auction=auction).delete()
+                    self._rebuild_auctiontos_from_club(auction, bidding_allowed_override=False)
         elif switching_to_all:
             with db_transaction.atomic():
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
@@ -2532,9 +2537,9 @@ class AuctionEditForm(forms.ModelForm):
         elif switching_to_checkin:
             with db_transaction.atomic():
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
-                # Clear auto-added TOS records; check-in mode populates them one at a time
-                AuctionTOS.objects.filter(auction=locked).delete()
                 auction = super().save(commit=commit)
+                # Rebuild all members with bidding disabled; check-in enables bidding one at a time
+                self._rebuild_auctiontos_from_club(auction, bidding_allowed_override=False)
         else:
             auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:

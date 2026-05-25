@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}{% if auction.use_check_in_mode %}Quick check in users{% else %}Scan club members{% endif %} for {{ auction }}{% endblock %}
+{% block content %}
+  {% include "auction_ribbon.html" %}
+  <div class="mt-3">
+    <h4>{% if auction.use_check_in_mode %}Quick check in users{% else %}Scan club members into this auction{% endif %}</h4>
+    <p class="text-muted">Scan membership cards to {% if auction.use_check_in_mode %}check users in{% else %}add club members to this auction{% endif %}. Scan a paddle barcode starting with 11111 first to assign that bidder number to the next member you scan.</p>
+    <button id="scan-toggle" type="button" class="btn btn-primary">
+      <i class="bi bi-camera-video"></i> Activate camera to scan membership cards
+    </button>
+    <div id="scanner-wrapper" class="mt-3 d-none">
+      <div class="rounded border overflow-hidden w-100" style="aspect-ratio: 3 / 1;">
+        <video id="scanner-video" playsinline muted style="width: 100%; height: 100%; object-fit: cover;"></video>
+      </div>
+    </div>
+    <div id="scan-status" class="alert alert-secondary mt-3 mb-2">Camera is off.</div>
+    <ul id="scan-messages" class="list-group"></ul>
+  </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  (() => {
+    const toggleButton = document.getElementById("scan-toggle");
+    const wrapper = document.getElementById("scanner-wrapper");
+    const video = document.getElementById("scanner-video");
+    const statusBox = document.getElementById("scan-status");
+    const messagesList = document.getElementById("scan-messages");
+    const scanUrl = "{% url 'auction_quick_check_in_scan' slug=auction.slug %}";
+    const csrfToken = "{{ csrf_token }}";
+    let stream = null;
+    let detector = null;
+    let animationFrameId = null;
+    let zxingReader = null;
+    let isScanning = false;
+    let pendingBidderNumber = "";
+    let lastProcessedValue = "";
+
+    function setStatus(message, level = "secondary") {
+      statusBox.className = `alert alert-${level} mt-3 mb-2`;
+      statusBox.textContent = message;
+    }
+
+    function addMessage(message, level = "success") {
+      const item = document.createElement("li");
+      item.className = `list-group-item list-group-item-${level}`;
+      item.textContent = message;
+      messagesList.prepend(item);
+    }
+
+    function shouldIgnoreDuplicate(value) {
+      // Silently ignore repeated scans of the same barcode until a new one is detected
+      if (value === lastProcessedValue) {
+        return true;
+      }
+      lastProcessedValue = value;
+      return false;
+    }
+
+    function parsePaddleBarcode(value) {
+      if (!value.startsWith("11111") || value.length <= 5) {
+        return "";
+      }
+      return value.slice(5);
+    }
+
+    async function postScan(barcode) {
+      const formData = new FormData();
+      formData.append("barcode", barcode);
+      if (pendingBidderNumber) {
+        formData.append("assign_bidder_number", pendingBidderNumber);
+      }
+      const response = await fetch(scanUrl, {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken },
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setStatus(payload.message || "Scan failed.", "danger");
+        addMessage(payload.message || "Scan failed.", "danger");
+        return;
+      }
+      const suffix = pendingBidderNumber ? ` and assigned bidder number ${pendingBidderNumber}` : "";
+      const verb = payload.verb || "Checked in";
+      addMessage(`${verb} ${payload.name}${suffix}`);
+      setStatus(`${verb} ${payload.name}.`, "success");
+      pendingBidderNumber = "";
+    }
+
+    async function handleCode(rawValue) {
+      const value = String(rawValue || "").trim();
+      if (!value || shouldIgnoreDuplicate(value)) {
+        return;
+      }
+      const paddleBidderNumber = parsePaddleBarcode(value);
+      if (paddleBidderNumber) {
+        pendingBidderNumber = paddleBidderNumber;
+        setStatus(`Scan the user to assign bidder number ${pendingBidderNumber} to.`, "warning");
+        addMessage(`Ready to assign bidder number ${pendingBidderNumber}.`, "warning");
+        return;
+      }
+      await postScan(value);
+    }
+
+    async function stopScanner() {
+      isScanning = false;
+      toggleButton.innerHTML = '<i class="bi bi-camera-video"></i> Activate camera to scan membership cards';
+      wrapper.classList.add("d-none");
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      if (zxingReader) {
+        zxingReader.reset();
+        zxingReader = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+      setStatus("Camera is off.");
+    }
+
+    async function startNativeScanner() {
+      detector = new BarcodeDetector({ formats: ["code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"] });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      video.srcObject = stream;
+      await video.play();
+      const scanFrame = async () => {
+        if (!isScanning) {
+          return;
+        }
+        try {
+          const barcodes = await detector.detect(video);
+          if (barcodes.length) {
+            await handleCode(barcodes[0].rawValue);
+          }
+        } catch (error) {
+          console.error(error);
+        }
+        animationFrameId = requestAnimationFrame(scanFrame);
+      };
+      animationFrameId = requestAnimationFrame(scanFrame);
+    }
+
+    async function loadZxing() {
+      if (window.ZXing) {
+        return window.ZXing;
+      }
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      return window.ZXing;
+    }
+
+    async function startFallbackScanner() {
+      const ZXing = await loadZxing();
+      zxingReader = new ZXing.BrowserMultiFormatReader();
+      wrapper.classList.remove("d-none");
+      await zxingReader.decodeFromVideoDevice(null, video, (result, error) => {
+        if (result) {
+          handleCode(result.getText());
+        } else if (error && !(error instanceof ZXing.NotFoundException)) {
+          console.error(error);
+        }
+      });
+      stream = video.srcObject;
+    }
+
+    async function startScanner() {
+      isScanning = true;
+      wrapper.classList.remove("d-none");
+      toggleButton.innerHTML = '<i class="bi bi-camera-video-off"></i> Stop camera';
+      setStatus(pendingBidderNumber ? `Scan the user to assign bidder number ${pendingBidderNumber} to.` : "Scanning...", "info");
+      try {
+        if ("BarcodeDetector" in window) {
+          await startNativeScanner();
+        } else {
+          await startFallbackScanner();
+        }
+      } catch (error) {
+        console.error(error);
+        await stopScanner();
+        setStatus(`Unable to start the camera: ${error.message || error}`, "danger");
+      }
+    }
+
+    toggleButton.addEventListener("click", async () => {
+      if (isScanning) {
+        await stopScanner();
+      } else {
+        await startScanner();
+      }
+    });
+  })();
+</script>
+{% endblock %}

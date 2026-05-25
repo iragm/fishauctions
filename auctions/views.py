@@ -328,6 +328,58 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
+_UNSET = object()
+
+
+def _default_pickup_location_for_auction(auction):
+    return PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+
+
+def _upsert_clubmember_shadow_tos(
+    auction,
+    member,
+    *,
+    pickup_location=None,
+    is_club_member=_UNSET,
+    bidding_allowed=_UNSET,
+    selling_allowed=_UNSET,
+    checked_in_at=_UNSET,
+):
+    if not member.bidder_number:
+        member.generate_bidder_number(save=True)
+    pickup_location = pickup_location or _default_pickup_location_for_auction(auction)
+    if not pickup_location:
+        return None
+    tos = AuctionTOS.objects.filter(auction=auction, clubmember=member).order_by("-createdon").first()
+    if not tos:
+        tos = AuctionTOS(
+            user=member.user,
+            auction=auction,
+            pickup_location=pickup_location,
+            clubmember=member,
+            bidder_number=member.bidder_number,
+            manually_added=True,
+        )
+    tos.user = member.user
+    tos.pickup_location = pickup_location
+    tos.clubmember = member
+    tos.bidder_number = member.bidder_number
+    tos.name = member.name or ""
+    tos.email = member.email or ""
+    tos.phone_number = member.phone_number or ""
+    tos.address = member.address or ""
+    if is_club_member is not _UNSET:
+        tos.is_club_member = is_club_member
+    if bidding_allowed is not _UNSET:
+        tos.bidding_allowed = bidding_allowed
+    if selling_allowed is not _UNSET:
+        tos.selling_allowed = selling_allowed
+    if checked_in_at is not _UNSET:
+        tos.checked_in = checked_in_at
+    tos.save()
+    return tos
+
+
 class IsAuthenticatedOrAPIKey(BasePermission):
     """Allow requests authenticated either as a user or with a club API key."""
 
@@ -2305,7 +2357,11 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
         added_count = 0
         skipped_count = 0
         for tos in tos_qs:
-            existing = _find_club_member(club, tos.user, tos.email)
+            existing = None
+            if tos.email:
+                existing = ClubMember.objects.filter(club=club, email__iexact=tos.email).first()
+            if not existing and tos.user:
+                existing = ClubMember.objects.filter(club=club, user=tos.user).first()
             if existing:
                 skipped_count += 1
                 continue
@@ -3173,11 +3229,62 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
             template_name = "auction_users.html"
         return template_name
 
+    def get_table_kwargs(self):
+        kwargs = super().get_table_kwargs()
+        kwargs["request"] = self.request
+        kwargs["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        return kwargs
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
         context["active_tab"] = "users"
+        context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
+        # When the filtered table has no results and a query was typed, show a "Create user" button
+        # pre-populated intelligently based on what the user typed.
+        query = (self.request.GET.get("query") or "").strip()
+        filterset = context.get("filter")
+        filtered_empty = filterset is not None and query and not filterset.qs.exists()
+        if filtered_empty and self.can_add_edit_people:
+            context["no_results"] = self._build_no_results_html(query)
         return context
+
+    def _build_no_results_html(self, query):
+        """Return an HTML snippet with a 'Create user' button pre-populated from the search query."""
+        import re as _re
+        from urllib.parse import urlencode
+
+        params = {}
+        q = query.strip()
+        digits_only = _re.sub(r"\D", "", q)
+        if len(digits_only) >= 7:
+            params["phone"] = q
+        elif "@" in q:
+            params["email"] = q
+        elif _re.fullmatch(r"[A-Za-z\s\-'.]+", q) and len(q) >= 4:
+            params["name"] = q
+        param_str = f"?{urlencode(params)}" if params else ""
+        auction = self.auction
+        if auction.manage_users_through_club == "checkin":
+            create_url = (
+                reverse("clubmember_create", kwargs={"slug": auction.club.slug})
+                + f"?auction={auction.slug}"
+                + (f"&{urlencode(params)}" if params else "")
+            )
+        else:
+            create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
+        return (
+            f'<div class="text-center py-3">'
+            f'<p class="text-muted mb-2">No users match <strong>{query}</strong>.</p>'
+            f'<button class="btn btn-info btn-sm" '
+            f'hx-get="{create_url}" '
+            f'hx-target="#modals-here" '
+            f'hx-trigger="click" '
+            f'_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+            f'<i class="bi bi-person-fill-add"></i> Create user</button>'
+            f"</div>"
+        )
 
     def get(self, *args, **kwargs):
         if not self.request.htmx and self.get_queryset().filter(bidder_number="ERROR").count():
@@ -3186,6 +3293,256 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
                 "Automatic bidder number generation failed, manually set the bidder numbers for these users",
             )
         return super().get(*args, **kwargs)
+
+
+class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
+    # TODO: This feature is incomplete and broken — the UI button has been removed from auction_users.html.
+    # The core bulk-update works, but re-enabling bidding per-user after this action is not wired up correctly
+    # and the overall UX flow is confusing. Do not re-expose this without a full end-to-end implementation.
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.use_check_in_mode:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        updated = AuctionTOS.objects.filter(auction=self.auction, bidding_allowed=True).update(bidding_allowed=False)
+        self.auction.create_history(
+            applies_to="USERS",
+            action="Turned bidding off for all users",
+            user=request.user,
+        )
+        messages.success(request, f"Turned bidding off for {updated} user{'s' if updated != 1 else ''}.")
+        return HttpResponse("<script>location.reload();</script>", status=200)
+
+
+class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auctiontos = get_object_or_404(AuctionTOS, pk=kwargs["pk"])
+        self.auction = self.auctiontos.auction
+        _ = self.can_add_edit_people
+        if not self.auction.use_check_in_mode:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        tos = self.auctiontos
+        bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
+        check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
+        html = f"""
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div class="modal fade show" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" style="display:block;">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
+        <button type="button" class="btn-close" onclick="closeModal()" aria-label="Close"></button>
+      </div>
+      <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
+        <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
+        <div class="modal-body">
+          <label for="checkin_bidder_number" class="form-label"><small>Bidder number</small></label>
+          <input
+            type="text"
+            class="form-control"
+            id="checkin_bidder_number"
+            name="bidder_number"
+            value="{bidder_number}"
+            placeholder="Auto"
+          >
+          <small class="text-muted mt-1 d-block">
+            If the bidder number entered here is in use by another user, their bidder number will be changed.
+          </small>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-success">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+(function() {{
+  clearTimeout(window._modalCloseTimer);
+  function closeModal() {{
+    var container = document.getElementById("modals-here");
+    var backdrop = document.getElementById("modal-backdrop");
+    var modal = document.getElementById("modal");
+    if (backdrop) {{ backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }}
+    if (modal) {{ modal.classList.remove("show"); modal.style.pointerEvents = "none"; }}
+    document.removeEventListener("keydown", escHandler);
+    window._modalCloseTimer = setTimeout(function() {{ if (container) container.innerHTML = ""; }}, 300);
+  }}
+  window.closeModal = closeModal;
+  function escHandler(e) {{ if (e.key === "Escape") closeModal(); }}
+  document.addEventListener("keydown", escHandler);
+  var bd = document.getElementById("modal-backdrop");
+  if (bd) bd.addEventListener("click", closeModal);
+  var input = document.getElementById("checkin_bidder_number");
+  if (input) {{ input.focus(); input.select(); }}
+}})();
+</script>
+"""
+        return HttpResponse(html)
+
+    def post(self, request, *args, **kwargs):
+        tos = self.auctiontos
+        bidder_number = (request.POST.get("bidder_number") or "").strip()
+        update_fields = []
+        if not tos.checked_in:
+            tos.checked_in = timezone.now()
+            update_fields.append("checked_in")
+        if not tos.bidding_allowed:
+            tos.bidding_allowed = True
+            update_fields.append("bidding_allowed")
+        if update_fields:
+            tos.save(update_fields=update_fields)
+        if bidder_number and bidder_number != tos.bidder_number:
+            tos.force_set_bidder_number(bidder_number, acting_user=request.user)
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Checked in {tos.name}",
+            user=request.user,
+        )
+        messages.success(request, f"Checked in {tos.name}.")
+        return HttpResponse("<script>location.reload();</script>", status=200)
+
+
+class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    template_name = "auctions/auction_door_prizes.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.use_check_in_mode:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["can_manage_check_in"] = True
+        context["active_tab"] = "users"
+        context["door_prize_winners"] = AuctionTOS.objects.filter(
+            auction=self.auction, door_prize_called__isnull=False
+        ).order_by("-door_prize_called", "name")
+        context["door_prize_candidates_remaining"] = AuctionTOS.objects.filter(
+            auction=self.auction,
+            checked_in__isnull=False,
+            door_prize_called__isnull=True,
+        ).exists()
+        return context
+
+    def post(self, request, *args, **kwargs):
+        redirect_url = reverse("auction_door_prizes", kwargs={"slug": self.auction.slug})
+        candidate_ids = list(
+            AuctionTOS.objects.filter(
+                auction=self.auction,
+                checked_in__isnull=False,
+                door_prize_called__isnull=True,
+            ).values_list("pk", flat=True)
+        )
+        if not candidate_ids:
+            messages.warning(request, "No checked-in users are left for door prizes.")
+            return redirect(redirect_url)
+        winner = AuctionTOS.objects.get(pk=choice(candidate_ids))
+        winner.door_prize_called = timezone.now()
+        winner.save(update_fields=["door_prize_called"])
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Picked door prize winner {winner.name}",
+            user=request.user,
+        )
+        messages.success(request, f"Picked {winner.name}.")
+        return redirect(redirect_url)
+
+
+class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    template_name = "auctions/quick_check_in_users.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.club_id:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["can_manage_check_in"] = self.auction.use_check_in_mode
+        context["can_scan_club_barcodes"] = True
+        context["active_tab"] = "users"
+        return context
+
+
+class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.club_id:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        barcode = (request.POST.get("barcode") or "").strip()
+        assign_bidder_number = (request.POST.get("assign_bidder_number") or "").strip()
+        if not barcode:
+            return JsonResponse({"ok": False, "message": "Scan a membership card barcode."}, status=400)
+        if not barcode.isdigit():
+            return JsonResponse({"ok": False, "message": "That barcode is not recognized."}, status=404)
+        member = ClubMember.objects.filter(
+            club=self.auction.club,
+            membership_number=int(barcode),
+            is_deleted=False,
+        ).first()
+        if not member:
+            return JsonResponse({"ok": False, "message": "No club member matches that barcode."}, status=404)
+        with transaction.atomic():
+            tos = _upsert_clubmember_shadow_tos(
+                self.auction,
+                member,
+                bidding_allowed=True,
+                selling_allowed=member.selling_allowed,
+                checked_in_at=timezone.now() if self.auction.use_check_in_mode else _UNSET,
+            )
+            if not tos:
+                return JsonResponse(
+                    {"ok": False, "message": "Add a pickup location before checking users in."}, status=400
+                )
+            if assign_bidder_number and assign_bidder_number != tos.bidder_number:
+                tos.force_set_bidder_number(assign_bidder_number, via_barcode=True, acting_user=request.user)
+                # Propagate the assigned number back to the ClubMember so it sticks for next time.
+                # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
+                ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
+        verb = "Checked in" if self.auction.use_check_in_mode else "Added"
+        self.auction.create_history(
+            applies_to="USERS",
+            action=(
+                f"{verb} {tos.name} via barcode"
+                + (f" and assigned bidder number {assign_bidder_number}" if assign_bidder_number else "")
+            ),
+            user=request.user,
+        )
+        return JsonResponse(
+            {
+                "ok": True,
+                "message": f"{verb} {tos.name}",
+                "name": tos.name,
+                "bidder_number": tos.bidder_number,
+                "verb": verb,
+            }
+        )
 
 
 class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
@@ -3388,29 +3745,19 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 # Look up the member by bidder number; if found, ensure a shadow AuctionTOS exists.
                 cm = ClubMember.objects.filter(club=self.auction.club, bidder_number=winner, is_deleted=False).first()
                 if cm:
-                    default_location = self.auction.location_qs.first()
-                    if default_location:
-                        tos = AuctionTOS.objects.filter(auction=self.auction, clubmember=cm).first()
-                        if not tos:
-                            tos = AuctionTOS.objects.create(
-                                user=cm.user,
-                                auction=self.auction,
-                                pickup_location=default_location,
-                                clubmember=cm,
-                                bidder_number=cm.bidder_number,
-                                bidding_allowed=cm.bidding_allowed,
-                                selling_allowed=cm.selling_allowed,
-                                name=cm.name or "",
-                                email=cm.email or "",
-                                phone_number=cm.phone_number or "",
-                                address=cm.address or "",
-                                manually_added=True,
-                            )
+                    tos = _upsert_clubmember_shadow_tos(
+                        self.auction,
+                        cm,
+                        bidding_allowed=cm.bidding_allowed,
+                        selling_allowed=cm.selling_allowed,
+                    )
             if not tos and winner:
                 error = "No bidder found"
             else:
                 if tos and tos.invoice and tos.invoice.status != "DRAFT" and action != "force_save":
                     error = "This user's invoice is not open"
+                if tos and tos.requires_check_in_before_bidding and action != "force_save":
+                    error = "This bidder has not been checked in yet"
         return tos, error
 
     def end_unsold(self, lot):
@@ -5286,8 +5633,13 @@ class ViewLot(DetailView):
             if tos:
                 context["user_tos"] = True
                 context["user_tos_location"] = tos.pickup_location
-                if not tos.bidding_allowed:
-                    context["user_specific_bidding_error"] = "This auction requires admin approval before you can bid"
+                if not tos.can_bid_in_auction:
+                    if tos.requires_check_in_before_bidding:
+                        context["user_specific_bidding_error"] = "You must check in at the event before you can bid"
+                    else:
+                        context["user_specific_bidding_error"] = (
+                            "This auction requires admin approval before you can bid"
+                        )
             else:
                 context["user_specific_bidding_error"] = (
                     f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
@@ -6403,6 +6755,15 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         form_kwargs["auction"] = self.auction
         form_kwargs["is_edit_form"] = self.is_edit_form
         form_kwargs["auctiontos"] = self.auctiontos
+        # Pre-populate new-user form from GET params (name, email, phone)
+        if not self.is_edit_form and self.request.method == "GET":
+            prefill = {}
+            for field in ("name", "email", "phone"):
+                val = self.request.GET.get(field, "").strip()
+                if val:
+                    prefill[field if field != "phone" else "phone_number"] = val
+            if prefill:
+                form_kwargs.setdefault("initial", {}).update(prefill)
         return form_kwargs
 
     def get_context_data(self, **kwargs):
@@ -9796,7 +10157,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         if club_count == 1:
             club = club_memberships.first().club
             context["club_membership_message"] = (
-                f"Updating your contact info will also update your contact info in {club.name}"
+                f"Updating your contact info will also update your contact info in the {club.name}"
             )
         elif club_count > 1:
             context["club_membership_message"] = (
@@ -13423,7 +13784,13 @@ class ClubMemberCreateView(APIView):
         auction = self._get_auction_context(request, club)
         post_url = self._post_url(slug, auction)
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(post_url=post_url, club=club, auction=auction)
+        # Pre-populate from URL params (name, email, phone) when coming from no-results search
+        initial = {}
+        for field, param in (("name", "name"), ("email", "email"), ("phone_number", "phone")):
+            val = request.query_params.get(param, "").strip()
+            if val:
+                initial[field] = val
+        form = ClubMemberAdminForm(post_url=post_url, club=club, auction=auction, initial=initial or None)
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=validation_url, checkin_auction=auction
         )
@@ -13441,12 +13808,9 @@ class ClubMemberCreateView(APIView):
     @staticmethod
     def _create_auction_tos(auction, member, form_cleaned_data):
         """Create an AuctionTOS for *member* in *auction*, applying form overrides."""
-        if not member.bidder_number:
-            member.generate_bidder_number(save=True)
-        default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
-        if not default_location:
+        pickup_location = form_cleaned_data.get("pickup_location") or _default_pickup_location_for_auction(auction)
+        if not pickup_location:
             return None
-        pickup_location = form_cleaned_data.get("pickup_location") or default_location
         is_club_member = form_cleaned_data.get("is_club_member", False)
         bidding_allowed = member.bidding_allowed
         selling_allowed = member.selling_allowed
@@ -13454,20 +13818,16 @@ class ClubMemberCreateView(APIView):
             bidding_allowed = form_cleaned_data["bidding_allowed"]
         if auction.only_approved_sellers and "selling_allowed" in form_cleaned_data:
             selling_allowed = form_cleaned_data["selling_allowed"]
-        return AuctionTOS.objects.create(
-            user=member.user,
-            auction=auction,
+        if auction.use_check_in_mode:
+            bidding_allowed = True
+        return _upsert_clubmember_shadow_tos(
+            auction,
+            member,
             pickup_location=pickup_location,
-            clubmember=member,
-            bidder_number=member.bidder_number,
+            is_club_member=is_club_member,
             bidding_allowed=bidding_allowed,
             selling_allowed=selling_allowed,
-            is_club_member=is_club_member,
-            name=member.name or "",
-            email=member.email or "",
-            phone_number=member.phone_number or "",
-            address=member.address or "",
-            manually_added=True,
+            checked_in_at=timezone.now() if auction.use_check_in_mode else _UNSET,
         )
 
     def post(self, request, slug):
@@ -14773,7 +15133,16 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                 address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
                 memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
                 discord_id = self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES)
-                contact_status = self.parse_contact_status(self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES))
+                raw_contact_status = self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES)
+                contact_status = self.parse_contact_status(raw_contact_status)
+                mark_deleted = (raw_contact_status or "").strip().lower() in {
+                    "inactive past member",
+                    "disabled",
+                    "deleted",
+                    "deactivated",
+                }
+                if mark_deleted:
+                    contact_status = "do_not_contact"
                 membership_last_paid = self.parse_flexible_date(
                     self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)
                 )
@@ -14791,6 +15160,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         existing.discord_id = discord_id[:100]
                     if contact_status is not None:
                         existing.contact_status = contact_status
+                    if mark_deleted:
+                        existing.is_deleted = True
                     if membership_last_paid is not None:
                         existing.membership_last_paid = membership_last_paid
                     if membership_expiration_date is not None:
@@ -14813,6 +15184,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         membership_expiration_date=membership_expiration_date,
                         source="csv",
                         added_by=self.request.user,
+                        is_deleted=mark_deleted,
                     )
                     if date_joined is not None:
                         ClubMember.objects.filter(pk=new_member.pk).update(createdon=date_joined)
@@ -14984,7 +15356,26 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
         if not self.is_api_key_request():
             return super().create(request, *args, **kwargs)
         serializer = self.get_serializer(data=self.get_mapped_request_data())
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            # Log the failed attempt (with raw POST data) to club history so admins can diagnose it.
+            try:
+                club = self.get_club()
+                actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})"
+                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                errors = serializer.errors
+                ClubHistory.objects.create(
+                    club=club,
+                    user=None,
+                    action=(
+                        f"Failed to create member via {actor} — validation errors: {errors} — POST data: {field_dump}"
+                    ),
+                    applies_to="MEMBERS",
+                )
+            except Exception:
+                pass  # Never let the history write mask the original error
+            raise
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=201, headers=headers)

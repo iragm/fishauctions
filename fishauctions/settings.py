@@ -792,15 +792,17 @@ if GOOGLE_WALLET_KEYFILE:
             _wallet_key = _json.load(_f)
         GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL = _wallet_key.get("client_email", "")
         GOOGLE_WALLET_SERVICE_ACCOUNT_KEY = _wallet_key.get("private_key", "")
-    except (OSError, ValueError):
+    except (OSError, ValueError) as _wallet_err:
         # File missing or invalid JSON — leave email/key empty so is_configured() returns False.
         # We intentionally don't raise so a misconfigured prod box still boots; the wallet
         # button just won't appear and the create-class signal no-ops.
         import logging as _logging
 
         _logging.getLogger(__name__).warning(
-            "GOOGLE_WALLET_KEYFILE=%s could not be loaded; Google Wallet disabled.",
+            "GOOGLE_WALLET_KEYFILE=%s could not be loaded (%s: %s); Google Wallet disabled.",
             _wallet_keyfile_path,
+            type(_wallet_err).__name__,
+            _wallet_err,
         )
 
 # Apple Wallet membership card integration (optional). See readme.md.

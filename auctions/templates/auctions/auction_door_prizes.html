@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Door prizes for {{ auction }}{% endblock %}
+{% block content %}
+  {% include "auction_ribbon.html" %}
+  <div class="mt-3">
+    <h4>Door prizes</h4>
+    <p class="text-muted">Pick a random checked-in user. Names that have already been called are shown newest first.</p>
+    <form method="post" class="mb-3">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary" {% if not door_prize_candidates_remaining %}disabled{% endif %}>
+        <i class="bi bi-shuffle"></i> Pick random name
+      </button>
+    </form>
+    {% if door_prize_winners %}
+      <ul class="list-group">
+        {% for winner in door_prize_winners %}
+          <li class="list-group-item">{{ winner.name }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="alert alert-secondary">No names have been called yet.</div>
+    {% endif %}
+  </div>
+{% endblock %}
