@@ -1152,8 +1152,13 @@ class ClubMember(ContactRecord):
         """Absolute URL for adding this membership to Google/Apple Wallet (UUID-keyed)."""
         from django.contrib.sites.models import Site
 
-        current_site = Site.objects.get_current()
-        return f"https://{current_site.domain}{self.member_page_url}"
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            # Fallback for test environments or missing Site
+            domain = "localhost"
+        return f"https://{domain}{self.member_page_url}"
 
     @property
     def simple_membership_link(self):
@@ -1161,12 +1166,17 @@ class ClubMember(ContactRecord):
         from django.contrib.sites.models import Site
         from django.urls import reverse
 
-        current_site = Site.objects.get_current()
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            # Fallback for test environments or missing Site
+            domain = "localhost"
         path = reverse(
             "club_member_by_number",
             kwargs={"slug": self.club.slug, "number": self.membership_number},
         )
-        return f"https://{current_site.domain}{path}"
+        return f"https://{domain}{path}"
 
     def calculate_membership_expiration_reminder_due(self):
         if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
