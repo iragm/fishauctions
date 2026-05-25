@@ -28,7 +28,13 @@ def google_analytics(request):
 
 
 def google_oauth(request):
-    return {"GOOGLE_OAUTH_LINK": settings.GOOGLE_OAUTH_LINK}
+    token = (settings.GOOGLE_OAUTH_LINK or "").strip()
+    google_login_enabled = bool(token) and token not in {
+        "unsecure",
+        "secret",
+        "secret.apps.googleusercontent.com",
+    }
+    return {"GOOGLE_OAUTH_LINK": settings.GOOGLE_OAUTH_LINK, "GOOGLE_LOGIN_ENABLED": google_login_enabled}
 
 
 def theme(request):

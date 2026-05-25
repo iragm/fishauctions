@@ -39,7 +39,7 @@ from django.db.models import (
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
@@ -5981,22 +5981,26 @@ class Lot(models.Model):
     def lot_link(self):
         """Simplest link to access this lot with"""
         if self.auction:
-            if self.slug:
+            lot_number_display = self.lot_number_display
+            try:
+                if self.slug:
+                    return reverse(
+                        "lot_in_auction_with_slug",
+                        kwargs={
+                            "slug": self.auction.slug,
+                            "custom_lot_number": lot_number_display,
+                            "lot_slug": self.slug,
+                        },
+                    )
                 return reverse(
-                    "lot_in_auction_with_slug",
+                    "lot_in_auction",
                     kwargs={
                         "slug": self.auction.slug,
-                        "custom_lot_number": self.lot_number_display,
-                        "lot_slug": self.slug,
+                        "custom_lot_number": lot_number_display,
                     },
                 )
-            return reverse(
-                "lot_in_auction",
-                kwargs={
-                    "slug": self.auction.slug,
-                    "custom_lot_number": self.lot_number_display,
-                },
-            )
+            except NoReverseMatch:
+                pass
         if self.slug:
             return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
         return reverse("lot_by_pk", kwargs={"pk": self.lot_number})

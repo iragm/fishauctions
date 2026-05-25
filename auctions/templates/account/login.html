@@ -9,9 +9,11 @@
 {% block content %}
     <h1>{% trans "Sign In" %}</h1>
 
+    {% if GOOGLE_LOGIN_ENABLED %}
     <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
+    {% endif %}
 
-      <br><br><h5>Don't have a Google account?  Sign in with your account on this site:</h5>
+      <br><br><h5>{% if GOOGLE_LOGIN_ENABLED %}Don't have a Google account?  {% endif %}Sign in with your account on this site:</h5>
 
     <form class="login" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}

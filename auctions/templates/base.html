@@ -238,7 +238,7 @@ window.onload = function() {
       {% else %}
           <span class="hide-fullscreen">
       {% endif %}
-      {% if not request.user.is_authenticated and not hide_google_login %}
+      {% if not request.user.is_authenticated and not hide_google_login and GOOGLE_LOGIN_ENABLED %}
       <script src="//accounts.google.com/gsi/client" async></script>
         <div id="g_id_onload"
             data-client_id="{{ GOOGLE_OAUTH_LINK }}"

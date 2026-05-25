@@ -61,6 +61,4 @@ class Migration(migrations.Migration):
         ("auctions", "0272_club_create_events_auction_discord_event_created"),
     ]
 
-    operations = [
-        migrations.RunPython(backfill_bap_reasons, migrations.RunPython.noop),
-    ]
+    operations = []

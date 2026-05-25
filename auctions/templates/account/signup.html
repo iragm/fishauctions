@@ -118,11 +118,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!val) return;
 
         // Gmail hint — show immediately
+        {% if GOOGLE_LOGIN_ENABLED %}
         if (isGmail(val)) {
             const next = encodeURIComponent('{{ redirect_field_value|default:"/" }}');
             emailHint.innerHTML = 'Looks like a Gmail address! You can <a href="{% url "google_login" %}?process=login&next=' + next + '">sign up with one click using Google</a>.';
             emailHint.style.display = 'block';
         }
+        {% endif %}
     }
 
     if (emailField) {
