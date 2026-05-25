@@ -18036,14 +18036,8 @@ class ManageUsersThroughClubTests(TestCase):
     def test_check_in_endpoint_marks_user_checked_in(self):
         self._enable_checkin_mode()
         cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
-        tos = AuctionTOS.objects.create(
-            user=self.joiner,
-            auction=self.auction,
-            pickup_location=self.location,
-            clubmember=cm,
-            bidder_number="123",
-            bidding_allowed=False,
-        )
+        # checkin mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.client.force_login(self.creator)
         response = self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
         self.assertEqual(response.status_code, 200)
