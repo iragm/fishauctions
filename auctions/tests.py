@@ -4595,7 +4595,7 @@ class LotListViewTests(StandardTestCase):
         self.lot.save(update_fields=["custom_lot_number"])
         self.assertTrue(self.lot.lot_link.startswith(f"/lots/{self.lot.pk}/"))
 
-    def test_all_lots_page_handles_invalid_custom_lot_number_slug(self):
+    def test_all_lots_page_renders_with_invalid_custom_lot_number_slug(self):
         self.online_auction.use_seller_dash_lot_numbering = True
         self.online_auction.save(update_fields=["use_seller_dash_lot_numbering"])
         self.lot.custom_lot_number = "xx RH-5"
@@ -15927,11 +15927,14 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(ineligible.bap_auto_reason, "not_bred")
 
     def test_backfill_bap_reasons_command_skips_unsold_lots(self):
+        sold_ineligible = self._make_lot(lot_name="Sold not bred fish", i_bred_this_fish=False)
         unsold = self._make_lot(lot_name="Unsold fish", winning_price=None, auctiontos_winner=None)
 
         call_command("backfill_bap_reasons")
 
+        sold_ineligible.refresh_from_db()
         unsold.refresh_from_db()
+        self.assertEqual(sold_ineligible.bap_auto_reason, "not_bred")
         self.assertEqual(unsold.bap_auto_reason, "")
 
 

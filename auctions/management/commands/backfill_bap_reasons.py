@@ -14,9 +14,8 @@ class Command(BaseCommand):
                 is_deleted=False,
                 bap_auto_reason="",
                 auction__club__enable_breeder_award_program=True,
-                winning_price__isnull=False,
             )
-            .filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False))
+            .filter(Q(winning_price__isnull=False) & (Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)))
             .exclude(bap_award__isnull=False)
             .select_related(
                 "auction__club",

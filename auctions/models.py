@@ -5980,7 +5980,8 @@ class Lot(models.Model):
     @property
     def lot_link(self):
         """Simplest link to access this lot with"""
-        lot_pk = self.pk or self.lot_number
+        # Prefer real PK URLs; fall back to lot_number only for unsaved instances.
+        lot_pk = self.pk if self.pk is not None else self.lot_number
         if self.auction:
             lot_number_display = self.lot_number_display
             try:
