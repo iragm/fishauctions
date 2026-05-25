@@ -247,6 +247,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "email good": {"email_address_status": "VALID"},
             "no email": {"email__isnull": True},
             "duplicate": {"possible_duplicate__isnull": False},
+            "not checked in": {"checked_in__isnull": True},
+            "checked in": {"checked_in__isnull": False},
         }
 
         if not match_names_only:
