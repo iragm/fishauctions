@@ -835,7 +835,11 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        default_points = self.club.points_per_lot if self.club and self.club.points_per_lot > 0 else 5
+        default_points = (
+            self.club.points_per_lot
+            if self.club and self.club.points_per_lot > 0
+            else (record.species_category.bap_points if record.species_category and record.species_category.bap_points else 5)
+        )
         return mark_safe(
             render_to_string(
                 "auctions/bap_lot_buttons.html",
