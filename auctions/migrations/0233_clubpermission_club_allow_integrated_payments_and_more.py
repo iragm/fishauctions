@@ -4,6 +4,21 @@ import autoslug.fields
 import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
+from django.utils.text import slugify
+
+
+def populate_club_slugs(apps, schema_editor):
+    Club = apps.get_model("auctions", "Club")
+    used = set()
+    for club in Club.objects.all().order_by("pk"):
+        base = slugify(club.name) or f"club-{club.pk}"
+        slug, i = base, 1
+        while slug in used:
+            i += 1
+            slug = f"{base}-{i}"
+        used.add(slug)
+        club.slug = slug
+        club.save(update_fields=["slug"])
 
 
 class Migration(migrations.Migration):
@@ -75,6 +90,12 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.AddField(
+            model_name="club",
+            name="slug",
+            field=autoslug.fields.AutoSlugField(blank=True, editable=False, null=True, populate_from="name"),
+        ),
+        migrations.RunPython(populate_club_slugs, migrations.RunPython.noop),
+        migrations.AlterField(
             model_name="club",
             name="slug",
             field=autoslug.fields.AutoSlugField(default="", editable=False, populate_from="name", unique=True),
