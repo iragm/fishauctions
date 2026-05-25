@@ -1504,7 +1504,7 @@ class Auction(models.Model):
     )
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
-        help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
+        help_text="And create membership if they don't have one.  You can turn this off on each invoice.",
     )
     MANAGE_USERS_CHOICES = [
         ("", "Off"),
