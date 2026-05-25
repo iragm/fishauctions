@@ -15097,7 +15097,9 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
 
-        response = self.client.post(url, {"target": self.member.pk})
+        response = self.client.post(
+            url, {"target": self.member.pk, "club_slug": self.club.slug, "exclude_member": source.pk}
+        )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "will be deactivated")
         self.assertContains(response, "Jane Doe")
