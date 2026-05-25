@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Quick check in users for {{ auction }}{% endblock %}
+{% block title %}{% if auction.use_check_in_mode %}Quick check in users{% else %}Scan club members{% endif %} for {{ auction }}{% endblock %}
 {% block content %}
   {% include "auction_ribbon.html" %}
   <div class="mt-3">
-    <h4>Quick check in users</h4>
-    <p class="text-muted">Scan membership cards to check users in. Scan a paddle barcode starting with 11111 first to assign that bidder number to the next member you scan.</p>
+    <h4>{% if auction.use_check_in_mode %}Quick check in users{% else %}Scan club members into this auction{% endif %}</h4>
+    <p class="text-muted">Scan membership cards to {% if auction.use_check_in_mode %}check users in{% else %}add club members to this auction{% endif %}. Scan a paddle barcode starting with 11111 first to assign that bidder number to the next member you scan.</p>
     <button id="scan-toggle" type="button" class="btn btn-primary">
       <i class="bi bi-camera-video"></i> Activate camera to scan membership cards
     </button>
@@ -81,8 +81,9 @@
         return;
       }
       const suffix = pendingBidderNumber ? ` and assigned bidder number ${pendingBidderNumber}` : "";
-      addMessage(`Checked in ${payload.name}${suffix}`);
-      setStatus(`Checked in ${payload.name}.`, "success");
+      const verb = payload.verb || "Checked in";
+      addMessage(`${verb} ${payload.name}${suffix}`);
+      setStatus(`${verb} ${payload.name}.`, "success");
       pendingBidderNumber = "";
     }
 

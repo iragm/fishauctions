@@ -17920,13 +17920,8 @@ class ManageUsersThroughClubTests(TestCase):
             name="Joiner",
             bidder_number="42",
         )
-        tos = AuctionTOS.objects.create(
-            user=self.joiner,
-            auction=self.auction,
-            pickup_location=self.location,
-            clubmember=cm,
-            bidder_number="42",
-        )
+        # club-managed mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         cm.bidding_allowed = False
         cm.selling_allowed = False
         cm.save()
@@ -17946,13 +17941,8 @@ class ManageUsersThroughClubTests(TestCase):
             name="Joiner",
             bidder_number="55",
         )
-        tos = AuctionTOS.objects.create(
-            user=self.joiner,
-            auction=self.auction,
-            pickup_location=self.location,
-            clubmember=cm,
-            bidder_number="55",
-        )
+        # club-managed mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.auction.invoiced = True
         self.auction.save()
         cm.bidder_number = "999"
@@ -18069,21 +18059,11 @@ class ManageUsersThroughClubTests(TestCase):
         unchecked_member = ClubMember.objects.create(
             club=self.club, user=self.outsider, name="Unchecked User", bidder_number="456"
         )
-        checked_in_tos = AuctionTOS.objects.create(
-            user=self.joiner,
-            auction=self.auction,
-            pickup_location=self.location,
-            clubmember=checked_in_member,
-            bidder_number="123",
-            checked_in=timezone.now(),
-        )
-        unchecked_tos = AuctionTOS.objects.create(
-            user=self.outsider,
-            auction=self.auction,
-            pickup_location=self.location,
-            clubmember=unchecked_member,
-            bidder_number="456",
-        )
+        # checkin mode auto-creates shadow AuctionTOS records via the ClubMember post_save signal
+        checked_in_tos = AuctionTOS.objects.get(auction=self.auction, clubmember=checked_in_member)
+        checked_in_tos.checked_in = timezone.now()
+        checked_in_tos.save()
+        unchecked_tos = AuctionTOS.objects.get(auction=self.auction, clubmember=unchecked_member)
         self.client.force_login(self.creator)
         response = self.client.post(reverse("auction_door_prizes", kwargs={"slug": self.auction.slug}))
         self.assertRedirects(response, reverse("auction_door_prizes", kwargs={"slug": self.auction.slug}))

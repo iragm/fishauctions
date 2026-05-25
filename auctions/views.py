@@ -3236,6 +3236,7 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
         context["auction"] = self.auction
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
         # When the filtered table has no results and a query was typed, show a "Create user" button
         # pre-populated intelligently based on what the user typed.
         query = (self.request.GET.get("query") or "").strip()
@@ -3466,14 +3467,15 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.get("slug", ""))
         _ = self.can_add_edit_people
-        if not self.auction.use_check_in_mode:
+        if not self.auction.club_id:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        context["can_manage_check_in"] = True
+        context["can_manage_check_in"] = self.auction.use_check_in_mode
+        context["can_scan_club_barcodes"] = True
         context["active_tab"] = "users"
         return context
 
@@ -3484,7 +3486,7 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.get("slug", ""))
         _ = self.can_add_edit_people
-        if not self.auction.use_check_in_mode:
+        if not self.auction.club_id:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
@@ -3508,7 +3510,7 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 member,
                 bidding_allowed=True,
                 selling_allowed=member.selling_allowed,
-                checked_in_at=timezone.now(),
+                checked_in_at=timezone.now() if self.auction.use_check_in_mode else _UNSET,
             )
             if not tos:
                 return JsonResponse(
@@ -3516,10 +3518,14 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 )
             if assign_bidder_number and assign_bidder_number != tos.bidder_number:
                 tos.force_set_bidder_number(assign_bidder_number, via_barcode=True, acting_user=request.user)
+                # Propagate the assigned number back to the ClubMember so it sticks for next time.
+                # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
+                ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
+        verb = "Checked in" if self.auction.use_check_in_mode else "Added"
         self.auction.create_history(
             applies_to="USERS",
             action=(
-                f"Checked in {tos.name} via barcode"
+                f"{verb} {tos.name} via barcode"
                 + (f" and assigned bidder number {assign_bidder_number}" if assign_bidder_number else "")
             ),
             user=request.user,
@@ -3527,9 +3533,10 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
         return JsonResponse(
             {
                 "ok": True,
-                "message": f"Checked in {tos.name}",
+                "message": f"{verb} {tos.name}",
                 "name": tos.name,
                 "bidder_number": tos.bidder_number,
+                "verb": verb,
             }
         )
 
@@ -10147,7 +10154,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         if club_count == 1:
             club = club_memberships.first().club
             context["club_membership_message"] = (
-                f"Updating your contact info will also update your contact info in {club.name}"
+                f"Updating your contact info will also update your contact info in the {club.name}"
             )
         elif club_count > 1:
             context["club_membership_message"] = (
