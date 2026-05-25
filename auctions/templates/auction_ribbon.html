@@ -109,9 +109,9 @@
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if auction.use_check_in_mode and can_manage_check_in %}
           <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
-          <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Quick check in users</a>
+          <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Check in</a>
           {% endif %}
-          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
+          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
           <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}

@@ -21,7 +21,6 @@
       hx-trigger="click"
       _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add member</a>
     {% endif %}
-    <a href="{% url 'club_admin' slug=auction.club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-people"></i> Manage club members</a>
   </div>
   {% else %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
@@ -109,9 +108,10 @@
     </span>
     {% if auction.use_check_in_mode and can_manage_check_in %}
     <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
-    <a class="btn btn-sm mt-2 mb-2 btn-primary d-md-none" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Quick check in users</a>
+    <a class="btn btn-sm mt-2 mb-2 btn-primary d-md-none" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Check in</a>
     {% endif %}
-    {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
+    {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
+    {% if not auction.is_online %}<a class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
     {% if auction.show_invoice_ready_button %}
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary d-none d-md-inline-block"
     hx-get="{% url 'auction_invoices_ready' auction.slug %}"

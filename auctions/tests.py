@@ -3009,6 +3009,13 @@ class CSVImportTests(StandardTestCase):
             name="Existing User",
             bidder_number="",
         )
+        # save() auto-assigns a random bidder_number; clear it for the test
+        AuctionTOS.objects.filter(pk=existing_tos.pk).update(bidder_number="")
+        # Ensure no other tos in the auction has the target number (auto-gen may collide)
+        for other in AuctionTOS.objects.filter(auction=self.online_auction, bidder_number="888").exclude(
+            pk=existing_tos.pk
+        ):
+            AuctionTOS.objects.filter(pk=other.pk).update(bidder_number=f"x{other.pk}")
 
         # Create CSV content to update with bidder number
         csv_buffer = StringIO()
@@ -17980,7 +17987,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.auction.refresh_from_db()
         self.assertTrue(self.auction.use_check_in_mode)
         self.assertContains(response, "Door prizes")
-        self.assertContains(response, "Quick check in users")
+        self.assertContains(response, "Check in")
         self.assertContains(response, "Turn bidding off for all users")
 
     def test_checkin_mode_manual_member_creation_sets_checked_in_and_bidding_allowed(self):
