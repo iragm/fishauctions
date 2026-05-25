@@ -4501,18 +4501,20 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        self.assertIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertIsInstance(
+        # These fields are now shown/hidden via JavaScript; real widgets are always rendered
+        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertNotIsInstance(
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
 
-    def test_manage_users_through_club_field_hidden_without_club(self):
+    def test_manage_users_through_club_field_shown_without_club(self):
         self.online_auction.club = None
         self.online_auction.save()
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        self.assertIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+        # manage_users_through_club is always rendered so JS can toggle it based on club selection
+        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
 
     def test_membership_fee_field_hidden_for_free_club(self):
         free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
@@ -4522,7 +4524,8 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
         self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertIsInstance(
+        # add_membership_fee field is now shown/hidden via JS, not server-side HiddenInput
+        self.assertNotIsInstance(
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
 
