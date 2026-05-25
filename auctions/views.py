@@ -2357,7 +2357,11 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
         added_count = 0
         skipped_count = 0
         for tos in tos_qs:
-            existing = _find_club_member(club, tos.user, tos.email)
+            existing = None
+            if tos.email:
+                existing = ClubMember.objects.filter(club=club, email__iexact=tos.email).first()
+            if not existing and tos.user:
+                existing = ClubMember.objects.filter(club=club, user=tos.user).first()
             if existing:
                 skipped_count += 1
                 continue
