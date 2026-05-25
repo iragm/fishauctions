@@ -31,8 +31,7 @@
     let zxingReader = null;
     let isScanning = false;
     let pendingBidderNumber = "";
-    let lastScanValue = "";
-    let lastScanAt = 0;
+    let lastProcessedValue = "";
 
     function setStatus(message, level = "secondary") {
       statusBox.className = `alert alert-${level} mt-3 mb-2`;
@@ -47,12 +46,11 @@
     }
 
     function shouldIgnoreDuplicate(value) {
-      const now = Date.now();
-      if (value === lastScanValue && now - lastScanAt < 1500) {
+      // Silently ignore repeated scans of the same barcode until a new one is detected
+      if (value === lastProcessedValue) {
         return true;
       }
-      lastScanValue = value;
-      lastScanAt = now;
+      lastProcessedValue = value;
       return false;
     }
 

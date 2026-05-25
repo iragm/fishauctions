@@ -110,7 +110,6 @@
     {% if auction.use_check_in_mode and can_manage_check_in %}
     <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
     <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Quick check in users</a>
-    <button type="button" class="btn btn-sm mt-2 mb-2 btn-warning" data-bs-toggle="modal" data-bs-target="#turnBiddingOffModal"><i class="bi bi-slash-circle"></i> Turn bidding off for all users</button>
     {% endif %}
     {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
     {% if auction.show_invoice_ready_button %}
@@ -187,28 +186,6 @@
   {% crispy filter.form %}
 </form>
 {% render_table table %}
-{% if auction.use_check_in_mode and can_manage_check_in %}
-<div class="modal fade" id="turnBiddingOffModal" tabindex="-1" aria-labelledby="turnBiddingOffModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="turnBiddingOffModalLabel">Turn bidding off for all users?</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        This keeps everyone checked in, but disables bidding for every user in this auction until you turn it back on for them.
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <form method="post" action="{% url 'auction_disable_bidding' slug=auction.slug %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-warning">Turn bidding off</button>
-        </form>
-      </div>
-    </div>
-  </div>
-</div>
-{% endif %}
 {% endblock %}
 
 {% block extra_js %}

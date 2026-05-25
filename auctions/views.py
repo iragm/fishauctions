@@ -3236,7 +3236,50 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
         context["auction"] = self.auction
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        # When the filtered table has no results and a query was typed, show a "Create user" button
+        # pre-populated intelligently based on what the user typed.
+        query = (self.request.GET.get("query") or "").strip()
+        filterset = context.get("filter")
+        filtered_empty = filterset is not None and query and not filterset.qs.exists()
+        if filtered_empty and self.can_add_edit_people:
+            context["no_results"] = self._build_no_results_html(query)
         return context
+
+    def _build_no_results_html(self, query):
+        """Return an HTML snippet with a 'Create user' button pre-populated from the search query."""
+        import re as _re
+        from urllib.parse import urlencode
+
+        params = {}
+        q = query.strip()
+        digits_only = _re.sub(r"\D", "", q)
+        if len(digits_only) >= 7:
+            params["phone"] = q
+        elif "@" in q:
+            params["email"] = q
+        elif _re.fullmatch(r"[A-Za-z\s\-'.]+", q) and len(q) >= 4:
+            params["name"] = q
+        param_str = f"?{urlencode(params)}" if params else ""
+        auction = self.auction
+        if auction.manage_users_through_club == "checkin":
+            create_url = (
+                reverse("clubmember_create", kwargs={"slug": auction.club.slug})
+                + f"?auction={auction.slug}"
+                + (f"&{urlencode(params)}" if params else "")
+            )
+        else:
+            create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
+        return (
+            f'<div class="text-center py-3">'
+            f'<p class="text-muted mb-2">No users match <strong>{query}</strong>.</p>'
+            f'<button class="btn btn-info btn-sm" '
+            f'hx-get="{create_url}" '
+            f'hx-target="#modals-here" '
+            f'hx-trigger="click" '
+            f'_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+            f'<i class="bi bi-person-fill-add"></i> Create user</button>'
+            f"</div>"
+        )
 
     def get(self, *args, **kwargs):
         if not self.request.htmx and self.get_queryset().filter(bidder_number="ERROR").count():
@@ -3248,6 +3291,9 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
 
 
 class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
+    # TODO: This feature is incomplete and broken — the UI button has been removed from auction_users.html.
+    # The core bulk-update works, but re-enabling bidding per-user after this action is not wired up correctly
+    # and the overall UX flow is confusing. Do not re-expose this without a full end-to-end implementation.
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
@@ -3279,22 +3325,66 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
+    def get(self, request, *args, **kwargs):
+        tos = self.auctiontos
+        bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
+        check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
+        html = f"""
+<div class="modal fade" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
+        <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
+        <div class="modal-body">
+          <label for="checkin_bidder_number" class="form-label"><small>Bidder number</small></label>
+          <input
+            type="text"
+            class="form-control"
+            id="checkin_bidder_number"
+            name="bidder_number"
+            value="{bidder_number}"
+            placeholder="Auto"
+          >
+          <small class="text-muted mt-1 d-block">
+            If the bidder number entered here is in use by another user, their bidder number will be changed.
+          </small>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-success">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:none;"></div>
+"""
+        return HttpResponse(html)
+
     def post(self, request, *args, **kwargs):
+        tos = self.auctiontos
+        bidder_number = (request.POST.get("bidder_number") or "").strip()
         update_fields = []
-        if not self.auctiontos.checked_in:
-            self.auctiontos.checked_in = timezone.now()
+        if not tos.checked_in:
+            tos.checked_in = timezone.now()
             update_fields.append("checked_in")
-        if not self.auctiontos.bidding_allowed:
-            self.auctiontos.bidding_allowed = True
+        if not tos.bidding_allowed:
+            tos.bidding_allowed = True
             update_fields.append("bidding_allowed")
         if update_fields:
-            self.auctiontos.save(update_fields=update_fields)
-            self.auction.create_history(
-                applies_to="USERS",
-                action=f"Checked in {self.auctiontos.name}",
-                user=request.user,
-            )
-        messages.success(request, f"Checked in {self.auctiontos.name}.")
+            tos.save(update_fields=update_fields)
+        if bidder_number and bidder_number != tos.bidder_number:
+            tos.force_set_bidder_number(bidder_number, acting_user=request.user)
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Checked in {tos.name}",
+            user=request.user,
+        )
+        messages.success(request, f"Checked in {tos.name}.")
         return HttpResponse("<script>location.reload();</script>", status=200)
 
 
@@ -3392,19 +3482,6 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
         if not member:
             return JsonResponse({"ok": False, "message": "No club member matches that barcode."}, status=404)
         with transaction.atomic():
-            if assign_bidder_number:
-                bidder_taken = (
-                    ClubMember.objects.filter(club=self.auction.club, bidder_number=assign_bidder_number)
-                    .exclude(pk=member.pk)
-                    .exists()
-                )
-                if bidder_taken:
-                    return JsonResponse(
-                        {"ok": False, "message": f"Bidder number {assign_bidder_number} is already in use."}, status=409
-                    )
-                if member.bidder_number != assign_bidder_number:
-                    member.bidder_number = assign_bidder_number
-                    member.save(update_fields=["bidder_number"])
             tos = _upsert_clubmember_shadow_tos(
                 self.auction,
                 member,
@@ -3412,17 +3489,17 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 selling_allowed=member.selling_allowed,
                 checked_in_at=timezone.now(),
             )
-        if not tos:
-            return JsonResponse({"ok": False, "message": "Add a pickup location before checking users in."}, status=400)
+            if not tos:
+                return JsonResponse(
+                    {"ok": False, "message": "Add a pickup location before checking users in."}, status=400
+                )
+            if assign_bidder_number and assign_bidder_number != tos.bidder_number:
+                tos.force_set_bidder_number(assign_bidder_number, via_barcode=True, acting_user=request.user)
         self.auction.create_history(
             applies_to="USERS",
             action=(
-                f"Checked in {tos.name}"
-                + (
-                    f" and assigned bidder number {assign_bidder_number}"
-                    if assign_bidder_number and member.bidder_number == assign_bidder_number
-                    else ""
-                )
+                f"Checked in {tos.name} via barcode"
+                + (f" and assigned bidder number {assign_bidder_number}" if assign_bidder_number else "")
             ),
             user=request.user,
         )
@@ -6646,6 +6723,15 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         form_kwargs["auction"] = self.auction
         form_kwargs["is_edit_form"] = self.is_edit_form
         form_kwargs["auctiontos"] = self.auctiontos
+        # Pre-populate new-user form from GET params (name, email, phone)
+        if not self.is_edit_form and self.request.method == "GET":
+            prefill = {}
+            for field in ("name", "email", "phone"):
+                val = self.request.GET.get(field, "").strip()
+                if val:
+                    prefill[field if field != "phone" else "phone_number"] = val
+            if prefill:
+                form_kwargs.setdefault("initial", {}).update(prefill)
         return form_kwargs
 
     def get_context_data(self, **kwargs):
@@ -13667,7 +13753,13 @@ class ClubMemberCreateView(APIView):
         auction = self._get_auction_context(request, club)
         post_url = self._post_url(slug, auction)
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(post_url=post_url, club=club, auction=auction)
+        # Pre-populate from URL params (name, email, phone) when coming from no-results search
+        initial = {}
+        for field, param in (("name", "name"), ("email", "email"), ("phone_number", "phone")):
+            val = request.query_params.get(param, "").strip()
+            if val:
+                initial[field] = val
+        form = ClubMemberAdminForm(post_url=post_url, club=club, auction=auction, initial=initial or None)
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=validation_url, checkin_auction=auction
         )

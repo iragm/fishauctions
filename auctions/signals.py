@@ -252,10 +252,45 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     push the new values to linked shadow AuctionTOS records for club-managed auctions
     that have not yet been invoiced. Bidder-number collisions are skipped per-row
     (warning logged) rather than letting a unique-constraint violation crash the save.
+
+    When a new member is created, auto-create shadow TOS records in any active
+    club-managed auctions that auto-add members ("all" or "checkin" mode).
     """
+    from .models import Auction, AuctionTOS, PickupLocation
+
     if created:
+        # Auto-create shadow TOS records in club-managed auctions for new members
+        managed_auctions = Auction.objects.filter(
+            club=instance.club,
+            is_deleted=False,
+            invoiced=False,
+            manage_users_through_club__in=["all", "checkin"],
+        )
+        for auction in managed_auctions:
+            default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+            if not default_location:
+                continue
+            already_exists = AuctionTOS.objects.filter(auction=auction, clubmember=instance).exists()
+            if already_exists:
+                continue
+            if not instance.bidder_number:
+                instance.generate_bidder_number(save=True)
+            bidding = False if auction.manage_users_through_club == "checkin" else instance.bidding_allowed
+            AuctionTOS.objects.create(
+                user=instance.user,
+                auction=auction,
+                pickup_location=default_location,
+                clubmember=instance,
+                bidder_number=instance.bidder_number,
+                bidding_allowed=bidding,
+                selling_allowed=instance.selling_allowed,
+                name=instance.name or "",
+                email=instance.email or "",
+                phone_number=instance.phone_number or "",
+                address=instance.address or "",
+                manually_added=True,
+            )
         return
-    from .models import AuctionTOS
 
     prev_bidder = getattr(instance, "_previous_bidder_number", None)
     prev_bidding = getattr(instance, "_previous_bidding_allowed", None)

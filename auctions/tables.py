@@ -73,8 +73,10 @@ class AuctionTOSHTMxTable(tables.Table):
             if self.can_manage_check_in:
                 check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
                 result += (
-                    f'<button class="btn btn-sm btn-success ms-1" hx-post="{check_in_url}" '
-                    'hx-target="#modals-here" hx-swap="innerHTML">Check in</button>'
+                    f'<button class="btn btn-sm btn-success ms-1" hx-get="{check_in_url}" '
+                    'hx-target="#modals-here" hx-swap="innerHTML" '
+                    '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    "Check in</button>"
                 )
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"

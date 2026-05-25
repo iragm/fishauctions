@@ -1500,7 +1500,7 @@ class Auction(models.Model):
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
     add_people_from_auction_to_club = models.BooleanField(
         default=False,
-        help_text="Add auction participants to the associated club.",
+        help_text="Add auction participants to the associated club.  This is a one-way sync to the club and will only create new club members, not update existing ones.  To keep both auction and club records in sync, turn on Manage users through club instead -- there's a 99% chance that's what you want.",
     )
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
@@ -1509,7 +1509,7 @@ class Auction(models.Model):
     MANAGE_USERS_CHOICES = [
         ("", "Off"),
         ("all", "Automatically add all club members"),
-        ("checkin", "Add on user check-in"),
+        ("checkin", "Automatically add, but require check-in"),
     ]
     manage_users_through_club = models.CharField(
         max_length=20,
@@ -4114,6 +4114,44 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
+
+    def force_set_bidder_number(self, number, via_barcode=False, acting_user=None):
+        """Forcefully assign *number* to this TOS record, displacing any existing holder.
+
+        If another TOS in the same auction already has *number*, it is assigned a newly
+        generated unique number first. An AuctionHistory entry is created. The record is
+        saved via update_fields so no full-model side-effects (e.g. bidder-number
+        auto-generation) are triggered.
+        """
+        from django.db import transaction as _tx
+
+        number = str(number).strip()
+        if not number:
+            return
+        with _tx.atomic():
+            conflicting = (
+                AuctionTOS.objects.filter(auction=self.auction, bidder_number=number).exclude(pk=self.pk).first()
+            )
+            if conflicting:
+                new_number = _generate_unique_bidder_number(
+                    is_taken=lambda n: (
+                        AuctionTOS.objects.filter(bidder_number=n, auction=self.auction)
+                        .exclude(pk=conflicting.pk)
+                        .exists()
+                        or n == number
+                    ),
+                    phone=conflicting.phone_number,
+                    address=conflicting.address,
+                )
+                AuctionTOS.objects.filter(pk=conflicting.pk).update(bidder_number=new_number)
+            self.bidder_number = number
+            AuctionTOS.objects.filter(pk=self.pk).update(bidder_number=number)
+            source = " via barcode" if via_barcode else ""
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Assigned bidder number {number} to {self.name}{source}",
+                user=acting_user,
+            )
 
     def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
