@@ -5487,19 +5487,20 @@ class Lot(models.Model):
                 valid = False
             if not valid:
                 return "not_active_member"
-        if club.days_between_same_name_lots > 0 and seller_user:
+        if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
-            prior = (
-                Lot.objects.filter(
-                    auction__club=club,
-                    user=seller_user,
-                    lot_name=self.lot_name,
-                    bap_points_awarded__gt=0,
-                    date_end__gte=cutoff,
-                )
-                .exclude(pk=self.pk)
-                .exists()
+            seller_filter = Q()
+            if seller_user:
+                seller_filter |= Q(user=seller_user)
+            if seller_email:
+                seller_filter |= Q(auctiontos_seller__email__iexact=seller_email)
+            prior = Lot.objects.filter(
+                auction__club=club,
+                lot_name=self.lot_name,
+                bap_points_awarded__gt=0,
+                date_end__gte=cutoff,
             )
+            prior = prior.filter(seller_filter).exclude(pk=self.pk).exists()
             if prior:
                 return "not_long_enough"
         return None

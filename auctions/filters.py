@@ -1055,12 +1055,13 @@ class ClubMemberFilter(django_filters.FilterSet):
         """
         query_value = (self.data.get("query") or "").lower()
         show_deactivated = "deactivated" in query_value.split()
-        if show_deactivated:
-            return super().filter_queryset(queryset.filter(is_deleted=True))
-        active_filtered = super().filter_queryset(queryset.filter(is_deleted=False))
         search_tokens = [t for t in query_value.split() if t != "deactivated"]
-        if search_tokens and not active_filtered.exists():
-            return super().filter_queryset(queryset.filter(is_deleted=True))
+        filtered = super().filter_queryset(queryset)
+        if show_deactivated:
+            return filtered.filter(is_deleted=True)
+        active_filtered = filtered.filter(is_deleted=False)
+        if search_tokens:
+            return filtered.filter(Q(is_deleted=False) | ~Exists(active_filtered.values("pk")))
         return active_filtered
 
     def clubmember_search(self, queryset, name, value):

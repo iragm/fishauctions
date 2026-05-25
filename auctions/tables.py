@@ -500,7 +500,7 @@ class ClubMemberHTMxTable(tables.Table):
         if record.is_deleted:
             result += format_html(" <span class='badge bg-secondary'>Deactivated</span>")
         if record.discord_id:
-            result += format_html("<i class='bi bi-discord text-white ms-1' title='Linked to Discord'></i>")
+            result += format_html("<i class='bi bi-discord ms-1' title='Linked to Discord'></i>")
         if record.email_address_status == "BAD":
             result += format_html(
                 "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
