@@ -14716,6 +14716,23 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
+    def test_club_admin_search_falls_back_to_deactivated_when_active_empty(self):
+        from .filters import ClubMemberFilter
+
+        deactivated = ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
+        qs = ClubMember.objects.filter(club=self.club)
+        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        self.assertEqual(list(filtered.values_list("pk", flat=True)), [deactivated.pk])
+
+    def test_club_admin_search_prefers_active_results(self):
+        from .filters import ClubMemberFilter
+
+        active = ClubMember.objects.create(club=self.club, name="Shared Search Name", is_deleted=False)
+        ClubMember.objects.create(club=self.club, name="Shared Search Name", is_deleted=True)
+        qs = ClubMember.objects.filter(club=self.club)
+        filtered = ClubMemberFilter({"query": "Shared Search"}, queryset=qs).qs
+        self.assertEqual(list(filtered.values_list("pk", flat=True)), [active.pk])
+
     def test_view_only_can_access_history(self):
         self._login(self.view_user)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
@@ -15891,6 +15908,28 @@ class LotBapEligibilityTests(TestCase):
     def test_eligible_returns_none(self):
         lot = self._make_lot()
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_same_name_rule_uses_email_when_seller_user_missing(self):
+        self.club.days_between_same_name_lots = 30
+        self.club.save(update_fields=["days_between_same_name_lots"])
+        self.member.user = None
+        self.member.email = self.user.email
+        self.member.save(update_fields=["user", "email"])
+        self.tos.user = None
+        self.tos.email = self.user.email
+        self.tos.save(update_fields=["user", "email"])
+        self._make_lot(
+            lot_name="Repeat Name",
+            auctiontos_seller=self.tos,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(
+            lot_name="Repeat Name",
+            auctiontos_seller=self.tos,
+            date_end=timezone.now(),
+        )
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_sold_lot_no_bap_reason_not_sold(self):
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)

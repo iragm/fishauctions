@@ -1212,6 +1212,8 @@ class ClubMember(ContactRecord):
         if self.membership_number and not self.pk:
             if ClubMember.objects.filter(membership_number=self.membership_number).exists():
                 self.membership_number = _pick_unique_membership_number()
+        if not self.user_id and self.email:
+            self.user = User.objects.filter(email__iexact=self.email).order_by("pk").first()
         previous_membership_last_paid = None
         previous_expiration_date = None
         previous_email = None
@@ -5461,11 +5463,17 @@ class Lot(models.Model):
         if not self.species_category or self.species_category.bap_points == 0:
             return "category_not_eligible"
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
-        if not seller_user:
-            return "not_club_member"
-        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        seller_email = (self.auctiontos_seller.email if self.auctiontos_seller else None) or (
+            seller_user.email if seller_user else None
+        )
+        member = None
+        if seller_user:
+            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member and seller_email:
+            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
         if not member:
             return "not_club_member"
+        seller_user = seller_user or member.user
         if club.only_active_members_can_participate:
             today = timezone.now().date()
             if member.membership_expiration_date:
@@ -5479,19 +5487,19 @@ class Lot(models.Model):
                 valid = False
             if not valid:
                 return "not_active_member"
-        if club.days_between_same_name_lots > 0:
+        if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
-            prior = (
-                Lot.objects.filter(
-                    auction__club=club,
-                    user=seller_user,
-                    lot_name=self.lot_name,
-                    bap_points_awarded__gt=0,
-                    date_end__gte=cutoff,
-                )
-                .exclude(pk=self.pk)
-                .exists()
-            )
+            base_prior = Lot.objects.filter(
+                auction__club=club,
+                lot_name=self.lot_name,
+                bap_points_awarded__gt=0,
+                date_end__gte=cutoff,
+            ).exclude(pk=self.pk)
+            prior = False
+            if seller_user:
+                prior = base_prior.filter(user=seller_user).exists()
+            if not prior and seller_email:
+                prior = base_prior.filter(auctiontos_seller__email__iexact=seller_email).exists()
             if prior:
                 return "not_long_enough"
         return None
