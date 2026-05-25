@@ -7008,8 +7008,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                             club=creator_club,
                             user=creator,
                             defaults={
-                                "first_name": creator.first_name,
-                                "last_name": creator.last_name,
+                                "name": creator.get_full_name(),
                                 "source": "manually_added",
                             },
                         )
