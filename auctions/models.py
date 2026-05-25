@@ -39,7 +39,7 @@ from django.db.models import (
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
@@ -5980,26 +5980,33 @@ class Lot(models.Model):
     @property
     def lot_link(self):
         """Simplest link to access this lot with"""
+        # Prefer real PK URLs; fall back to lot_number only for unsaved instances.
+        lot_pk = self.pk if self.pk is not None else self.lot_number
         if self.auction:
-            if self.slug:
+            lot_number_display = self.lot_number_display
+            try:
+                if self.slug:
+                    return reverse(
+                        "lot_in_auction_with_slug",
+                        kwargs={
+                            "slug": self.auction.slug,
+                            "custom_lot_number": lot_number_display,
+                            "lot_slug": self.slug,
+                        },
+                    )
                 return reverse(
-                    "lot_in_auction_with_slug",
+                    "lot_in_auction",
                     kwargs={
                         "slug": self.auction.slug,
-                        "custom_lot_number": self.lot_number_display,
-                        "lot_slug": self.slug,
+                        "custom_lot_number": lot_number_display,
                     },
                 )
-            return reverse(
-                "lot_in_auction",
-                kwargs={
-                    "slug": self.auction.slug,
-                    "custom_lot_number": self.lot_number_display,
-                },
-            )
+            except NoReverseMatch:
+                # Fall back to PK-based lot URLs for lots with invalid custom_lot_number/slug route pieces.
+                logger.debug("Falling back to PK lot URL for lot=%s auction=%s", self.pk, self.auction_id)
         if self.slug:
-            return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
-        return reverse("lot_by_pk", kwargs={"pk": self.lot_number})
+            return reverse("lot_by_pk_and_slug", kwargs={"pk": lot_pk, "slug": self.slug})
+        return reverse("lot_by_pk", kwargs={"pk": lot_pk})
 
     @property
     def full_lot_link(self):

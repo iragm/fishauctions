@@ -3,6 +3,11 @@ import zoneinfo
 from django.conf import settings  # import the settings file
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
+GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
+    "unsecure",
+    "secret",
+    "secret.apps.googleusercontent.com",
+}
 
 
 def _safe_timezone(value: str | None) -> str | None:
@@ -28,7 +33,9 @@ def google_analytics(request):
 
 
 def google_oauth(request):
-    return {"GOOGLE_OAUTH_LINK": settings.GOOGLE_OAUTH_LINK}
+    token = (settings.GOOGLE_OAUTH_LINK or "").strip()
+    google_login_enabled = bool(token) and token not in GOOGLE_OAUTH_PLACEHOLDER_VALUES
+    return {"GOOGLE_OAUTH_LINK": token, "GOOGLE_LOGIN_ENABLED": google_login_enabled}
 
 
 def theme(request):

@@ -1,15 +1,8 @@
 """
-Data migration: backfill bap_auto_reason for historical sold lots.
+Historical note: migration 0273 originally contained a BAP backfill.
 
-Lots sold before the BAP feature was introduced have bap_auto_reason="" (the
-field default) regardless of eligibility.  This migration computes the reason
-for every sold lot in a BAP-enabled club auction that hasn't been processed yet
-(bap_auto_reason still blank, no BapAward attached) and writes the correct
-value so the pending-BAP table and selling-dashboard filter can display them.
-
-Only bap_auto_reason is written.  No BapAward records are created and
-bap_points_awarded is left untouched; awarding historical points is a separate
-admin action.
+The backfill now runs only via the `backfill_bap_reasons` management command so
+that operators can execute it explicitly when needed.
 """
 
 from django.db import migrations
@@ -61,6 +54,5 @@ class Migration(migrations.Migration):
         ("auctions", "0272_club_create_events_auction_discord_event_created"),
     ]
 
-    operations = [
-        migrations.RunPython(backfill_bap_reasons, migrations.RunPython.noop),
-    ]
+    # Intentionally no-op: backfill moved to on-demand management command.
+    operations = []

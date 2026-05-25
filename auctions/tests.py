@@ -3,6 +3,7 @@ import csv
 import datetime
 import hashlib
 import hmac
+import importlib
 import io
 import json
 from decimal import Decimal
@@ -4586,6 +4587,23 @@ class LotListViewTests(StandardTestCase):
         content = response.content.decode("utf-8")
         self.assertIn("Donation", content)
         self.assertIn("True", content)
+
+    def test_lot_link_falls_back_when_custom_lot_number_is_not_slug_compatible(self):
+        self.online_auction.use_seller_dash_lot_numbering = True
+        self.online_auction.save(update_fields=["use_seller_dash_lot_numbering"])
+        self.lot.custom_lot_number = "bad-lot!"
+        self.lot.save(update_fields=["custom_lot_number"])
+        self.assertTrue(self.lot.lot_link.startswith(f"/lots/{self.lot.pk}/"))
+
+    def test_all_lots_page_renders_with_invalid_custom_lot_number_slug(self):
+        self.online_auction.use_seller_dash_lot_numbering = True
+        self.online_auction.save(update_fields=["use_seller_dash_lot_numbering"])
+        self.lot.custom_lot_number = "xx RH-5"
+        self.lot.save(update_fields=["custom_lot_number"])
+
+        response = self.client.get("/lots/all/")
+
+        self.assertEqual(response.status_code, 200)
 
     def test_auction_lot_list_csv_export_includes_custom_dropdown(self):
         self.online_auction.use_custom_dropdown_field = "allow"
@@ -11030,6 +11048,31 @@ class ContextProcessorsTestCase(TestCase):
 
         context = google_oauth(request)
         self.assertIn("GOOGLE_OAUTH_LINK", context)
+        self.assertIn("GOOGLE_LOGIN_ENABLED", context)
+
+    @override_settings(GOOGLE_OAUTH_LINK="secret.apps.googleusercontent.com")
+    def test_google_oauth_context_marks_default_placeholder_as_disabled(self):
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_oauth
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        context = google_oauth(request)
+        self.assertFalse(context["GOOGLE_LOGIN_ENABLED"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_google_oauth_context_marks_real_client_id_as_enabled(self):
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_oauth
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        context = google_oauth(request)
+        self.assertTrue(context["GOOGLE_LOGIN_ENABLED"])
 
     def test_theme_context_anonymous_user(self):
         """Test theme context processor for anonymous users"""
@@ -11313,6 +11356,26 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
+
+
+class GoogleLoginTemplateVisibilityTests(TestCase):
+    @override_settings(GOOGLE_OAUTH_LINK="secret.apps.googleusercontent.com")
+    def test_login_page_hides_google_button_when_oauth_link_is_placeholder(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "id='sign-in-google'")
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_login_page_shows_google_button_when_oauth_link_is_real(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "id='sign-in-google'")
+
+    @override_settings(GOOGLE_OAUTH_LINK="secret.apps.googleusercontent.com")
+    def test_signup_page_hides_gmail_prompt_text_when_oauth_link_is_placeholder(self):
+        response = self.client.get(reverse("account_signup"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Looks like a Gmail address!")
 
 
 class MiddlewareTestCase(TestCase):
@@ -15849,6 +15912,37 @@ class LotBapEligibilityTests(TestCase):
         lot.auto_award_bap_points()
         lot.refresh_from_db()
         self.assertEqual(lot.bap_points_awarded, 12)
+
+    def test_backfill_bap_reasons_command_updates_only_ineligible_lots(self):
+        eligible = self._make_lot(lot_name="Eligible fish")
+        ineligible = self._make_lot(lot_name="Not bred fish", i_bred_this_fish=False)
+        ineligible.bap_auto_reason = ""
+        ineligible.save(update_fields=["bap_auto_reason"])
+
+        call_command("backfill_bap_reasons")
+
+        eligible.refresh_from_db()
+        ineligible.refresh_from_db()
+        self.assertEqual(eligible.bap_auto_reason, "")
+        self.assertEqual(ineligible.bap_auto_reason, "not_bred")
+
+    def test_backfill_bap_reasons_command_skips_unsold_lots(self):
+        sold_ineligible = self._make_lot(lot_name="Sold not bred fish", i_bred_this_fish=False)
+        unsold = self._make_lot(lot_name="Unsold fish", winning_price=None, auctiontos_winner=None)
+
+        call_command("backfill_bap_reasons")
+
+        sold_ineligible.refresh_from_db()
+        unsold.refresh_from_db()
+        self.assertEqual(sold_ineligible.bap_auto_reason, "not_bred")
+        self.assertEqual(unsold.bap_auto_reason, "")
+
+
+class BapBackfillMigrationTests(TestCase):
+    def test_0273_migration_has_no_operations(self):
+        # Numeric migration module names require dynamic import syntax.
+        migration_module = importlib.import_module("auctions.migrations.0273_backfill_bap_auto_reason")
+        self.assertEqual(migration_module.Migration.operations, [])
 
 
 class ClubBapLotsViewTests(TestCase):
