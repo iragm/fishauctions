@@ -15221,7 +15221,28 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
         if not self.is_api_key_request():
             return super().create(request, *args, **kwargs)
         serializer = self.get_serializer(data=self.get_mapped_request_data())
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            # Log the failed attempt (with raw POST data) to club history so admins can diagnose it.
+            try:
+                club = self.get_club()
+                actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})"
+                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                errors = serializer.errors
+                ClubHistory.objects.create(
+                    club=club,
+                    user=None,
+                    action=(
+                        f"Failed to create member via {actor} — "
+                        f"validation errors: {errors} — "
+                        f"POST data: {field_dump}"
+                    ),
+                    applies_to="MEMBERS",
+                )
+            except Exception:
+                pass  # Never let the history write mask the original error
+            raise
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=201, headers=headers)
