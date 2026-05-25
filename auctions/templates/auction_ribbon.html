@@ -107,6 +107,10 @@
           {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
+          {% if auction.use_check_in_mode and can_manage_check_in %}
+          <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
+          <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> Quick check in users</a>
+          {% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
           <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>

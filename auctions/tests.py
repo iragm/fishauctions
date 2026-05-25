@@ -17700,6 +17700,10 @@ class ManageUsersThroughClubTests(TestCase):
         self.auction.manage_users_through_club = "all"
         self.auction.save()
 
+    def _enable_checkin_mode(self):
+        self.auction.manage_users_through_club = "checkin"
+        self.auction.save()
+
     def _auction_form_data(self):
         return {
             "title": self.auction.title,
@@ -17967,6 +17971,149 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIsNotNone(tos)
         self.assertEqual(tos.clubmember_id, cm.pk)
         self.assertEqual(tos.bidder_number, "123")
+
+    def test_checkin_mode_property_and_users_page_actions(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.use_check_in_mode)
+        self.assertContains(response, "Door prizes")
+        self.assertContains(response, "Quick check in users")
+        self.assertContains(response, "Turn bidding off for all users")
+
+    def test_checkin_mode_manual_member_creation_sets_checked_in_and_bidding_allowed(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.club_add_edit_user)
+        response = self.client.post(
+            reverse("clubmember_create", kwargs={"slug": self.club.slug}) + f"?auction={self.auction.slug}",
+            {
+                "name": "Checked In Member",
+                "email": "checkedin@example.com",
+                "phone_number": "",
+                "address": "",
+                "contact_status": "contact",
+                "bidder_number": "",
+                "memo": "",
+                "discord_role_auto_managed": "on",
+                "discord_role_override": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        member = ClubMember.objects.get(club=self.club, email="checkedin@example.com")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertIsNotNone(tos.checked_in)
+        self.assertTrue(tos.bidding_allowed)
+
+    def test_validate_winner_requires_checked_in_in_checkin_mode(self):
+        self._enable_checkin_mode()
+        ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="123",
+        )
+        from auctions.views import DynamicSetLotWinner
+
+        view = DynamicSetLotWinner()
+        view.request = type("R", (), {"user": self.creator})()
+        view.auction = self.auction
+        tos, error = view.validate_winner("123", "save")
+        self.assertEqual(error, "This bidder has not been checked in yet")
+        self.assertIsNotNone(tos)
+        tos, error = view.validate_winner("123", "force_save")
+        self.assertIsNone(error)
+        self.assertIsNotNone(tos)
+
+    def test_check_in_endpoint_marks_user_checked_in(self):
+        self._enable_checkin_mode()
+        cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="123",
+            bidding_allowed=False,
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
+        self.assertEqual(response.status_code, 200)
+        tos.refresh_from_db()
+        self.assertIsNotNone(tos.checked_in)
+        self.assertTrue(tos.bidding_allowed)
+
+    def test_turn_bidding_off_for_all_users(self):
+        self._enable_checkin_mode()
+        cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
+        AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="123",
+            bidding_allowed=True,
+            checked_in=timezone.now(),
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(reverse("auction_disable_bidding", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.auction, bidding_allowed=True).exists())
+
+    def test_door_prize_picker_only_uses_checked_in_users(self):
+        self._enable_checkin_mode()
+        checked_in_member = ClubMember.objects.create(
+            club=self.club, user=self.joiner, name="Checked In Winner", bidder_number="123"
+        )
+        unchecked_member = ClubMember.objects.create(
+            club=self.club, user=self.outsider, name="Unchecked User", bidder_number="456"
+        )
+        checked_in_tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=checked_in_member,
+            bidder_number="123",
+            checked_in=timezone.now(),
+        )
+        unchecked_tos = AuctionTOS.objects.create(
+            user=self.outsider,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=unchecked_member,
+            bidder_number="456",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(reverse("auction_door_prizes", kwargs={"slug": self.auction.slug}))
+        self.assertRedirects(response, reverse("auction_door_prizes", kwargs={"slug": self.auction.slug}))
+        checked_in_tos.refresh_from_db()
+        unchecked_tos.refresh_from_db()
+        self.assertIsNotNone(checked_in_tos.door_prize_called)
+        self.assertIsNone(unchecked_tos.door_prize_called)
+
+    def test_quick_check_in_scan_assigns_bidder_number(self):
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_quick_check_in_scan", kwargs={"slug": self.auction.slug}),
+            {"barcode": str(member.membership_number), "assign_bidder_number": "456"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        member.refresh_from_db()
+        self.assertEqual(member.bidder_number, "456")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertEqual(tos.bidder_number, "456")
+        self.assertIsNotNone(tos.checked_in)
+        self.assertTrue(tos.bidding_allowed)
 
     def test_clubmember_generate_bidder_number_unique_per_club(self):
         cm1 = ClubMember.objects.create(

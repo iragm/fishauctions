@@ -2135,6 +2135,11 @@ class Auction(models.Model):
         """True when club members are automatically added as AuctionTOS participants."""
         return self.manage_users_through_club == "all" and bool(self.club_id)
 
+    @property
+    def use_check_in_mode(self):
+        """True when this auction adds club members as they are checked in at an event."""
+        return self.manage_users_through_club == "checkin" and bool(self.club_id)
+
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
         if self.created_by == user:
@@ -3659,6 +3664,8 @@ class AuctionTOS(models.Model):
     )
     possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
     add_to_calendar = models.CharField(max_length=20, blank=True, null=True)
+    checked_in = models.DateTimeField(blank=True, null=True, default=None)
+    door_prize_called = models.DateTimeField(blank=True, null=True, default=None)
     clubmember = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -3829,6 +3836,14 @@ class AuctionTOS(models.Model):
     @property
     def invoice(self):
         return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
+
+    @property
+    def requires_check_in_before_bidding(self):
+        return self.auction.use_check_in_mode and self.checked_in is None
+
+    @property
+    def can_bid_in_auction(self):
+        return self.bidding_allowed and not self.requires_check_in_before_bidding
 
     @property
     def invoice_link_html(self):

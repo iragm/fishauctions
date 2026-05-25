@@ -64,8 +64,18 @@ class AuctionTOSHTMxTable(tables.Table):
             result += (
                 f'<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{label}</span>'
             )
-        if not record.bidding_allowed:
+        if not record.can_bid_in_auction:
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
+        if record.checked_in:
+            result += '<span class="badge bg-success ms-1 me-1" title="Checked in">Checked in</span>'
+        elif record.auction.use_check_in_mode:
+            result += '<span class="badge bg-secondary ms-1 me-1" title="Not checked in">Not checked in</span>'
+            if self.can_manage_check_in:
+                check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
+                result += (
+                    f'<button class="btn btn-sm btn-success ms-1" hx-post="{check_in_url}" '
+                    'hx-target="#modals-here" hx-swap="innerHTML">Check in</button>'
+                )
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
         if record.email_address_status == "VALID":
@@ -106,6 +116,7 @@ class AuctionTOSHTMxTable(tables.Table):
     # }
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
+        self.can_manage_check_in = kwargs.pop("can_manage_check_in", False)
         super().__init__(*args, **kwargs)
 
 
