@@ -15359,9 +15359,7 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
                     club=club,
                     user=None,
                     action=(
-                        f"Failed to create member via {actor} — "
-                        f"validation errors: {errors} — "
-                        f"POST data: {field_dump}"
+                        f"Failed to create member via {actor} — validation errors: {errors} — POST data: {field_dump}"
                     ),
                     applies_to="MEMBERS",
                 )
