@@ -5489,18 +5489,17 @@ class Lot(models.Model):
                 return "not_active_member"
         if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
-            seller_filter = Q()
-            if seller_user:
-                seller_filter |= Q(user=seller_user)
-            if seller_email:
-                seller_filter |= Q(auctiontos_seller__email__iexact=seller_email)
-            prior = Lot.objects.filter(
+            base_prior = Lot.objects.filter(
                 auction__club=club,
                 lot_name=self.lot_name,
                 bap_points_awarded__gt=0,
                 date_end__gte=cutoff,
-            )
-            prior = prior.filter(seller_filter).exclude(pk=self.pk).exists()
+            ).exclude(pk=self.pk)
+            prior = False
+            if seller_user:
+                prior = base_prior.filter(user=seller_user).exists()
+            if not prior and seller_email:
+                prior = base_prior.filter(auctiontos_seller__email__iexact=seller_email).exists()
             if prior:
                 return "not_long_enough"
         return None
