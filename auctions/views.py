@@ -2133,6 +2133,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                 "Culture points",
                 "Points reason",
                 "Points club",
+                "Lot URL",
             ]
         )
         for lot in lots:
@@ -2166,6 +2167,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                     cap_pts,
                     points_reason,
                     points_club,
+                    "https://" + lot.full_lot_link,
                 ]
             )
         return response
