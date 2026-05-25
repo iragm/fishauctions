@@ -38,6 +38,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
+    Invoice,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -1200,6 +1201,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.fields["bidder_number"].help_text = None
         self.fields["memo"].widget.attrs["placeholder"] = "Only visible to admins"
         self.fields["bidder_number"].widget.attrs["placeholder"] = "Auto generate"
+        if self.auction.is_club_managed:
+            # In club-managed mode, these fields live on ClubMember and are managed via the club admin.
+            for field_name in ("bidder_number", "bidding_allowed", "selling_allowed", "is_admin", "is_club_member"):
+                self.fields[field_name].disabled = True
+                self.fields[field_name].widget = HiddenInput()
 
     class Meta:
         model = AuctionTOS
@@ -1900,6 +1906,12 @@ class AuctionEditForm(forms.ModelForm):
         help_text="This plus the alternate club cut must be 100%",
         label="Alternate user cut",
     )
+    club = forms.ModelChoiceField(
+        queryset=Club.objects.none(),
+        required=False,
+        empty_label="None",
+        help_text="Associate this auction with a club.",
+    )
 
     class Meta:
         model = Auction
@@ -1941,6 +1953,8 @@ class AuctionEditForm(forms.ModelForm):
             "use_seller_dash_lot_numbering",
             "enable_online_payments",
             "enable_square_payments",
+            "club",
+            "manage_users_through_club",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1968,31 +1982,80 @@ class AuctionEditForm(forms.ModelForm):
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
-        paypal_seller = PayPalSeller.objects.filter(user=self.instance.created_by).first()
+
+        # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
+        if self.user.is_superuser:
+            permitted_club_ids = list(Club.objects.values_list("pk", flat=True))
+        else:
+            permitted_club_ids = list(
+                ClubMember.objects.filter(
+                    user=self.user,
+                    is_deleted=False,
+                )
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+                .values_list("club_id", flat=True)
+            )
+        # Always include the currently saved club so admins without club membership can still edit
+        club_id_set = set(permitted_club_ids)
+        if self.instance and self.instance.pk and self.instance.club_id:
+            club_id_set.add(self.instance.club_id)
+        self.fields["club"].queryset = Club.objects.filter(pk__in=club_id_set).order_by("name")
+        self.fields["club"].initial = self.instance.club if (self.instance and self.instance.pk) else None
+
+        # Determine effective payment user (club's payment_user if integrated payments are on)
+        payment_user = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
+        if (
+            self.instance
+            and self.instance.club
+            and self.instance.club.allow_integrated_payments
+            and self.instance.club.payment_user
+        ):
+            payment_user = self.instance.club.payment_user
+
+        paypal_seller = PayPalSeller.objects.filter(user=payment_user).first()
         if paypal_seller:
             self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
         else:
-            if self.instance.created_by.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
+            effective_creator = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
+            if effective_creator.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
                 # show payments option for superusers with site-wide PayPal configured
                 pass
             else:
-                # Hide the field if user doesn't have PayPal connected and isn't a superuser
+                # Hide the field if no PayPal is connected
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
-        square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()
+        square_seller = SquareSeller.objects.filter(user=payment_user).first()
         if square_seller:
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
-            # Square requires OAuth - no fallback for superusers
-            # Hide the field if seller hasn't linked their Square account
-            if not self.instance.created_by.userdata.square_enabled:
-                self.fields["enable_square_payments"].widget = forms.HiddenInput()
+            # Square requires an actual linked seller record; the userdata flag alone
+            # is not enough because it can remain set after a disconnected/stale auth.
+            self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
-        if not self.instance.club:
+        # These three fields are shown/hidden via JavaScript based on the club selection.
+        # We always render real widgets so the JS can toggle them; server validation
+        # already rejects the combination of no-club + enabled flag.
+        if self.instance.pk and self.instance.manage_users_through_club:
             self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
-        elif not self.instance.club.membership_annual_fee:
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+            # When club-managed, copy_users is irrelevant — the new auction gets members from the club
+            self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
+            has_activity = (
+                Lot.objects.filter(auction=self.instance, is_deleted=False).exists()
+                or Invoice.objects.filter(auction=self.instance).exists()
+            )
+            if has_activity:
+                # Auction has lots or invoices — club-managed mode is locked; club field also locked
+                self.fields["manage_users_through_club"].disabled = True
+                self.fields["manage_users_through_club"].help_text = "Cannot be changed once lots or invoices exist."
+                self.fields["club"].disabled = True
+                self.fields[
+                    "club"
+                ].help_text = "Cannot be changed while lots or invoices exist in a club-managed auction."
+            else:
+                # No activity yet — allow toggling off or changing the club
+                self.fields[
+                    "manage_users_through_club"
+                ].help_text = "Changing this will delete all existing participant records for this auction."
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -2180,6 +2243,18 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
+            HTML("<h4>Club</h4>"),
+            Div(
+                Div(
+                    "club",
+                    css_class="col-md-6",
+                ),
+                Div(
+                    "manage_users_through_club",
+                    css_class="col-md-6",
+                ),
+                css_class="row",
+            ),
             HTML("<h4>General</h4>"),
             Div(
                 Div(
@@ -2289,25 +2364,179 @@ class AuctionEditForm(forms.ModelForm):
                     cleaned_data["minimum_bid"] = round_to_whole_dollar(minimum_bid)
                 else:
                     self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
-        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not cleaned_data.get(
-            "add_people_from_auction_to_club"
-        ):
+        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not cleaned_data.get("club"):
             self.add_error(
                 "add_membership_fee_to_invoices_for_expired_members",
-                "Enable adding people from this auction to the club before enabling membership fees.",
+                "Associate this auction with a club before enabling membership fees.",
             )
-        if (
-            cleaned_data.get("add_people_from_auction_to_club")
-            or cleaned_data.get("add_membership_fee_to_invoices_for_expired_members")
-        ) and not self.instance.club:
+        if cleaned_data.get("add_people_from_auction_to_club") and not cleaned_data.get("club"):
             self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
+    def clean_manage_users_through_club(self):
+        target = self.cleaned_data.get("manage_users_through_club") or ""
+        instance = self.instance
+        currently_enabled = bool(instance and instance.pk and instance.manage_users_through_club)
+        target_enabled = bool(target)
+        if currently_enabled and not target_enabled:
+            # Allow disabling only when there are no lots or invoices
+            if instance and instance.pk:
+                if Lot.objects.filter(auction=instance, is_deleted=False).exists():
+                    msg = "Cannot disable club-managed mode: this auction already has lots."
+                    raise forms.ValidationError(msg)
+                if Invoice.objects.filter(auction=instance).exists():
+                    msg = "Cannot disable club-managed mode: this auction already has invoices."
+                    raise forms.ValidationError(msg)
+        if target_enabled and not currently_enabled:
+            club = self.cleaned_data.get("club") or (instance.club if instance and instance.pk else None)
+            if not club:
+                msg = "Associate this auction with a club before enabling this option."
+                raise forms.ValidationError(msg)
+            if instance and instance.pk:
+                if Lot.objects.filter(auction=instance, is_deleted=False).exists():
+                    msg = "This auction already has lots. Club-managed mode can only be enabled on an empty auction."
+                    raise forms.ValidationError(msg)
+                if Invoice.objects.filter(auction=instance).exists():
+                    msg = (
+                        "This auction already has invoices. Club-managed mode can only be enabled on an empty auction."
+                    )
+                    raise forms.ValidationError(msg)
+        return target
+
+    @staticmethod
+    def _rebuild_auctiontos_from_club(auction):
+        """Delete existing AuctionTOS and recreate from club members (used when enabling or re-enabling club-managed mode)."""
+        AuctionTOS.objects.filter(auction=auction).delete()
+        default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
+        if default_location and auction.club_id:
+            club_members = ClubMember.objects.filter(club_id=auction.club_id, is_deleted=False).order_by(
+                "createdon", "pk"
+            )
+            for club_member in club_members:
+                if not club_member.bidder_number:
+                    club_member.generate_bidder_number(save=True)
+                AuctionTOS.objects.create(
+                    user=club_member.user,
+                    auction=auction,
+                    pickup_location=default_location,
+                    clubmember=club_member,
+                    bidder_number=club_member.bidder_number,
+                    bidding_allowed=club_member.bidding_allowed,
+                    selling_allowed=club_member.selling_allowed,
+                    name=club_member.name or "",
+                    email=club_member.email or "",
+                    phone_number=club_member.phone_number or "",
+                    address=club_member.address or "",
+                    manually_added=True,
+                )
+
     def save(self, commit=True):
+        from django.db import transaction as db_transaction
+
         was_only_whole_dollar_bids = bool(
             self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
         )
-        auction = super().save(commit=commit)
+        # self.initial is populated from model_to_dict(instance) by BaseModelForm.__init__
+        # BEFORE _post_clean() mutates self.instance, so it holds the original DB values.
+        # Never read self.instance.<field> here — it already has the new POST value.
+        old_manage_value = self.initial.get("manage_users_through_club") or ""
+        was_managed_through_club = bool(old_manage_value)
+        was_manage_all = old_manage_value == "all"
+        target_manage_value = self.cleaned_data.get("manage_users_through_club") or ""
+        target_managed_through_club = bool(target_manage_value)
+        target_manage_all = target_manage_value == "all"
+        # self.initial["club"] is the old club pk (int/None) from model_to_dict
+        was_club_id = self.initial.get("club")
+        target_club = self.cleaned_data.get("club")
+        target_club_id = target_club.pk if target_club else None
+
+        enabling_club_management = (
+            commit and self.instance.pk and not was_managed_through_club and target_managed_through_club
+        )
+        disabling_club_management = (
+            commit and self.instance.pk and was_managed_through_club and not target_managed_through_club
+        )
+        club_changed_while_managed = (
+            commit
+            and self.instance.pk
+            and was_managed_through_club
+            and target_managed_through_club
+            and target_club_id != was_club_id
+        )
+        # Rebuild from club when switching to "all" from "checkin" (or any non-all managed state)
+        switching_to_all = (
+            commit
+            and self.instance.pk
+            and was_managed_through_club
+            and target_manage_all
+            and not was_manage_all
+            and not club_changed_while_managed
+        )
+        # Switching from "all" → "checkin": clear auto-added TOS records
+        switching_to_checkin = (
+            commit
+            and self.instance.pk
+            and was_managed_through_club
+            and target_managed_through_club
+            and not target_manage_all
+            and was_manage_all
+            and not club_changed_while_managed
+        )
+
+        if enabling_club_management:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                if Lot.objects.filter(auction=locked, is_deleted=False).exists():
+                    msg = "Cannot enable club-managed mode: lots were added while the form was open."
+                    raise forms.ValidationError(msg)
+                if Invoice.objects.filter(auction=locked).exists():
+                    msg = "Cannot enable club-managed mode: invoices were added while the form was open."
+                    raise forms.ValidationError(msg)
+                auction = super().save(commit=commit)
+                if target_manage_all:
+                    self._rebuild_auctiontos_from_club(auction)
+                else:
+                    # check-in mode: clear any existing TOS but don't auto-add
+                    AuctionTOS.objects.filter(auction=locked).delete()
+        elif disabling_club_management:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                if Lot.objects.filter(auction=locked, is_deleted=False).exists():
+                    msg = "Cannot disable club-managed mode: lots were added while the form was open."
+                    raise forms.ValidationError(msg)
+                if Invoice.objects.filter(auction=locked).exists():
+                    msg = "Cannot disable club-managed mode: invoices were added while the form was open."
+                    raise forms.ValidationError(msg)
+                # Clear all AuctionTOS since club-managed mode is being turned off
+                AuctionTOS.objects.filter(auction=locked).delete()
+                auction = super().save(commit=commit)
+        elif club_changed_while_managed:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                if Lot.objects.filter(auction=locked, is_deleted=False).exists():
+                    msg = "Cannot change the club while lots exist in a club-managed auction."
+                    raise forms.ValidationError(msg)
+                if Invoice.objects.filter(auction=locked).exists():
+                    msg = "Cannot change the club while invoices exist in a club-managed auction."
+                    raise forms.ValidationError(msg)
+                auction = super().save(commit=commit)
+                if target_manage_all:
+                    self._rebuild_auctiontos_from_club(auction)
+                else:
+                    AuctionTOS.objects.filter(auction=auction).delete()
+        elif switching_to_all:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                auction = super().save(commit=commit)
+                self._rebuild_auctiontos_from_club(auction)
+        elif switching_to_checkin:
+            with db_transaction.atomic():
+                locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
+                # Clear auto-added TOS records; check-in mode populates them one at a time
+                AuctionTOS.objects.filter(auction=locked).delete()
+                auction = super().save(commit=commit)
+        else:
+            auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
             lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
             lots_to_update = []
@@ -3485,7 +3714,7 @@ class ClubEditForm(forms.ModelForm):
             "location_coordinates",
         ]
         help_texts = {
-            "name": "Changing this will change the URL for your club's page.",
+            "name": "Changing this will change the URL for your club's page, as well as any API keys you're using.",
             "allow_joining": "Let members self-join via the public club page.",
             "enable_breeder_award_program": "Track when users breed fish and show a leaderboard of top breeders.",
         }
@@ -3757,46 +3986,122 @@ class BapAwardForm(forms.ModelForm):
 
 
 class ClubMemberAdminForm(forms.ModelForm):
-    """Form for club admins to edit a club member's details."""
+    """Form for club admins to edit a club member's details.
+
+    When ``auctiontos`` is passed the form is rendered in the context of a
+    specific auction.  Auction-scoped fields (pickup_location, is_club_member)
+    are added; contact_status and Discord role fields are hidden because those
+    are club-wide settings that don't belong in the per-auction workflow.
+    """
+
+    # Extra fields for auction context (not on ClubMember model)
+    pickup_location = forms.ModelChoiceField(queryset=PickupLocation.objects.none(), required=False)
+    is_club_member = forms.BooleanField(required=False, label="Alternate fees")
 
     class Meta:
         model = ClubMember
         fields = [
             "name",
+            "memo",
             "email",
             "phone_number",
             "address",
             "contact_status",
+            "bidder_number",
+            "bidding_allowed",
+            "selling_allowed",
             "discord_role_auto_managed",
             "discord_role_override",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
+            "memo": forms.TextInput(attrs={"placeholder": "Admin notes"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
-            "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
+            "address": forms.Textarea(attrs={"placeholder": "123 Main St, City, State", "rows": 3}),
+            "bidder_number": forms.TextInput(attrs={"placeholder": "Auto"}),
         }
-        help_texts = {
-            "contact_status": (
-                "Contact normally: all emails. "
-                "No non-essential emails: only transactional messages. "
-                "Do not contact: no emails at all."
-            ),
-        }
+        # All help texts stripped; only is_club_member retains its help text (set dynamically below)
+        help_texts = dict.fromkeys(fields, "")
 
-    def __init__(self, *args, post_url=None, read_only=False, club=None, **kwargs):
+    def __init__(self, *args, post_url=None, read_only=False, club=None, auctiontos=None, auction=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        self._club = club
+        self._auctiontos = auctiontos
 
         # Restrict discord_role_override queryset to roles the bot can actually assign
         has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
         if club:
             self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
-        # Hide Discord role fields when the club has no Discord server
+        # --- Auction-context extra fields ---
+        # auctiontos is set when editing; auction is set when creating in check-in mode
+        auction = auctiontos.auction if auctiontos else auction
+        show_pickup = bool(auction and auction.multi_location)
+        show_alt_fees = bool(auction)  # show whenever we have auction context, create or edit
+        in_auction_context = bool(auctiontos or auction)
+
+        if show_pickup:
+            self.fields["pickup_location"].queryset = auction.location_qs
+            self.fields["pickup_location"].initial = auctiontos.pickup_location_id if auctiontos else None
+        else:
+            self.fields["pickup_location"].widget = forms.HiddenInput()
+
+        if show_alt_fees and auction:
+            help_text = "Check to apply alternate fees: "
+            fee_parts = []
+            if auction.lot_entry_fee_for_club_members:
+                fee_parts.append(f"${auction.lot_entry_fee_for_club_members} lot entry fee")
+            if auction.winning_bid_percent_to_club_for_club_members:
+                fee_parts.append(f"{auction.winning_bid_percent_to_club_for_club_members}% club cut")
+            if fee_parts:
+                help_text += ", ".join(fee_parts)
+            else:
+                help_text = "Check to charge no selling fees (are your rules set up correctly?)"
+            label = (
+                auction.alternative_split_label.capitalize() if auction.alternative_split_label else "Alternate fees"
+            )
+            self.fields["is_club_member"].help_text = help_text
+            self.fields["is_club_member"].label = label
+            if auctiontos:
+                self.fields["is_club_member"].initial = auctiontos.is_club_member
+        else:
+            self.fields["is_club_member"].widget = forms.HiddenInput()
+
+        # contact_status is excluded from the layout in auction context but is still a required field
+        # (no blank=True). Make it a hidden input so a valid value is always submitted.
+        if in_auction_context:
+            self.fields["contact_status"].widget = forms.HiddenInput()
+            self.fields["contact_status"].initial = (
+                self.instance.contact_status if self.instance and self.instance.pk else "contact"
+            )
+
+        # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them.
+        # BooleanField has required=True by default; set required=False so an absent/False value
+        # doesn't fail validation when the field is hidden.
+        if in_auction_context and auction:
+            if not auction.only_approved_sellers:
+                self.fields["selling_allowed"].widget = forms.HiddenInput()
+                self.fields["selling_allowed"].required = False
+            if not auction.only_approved_bidders:
+                self.fields["bidding_allowed"].widget = forms.HiddenInput()
+                self.fields["bidding_allowed"].required = False
+            # Initialise from auctiontos when editing; default to member/True for new check-ins.
+            if auctiontos:
+                self.fields["selling_allowed"].initial = auctiontos.selling_allowed
+                self.fields["bidding_allowed"].initial = auctiontos.bidding_allowed
+            else:
+                instance_obj = self.instance if self.instance and self.instance.pk else None
+                self.fields["selling_allowed"].initial = instance_obj.selling_allowed if instance_obj else True
+                self.fields["bidding_allowed"].initial = instance_obj.bidding_allowed if instance_obj else True
+
+        # Hide Discord role fields when the club has no Discord server, or in auction context.
+        # discord_role_auto_managed is a BooleanField — set required=False and a sensible initial
+        # so HiddenInput doesn't trigger a spurious required-field validation error.
         discord_fields = []
-        if has_discord:
+        if has_discord and not in_auction_context:
             discord_fields = [
                 "discord_role_auto_managed",
                 Field(
@@ -3804,13 +4109,59 @@ class ClubMemberAdminForm(forms.ModelForm):
                     wrapper_class="discord-role-override-field",
                 ),
             ]
+        else:
+            self.fields["discord_role_auto_managed"].widget = forms.HiddenInput()
+            self.fields["discord_role_auto_managed"].required = False
+            instance_obj = self.instance if self.instance and self.instance.pk else None
+            self.fields["discord_role_auto_managed"].initial = (
+                instance_obj.discord_role_auto_managed if instance_obj else True
+            )
+            self.fields["discord_role_override"].widget = forms.HiddenInput()
+            # discord_role_auto_managed must appear in the layout for crispy to render it as hidden
+            discord_fields = [Field("discord_role_auto_managed"), Field("discord_role_override")]
+
+        # Layout:
+        #   Row: bidder_number (left) | memo (right)
+        #   name
+        #   Row: email | phone
+        #   address (textarea)
+        #   contact_status (hidden in auction context)
+        #   Row: bidding_allowed | selling_allowed  (hidden when not applicable)
+        #   is_club_member (alt fees, auction context only)
+        #   pickup_location (multi-location auction only)
+        # In auction context contact_status and discord_role_auto_managed are hidden but still
+        # in the form — they MUST appear in the layout so crispy renders them as hidden inputs
+        # (crispy only auto-renders hidden fields that are somewhere in the layout).
+        if in_auction_context:
+            contact_status_fields: list = [Field("contact_status")]
+        else:
+            contact_status_fields = ["contact_status"]
+
+        bidding_selling_row = Div(
+            Div("bidding_allowed", css_class="col-md-6"),
+            Div("selling_allowed", css_class="col-md-6"),
+            css_class="row",
+        )
+        alt_fees_field: list = ["is_club_member"] if show_alt_fees else []
+        pickup_field: list = ["pickup_location"] if show_pickup else []
 
         base_fields = [
+            Div(
+                Div("bidder_number", css_class="col-md-4"),
+                Div("memo", css_class="col-md-8"),
+                css_class="row",
+            ),
             "name",
-            "email",
-            "phone_number",
+            Div(
+                Div("email", css_class="col-md-6"),
+                Div("phone_number", css_class="col-md-6"),
+                css_class="row",
+            ),
             "address",
-            "contact_status",
+            *contact_status_fields,
+            bidding_selling_row,
+            *alt_fees_field,
+            *pickup_field,
         ]
 
         if read_only:
@@ -3854,6 +4205,21 @@ class ClubMemberAdminForm(forms.ModelForm):
             msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
             raise forms.ValidationError(msg)
         return role
+
+    def clean_bidder_number(self):
+        bidder_number = (self.cleaned_data.get("bidder_number") or "").strip()
+        if not bidder_number:
+            return bidder_number
+        club = self._club or (self.instance.club if self.instance and self.instance.pk else None)
+        if not club:
+            return bidder_number
+        clash = (
+            ClubMember.objects.filter(club=club, bidder_number=bidder_number).exclude(pk=self.instance.pk or 0).exists()
+        )
+        if clash:
+            msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
+            raise forms.ValidationError(msg)
+        return bidder_number
 
 
 class ClubMemberPermissionsForm(forms.ModelForm):
@@ -3902,15 +4268,39 @@ class ClubMemberPermissionsForm(forms.ModelForm):
 
 
 class ClubMemberMergeTargetForm(forms.Form):
-    target = forms.ModelChoiceField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
+    target = forms.CharField(
+        widget=autocomplete.Select2(
+            url="club-member-merge-autocomplete",
+            forward=["club_slug", "exclude_member"],
+            attrs={
+                "data-html": True,
+                "data-container-css-class": "",
+            },
+        )
+    )
+    club_slug = forms.CharField(widget=HiddenInput())
+    exclude_member = forms.IntegerField(widget=HiddenInput(), required=False)
 
     def __init__(self, club, source, *args, **kwargs):
         self.club = club
         self.source = source
         super().__init__(*args, **kwargs)
-        self.fields["target"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).exclude(pk=source.pk)
         self.fields["target"].label = f"Merge {self.source} with"
+        self.fields["club_slug"].initial = club.slug
+        self.fields["exclude_member"].initial = source.pk
         add_bootstrap_classes(self)
+
+    def clean_target(self):
+        target_pk = self.cleaned_data["target"]
+        try:
+            target = ClubMember.objects.get(pk=target_pk, club=self.club)
+        except ClubMember.DoesNotExist as exc:
+            msg = "Select a member from this club"
+            raise forms.ValidationError(msg) from exc
+        if target == self.source:
+            msg = "You can't merge a member with themselves"
+            raise forms.ValidationError(msg)
+        return target
 
 
 class ClubMemberMergeReviewForm(forms.ModelForm):

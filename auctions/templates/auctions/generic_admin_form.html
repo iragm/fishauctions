@@ -6,11 +6,12 @@
 	<div class="modal-dialog modal-lg modal-dialog-centered">
 	  <div class="modal-content">
 		<div class="modal-header">
-		  <h5 class="modal-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
+		  <h5 class="modal-title" id="modal-invoice-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
 		</div>
 		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning text-dark'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip|safe }}</span>
+            {% if invoice %}{% include "auctions/partials/invoice_membership_renewal.html" %}{% endif %}
 			<p>{% crispy form form.helper %}</p>
 	  </div>
 	</div>
@@ -18,7 +19,12 @@
 </div>
 <script>
 (function() {
+	// Cancel any pending clear-timer from a previous close so a fast re-open
+	// is never wiped out by a stale timer callback.
 	clearTimeout(window._modalCloseTimer);
+	window._modalOpenToken = (window._modalOpenToken || 0) + 1;
+	var myToken = window._modalOpenToken;
+
 	function closeModal() {
 		var container = document.getElementById("modals-here");
 		var backdrop = document.getElementById("modal-backdrop");
@@ -26,7 +32,10 @@
 		if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
 		if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
 		document.removeEventListener("keydown", escHandler);
-		window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
+		// Only clear the container if no new modal has been opened since this one.
+		window._modalCloseTimer = setTimeout(function() {
+			if (window._modalOpenToken === myToken && container) container.innerHTML = "";
+		}, 300);
 	}
 	window.closeModal = closeModal;
 	function escHandler(e) { if (e.key === "Escape") closeModal(); }

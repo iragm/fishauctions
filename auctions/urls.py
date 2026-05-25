@@ -26,6 +26,11 @@ urlpatterns = [
         views.ClubMemberAutocomplete.as_view(),
         name="club-member-autocomplete",
     ),
+    path(
+        "api/club-member-merge-autocomplete/",
+        views.ClubMemberMergeAutocomplete.as_view(),
+        name="club-member-merge-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
@@ -339,6 +344,11 @@ urlpatterns = [
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
     path("auctions/<slug:slug>/report/", views.AuctionReportView.as_view(), name="user_list"),
     path(
+        "auctions/<slug:slug>/add-to-club/",
+        views.AddAuctionUsersToClub.as_view(),
+        name="auction_add_users_to_club",
+    ),
+    path(
         "auctions/<slug:slug>/email-users/",
         views.ComposeEmailToUsers.as_view(),
         name="compose_email_to_users",
@@ -569,6 +579,16 @@ urlpatterns = [
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/",
+        views.ClubMemberByUUIDView.as_view(),
+        name="club_member_by_uuid",
+    ),
+    path(
+        "clubs/<slug:slug>/member-number/<int:number>/",
+        views.ClubMemberByNumberView.as_view(),
+        name="club_member_by_number",
+    ),
     path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
@@ -620,7 +640,22 @@ urlpatterns = [
         views.ClubMemberAppleWalletPassView.as_view(),
         name="club_member_apple_wallet",
     ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/apple-wallet.pkpass",
+        views.ClubMemberAppleWalletByUUIDView.as_view(),
+        name="club_member_apple_wallet_by_uuid",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
+    path(
+        "api/clubmember/<int:pk>/permanent-delete/",
+        views.ClubMemberPermanentDeleteView.as_view(),
+        name="club_member_permanent_delete",
+    ),
+    path(
+        "api/clubmember/<int:pk>/reactivate/",
+        views.ClubMemberReactivateView.as_view(),
+        name="club_member_reactivate",
+    ),
     path(
         "api/clubmember/<int:pk>/confirm/<str:action>/",
         views.ClubMemberConfirmView.as_view(),
@@ -637,17 +672,16 @@ urlpatterns = [
         views.ClubMemberRenewPageView.as_view(),
         name="club_member_renew_page",
     ),
-    # REST API v1
-    path(
-        "api/v1/clubs/<slug:slug>/members/ingest/",
-        views.ClubMemberIngestAPIView.as_view(),
-        name="api_club_member_ingest",
-    ),
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
     path(
         "api/v1/clubs/<slug:slug>/members/<int:pk>/",
         views.ClubMemberDetailAPIView.as_view(),
         name="api_club_member_detail",
+    ),
+    path(
+        "api/v1/clubs/<slug:slug>/members/<int:pk>/bap-awards/",
+        views.ClubMemberBapAwardAPIView.as_view(),
+        name="api_club_member_bap_awards",
     ),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),

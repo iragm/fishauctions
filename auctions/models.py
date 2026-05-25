@@ -681,6 +681,10 @@ class Club(models.Model):
         null=True,
         help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
     )
+    create_events_for_auctions = models.BooleanField(
+        default=False,
+        help_text="Automatically create a Discord scheduled event for each promoted auction.",
+    )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     icon = ThumbnailerImageField(
@@ -821,6 +825,48 @@ class ContactRecord(models.Model):
         abstract = True
 
 
+def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, address=None, last_used=None):
+    """Generate a bidder number using phone/address/preferred number with collision retries.
+
+    Shared by AuctionTOS.save() (auction-scoped uniqueness) and ClubMember.generate_bidder_number()
+    (club-scoped uniqueness). The caller passes an `is_taken(number)` callable that returns True if
+    the candidate number is already in use within the relevant scope.
+
+    Algorithm matches the long-standing AuctionTOS behavior:
+      1. If `last_used` is given and not taken, reuse it.
+      2. Seed from last 3 digits of phone, else last 3 digits of address, else `preferred`.
+      3. Avoid the blacklist 13-19 (decades that look like ages).
+      4. Loop up to 6000 times trying the seed, then random ints in [1, 999].
+      5. If nothing works, return the literal "ERROR".
+    """
+    dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
+    if last_used and not is_taken(last_used):
+        return last_used
+    search = None
+    if phone:
+        search = re.search(r"([\d]{3}$)|$", phone).group()
+    if (not search or str(search) in dont_use_these) and address:
+        search = re.search(r"([\d]{3}$)|$", address).group()
+    if preferred:
+        search = preferred
+    try:
+        if str(search)[0] == "0":
+            search = search[1:]
+        if str(search)[0] == "0":
+            search = search[1:]
+    except Exception:
+        pass
+    failsafe = 0
+    while failsafe < 6000:
+        search = str(search)
+        if search[:-2] not in dont_use_these and search != "None":
+            if not is_taken(search):
+                return search
+        search = randint(1, 999)
+        failsafe += 1
+    return "ERROR"
+
+
 class ClubMember(ContactRecord):
     """A member of a club. Similar to AuctionTOS but for club membership."""
 
@@ -902,6 +948,21 @@ class ClubMember(ContactRecord):
         blank=True,
         related_name="duplicate_of",
         help_text="Another club member with the same name; may be a duplicate",
+    )
+    bidder_number = models.CharField(
+        max_length=20,
+        default="",
+        blank=True,
+        db_index=True,
+        help_text="Used when the club manages auction participants directly. Must be unique within this club.",
+    )
+    bidding_allowed = models.BooleanField(
+        default=True,
+        help_text="When the club manages auction participants, controls whether this member can place bids.",
+    )
+    selling_allowed = models.BooleanField(
+        default=True,
+        help_text="When the club manages auction participants, controls whether this member can submit lots.",
     )
 
     @property
@@ -1081,10 +1142,41 @@ class ClubMember(ContactRecord):
 
     @property
     def member_page_url(self):
-        """Relative URL for this member's club detail page with their UUID pre-filled."""
+        """Relative URL for this member's wallet/identity page (UUID-keyed)."""
         from django.urls import reverse
 
-        return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"?user={self.uuid}"
+        return reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.uuid})
+
+    @property
+    def wallet_link(self):
+        """Absolute URL for adding this membership to Google/Apple Wallet (UUID-keyed)."""
+        from django.contrib.sites.models import Site
+
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            # Fallback for test environments or missing Site
+            domain = "localhost"
+        return f"https://{domain}{self.member_page_url}"
+
+    @property
+    def simple_membership_link(self):
+        """Absolute URL for the member-number page (shows number, expiration, payment)."""
+        from django.contrib.sites.models import Site
+        from django.urls import reverse
+
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            # Fallback for test environments or missing Site
+            domain = "localhost"
+        path = reverse(
+            "club_member_by_number",
+            kwargs={"slug": self.club.slug, "number": self.membership_number},
+        )
+        return f"https://{domain}{path}"
 
     def calculate_membership_expiration_reminder_due(self):
         if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
@@ -1103,6 +1195,13 @@ class ClubMember(ContactRecord):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "bidder_number"],
+                condition=~Q(bidder_number=""),
+                name="unique_bidder_number_per_club",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         # Belt-and-suspenders uniqueness for membership_number: the DB has a unique
@@ -1192,6 +1291,29 @@ class ClubMember(ContactRecord):
                     ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
 
+    def generate_bidder_number(self, save=True):
+        """Assign a unique bidder_number scoped to this member's club.
+        Uses the shared `_generate_unique_bidder_number` helper. Returns the assigned number.
+        Does not write to userdata.preferred_bidder_number (club-scoped numbers are not a global hint).
+        """
+        preferred = None
+        if self.user_id:
+            try:
+                preferred = self.user.userdata.preferred_bidder_number or None
+            except Exception:
+                preferred = None
+        self.bidder_number = _generate_unique_bidder_number(
+            is_taken=lambda n: (
+                ClubMember.objects.filter(club_id=self.club_id, bidder_number=n).exclude(pk=self.pk or 0).exists()
+            ),
+            preferred=preferred,
+            phone=self.phone_number,
+            address=self.address,
+        )
+        if save:
+            ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
+        return self.bidder_number
+
 
 class ClubHistory(models.Model):
     """Changelog of changes made to a club"""
@@ -1231,6 +1353,10 @@ class ClubAPIKey(models.Model):
     prefix = models.CharField(max_length=12, unique=True, db_index=True)
     key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
     is_active = models.BooleanField(default=True)
+    can_add_club_members = models.BooleanField(default=True)
+    can_read_club_member_list = models.BooleanField(default=False)
+    can_update_club_members = models.BooleanField(default=False)
+    can_add_bap_points = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -1368,6 +1494,7 @@ class Auction(models.Model):
     watch_warning_email_sent = models.BooleanField(default=False)
     first_discord_sent = models.BooleanField(default=False)
     second_discord_sent = models.BooleanField(default=False)
+    discord_event_created = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
@@ -1378,6 +1505,22 @@ class Auction(models.Model):
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
         help_text="And create membership if they don't have one.  you can turn this off on each invoice.",
+    )
+    MANAGE_USERS_CHOICES = [
+        ("", "Off"),
+        ("all", "Automatically add all club members"),
+        ("checkin", "Add on user check-in"),
+    ]
+    manage_users_through_club = models.CharField(
+        max_length=20,
+        choices=MANAGE_USERS_CHOICES,
+        default="",
+        blank=True,
+        help_text=(
+            "Manage participants as members of the associated club. "
+            "Requires an associated club and an empty auction (no lots, no invoices). "
+            "Changing this deletes existing per-auction participant records."
+        ),
     )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
@@ -1623,16 +1766,26 @@ class Auction(models.Model):
         return settings.UNTRUSTED_MESSAGE
 
     @property
+    def effective_payment_user(self):
+        """Return the user whose payment accounts should be used for this auction.
+        If the auction belongs to a club with integrated payments and a payment_user set,
+        that user's accounts are used instead of the auction creator's."""
+        if self.club and self.club.allow_integrated_payments and self.club.payment_user:
+            return self.club.payment_user
+        return self.created_by
+
+    @property
     def paypal_information(self):
         """
         Return the merchant ID for PayPal payments
-        Fallback for admin users to use the site-wide api keys
+        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
+        Fallback for admin users to use the site-wide api keys.
         """
-
-        seller = PayPalSeller.objects.filter(user=self.created_by).first()
+        user = self.effective_payment_user
+        seller = PayPalSeller.objects.filter(user=user).first()
         if seller:
             return seller.paypal_merchant_id
-        if self.created_by.is_superuser:
+        if self.created_by and self.created_by.is_superuser:
             return "admin"
         return None
 
@@ -1640,11 +1793,13 @@ class Auction(models.Model):
     def square_information(self):
         """
         Return the merchant ID for Square payments
-        Only returns ID if seller has linked their Square account via OAuth
+        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
+        Only returns ID if the effective user has linked their Square account via OAuth.
         """
         from auctions.models import SquareSeller
 
-        seller = SquareSeller.objects.filter(user=self.created_by).first()
+        user = self.effective_payment_user
+        seller = SquareSeller.objects.filter(user=user).first()
         if seller:
             return seller.square_merchant_id
         return None
@@ -1653,7 +1808,10 @@ class Auction(models.Model):
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
-        this banner should only be shown to the auction creator"""
+        this banner should only be shown to the auction creator.
+        Hidden when the club manages payments (banner doesn't apply to the creator)."""
+        if self.club and self.club.allow_integrated_payments:
+            return False
         if self.dismissed_paypal_banner:
             return False
         if not self.created_by.userdata.paypal_enabled:
@@ -1672,9 +1830,12 @@ class Auction(models.Model):
     def show_square_banner(self):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
-        this banner should only be shown to the auction creator"""
+        this banner should only be shown to the auction creator.
+        Hidden when the club manages payments (banner doesn't apply to the creator)."""
         from auctions.models import SquareSeller
 
+        if self.club and self.club.allow_integrated_payments:
+            return False
         if self.dismissed_square_banner:
             return False
         if not self.created_by.userdata.square_enabled:
@@ -1964,6 +2125,16 @@ class Auction(models.Model):
         # return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
         return f"{self.get_absolute_url()}lots/set-winners/"
 
+    @property
+    def is_club_managed(self):
+        """True when this auction manages its participants via the associated club's ClubMember records."""
+        return bool(self.manage_users_through_club) and bool(self.club_id)
+
+    @property
+    def manage_users_auto_add(self):
+        """True when club members are automatically added as AuctionTOS participants."""
+        return self.manage_users_through_club == "all" and bool(self.club_id)
+
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
         if self.created_by == user:
@@ -1975,6 +2146,14 @@ class Auction(models.Model):
         tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.pk).first()
         if tos:
             return True
+        if self.is_club_managed:
+            has_club_admin = (
+                ClubMember.objects.filter(club_id=self.club_id, user=user, is_deleted=False)
+                .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+                .exists()
+            )
+            if has_club_admin:
+                return True
         return False
 
     @property
@@ -3480,6 +3659,14 @@ class AuctionTOS(models.Model):
     )
     possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
     add_to_calendar = models.CharField(max_length=20, blank=True, null=True)
+    clubmember = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="auction_tos_records",
+        help_text="When the auction is managed through its club, links this record to the ClubMember that owns the bidder_number and permissions.",
+    )
 
     @property
     def phone_as_string(self):
@@ -3677,10 +3864,6 @@ class AuctionTOS(models.Model):
         return 0
 
     def save(self, *args, **kwargs):
-        def check_number_in_auction(number):
-            """See if any other auctiontos are currently using a given bidder number"""
-            return AuctionTOS.objects.filter(bidder_number=number, auction=self.auction).count()
-
         if not self.pk:
             # logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
@@ -3730,60 +3913,45 @@ class AuctionTOS(models.Model):
         # self.address = userData.address
         # set the bidder number based on the phone, address, last used number, or just at random
         if not self.bidder_number or self.bidder_number == "None":
-            # recycle numbers from the last auction if we can
-            # Build query to find previous AuctionTOS by same auction creator
-            last_number_used = None
+            last_used = None
             if self.user or self.email:
                 query = Q()
                 if self.user:
                     query |= Q(user=self.user)
                 if self.email:
                     query |= Q(email=self.email)
-
-                last_number_used = (
+                last_obj = (
                     AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
-                    .exclude(pk=self.pk)  # Exclude self if updating
+                    .exclude(pk=self.pk)
                     .order_by("-createdon")
                     .first()
                 )
+                if last_obj:
+                    last_used = last_obj.bidder_number
 
-            if last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
-                self.bidder_number = last_number_used.bidder_number
-            else:
-                dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
-                search = None
-                if self.phone_number:
-                    search = re.search(r"([\d]{3}$)|$", self.phone_number).group()
-                if not search or str(search) in dont_use_these:
-                    if self.address:
-                        search = re.search(r"([\d]{3}$)|$", self.address).group()
-                if self.user:
-                    userData = self.user.userdata
-                    if userData.preferred_bidder_number:
-                        search = userData.preferred_bidder_number
-                # I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
-                failsafe = 0
-                # bidder numbers shouldn't start with 0
-                try:
-                    if str(search)[0] == "0":
-                        search = search[1:]
-                    if str(search)[0] == "0":
-                        search = search[1:]
-                except:
-                    pass
-                while failsafe < 6000:
-                    search = str(search)
-                    if search[:-2] not in dont_use_these and search != "None":
-                        if check_number_in_auction(search) == 0:
-                            self.bidder_number = search
-                            if self.user:
-                                if not userData.preferred_bidder_number:
-                                    userData.preferred_bidder_number = search
-                                    userData.save()
-                            break
-                    # OK, give up and just randomly generate something
-                    search = randint(1, 999)
-                    failsafe += 1
+            user_data = None
+            preferred = None
+            if self.user:
+                user_data = self.user.userdata
+                preferred = user_data.preferred_bidder_number or None
+
+            self.bidder_number = _generate_unique_bidder_number(
+                is_taken=lambda n: (
+                    AuctionTOS.objects.filter(bidder_number=n, auction=self.auction).exclude(pk=self.pk or 0).exists()
+                ),
+                preferred=preferred,
+                phone=self.phone_number,
+                address=self.address,
+                last_used=last_used,
+            )
+            if (
+                user_data
+                and not user_data.preferred_bidder_number
+                and self.bidder_number
+                and self.bidder_number != "ERROR"
+            ):
+                user_data.preferred_bidder_number = self.bidder_number
+                user_data.save()
         if not self.bidder_number:
             # I don't ever want this to be null
             self.bidder_number = "ERROR"
@@ -3936,7 +4104,8 @@ class AuctionTOS(models.Model):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
         preserves any non-empty fields from duplicate that are missing on self,
-        creates an AuctionHistory entry, then deletes the duplicate.
+        creates an AuctionHistory (or ClubHistory for club-managed auctions) entry, then deletes the duplicate.
+        For club-managed auctions, also merges the associated ClubMember records.
         Pass user=request.user when this is triggered by an admin action.
         """
         if duplicate == self:
@@ -3948,7 +4117,16 @@ class AuctionTOS(models.Model):
         # Preserve non-empty fields from duplicate onto self where self has no value.
         # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
         if preserve_missing_fields:
-            fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+            fields_to_preserve = [
+                "user",
+                "name",
+                "email",
+                "memo",
+                "address",
+                "phone_number",
+                "bidder_number",
+                "clubmember",
+            ]
             updates = {}
             for field in fields_to_preserve:
                 self_val = getattr(self, field, None)
@@ -3972,12 +4150,49 @@ class AuctionTOS(models.Model):
             InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
             InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
         invoice.recalculate()
-        # Create auction history entry
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}",
-            user=user,
-        )
+        # For club-managed auctions, also merge the associated ClubMember records
+        merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
+        if self.auction.is_club_managed and self.auction.club_id:
+            self_club_member = self.clubmember
+            dup_club_member = duplicate.clubmember
+            if dup_club_member and dup_club_member != self_club_member:
+                if self_club_member:
+                    # Merge: move all other TOS records that point to the duplicate ClubMember
+                    AuctionTOS.objects.filter(clubmember=dup_club_member).exclude(pk=duplicate.pk).update(
+                        clubmember=self_club_member
+                    )
+                    # Preserve contact info on the surviving ClubMember
+                    for field in ("name", "email", "phone_number", "address"):
+                        self_val = getattr(self_club_member, field, None)
+                        dup_val = getattr(dup_club_member, field, None)
+                        if (self_val is None or self_val == "") and dup_val:
+                            setattr(self_club_member, field, dup_val)
+                    self_club_member.save()
+                    ClubHistory.objects.create(
+                        club=self.auction.club,
+                        user=user,
+                        action=f"Merged club member {dup_club_member} into {self_club_member}: {reason}",
+                        applies_to="MEMBERS",
+                    )
+                    dup_club_member.is_deleted = True
+                    dup_club_member.save()
+                else:
+                    # self TOS has no club member yet — adopt the duplicate's
+                    self.clubmember = dup_club_member
+                    AuctionTOS.objects.filter(pk=self.pk).update(clubmember=dup_club_member)
+            ClubHistory.objects.create(
+                club=self.auction.club,
+                user=user,
+                action=merge_action,
+                applies_to="MEMBERS",
+            )
+        else:
+            # Standard auction — record in AuctionHistory
+            self.auction.create_history(
+                applies_to="USERS",
+                action=merge_action,
+                user=user,
+            )
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 
@@ -7536,6 +7751,19 @@ class UserData(models.Model):
         self.has_unsubscribed = True
         self.last_activity = timezone.now()
         self.save()
+        # Also mark any club members whose email matches as do not contact
+        email = self.user.email
+        if email:
+            members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="do_not_contact")
+            for member in members:
+                member.contact_status = "do_not_contact"
+                member.save(update_fields=["contact_status"])
+                ClubHistory.objects.create(
+                    club=member.club,
+                    user=None,
+                    action=f"{member} marked do not contact after unsubscribing from all emails",
+                    applies_to="MEMBERS",
+                )
 
     @property
     def currency(self):

@@ -71,6 +71,125 @@ class AuctionFilter(django_filters.FilterSet):
             )
 
 
+# Nicknames / short-form equivalents used by both AuctionTOSFilter and ClubMemberFilter to surface
+# rhyming-name matches (e.g. "Bob Smith" also returns "Robert Smith").
+RHYMING_NAMES = [
+    ["andy", "andrew", "drew"],
+    ["alex", "alexander", "lex", "lexi"],
+    ["al", "albert", "bert"],
+    ["bart", "bartholomew", "bartie"],
+    ["ben", "benjamin", "benny"],
+    ["bill", "william", "billy", "will"],
+    ["bob", "robert", "bobby", "rob"],
+    ["brad", "bradley"],
+    ["brandon", "bran"],
+    ["brent", "brenton"],
+    ["brian", "bryan"],
+    ["cal", "calvin"],
+    ["carl", "carlton"],
+    ["chad", "chadwick"],
+    ["charles", "charlie", "chuck"],
+    ["chris", "christopher", "chrissy", "christy"],
+    ["dick", "richard", "ricky"],
+    ["dan", "daniel", "danny"],
+    ["dave", "david", "davy"],
+    ["dean", "deano"],
+    ["don", "donald", "donnie"],
+    ["doug", "douglas", "dougie"],
+    ["ed", "eddie", "edward", "edwin"],
+    ["eli", "elijah"],
+    ["eric", "erick"],
+    ["frank", "franklin", "frankie"],
+    ["fred", "frederick", "freddy"],
+    ["gary", "gareth"],
+    ["george", "georgie", "geo"],
+    ["greg", "gregory", "gregg"],
+    ["hank", "henry"],
+    ["jack", "jackson", "jackie", "john"],
+    ["james", "jamie", "jim", "jimmy"],
+    ["jason", "jay", "jase"],
+    ["jeff", "jeffrey", "jeffry"],
+    ["jerry", "gerald"],
+    ["jesse", "jess", "jessie"],
+    ["jim", "james", "jimmy"],
+    ["joe", "joseph", "joey"],
+    ["john", "jonathan", "jon", "johnny", "jack"],
+    ["josh", "joshua", "joshie"],
+    ["justin", "justine", "jussi"],
+    ["keith", "keithan"],
+    ["ken", "kenneth", "kenny"],
+    ["kevin", "kev"],
+    ["larry", "lawrence", "lars"],
+    ["lee", "leeland"],
+    ["len", "leonard", "lenny"],
+    ["leo", "leonard", "leon"],
+    ["logan", "logie"],
+    ["lou", "louis", "louie"],
+    ["mark", "marcus", "markie"],
+    ["matt", "matthew", "matty"],
+    ["max", "maximilian"],
+    ["mike", "michael", "mikey"],
+    ["nate", "nathan", "nathaniel", "natey"],
+    ["nick", "nicholas", "nicky"],
+    ["pat", "patrick", "paddy"],
+    ["paul", "paulie"],
+    ["pete", "peter", "petey"],
+    ["phil", "philip", "phillip", "philly"],
+    ["ray", "raymond", "raymie"],
+    ["rich", "richard", "richie", "rick"],
+    ["rob", "robert", "robbie"],
+    ["ron", "ronald", "ronnie"],
+    ["russ", "russell"],
+    ["ryan", "ry"],
+    ["sam", "samuel", "sammie"],
+    ["scott", "scottie"],
+    ["sean", "shawn", "shaun", "shawny"],
+    ["steve", "steven", "stevie"],
+    ["ted", "theodore", "teddy"],
+    ["tim", "timothy", "timmy"],
+    ["tom", "thomas", "tommy"],
+    ["tony", "anthony", "tonya", "toni"],
+    ["travis", "trav"],
+    ["trey", "treyton"],
+    ["tyler", "ty tye"],
+    ["vern", "vernon"],
+    ["vic", "victor"],
+    ["vince", "vincent", "vinny"],
+    ["walt", "walter", "wally"],
+    ["warren", "warrick"],
+    ["wayne", "waine"],
+    ["wes", "wesley"],
+    ["will", "william", "willy"],
+    ["zach", "zachary", "zachie"],
+    ["abe", "abraham"],
+    ["ace", "acer"],
+    ["adam", "ad"],
+    ["art", "arthur", "artie"],
+    ["ash", "ashley", "asher"],
+]
+
+
+def rhyming_name_q(value, name_field="name"):
+    """Return a Q object that matches any rhyming/nickname variant for the first word in *value*.
+
+    Given a search string such as "Bob Smith", returns a Q that matches any AuctionTOS/ClubMember
+    whose *name_field* starts with a nickname equivalent (e.g. "Robert Smith", "Bobby Smith") so
+    that searching for a nickname surfaces records stored under the formal name and vice-versa.
+
+    If *value* contains a second word it is treated as a last-name prefix and appended to every
+    candidate first name so the match stays specific (e.g. "Rob Smith" won't match "Bobby Jones").
+    """
+    parts = value.lower().split()
+    first_name = parts[0] if parts else ""
+    last_name = (" " + parts[1]) if len(parts) >= 2 else ""
+    q = Q()
+    for name_set in RHYMING_NAMES:
+        if first_name in name_set:
+            for candidate in name_set:
+                q |= Q(**{f"{name_field}__istartswith": candidate + last_name})
+    return q
+
+
 class AuctionTOSFilter(django_filters.FilterSet):
     """This filter is used on any admin views that allow adding users to an auction and on lot creation/winner screens"""
 
@@ -111,104 +230,6 @@ class AuctionTOSFilter(django_filters.FilterSet):
             qs = add_tos_info(qs)
             qs = qs.order_by("trust")
 
-        RHYMING_NAMES = [
-            [
-                "andy",
-                "andrew",
-                "drew",
-            ],
-            ["alex", "alexander", "lex", "lexi"],
-            ["al", "albert", "bert"],
-            ["bart", "bartholomew", "bartie"],
-            ["ben", "benjamin", "benny"],
-            ["bill", "william", "billy", "will"],
-            ["bob", "robert", "bobby", "rob"],
-            ["brad", "bradley"],
-            ["brandon", "bran"],
-            ["brent", "brenton"],
-            ["brian", "bryan"],
-            ["cal", "calvin"],
-            ["carl", "carlton"],
-            ["chad", "chadwick"],
-            ["charles", "charlie", "chuck"],
-            ["chris", "christopher", "chrissy", "christy"],
-            ["dick", "richard", "ricky"],
-            ["dan", "daniel", "danny"],
-            ["dave", "david", "davy"],
-            ["dean", "deano"],
-            ["don", "donald", "donnie"],
-            ["doug", "douglas", "dougie"],
-            ["ed", "eddie", "edward", "edwin"],
-            ["eli", "elijah"],
-            ["eric", "erick"],
-            ["frank", "franklin", "frankie"],
-            ["fred", "frederick", "freddy"],
-            ["gary", "gareth"],
-            ["george", "georgie", "geo"],
-            ["greg", "gregory", "gregg"],
-            ["hank", "henry"],
-            ["jack", "jackson", "jackie", "john"],
-            ["james", "jamie", "jim", "jimmy"],
-            ["jason", "jay", "jase"],
-            ["jeff", "jeffrey", "jeffry"],
-            ["jerry", "gerald"],
-            ["jesse", "jess", "jessie"],
-            ["jim", "james", "jimmy"],
-            ["joe", "joseph", "joey"],
-            ["john", "jonathan", "jon", "johnny", "jack"],
-            ["josh", "joshua", "joshie"],
-            ["justin", "justine", "jussi"],
-            ["keith", "keithan"],
-            ["ken", "kenneth", "kenny"],
-            ["kevin", "kev"],
-            ["larry", "lawrence", "lars"],
-            ["lee", "leeland"],
-            ["len", "leonard", "lenny"],
-            ["leo", "leonard", "leon"],
-            ["logan", "logie"],
-            ["lou", "louis", "louie"],
-            ["mark", "marcus", "markie"],
-            ["matt", "matthew", "matty"],
-            ["max", "maximilian"],
-            ["mike", "michael", "mikey"],
-            ["nate", "nathan", "nathaniel", "natey"],
-            ["nick", "nicholas", "nicky"],
-            ["pat", "patrick", "paddy"],
-            ["paul", "paulie"],
-            ["pete", "peter", "petey"],
-            ["phil", "philip", "phillip", "philly"],
-            ["ray", "raymond", "raymie"],
-            ["rich", "richard", "richie", "rick"],
-            ["rob", "robert", "robbie"],
-            ["ron", "ronald", "ronnie"],
-            ["russ", "russell"],
-            ["ryan", "ry"],
-            ["sam", "samuel", "sammie"],
-            ["scott", "scottie"],
-            ["sean", "shawn", "shaun", "shawny"],
-            ["steve", "steven", "stevie"],
-            ["ted", "theodore", "teddy"],
-            ["tim", "timothy", "timmy"],
-            ["tom", "thomas", "tommy"],
-            ["tony", "anthony", "tonya", "toni"],
-            ["travis", "trav"],
-            ["trey", "treyton"],
-            ["tyler", "ty tye"],
-            ["vern", "vernon"],
-            ["vic", "victor"],
-            ["vince", "vincent", "vinny"],
-            ["walt", "walter", "wally"],
-            ["warren", "warrick"],
-            ["wayne", "waine"],
-            ["wes", "wesley"],
-            ["will", "william", "willy"],
-            ["zach", "zachary", "zachie"],
-            ["abe", "abraham"],
-            ["ace", "acer"],
-            ["adam", "ad"],
-            ["art", "arthur", "artie"],
-            ["ash", "ashley", "asher"],
-        ]
         # search by invoice status
         invoice_patterns = {
             "open": {"auctiontos__status": "DRAFT"},
@@ -238,21 +259,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
                     qs = qs.filter(**filter_data)
 
         # search by rhyming names
-        qList = Q()
-        parts = value.lower().split()
-        if len(parts) >= 1:
-            first_name = parts[0]
-        else:
-            first_name = ""
-        if len(parts) >= 2:
-            last_name = " " + parts[1]
-        else:
-            last_name = ""
-        for name_set in RHYMING_NAMES:
-            if first_name in name_set:
-                # got a match?  Add all possible matches as OR filters
-                for possible_matching_name in name_set:
-                    qList |= Q(name__istartswith=possible_matching_name + last_name)
+        qList = rhyming_name_q(value)
 
         value = value.strip()
 
@@ -338,6 +345,9 @@ class LotAdminFilter(django_filters.FilterSet):
             # this was a one-off for a bug found during an ACM auction.  It's probably safe to remove.
             if value == "broken":
                 return queryset.filter(auctiontos_winner__isnull=True, winner__isnull=False)
+
+            if value == "bap":
+                return queryset.filter(bap_award__isnull=False)
 
             if value == "unsold":
                 return queryset.filter(auctiontos_winner__isnull=True)
@@ -999,7 +1009,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, source, expired, expiring, never paid...",
+                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1013,11 +1023,38 @@ class ClubMemberFilter(django_filters.FilterSet):
         model = ClubMember
         fields = []
 
+    def __init__(self, data=None, *args, **kwargs):
+        # FilterView passes `request.GET or None`, so an empty GET dict becomes None and the
+        # filterset is treated as unbound — filter_queryset is never called and all members
+        # (including deactivated) leak through.  Seed an empty query so the filterset is always
+        # bound and our filter_queryset override can apply the is_deleted=False default.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+
+    def filter_queryset(self, queryset):
+        """Apply is_deleted default before delegating to field-level filters.
+
+        Deactivated members are hidden unless the user explicitly types 'deactivated'.
+        """
+        query_value = (self.data.get("query") or "").lower()
+        show_deactivated = "deactivated" in query_value.split()
+        if show_deactivated:
+            queryset = queryset.filter(is_deleted=True)
+        else:
+            queryset = queryset.filter(is_deleted=False)
+        return super().filter_queryset(queryset)
+
     def clubmember_search(self, queryset, name, value):
-        """Support text search including special tokens: discord, current, expired, expiring, never paid"""
+        """Support text search including special tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
+
+        Any remaining text after keywords are stripped is searched against name (with rhyming-name
+        expansion), email, discord username, and membership number.
+        """
         tokens = value.lower().split()
         source_filter = None
         status_filter = None
+        duplicate_filter = False
         remaining = []
         for token in tokens:
             if token == "discord":
@@ -1034,11 +1071,17 @@ class ClubMemberFilter(django_filters.FilterSet):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
                 source_filter = "manually_added"
+            elif token == "duplicate":
+                duplicate_filter = True
+            elif token == "deactivated":
+                pass  # handled in filter_queryset
             else:
                 remaining.append(token)
 
         if source_filter:
             queryset = queryset.filter(source=source_filter)
+        if duplicate_filter:
+            queryset = queryset.filter(possible_duplicate__isnull=False)
         if status_filter:
             today = timezone.now().date()
             if status_filter == "current":
@@ -1055,12 +1098,20 @@ class ClubMemberFilter(django_filters.FilterSet):
 
         text = " ".join(remaining)
         if text:
+            number_q = Q()
+            try:
+                number_q = Q(membership_number=int(text))
+            except (ValueError, TypeError):
+                pass
+            rhyming_q = rhyming_name_q(text)
             queryset = queryset.filter(
                 Q(name__icontains=text)
                 | Q(email__icontains=text)
                 | Q(user__email__icontains=text)
                 | Q(discord_username__icontains=text)
-            )
+                | number_q
+                | rhyming_q
+            ).distinct()
         return queryset
 
 

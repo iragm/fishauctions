@@ -206,6 +206,71 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
         transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk, unpaid_only=True))
 
 
+@receiver(pre_save, sender="auctions.ClubMember")
+def stash_previous_clubmember_state(sender, instance, **kwargs):
+    """Snapshot per-club auction-permission fields so post_save can detect changes
+    and propagate them to linked shadow AuctionTOS records."""
+    if instance.pk:
+        from .models import ClubMember
+
+        prev = (
+            ClubMember.objects.filter(pk=instance.pk)
+            .values("bidder_number", "bidding_allowed", "selling_allowed")
+            .first()
+            or {}
+        )
+        instance._previous_bidder_number = prev.get("bidder_number")
+        instance._previous_bidding_allowed = prev.get("bidding_allowed")
+        instance._previous_selling_allowed = prev.get("selling_allowed")
+    else:
+        instance._previous_bidder_number = None
+        instance._previous_bidding_allowed = None
+        instance._previous_selling_allowed = None
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
+    """When a ClubMember's bidder_number / bidding_allowed / selling_allowed change,
+    push the new values to linked shadow AuctionTOS records for club-managed auctions
+    that have not yet been invoiced. Bidder-number collisions are skipped per-row
+    (warning logged) rather than letting a unique-constraint violation crash the save.
+    """
+    if created:
+        return
+    from .models import AuctionTOS
+
+    prev_bidder = getattr(instance, "_previous_bidder_number", None)
+    prev_bidding = getattr(instance, "_previous_bidding_allowed", None)
+    prev_selling = getattr(instance, "_previous_selling_allowed", None)
+
+    shadows = AuctionTOS.objects.filter(
+        clubmember=instance,
+        auction__manage_users_through_club__in=["all", "checkin"],
+        auction__invoiced=False,
+    )
+
+    if prev_bidding is not None and prev_bidding != instance.bidding_allowed:
+        shadows.update(bidding_allowed=instance.bidding_allowed)
+    if prev_selling is not None and prev_selling != instance.selling_allowed:
+        shadows.update(selling_allowed=instance.selling_allowed)
+    if prev_bidder is not None and prev_bidder != instance.bidder_number and instance.bidder_number:
+        for shadow in shadows:
+            collision = (
+                AuctionTOS.objects.filter(auction_id=shadow.auction_id, bidder_number=instance.bidder_number)
+                .exclude(pk=shadow.pk)
+                .exists()
+            )
+            if collision:
+                logging.getLogger(__name__).warning(
+                    "Skipped bidder_number sync for AuctionTOS pk=%s: '%s' already taken in auction pk=%s",
+                    shadow.pk,
+                    instance.bidder_number,
+                    shadow.auction_id,
+                )
+                continue
+            AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+
+
 @receiver(pre_save, sender="auctions.Lot")
 def update_lot_info(sender, instance, **kwargs):
     """Fill out the location and address from the user; set end date from auction."""
@@ -264,22 +329,15 @@ def create_user_userdata(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def ensure_google_wallet_class(sender, instance, created, **kwargs):
-    """Ensure the Google Wallet GenericClass exists / is current for this club.
+    """Create the Google Wallet GenericClass once per club.
 
-    Fires when:
-      * the class hasn't been confirmed created yet (`google_wallet_class_created` False), or
-      * the club icon was just changed (so the new logo propagates to existing passes).
-
-    The task itself is upsert (POST → PATCH on 409) so re-running it is always safe.
+    The class is essentially a static template (per-pass visuals live on the
+    GenericObject, not here), so we only need to create it the first time —
+    icon / name changes are handled by refresh_google_wallet_objects_for_club.
     Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't leak
     a task that then tries to create a Wallet class for a nonexistent club.
     """
-    icon_changed = False
-    prev_icon = getattr(instance, "_previous_icon_name", "")
-    current_icon = instance.icon.name if instance.icon else ""
-    if prev_icon != current_icon:
-        icon_changed = True
-    if instance.google_wallet_class_created and not icon_changed:
+    if instance.google_wallet_class_created:
         return
     from .tasks import create_google_wallet_class_for_club
 
@@ -287,12 +345,18 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender="auctions.Club")
-def refresh_google_wallet_objects_for_club_name_change(sender, instance, created, **kwargs):
-    """Patch member wallet object metadata when a club is renamed."""
+def refresh_google_wallet_objects_for_club(sender, instance, created, **kwargs):
+    """Patch all member wallet objects when the club's name or icon changes.
+
+    Logo and background color are GenericObject fields (per-pass), not class
+    fields, so a club-level visual change requires PATCHing every active member.
+    """
     if created:
         return
     prev_name = getattr(instance, "_previous_name", "")
-    if prev_name == instance.name:
+    prev_icon = getattr(instance, "_previous_icon_name", "")
+    current_icon = instance.icon.name if instance.icon else ""
+    if prev_name == instance.name and prev_icon == current_icon:
         return
     from .tasks import update_google_wallet_objects_for_club
 
@@ -322,14 +386,14 @@ def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwa
     if user:
         user.userdata.unsubscribe_from_all
 
-    members = ClubMember.objects.filter(email=email, is_deleted=False, contact_status="contact")
+    members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="do_not_contact")
     for member in members:
-        member.contact_status = "non_essential"
+        member.contact_status = "do_not_contact"
         member.save(update_fields=["contact_status"])
         ClubHistory.objects.create(
             club=member.club,
             user=None,
-            action=f"{member} has requested to be unsubscribed",
+            action=f"{member} marked do not contact after SES complaint",
             applies_to="MEMBERS",
         )
 

@@ -415,11 +415,15 @@ THUMBNAIL_ALIASES = {
         "ad": {"size": (250, 150), "crop": False},
         "lot_list": {"size": (250, 150), "crop": "smart"},
         # 'lot_full': {'size': (600, 600), 'crop': False},
-        # Club icon: used inline next to club names and as logo/icon on wallet
-        # passes. Square crop, sized to be retina-friendly (Apple wants up to 58px,
-        # Google's logo recommendation is ~660x660 source).
+        # Club icon: used inline next to club names.
         "club_icon": {"size": (128, 128), "crop": "smart"},
         "club_icon_small": {"size": (32, 32), "crop": "smart"},
+        # Google Wallet logo: 660×660 JPEG as recommended by Google.
+        # PNG/WEBP source images are converted; upscaling is avoided (result may
+        # be smaller than 660 if the source is small, which is fine).
+        # upscale=True ensures the output is exactly 660x660 even when the source
+        # is shorter than 660px in one dimension (Google Wallet rejects non-square logos).
+        "google_wallet_logo": {"size": (660, 660), "crop": "smart", "upscale": True, "format": "JPEG", "quality": 90},
     },
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"

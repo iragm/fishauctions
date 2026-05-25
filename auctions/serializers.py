@@ -2,13 +2,49 @@ from rest_framework import serializers
 
 from .models import ClubMember
 
+CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
+    {
+        "id",
+        "user",
+        "club",
+        "uuid",
+        "createdon",
+        "added_by",
+        "is_deleted",
+        "possible_duplicate",
+        "last_discord_role_assigned",
+        "discord_role_override",
+        "membership_number",
+        "source",  # set server-side from the API key name; not caller-writable
+        "permission_admin",
+        "permission_view",
+        "permission_export",
+        "permission_add_edit",
+        "permission_edit_club",
+        "permission_manage_auctions",
+        "permission_manage_bap",
+        "bap_points",
+        "hap_points",
+        "culture_points",
+        "bap_points_ytd",
+        "hap_points_ytd",
+        "culture_points_ytd",
+    }
+)
+CLUB_MEMBER_API_KEY_WRITE_FIELDS = tuple(
+    field.name for field in ClubMember._meta.fields if field.name not in CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS
+)
+CLUB_MEMBER_API_KEY_MAPPING_FIELDS = (*CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_name", "last_name")
+
 
 class ClubMemberSerializer(serializers.ModelSerializer):
+    wallet_link = serializers.ReadOnlyField()
+    simple_membership_link = serializers.ReadOnlyField()
+
     class Meta:
         model = ClubMember
         fields = [
             "id",
-            "user",
             "club",
             "name",
             "email",
@@ -19,14 +55,16 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "bap_points",
             "hap_points",
             "membership_last_paid",
-            "uuid",
             "membership_expiration_reminder_due",
             "createdon",
             "source",
             "is_deleted",
             "memo",
+            "membership_number",
+            "wallet_link",
+            "simple_membership_link",
         ]
-        read_only_fields = ["id", "user", "createdon", "club", "is_deleted"]
+        read_only_fields = ["id", "createdon", "club", "is_deleted", "membership_number"]
 
 
 class ClubMemberIngestSerializer(serializers.Serializer):
@@ -63,4 +101,58 @@ class ClubMemberIngestSerializer(serializers.Serializer):
         for field in ("address", "memo", "phone_number"):
             if data.get(field):
                 data[field] = data[field].strip()
+        return data
+
+
+class ClubMemberAPIKeySerializer(serializers.ModelSerializer):
+    """Writable serializer for ClubMember records created or updated via API keys."""
+
+    id = serializers.IntegerField(read_only=True)
+    # source is set server-side from the API key name and must not be overridden by callers
+    source = serializers.CharField(read_only=True)
+    first_name = serializers.CharField(max_length=100, required=False, allow_blank=True, write_only=True)
+    last_name = serializers.CharField(max_length=100, required=False, allow_blank=True, write_only=True)
+
+    class Meta:
+        model = ClubMember
+        fields = ["id", "source", *CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_name", "last_name"]
+
+    def validate(self, data):
+        first = (data.pop("first_name", "") or "").strip()
+        last = (data.pop("last_name", "") or "").strip()
+        name = (data.get("name", "") or "").strip()
+        if not name and (first or last):
+            name = f"{first} {last}".strip()
+        if name:
+            data["name"] = name
+        elif "name" in data:
+            data["name"] = ""
+
+        if data.get("email"):
+            data["email"] = data["email"].lower().strip()
+        for field in (
+            "address",
+            "memo",
+            "phone_number",
+            "discord_id",
+            "discord_username",
+        ):
+            if data.get(field):
+                data[field] = data[field].strip()
+        if not self.instance and not data.get("email") and not data.get("name"):
+            msg = "Provide at least an email address or a name."
+            raise serializers.ValidationError(msg)
+        return data
+
+
+class BapAwardAPIKeyCreateSerializer(serializers.Serializer):
+    """Simple serializer for adding BAP points to a club member."""
+
+    points = serializers.IntegerField(min_value=1)
+    date = serializers.DateField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+    def validate(self, data):
+        if data.get("notes"):
+            data["notes"] = data["notes"].strip()
         return data

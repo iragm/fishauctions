@@ -28,6 +28,7 @@ from .models import (
     AuctionDropdown,
     AuctionHistory,
     AuctionTOS,
+    BapAward,
     Bid,
     Category,
     ChatSubscription,
@@ -4500,10 +4501,20 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        self.assertIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertIsInstance(
+        # These fields are now shown/hidden via JavaScript; real widgets are always rendered
+        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertNotIsInstance(
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
+
+    def test_manage_users_through_club_field_shown_without_club(self):
+        self.online_auction.club = None
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        # manage_users_through_club is always rendered so JS can toggle it based on club selection
+        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
 
     def test_membership_fee_field_hidden_for_free_club(self):
         free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
@@ -4513,9 +4524,30 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
         self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertIsInstance(
+        # add_membership_fee field is now shown/hidden via JS, not server-side HiddenInput
+        self.assertNotIsInstance(
             form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
         )
+
+    def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
+        paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
+        self.online_auction.club = paid_club
+        self.online_auction.manage_users_through_club = "all"
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertNotIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
+    def test_enable_square_payments_field_hidden_without_square_seller(self):
+        self.online_auction.created_by.userdata.square_enabled = True
+        self.online_auction.created_by.userdata.save(update_fields=["square_enabled"])
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertIsInstance(form.fields["enable_square_payments"].widget, forms.HiddenInput)
 
 
 class LotListViewTests(StandardTestCase):
@@ -5235,6 +5267,14 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
+
+    def test_club_managed_auction_can_mark_membership_renewal_needed(self):
+        from auctions.views import _should_mark_invoice_renewal_needed
+
+        self.online_auction.add_people_from_auction_to_club = False
+        self.online_auction.manage_users_through_club = "all"
+        self.online_auction.save(update_fields=["add_people_from_auction_to_club", "manage_users_through_club"])
+        self.assertTrue(_should_mark_invoice_renewal_needed(self.invoice))
 
     def test_membership_reminder_due_not_set_for_free_membership(self):
         self.club.membership_annual_fee = None
@@ -9140,7 +9180,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
             self.fail(f"square_payment_success URL pattern not configured: {e}")
 
 
-@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="")
+@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True)
 class SquareOAuthRevocationTests(StandardTestCase):
     """Tests for Square OAuth authorization revocation handling"""
 
@@ -13054,7 +13094,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "This will delete")
+        self.assertContains(response, "This will deactivate")
         self.assertContains(response, "Kept User")
 
         response = self.client.post(
@@ -14931,7 +14971,7 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_renew", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         self.member.refresh_from_db()
         from django.utils import timezone
 
@@ -15060,9 +15100,11 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
 
-        response = self.client.post(url, {"target": self.member.pk})
+        response = self.client.post(
+            url, {"target": self.member.pk, "club_slug": self.club.slug, "exclude_member": source.pk}
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "This will delete")
+        self.assertContains(response, "will be deactivated")
         self.assertContains(response, "Jane Doe")
 
         response = self.client.post(
@@ -15117,6 +15159,115 @@ class ClubAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreaterEqual(len(data), 1)
+
+
+class ClubAPIKeyMemberPermissionTests(TestCase):
+    """API key permission checks for club member API endpoints."""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="club_key_owner", password="testpass", email="key@example.com")
+        self.club = Club.objects.create(name="Club Key API Club", enable_breeder_award_program=True)
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            name="Existing Member",
+            email="existing@example.com",
+            memo="before",
+        )
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Extended API",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+            can_add_club_members=True,
+        )
+        self.raw_key = raw_key
+        self.list_url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        self.detail_url = reverse("api_club_member_detail", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+        self.bap_url = reverse("api_club_member_bap_awards", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+
+    def test_api_key_list_requires_read_permission(self):
+        response = self.client.get(self.list_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 403)
+
+    def test_api_key_can_list_members_when_enabled(self):
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        response = self.client.get(self.list_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["email"], "existing@example.com")
+
+    def test_api_key_create_supports_extended_field_mapping(self):
+        ClubAPIKeyFieldMap.objects.create(
+            api_key=self.api_key, external_field="discord_user", internal_field="discord_id"
+        )
+        response = self.client.post(
+            self.list_url,
+            {"email": "mappedmember@example.com", "discord_user": "12345"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 201)
+        created = ClubMember.objects.get(club=self.club, email="mappedmember@example.com")
+        self.assertEqual(created.discord_id, "12345")
+        self.assertEqual(created.source, self.api_key.name)
+
+    def test_api_key_update_requires_update_permission(self):
+        response = self.client.patch(
+            self.detail_url,
+            {"memo": "after"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_api_key_update_uses_field_mapping(self):
+        self.api_key.can_update_club_members = True
+        self.api_key.save(update_fields=["can_update_club_members"])
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="member_note", internal_field="memo")
+        response = self.client.patch(
+            self.detail_url,
+            {"member_note": "after"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.memo, "after")
+
+    def test_api_key_cannot_delete_member(self):
+        self.api_key.can_update_club_members = True
+        self.api_key.save(update_fields=["can_update_club_members"])
+        response = self.client.delete(self.detail_url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 403)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_deleted)
+
+    def test_api_key_can_add_bap_points_when_enabled(self):
+        self.api_key.can_add_bap_points = True
+        self.api_key.save(update_fields=["can_add_bap_points"])
+        response = self.client.post(
+            self.bap_url,
+            {"points": 7, "notes": "bonus"},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 201)
+        award = BapAward.objects.get(club_member=self.member)
+        self.assertEqual(award.points, 7)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 7)
+
+    def test_api_key_bap_endpoint_requires_permission(self):
+        response = self.client.post(
+            self.bap_url,
+            {"points": 3},
+            content_type="application/json",
+            HTTP_X_API_KEY=self.raw_key,
+        )
+        self.assertEqual(response.status_code, 403)
 
 
 class ParseBoolEnvTests(TestCase):
@@ -15243,6 +15394,12 @@ class ClubAuctionIntegrationTests(TestCase):
         actions = [h.action for h in history]
         self.assertTrue(any("Automatically associated with club" in a for a in actions))
 
+    def test_auction_creation_updates_last_auction_used(self):
+        self._create_auction_via_view(self.owner)
+        auction = Auction.objects.filter(created_by=self.owner).last()
+        self.owner.userdata.refresh_from_db()
+        self.assertEqual(self.owner.userdata.last_auction_used, auction)
+
     def test_no_club_association_when_no_permission(self):
         """Auction is not associated with club if user has no admin/manage_auctions permission"""
         user_no_perm = User.objects.create_user(username="no_perm", password="testpass", email="no_perm@example.com")
@@ -15284,6 +15441,28 @@ class ClubAuctionIntegrationTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(list(response.context["club_auctions"])), 0)
+
+    def test_club_detail_lists_newest_auctions_first(self):
+        older = Auction.objects.create(
+            title="Older Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=True,
+        )
+        newer = Auction.objects.create(
+            title="Newer Auction",
+            date_start=timezone.now() + timezone.timedelta(days=21),
+            date_end=timezone.now() + timezone.timedelta(days=28),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=True,
+        )
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        auctions = list(response.context["club_auctions"])
+        self.assertEqual([auction.pk for auction in auctions[:2]], [newer.pk, older.pk])
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
         """When a member gains manage_auctions permission, existing auctions get club filled in"""
@@ -15777,8 +15956,8 @@ class ClubAPIKeyModelTests(TestCase):
         self.assertIsNone(ClubAPIKey.verify(""))
 
 
-class ClubMemberIngestAPITests(TestCase):
-    """Integration tests for ClubMemberIngestAPIView."""
+class ClubMemberCreateAPITests(TestCase):
+    """Integration tests for POST /api/v1/clubs/<slug>/members/ via API key."""
 
     def setUp(self):
         self.owner = User.objects.create_user(
@@ -15787,10 +15966,15 @@ class ClubMemberIngestAPITests(TestCase):
         self.club = Club.objects.create(name="Ingest Club")
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         self.api_key = ClubAPIKey.objects.create(
-            club=self.club, name="Test Integration", prefix=prefix, key_hash=key_hash, created_by=self.owner
+            club=self.club,
+            name="Test Integration",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+            can_add_club_members=True,
         )
         self.raw_key = raw_key
-        self.url = reverse("api_club_member_ingest", kwargs={"slug": self.club.slug})
+        self.url = reverse("api_club_members", kwargs={"slug": self.club.slug})
 
     def _post(self, data, key=None):
         headers = {}
@@ -15808,7 +15992,7 @@ class ClubMemberIngestAPITests(TestCase):
 
     def test_wrong_slug_returns_403(self):
         other_club = Club.objects.create(name="Other Club")
-        wrong_url = reverse("api_club_member_ingest", kwargs={"slug": other_club.slug})
+        wrong_url = reverse("api_club_members", kwargs={"slug": other_club.slug})
         response = self.client.post(
             wrong_url, {"email": "test@example.com"}, content_type="application/json", HTTP_X_API_KEY=self.raw_key
         )
@@ -15817,33 +16001,29 @@ class ClubMemberIngestAPITests(TestCase):
     def test_valid_key_creates_member(self):
         response = self._post({"email": "new@example.com", "first_name": "Alice"})
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["status"], "created")
+        data = response.json()
+        self.assertEqual(data["email"], "new@example.com")
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="new@example.com").exists())
 
-    def test_email_lowercased_on_creation(self):
-        self._post({"email": "UPPER@Example.COM"})
-        self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
+    def test_add_member_permission_required(self):
+        self.api_key.can_add_club_members = False
+        self.api_key.save(update_fields=["can_add_club_members"])
+        response = self._post({"email": "blocked@example.com"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, email="blocked@example.com").exists())
 
-    def test_duplicate_email_returns_200(self):
-        self._post({"email": "dup@example.com"})
-        response = self._post({"email": "dup@example.com"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "duplicate")
-        self.assertEqual(ClubMember.objects.filter(club=self.club, email="dup@example.com").count(), 1)
+    def test_email_lowercased_on_creation(self):
+        response = self._post({"email": "UPPER@Example.COM"})
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
 
     def test_invalid_payload_returns_400(self):
         response = self._post({})
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["status"], "error")
 
     def test_club_history_created_on_success(self):
         before = ClubHistory.objects.filter(club=self.club).count()
         self._post({"email": "hist@example.com"})
-        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
-
-    def test_club_history_created_on_failure(self):
-        before = ClubHistory.objects.filter(club=self.club).count()
-        self._post({})
         self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
 
     def test_field_mapping_applied(self):
@@ -15858,9 +16038,24 @@ class ClubMemberIngestAPITests(TestCase):
         self.api_key.refresh_from_db()
         self.assertIsNotNone(self.api_key.last_used_at)
 
+    def test_last_used_at_updated_on_get(self):
+        """last_used_at is touched even on read-only GET requests."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        self.assertIsNone(self.api_key.last_used_at)
+        self.client.get(self.url, HTTP_X_API_KEY=self.raw_key)
+        self.api_key.refresh_from_db()
+        self.assertIsNotNone(self.api_key.last_used_at)
+
     def test_member_source_is_api_key_name(self):
         self._post({"email": "source@example.com"})
         member = ClubMember.objects.get(club=self.club, email="source@example.com")
+        self.assertEqual(member.source, self.api_key.name)
+
+    def test_source_cannot_be_overridden_by_caller(self):
+        """Clients cannot set source — it is always the API key name."""
+        self._post({"email": "srcoverride@example.com", "source": "hacked"})
+        member = ClubMember.objects.get(club=self.club, email="srcoverride@example.com")
         self.assertEqual(member.source, self.api_key.name)
 
     def test_first_name_alias_stored_as_name(self):
@@ -15888,6 +16083,30 @@ class ClubMemberIngestAPITests(TestCase):
         self._post({"email": "mapped@example.com", "given": "Mapped", "surname": "User"})
         member = ClubMember.objects.get(club=self.club, email="mapped@example.com")
         self.assertEqual(member.name, "Mapped User")
+
+    def test_filter_by_name_param(self):
+        """GET ?name=alice returns only matching members."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        ClubMember.objects.create(club=self.club, name="Alice Smith", email="alice@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Jones", email="bob@example.com")
+        response = self.client.get(self.url + "?name=alice", HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        results = response.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], "alice@example.com")
+
+    def test_filter_by_filter_param(self):
+        """GET ?filter=<token> applies the same search logic as the admin member list."""
+        self.api_key.can_read_club_member_list = True
+        self.api_key.save(update_fields=["can_read_club_member_list"])
+        ClubMember.objects.create(club=self.club, name="Alice Smith", email="alice@example.com")
+        ClubMember.objects.create(club=self.club, name="Bob Jones", email="bob@example.com")
+        response = self.client.get(self.url + "?filter=alice", HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 200)
+        results = response.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], "alice@example.com")
 
 
 class ClubAPIKeyUITests(TestCase):
@@ -15945,6 +16164,37 @@ class ClubAPIKeyUITests(TestCase):
         response = self.client.post(self.create_url, {"name": "My Integration"})
         self.assertEqual(response.status_code, 302)
         self.assertTrue(ClubAPIKey.objects.filter(club=self.club, name="My Integration").exists())
+
+    def test_create_key_permission_defaults(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(self.create_url, {"name": "Default Permissions"})
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Default Permissions")
+        self.assertTrue(api_key.can_add_club_members)
+        self.assertFalse(api_key.can_read_club_member_list)
+        self.assertFalse(api_key.can_update_club_members)
+        self.assertFalse(api_key.can_add_bap_points)
+
+    def test_create_key_can_enable_all_extended_permissions(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(
+            self.create_url,
+            {
+                "name": "Everything Key",
+                "can_add_club_members_present": "1",
+                "can_add_club_members": "on",
+                "can_read_club_member_list_present": "1",
+                "can_read_club_member_list": "on",
+                "can_update_club_members_present": "1",
+                "can_update_club_members": "on",
+                "can_add_bap_points_present": "1",
+                "can_add_bap_points": "on",
+            },
+        )
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Everything Key")
+        self.assertTrue(api_key.can_add_club_members)
+        self.assertTrue(api_key.can_read_club_member_list)
+        self.assertTrue(api_key.can_update_club_members)
+        self.assertTrue(api_key.can_add_bap_points)
 
     def test_create_redirects_to_detail_with_raw_key_in_session(self):
         self.client.login(username="apiui_editor", password="testpass")
@@ -16008,6 +16258,26 @@ class ClubAPIKeyUITests(TestCase):
         detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
         response = self.client.get(detail_url)
         self.assertEqual(response.status_code, 403)
+
+    def test_detail_shows_extended_example_endpoints(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Examples",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.editor,
+            can_read_club_member_list=True,
+            can_update_club_members=True,
+            can_add_bap_points=True,
+        )
+        member = ClubMember.objects.create(club=self.club, name="Endpoint Example")
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/bap-awards/")
 
 
 class ClubPermissionWildcardTests(TestCase):
@@ -16242,17 +16512,99 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertEqual(payload["name_tooltip"], "Source Member is already in this club")
         self.assertEqual(payload["email_tooltip"], "Email is already in this club")
 
+    def test_member_validation_reports_duplicate_bidder_number(self):
+        self.source_member.bidder_number = "42"
+        self.source_member.save(update_fields=["bidder_number"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(self.validation_url, {"bidder_number": "42"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["bidder_number_tooltip"], "Bidder number is already in this club")
+
     def test_renew_endpoint_updates_membership_and_history(self):
         self.source_member.membership_last_paid = None
         self.source_member.save(update_fields=["membership_last_paid"])
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         self.source_member.refresh_from_db()
         self.assertEqual(self.source_member.membership_last_paid, timezone.now().date())
+        # For january_first system, expiration should be Jan 1 of next year
+        expected_expiration = datetime.date(timezone.now().year + 1, 1, 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
         self.assertTrue(
             ClubHistory.objects.filter(club=self.club, action__contains="Renewed membership for Source Member").exists()
         )
+
+    def test_renew_rolling_extends_from_current_expiration_if_future(self):
+        """Rolling: if current expiration is in future, extend from that date."""
+        self.club.membership_system = "rolling"
+        self.club.save(update_fields=["membership_system"])
+        future_expiration = timezone.now().date() + datetime.timedelta(days=100)
+        self.source_member.membership_expiration_date = future_expiration
+        self.source_member.save(update_fields=["membership_expiration_date"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.source_member.refresh_from_db()
+        expected_expiration = future_expiration.replace(year=future_expiration.year + 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
+
+    def test_renew_rolling_extends_from_today_if_expiration_past(self):
+        """Rolling: if current expiration is in past, extend from today."""
+        self.club.membership_system = "rolling"
+        self.club.save(update_fields=["membership_system"])
+        past_expiration = timezone.now().date() - datetime.timedelta(days=100)
+        self.source_member.membership_expiration_date = past_expiration
+        self.source_member.save(update_fields=["membership_expiration_date"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.source_member.refresh_from_db()
+        today = timezone.now().date()
+        expected_expiration = today.replace(year=today.year + 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
+
+    def test_renew_rolling_extends_from_today_if_no_current_expiration(self):
+        """Rolling: if no current expiration, extend from today."""
+        self.club.membership_system = "rolling"
+        self.club.save(update_fields=["membership_system"])
+        self.source_member.membership_expiration_date = None
+        self.source_member.membership_last_paid = None
+        self.source_member.save(update_fields=["membership_expiration_date", "membership_last_paid"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.source_member.refresh_from_db()
+        today = timezone.now().date()
+        expected_expiration = today.replace(year=today.year + 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
+
+    def test_renew_january_first_extends_from_current_if_future(self):
+        """January_first: if current expiration is in future, extend from that date to next Jan 1."""
+        # Club defaults to january_first
+        future_expiration = timezone.now().date() + datetime.timedelta(days=100)
+        self.source_member.membership_expiration_date = future_expiration
+        self.source_member.save(update_fields=["membership_expiration_date"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.source_member.refresh_from_db()
+        expected_expiration = datetime.date(future_expiration.year + 1, 1, 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
+
+    def test_renew_january_first_extends_from_today_if_expiration_past(self):
+        """January_first: if current expiration is in past, extend from today to next Jan 1."""
+        # Club defaults to january_first
+        past_expiration = timezone.now().date() - datetime.timedelta(days=100)
+        self.source_member.membership_expiration_date = past_expiration
+        self.source_member.save(update_fields=["membership_expiration_date"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.source_member.refresh_from_db()
+        today = timezone.now().date()
+        expected_expiration = datetime.date(today.year + 1, 1, 1)
+        self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
     def test_renew_page_updates_requested_paid_date(self):
         self.client.login(username="club_editor", password="testpass")
@@ -16269,17 +16621,8 @@ class ClubMemberManagementViewTests(TestCase):
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(
-            ClubHistory.objects.filter(club=self.club, action__contains="Removed member Source Member").exists()
+            ClubHistory.objects.filter(club=self.club, action__contains="Deactivated member Source Member").exists()
         )
-
-    def test_confirm_delete_view_renders_modal(self):
-        self.client.login(username="club_editor", password="testpass")
-        response = self.client.get(
-            reverse("club_member_confirm", kwargs={"pk": self.source_member.pk, "action": "delete"})
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Remove member")
-        self.assertContains(response, "Remove Source Member from this club?")
 
     def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
         self.client.login(username="club_editor", password="testpass")
@@ -17155,34 +17498,44 @@ class ClubIconWalletTests(TestCase):
         self.club.save()
         self.member = ClubMember.objects.create(club=self.club, user=self.user, name="M")
 
-    def test_google_wallet_class_body_includes_logo_when_icon_set(self):
-        from .google_wallet import _class_body
+    def test_object_visuals_includes_logo_when_icon_set(self):
+        """Logo lives on GenericObject (not GenericClass) per Google Wallet REST schema."""
+        from .google_wallet import _object_visuals
 
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
-            body = _class_body(self.club)
-        self.assertIn("logo", body)
-        self.assertTrue(body["logo"]["sourceUri"]["uri"].startswith("https://"))
-        self.assertIn("/media/", body["logo"]["sourceUri"]["uri"])
+            visuals = _object_visuals(self.club)
+        self.assertIn("logo", visuals)
+        self.assertIn("hexBackgroundColor", visuals)
+        self.assertTrue(visuals["logo"]["sourceUri"]["uri"].startswith("https://"))
+        self.assertIn("/media/", visuals["logo"]["sourceUri"]["uri"])
+        # contentDescription is required by Google for accessibility
+        self.assertIn("contentDescription", visuals["logo"])
 
-    def test_google_wallet_class_body_omits_logo_when_no_icon(self):
-        from .google_wallet import _class_body
+    def test_object_visuals_omits_logo_when_no_icon(self):
+        from .google_wallet import _object_visuals
         from .models import Club
 
         no_icon = Club.objects.create(name="Bare Club")
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
-            body = _class_body(no_icon)
-        self.assertNotIn("logo", body)
+            visuals = _object_visuals(no_icon)
+        self.assertNotIn("logo", visuals)
+        # Background color is still set even without an icon
+        self.assertIn("hexBackgroundColor", visuals)
 
-    def test_icon_change_redispatches_wallet_class_task(self):
+    def test_class_body_never_contains_logo_or_hex_bg(self):
+        """Google silently ignores logo/hexBackgroundColor on GenericClass — keep them out."""
+        from .google_wallet import _class_body
+
+        with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
+            body = _class_body(self.club)
+        self.assertNotIn("logo", body)
+        self.assertNotIn("hexBackgroundColor", body)
+
+    def test_icon_change_dispatches_object_refresh(self):
+        """Icon change must refresh every member's GenericObject (logo lives there)."""
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        # Flip the flag manually so we'd normally skip — the change-detection
-        # logic must override and dispatch anyway.
-        from .models import Club
-
-        Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
-        self.club.refresh_from_db()
-        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 self.club.icon = SimpleUploadedFile(
                     "new.png", self._png_bytes(color=(0, 255, 0)), content_type="image/png"
@@ -17190,16 +17543,33 @@ class ClubIconWalletTests(TestCase):
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_unchanged_icon_does_not_redispatch(self):
+    def test_unchanged_club_does_not_redispatch(self):
+        """Saving without changing name or icon must not dispatch an object refresh."""
         from .models import Club
 
         Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
         self.club.refresh_from_db()
-        with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.name = "Renamed"
                 self.club.save()
             delay.assert_not_called()
+
+    def test_adding_icon_to_initialized_club_dispatches_object_refresh(self):
+        """Adding an icon for the first time must refresh every member's wallet object."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .models import Club
+
+        no_icon_club = Club.objects.create(name="No Icon Yet")
+        Club.objects.filter(pk=no_icon_club.pk).update(google_wallet_class_created=True)
+        no_icon_club.refresh_from_db()
+        self.assertFalse(bool(no_icon_club.icon))
+
+        with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                no_icon_club.icon = SimpleUploadedFile("first.png", self._png_bytes(), content_type="image/png")
+                no_icon_club.save()
+            delay.assert_called_once_with(no_icon_club.pk)
 
     def test_club_rename_dispatches_wallet_object_sync(self):
         with patch("auctions.tasks.update_google_wallet_objects_for_club.delay") as delay:
@@ -17208,7 +17578,7 @@ class ClubIconWalletTests(TestCase):
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_update_generic_object_for_member_patches_with_current_club_name(self):
+    def test_update_generic_object_for_member_patches_with_logo_and_bg(self):
         from unittest.mock import MagicMock
 
         from .google_wallet import update_generic_object_for_member
@@ -17224,6 +17594,9 @@ class ClubIconWalletTests(TestCase):
                     self.assertTrue(update_generic_object_for_member(self.member))
         payload = patch_mock.call_args.kwargs["json"]
         self.assertEqual(payload["cardTitle"]["defaultValue"]["value"], self.club.name)
+        # Logo + background must be on the GenericObject PATCH — not the class.
+        self.assertIn("logo", payload)
+        self.assertIn("hexBackgroundColor", payload)
 
     def test_apple_wallet_icon_png_uses_club_icon(self):
         from .apple_wallet import _icon_png
@@ -17252,13 +17625,18 @@ class ClubIconWalletTests(TestCase):
         self.assertEqual(img.size, (29, 29))
 
     def test_create_generic_class_patches_on_409(self):
-        """409 from POST must trigger a PATCH so icon updates propagate to existing classes."""
+        """409 from POST must trigger a PATCH to keep the class definition current."""
         from unittest.mock import MagicMock
 
         from .google_wallet import create_generic_class
 
         post_resp = MagicMock(status_code=409, text="exists")
-        patch_resp = MagicMock(status_code=200, text="patched")
+        patch_resp = MagicMock(
+            status_code=200,
+            text="patched",
+            json=lambda: {"id": "x.membership_1", "classTemplateInfo": {}},
+        )
+        patch_resp.headers = {"content-type": "application/json"}
         with self.settings(
             GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
             GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
@@ -17270,3 +17648,340 @@ class ClubIconWalletTests(TestCase):
                         self.assertTrue(create_generic_class(self.club))
         self.assertEqual(post_mock.call_count, 1)
         self.assertEqual(patch_mock.call_count, 1)
+        # logo/hexBackgroundColor are NOT valid GenericClass fields — keep them out.
+        patch_body = patch_mock.call_args.kwargs["json"]
+        self.assertNotIn("logo", patch_body)
+        self.assertNotIn("hexBackgroundColor", patch_body)
+
+
+class ManageUsersThroughClubTests(TestCase):
+    """Tests for the per-auction 'manage_users_through_club' setting that pivots auction
+    user management onto ClubMember records."""
+
+    def setUp(self):
+        now = timezone.now()
+        self.creator = User.objects.create_user(username="auction_creator", password="testpw", email="c@example.com")
+        self.joiner = User.objects.create_user(username="joiner", password="testpw", email="j@example.com")
+        self.club_admin_user = User.objects.create_user(
+            username="club_admin", password="testpw", email="ca@example.com"
+        )
+        self.club_add_edit_user = User.objects.create_user(
+            username="club_add_edit", password="testpw", email="cae@example.com"
+        )
+        self.club_manage_auctions_user = User.objects.create_user(
+            username="club_manage_auctions", password="testpw", email="cma@example.com"
+        )
+        self.outsider = User.objects.create_user(username="outsider", password="testpw", email="o@example.com")
+        self.club = Club.objects.create(name="Test Club")
+        # Permission rows on the club
+        ClubMember.objects.create(club=self.club, user=self.club_admin_user, name="Admin", permission_admin=True)
+        ClubMember.objects.create(
+            club=self.club, user=self.club_add_edit_user, name="AddEdit", permission_add_edit=True
+        )
+        ClubMember.objects.create(
+            club=self.club,
+            user=self.club_manage_auctions_user,
+            name="ManageAuctions",
+            permission_manage_auctions=True,
+        )
+        self.auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Empty Auction",
+            is_online=False,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=10),
+            club=self.club,
+        )
+        self.location = PickupLocation.objects.create(
+            name="loc", auction=self.auction, pickup_time=now + datetime.timedelta(days=5)
+        )
+
+    def _enable_club_managed(self):
+        self.auction.manage_users_through_club = "all"
+        self.auction.save()
+
+    def _auction_form_data(self):
+        return {
+            "title": self.auction.title,
+            "slug": self.auction.slug,
+            "date_start": self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_online_bidding_starts": "",
+            "date_online_bidding_ends": "",
+            "lot_submission_start_date": "",
+            "lot_submission_end_date": "",
+            "summernote_description": self.auction.summernote_description or "",
+            "online_bidding": self.auction.online_bidding,
+            "buy_now": self.auction.buy_now,
+            "reserve_price": self.auction.reserve_price,
+            "lot_entry_fee": self.auction.lot_entry_fee,
+            "unsold_lot_fee": self.auction.unsold_lot_fee,
+            "winning_bid_percent_to_club": self.auction.winning_bid_percent_to_club,
+            "pre_register_lot_discount_percent": self.auction.pre_register_lot_discount_percent,
+            "winning_bid_percent_to_club_for_club_members": self.auction.winning_bid_percent_to_club_for_club_members,
+            "lot_entry_fee_for_club_members": self.auction.lot_entry_fee_for_club_members,
+            "alternative_split_label": self.auction.alternative_split_label,
+            "minimum_bid": self.auction.minimum_bid,
+            "tax": self.auction.tax,
+            "club": str(self.club.pk),
+        }
+
+    def test_is_club_managed_requires_club(self):
+        a = Auction.objects.create(
+            created_by=self.creator,
+            title="No club",
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        a.manage_users_through_club = "all"
+        a.save()
+        self.assertFalse(a.is_club_managed)
+        self.auction.manage_users_through_club = "all"
+        self.auction.save()
+        self.assertTrue(self.auction.is_club_managed)
+
+    def test_cannot_enable_when_lots_exist(self):
+        Lot.objects.create(lot_name="x", auction=self.auction, quantity=1)
+        form = AuctionEditForm(
+            data={"manage_users_through_club": "all", "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Field-level cleaner triggers before full clean
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+
+    def test_cannot_enable_when_invoices_exist(self):
+        tos = AuctionTOS.objects.create(user=self.creator, auction=self.auction, pickup_location=self.location)
+        Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+        form = AuctionEditForm(
+            data={"manage_users_through_club": "all", "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+
+    def test_can_disable_without_activity(self):
+        """Disabling club-managed mode is allowed when there are no lots or invoices."""
+        self._enable_club_managed()
+        form = AuctionEditForm(
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Without activity the field is NOT disabled — the admin may toggle it.
+        self.assertFalse(form.fields["manage_users_through_club"].disabled)
+
+    def test_cannot_disable_once_lots_exist(self):
+        """Disabling is blocked once lots have been added."""
+        self._enable_club_managed()
+        Lot.objects.create(lot_name="x", auction=self.auction, quantity=1)
+        form = AuctionEditForm(
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # UI-level: field is disabled so users cannot post an empty value.
+        self.assertTrue(form.fields["manage_users_through_club"].disabled)
+        # Defense-in-depth: the validator also rejects an attempt to turn it off.
+        form2 = AuctionEditForm(
+            data={"manage_users_through_club": "", "club": str(self.club.pk)},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form2.fields["manage_users_through_club"].disabled = False
+        form2.is_valid()
+        self.assertIn("manage_users_through_club", form2.errors)
+
+    def test_enabling_club_management_syncs_existing_club_members(self):
+        self.joiner.userdata.preferred_bidder_number = "246"
+        self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        form = AuctionEditForm(
+            data={**self._auction_form_data(), "manage_users_through_club": "all"},
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), msg=form.errors)
+        form.save()
+        member.refresh_from_db()
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertEqual(member.bidder_number, "246")
+        self.assertEqual(shadow.bidder_number, "246")
+
+    def test_membership_fee_can_be_enabled_with_club_managed_mode(self):
+        self.club.membership_annual_fee = Decimal("25.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        form = AuctionEditForm(
+            data={
+                **self._auction_form_data(),
+                "manage_users_through_club": "all",
+                "add_membership_fee_to_invoices_for_expired_members": True,
+            },
+            instance=self.auction,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertNotIn("add_membership_fee_to_invoices_for_expired_members", form.errors)
+
+    def test_permission_check_grants_club_admin_and_manage_auctions(self):
+        self._enable_club_managed()
+        self.assertTrue(self.auction.permission_check(self.club_admin_user))
+        self.assertTrue(self.auction.permission_check(self.club_manage_auctions_user))
+        # add_edit alone does NOT grant general auction permission_check; it is gated
+        # specifically by can_add_edit_people on the view layer.
+        self.assertFalse(self.auction.permission_check(self.club_add_edit_user))
+        self.assertFalse(self.auction.permission_check(self.outsider))
+
+    def test_join_creates_clubmember_and_shadow_auctiontos(self):
+        self._enable_club_managed()
+        from unittest.mock import MagicMock
+
+        from auctions.forms import AuctionJoin
+        from auctions.views import AuctionInfo
+
+        # Drive AuctionInfo.post directly to avoid URL/host coupling and to assert form validity.
+        form = AuctionJoin(
+            data={
+                "i_agree": True,
+                "pickup_location": str(self.location.pk),
+                "time_spent_reading_rules": "5",
+            },
+            auction=self.auction,
+            user=self.joiner,
+        )
+        self.assertTrue(form.is_valid(), msg=f"Form errors: {form.errors}")
+        view = AuctionInfo()
+        view.auction = self.auction
+        view.kwargs = {}
+        view.object = self.auction
+        request = MagicMock()
+        request.user = self.joiner
+        view.request = request
+        view.get_form = lambda: form
+        view.form_valid = lambda f: None
+        view.form_invalid = lambda f: None
+        view.post(request)
+        cm = ClubMember.objects.get(club=self.club, user=self.joiner)
+        self.assertEqual(cm.source, "Empty Auction")
+        self.assertTrue(cm.bidder_number)
+        self.assertNotEqual(cm.bidder_number, "")
+        # AuctionTOS.save clears user when email changes for non-manually-added records;
+        # the user gets re-linked on next login via signals. Query by clubmember instead.
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
+        self.assertEqual(tos.bidder_number, cm.bidder_number)
+
+    def test_join_page_hides_club_add_message_for_existing_member(self):
+        self._enable_club_managed()
+        ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        self.client.force_login(self.joiner)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Joining this auction will also add you to")
+
+    def test_club_managed_auction_users_page_hides_import_and_add_to_club_actions(self):
+        self._enable_club_managed()
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Import members CSV")
+        self.assertNotContains(response, f"Add all users to {self.club}")
+
+    def test_signal_propagates_clubmember_changes_to_shadow(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="42",
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="42",
+        )
+        cm.bidding_allowed = False
+        cm.selling_allowed = False
+        cm.save()
+        tos.refresh_from_db()
+        self.assertFalse(tos.bidding_allowed)
+        self.assertFalse(tos.selling_allowed)
+        cm.bidder_number = "77"
+        cm.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.bidder_number, "77")
+
+    def test_signal_skips_bidder_number_when_auction_invoiced(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="55",
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=cm,
+            bidder_number="55",
+        )
+        self.auction.invoiced = True
+        self.auction.save()
+        cm.bidder_number = "999"
+        cm.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.bidder_number, "55")
+
+    def test_validate_winner_resolves_via_clubmember(self):
+        self._enable_club_managed()
+        cm = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="123",
+        )
+        from auctions.views import DynamicSetLotWinner
+
+        view = DynamicSetLotWinner()
+        view.request = type("R", (), {"user": self.creator})()
+        view.auction = self.auction
+        tos, error = view.validate_winner("123", "save")
+        self.assertIsNone(error)
+        self.assertIsNotNone(tos)
+        self.assertEqual(tos.clubmember_id, cm.pk)
+        self.assertEqual(tos.bidder_number, "123")
+
+    def test_clubmember_generate_bidder_number_unique_per_club(self):
+        cm1 = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="A",
+            phone_number="555-111-2222",
+        )
+        cm1.generate_bidder_number()
+        self.assertTrue(cm1.bidder_number)
+        cm2 = ClubMember.objects.create(
+            club=self.club,
+            user=self.club_add_edit_user,
+            name="B",
+            phone_number="555-111-2222",
+        )
+        cm2.generate_bidder_number()
+        self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)

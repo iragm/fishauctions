@@ -363,6 +363,27 @@ class LotHTMxTableForUsers(tables.Table):
         if record.owner_chats:
             result += f" <span style='color:black;font-weight:900' class='badge bg-warning'>{record.owner_chats}</span>"
         result += "</a>"
+        if getattr(record, "show_bap_badge", False):
+            try:
+                award = record.bap_award
+                parts = []
+                if award.points:
+                    parts.append(f"{award.points} BAP")
+                if award.hap_points:
+                    parts.append(f"{award.hap_points} HAP")
+                if award.cap_points:
+                    parts.append(f"{award.cap_points} CAP")
+                pts = "/".join(parts) if parts else "0 pts"
+                club_name = award.club_member.club.name if award.club_member_id and award.club_member.club_id else ""
+                notes = award.notes or ""
+                badge_parts = [pts]
+                if club_name:
+                    badge_parts.append(club_name)
+                if notes:
+                    badge_parts.append(notes)
+                result += f' <span class="badge bg-success text-dark">{" · ".join(badge_parts)}</span>'
+            except Exception:
+                pass
         return mark_safe(result)
 
     def render_auction(self, value, record):
@@ -403,6 +424,7 @@ _PERMISSION_BADGES = [
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
     name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
+    bidder_number = tables.Column(accessor="bidder_number", verbose_name="Bidder", orderable=True)
     bap_points = tables.Column(
         accessor="bap_points",
         verbose_name="BAP",
@@ -463,6 +485,8 @@ class ClubMemberHTMxTable(tables.Table):
             icon,
             name,
         )
+        if record.is_deleted:
+            result += format_html(" <span class='badge bg-secondary'>Deactivated</span>")
         if record.email_address_status == "BAD":
             result += format_html(
                 "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
@@ -520,7 +544,7 @@ class ClubMemberHTMxTable(tables.Table):
         name = record.display_name
 
         permissions_item = format_html("")
-        if self.can_manage_permissions:
+        if self.can_manage_permissions and not record.is_deleted:
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
                 '<li><a class="dropdown-item" href="javascript:void(0)"'
@@ -533,56 +557,73 @@ class ClubMemberHTMxTable(tables.Table):
 
         edit_items = format_html("")
         if self.can_add_edit:
-            renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
-            set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
-            confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
-            merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
-            email_item = format_html("")
-            if record.email:
-                icon_class = "bi bi-envelope"
-                if record.email_address_status == "BAD":
-                    icon_class = "bi bi-envelope-exclamation-fill text-danger"
-                elif record.email_address_status == "VALID":
-                    icon_class = "bi bi-envelope-check-fill"
-                email_item = format_html(
-                    '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
-                    record.email,
-                    icon_class,
+            if record.is_deleted:
+                # Deactivated member: offer reactivate (no confirm) and permanent delete
+                reactivate_url = reverse("club_member_reactivate", kwargs={"pk": record.pk})
+                perm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "permanent_delete"})
+                edit_items = format_html(
+                    '<li><a class="dropdown-item" href="javascript:void(0)"'
+                    ' hx-post="{}" hx-target="#modals-here" hx-swap="innerHTML">'
+                    '<i class="bi bi-person-check me-1"></i>Reactivate</a></li>'
+                    '<li><hr class="dropdown-divider"></li>'
+                    '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
+                    ' hx-get="{}" hx-target="#modals-here"'
+                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-trash me-1"></i>Permanently delete</a></li>',
+                    reactivate_url,
+                    perm_delete_url,
                 )
-            # Member-number action is hidden entirely when the club has the feature disabled.
-            membership_number_item = format_html("")
-            if record.club.membership_number_mode != "disabled":
-                membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
-                membership_number_item = format_html(
+            else:
+                renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+                confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
+                merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+                email_item = format_html("")
+                if record.email:
+                    icon_class = "bi bi-envelope"
+                    if record.email_address_status == "BAD":
+                        icon_class = "bi bi-envelope-exclamation-fill text-danger"
+                    elif record.email_address_status == "VALID":
+                        icon_class = "bi bi-envelope-check-fill"
+                    email_item = format_html(
+                        '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
+                        record.email,
+                        icon_class,
+                    )
+                # Member-number action is hidden entirely when the club has the feature disabled.
+                membership_number_item = format_html("")
+                if record.club.membership_number_mode != "disabled":
+                    membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
+                    membership_number_item = format_html(
+                        '<li><a class="dropdown-item" href="javascript:void(0)"'
+                        ' hx-get="{}" hx-target="#modals-here"'
+                        ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                        '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
+                        membership_number_url,
+                    )
+                edit_items = format_html(
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
                     ' hx-get="{}" hx-target="#modals-here"'
                     ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                    '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
-                    membership_number_url,
+                    '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
+                    '<li><a class="dropdown-item" href="{}">'
+                    '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
+                    '<li><a class="dropdown-item" href="{}">'
+                    '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+                    "{}"
+                    "{}"
+                    '<li><hr class="dropdown-divider"></li>'
+                    '<li><a class="dropdown-item" href="javascript:void(0)"'
+                    ' hx-get="{}" hx-target="#modals-here"'
+                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-person-dash me-1"></i>Deactivate</a></li>',
+                    renew_confirm_url,
+                    set_expiry_url,
+                    merge_url,
+                    membership_number_item,
+                    email_item,
+                    confirm_delete_url,
                 )
-            edit_items = format_html(
-                '<li><a class="dropdown-item" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
-                '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
-                '<li><a class="dropdown-item" href="{}">'
-                '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
-                "{}"
-                "{}"
-                '<li><hr class="dropdown-divider"></li>'
-                '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
-                renew_confirm_url,
-                set_expiry_url,
-                merge_url,
-                membership_number_item,
-                email_item,
-                confirm_delete_url,
-            )
 
         django_admin_item = format_html("")
         if self.request and getattr(self.request.user, "is_staff", False):
@@ -611,6 +652,7 @@ class ClubMemberHTMxTable(tables.Table):
         template_name = "tables/bootstrap_htmx.html"
         fields = (
             "name",
+            "bidder_number",
             "bap_points",
             "hap_points",
             "membership_last_paid",
@@ -626,11 +668,14 @@ class ClubMemberHTMxTable(tables.Table):
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
+        can_manage_auctions = kwargs.pop("can_manage_auctions", False)
         exclude = list(kwargs.pop("exclude", None) or [])
         if not can_manage_bap:
             exclude += ["bap_points", "hap_points"]
         if not can_manage_membership:
             exclude += ["membership_last_paid", "membership_expiration_date"]
+        if not can_manage_auctions:
+            exclude += ["bidder_number"]
         super().__init__(*args, exclude=exclude, **kwargs)
 
 

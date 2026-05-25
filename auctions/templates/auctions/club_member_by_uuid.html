@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ member.display_name }} — {{ club.name }}{% endblock %}
+
+{% block content %}
+<div class="card mx-auto" style="max-width: 600px;">
+  <div class="card-body">
+    {% include "partials/club_member_uuid_card.html" %}
+  </div>
+  <div class="border-top d-flex flex-wrap justify-content-center gap-2 p-3">
+    <a class="btn btn-link btn-sm" href="{% url 'club_detail' slug=club.slug %}">Club page</a>
+  </div>
+</div>
+{% endblock %}

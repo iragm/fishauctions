@@ -29,6 +29,36 @@ def _send_discord_channel_message(channel_id, content):
         return False
 
 
+def _create_discord_scheduled_event(guild_id, name, start_time, end_time, location_url):
+    """Create a Discord Guild Scheduled Event (external type). Returns True on success."""
+    bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+    if not bot_token or not guild_id:
+        return False
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events"
+    headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+    payload = {
+        "name": name,
+        "scheduled_start_time": start_time.isoformat(),
+        "scheduled_end_time": end_time.isoformat(),
+        "privacy_level": 2,  # GUILD_ONLY
+        "entity_type": 3,  # EXTERNAL
+        "entity_metadata": {"location": location_url},
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        if resp.status_code not in (200, 201):
+            logger.warning(
+                "Discord scheduled event creation failed: status=%s body=%s",
+                resp.status_code,
+                resp.text,
+            )
+            return False
+        return True
+    except Exception as exc:
+        logger.exception("Discord scheduled event creation error: %s", exc)
+        return False
+
+
 class Command(BaseCommand):
     help = "Send reminder emails to auction creators: welcome, invoice, and follow-up emails."
 
@@ -61,7 +91,7 @@ class Command(BaseCommand):
                     and auction.admin_checklist_rules_updated
                     and auction.admin_checklist_joined
                 ):
-                    subject = f"Don't forget to finish setting up {auction}!"
+                    subject = f"Finish setting up {auction}!"
                 else:
                     subject = f"Thanks for creating {auction}!"
 
@@ -112,6 +142,8 @@ class Command(BaseCommand):
 
         # Discord auction channel notifications
         self._send_discord_notifications(now, current_site.domain)
+        # Discord scheduled event creation
+        self._create_discord_events(now, current_site.domain)
 
     def _send_discord_notifications(self, now, domain):
         pending = (
@@ -150,7 +182,7 @@ class Command(BaseCommand):
             and auction.lot_submission_start_date
             and auction.lot_submission_start_date <= now
         ):
-            lines = [f"🐟 **{auction.title}** lot submission is now open!"]
+            lines = [f"**{auction.title}** lot submission is now open!"]
             if auction.lot_submission_end_date:
                 lines.append(f"Submit lots before <t:{int(auction.lot_submission_end_date.timestamp())}:f>")
             if auction.date_start:
@@ -175,8 +207,7 @@ class Command(BaseCommand):
             and auction.date_start - timedelta(hours=24) <= now < auction.date_start
         ):
             lines = [
-                f"🐟 **{auction.title}** starts in less than 24 hours!",
-                f"Auction starts <t:{int(auction.date_start.timestamp())}:f>",
+                f"**{auction.title}** starts in <t:{int(auction.date_start.timestamp())}:f>",
                 auction_url,
             ]
             ok = _send_discord_channel_message(channel_id, "\n".join(lines))
@@ -194,7 +225,7 @@ class Command(BaseCommand):
     def _notify_online(self, auction, channel_id, auction_url, now):
         # FIRST: auction starts (date_start <= now)
         if not auction.first_discord_sent and auction.date_start and auction.date_start <= now:
-            lines = [f"🐟 **{auction.title}** bidding is now open!"]
+            lines = [f"**{auction.title}** bidding is now open!"]
             if auction.date_end:
                 lines.append(f"Bidding closes <t:{int(auction.date_end.timestamp())}:f>")
             lines.append(auction_url)
@@ -210,10 +241,14 @@ class Command(BaseCommand):
             )
             logger.info("Discord auction-start for auction %s: %s", auction.slug, status)
 
-        # SECOND: auction ends (date_end <= now)
-        if not auction.second_discord_sent and auction.date_end and auction.date_end <= now:
+        # SECOND: 24 hours before bidding ends
+        if (
+            not auction.second_discord_sent
+            and auction.date_end
+            and auction.date_end - timedelta(hours=24) <= now < auction.date_end
+        ):
             lines = [
-                f"🐟 **{auction.title}** bidding has ended!",
+                f"**{auction.title}** — bidding ends <t:{int(auction.date_end.timestamp())}:R>",
                 auction_url,
             ]
             ok = _send_discord_channel_message(channel_id, "\n".join(lines))
@@ -223,7 +258,72 @@ class Command(BaseCommand):
             AuctionHistory.objects.create(
                 auction=auction,
                 user=None,
-                action=f"Discord: auction-end notification {status}",
+                action=f"Discord: 24h-before-end reminder {status}",
                 applies_to="RULES",
             )
-            logger.info("Discord auction-end for auction %s: %s", auction.slug, status)
+            logger.info("Discord 24h-before-end for auction %s: %s", auction.slug, status)
+
+    def _create_discord_events(self, now, domain):
+        """Create Discord scheduled events for promoted auctions that haven't had one yet."""
+        cutoff = now - timedelta(hours=24)
+        pending = (
+            Auction.objects.exclude(is_deleted=True)
+            .select_related("club")
+            .filter(
+                discord_event_created=False,
+                promote_this_auction=True,
+                date_posted__lte=cutoff,
+            )
+        )
+
+        for auction in pending:
+            club = auction.club
+            if not club or not club.discord_server_id:
+                # No Discord server — mark done so we don't revisit
+                auction.discord_event_created = True
+                auction.save(update_fields=["discord_event_created"])
+                continue
+
+            if not club.create_events_for_auctions:
+                # Feature disabled for this club — mark done to avoid a backlog when later enabled
+                auction.discord_event_created = True
+                auction.save(update_fields=["discord_event_created"])
+                continue
+
+            auction_url = f"https://{domain}{reverse('auction_main', kwargs={'slug': auction.slug})}"
+
+            if auction.is_online:
+                start_time = auction.date_start
+                end_time = auction.date_end
+            else:
+                start_time = auction.date_start
+                end_time = auction.date_start + timedelta(hours=2) if auction.date_start else None
+
+            if not start_time or not end_time:
+                logger.info("Discord event skipped for auction %s — missing start/end times", auction.slug)
+                continue
+
+            if start_time <= now:
+                # Auction has already started (or ended) — Discord rejects past start times.
+                auction.discord_event_created = True
+                auction.save(update_fields=["discord_event_created"])
+                logger.info("Discord event skipped for auction %s — start time is in the past", auction.slug)
+                continue
+
+            ok = _create_discord_scheduled_event(
+                guild_id=club.discord_server_id,
+                name=auction.title,
+                start_time=start_time,
+                end_time=end_time,
+                location_url=auction_url,
+            )
+            auction.discord_event_created = True
+            auction.save(update_fields=["discord_event_created"])
+            status = "created" if ok else "failed (marked done to prevent retry)"
+            AuctionHistory.objects.create(
+                auction=auction,
+                user=None,
+                action=f"Discord: scheduled event {status}",
+                applies_to="RULES",
+            )
+            logger.info("Discord scheduled event for auction %s: %s", auction.slug, status)

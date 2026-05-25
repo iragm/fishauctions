@@ -1,0 +1,60 @@
+{% load membership_tags qr_code %}
+
+<div class="text-center">
+  <h3 class="mb-1">{{ member.display_name }}</h3>
+  <p class="text-muted mb-3">{{ club.name }}</p>
+
+  {% if member.membership_number_visible %}
+    <div class="text-muted small mb-1">Membership number</div>
+    <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
+    <div class="membership-barcode mb-3" style="max-width: 320px; margin-left: auto; margin-right: auto;">{% membership_barcode member.membership_number %}</div>
+    <div class="d-flex justify-content-center mb-3">
+      {% qr_from_text member.membership_number|stringformat:"s" size="s" %}
+    </div>
+  {% endif %}
+
+  {% if member.membership_expiration_date %}
+    <p class="mb-3">Membership expires: <strong>{{ member.membership_expiration_date|date:"M j, Y" }}</strong></p>
+  {% endif %}
+
+  {% if member.bap_points or member.hap_points or member.culture_points %}
+    <p class="mb-3 text-muted small">
+      {% if member.bap_points %}BAP: {{ member.bap_points }} pts{% endif %}
+      {% if member.hap_points %}{% if member.bap_points %} &nbsp;|&nbsp; {% endif %}HAP: {{ member.hap_points }} pts{% endif %}
+      {% if member.culture_points %}{% if member.bap_points or member.hap_points %} &nbsp;|&nbsp; {% endif %}Culture: {{ member.culture_points }} pts{% endif %}
+    </p>
+  {% endif %}
+
+  <p class="mb-3 text-muted small">Member since: {{ member.createdon|date:"M j, Y" }}</p>
+
+  {% google_wallet_save_url member as wallet_url %}
+  <div class="d-flex flex-wrap justify-content-center gap-2 mb-3">
+    {% if wallet_url %}
+      <a class="btn btn-dark btn-sm" href="{{ wallet_url }}" target="_blank" rel="noopener">
+        <i class="bi bi-google"></i> Add to Google Wallet
+      </a>
+    {% endif %}
+    {% if apple_wallet_enabled and member.membership_number_visible %}
+      <a class="btn btn-dark btn-sm" href="{% url 'club_member_apple_wallet_by_uuid' slug=club.slug uuid=member.uuid %}">
+        <i class="bi bi-apple"></i> Add to Apple Wallet
+      </a>
+    {% elif wallet_url %}
+      {# Google Wallet is configured but Apple isn't — show a stub that explains why. #}
+      <button class="btn btn-dark btn-sm" type="button"
+        data-bs-toggle="collapse" data-bs-target="#apple-wallet-explainer"
+        aria-expanded="false" aria-controls="apple-wallet-explainer">
+        <i class="bi bi-apple"></i> Add to Apple Wallet
+      </button>
+    {% endif %}
+  </div>
+
+  {% if not apple_wallet_enabled and wallet_url %}
+  <div id="apple-wallet-explainer" class="collapse mb-3">
+    <div class="alert alert-info mb-0">
+      Apple wants a hundred bucks to add passes, which is crazy given everything else is completely free.
+      If you want to add membership cards to your iPhone, send the $100 to TFCB and we'll get verified with them
+      and enable Apple Wallet integration for everyone. Or just take a screenshot.
+    </div>
+  </div>
+  {% endif %}
+</div>

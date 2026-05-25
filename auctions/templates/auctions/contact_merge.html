@@ -23,7 +23,14 @@
 
         <div class="alert alert-warning text-dark">
           <i class="bi bi-exclamation-triangle me-1"></i>
-          This will delete <strong>{{ source_label }}</strong> and keep <strong>{{ target_label }}</strong>.
+          <p class="mb-2">This will deactivate <strong>{{ source_label }}</strong> and keep <strong>{{ target_label }}</strong>.</p>
+          {% if summary_lines %}
+            <ul class="mb-0">
+              {% for line in summary_lines %}
+                <li>{{ line }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
         </div>
 
         <div class="table-responsive mb-4">
@@ -38,7 +45,7 @@
             <tbody>
               <tr>
                 <th scope="row"></th>
-                <td><strong class="text-danger">DELETE</strong></td>
+                <td><strong class="text-danger">DEACTIVATE</strong></td>
                 <td><strong class="text-success">KEEP</strong></td>
               </tr>
               {% for row in comparison_rows %}
@@ -52,7 +59,7 @@
           </table>
         </div>
 
-        <h5 class="mb-3">Edit the kept record before deleting {{ source_label }}</h5>
+        <h5 class="mb-3">Edit the kept record before deactivating {{ source_label }}</h5>
         {% for hidden in review_form.hidden_fields %}
           {{ hidden }}
         {% endfor %}
@@ -67,7 +74,7 @@
           </div>
         {% endfor %}
       {% else %}
-        <p class="mb-3">You'll review the exact changes before anything is deleted.</p>
+        <p class="mb-3">You'll review the exact changes before anything is deactivated.</p>
         {% for hidden in selection_form.hidden_fields %}
           {{ hidden }}
         {% endfor %}
