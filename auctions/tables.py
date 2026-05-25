@@ -839,7 +839,11 @@ class ClubBapLotHTMxTable(tables.Table):
         default_points = (
             self.club.points_per_lot
             if self.club and self.club.points_per_lot > 0
-            else (record.species_category.bap_points if record.species_category and record.species_category.bap_points else 5)
+            else (
+                record.species_category.bap_points
+                if record.species_category and record.species_category.bap_points
+                else 5
+            )
         )
         return mark_safe(
             render_to_string(
