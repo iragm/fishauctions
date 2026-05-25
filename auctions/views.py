@@ -3325,6 +3325,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return context
 
     def post(self, request, *args, **kwargs):
+        redirect_url = reverse("auction_door_prizes", kwargs={"slug": self.auction.slug})
         candidate_ids = list(
             AuctionTOS.objects.filter(
                 auction=self.auction,
@@ -3334,7 +3335,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         )
         if not candidate_ids:
             messages.warning(request, "No checked-in users are left for door prizes.")
-            return redirect(request.path)
+            return redirect(redirect_url)
         winner = AuctionTOS.objects.get(pk=choice(candidate_ids))
         winner.door_prize_called = timezone.now()
         winner.save(update_fields=["door_prize_called"])
@@ -3344,7 +3345,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             user=request.user,
         )
         messages.success(request, f"Picked {winner.name}.")
-        return redirect(request.path)
+        return redirect(redirect_url)
 
 
 class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
