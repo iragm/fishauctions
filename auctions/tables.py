@@ -64,12 +64,11 @@ class AuctionTOSHTMxTable(tables.Table):
             result += (
                 f'<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{label}</span>'
             )
-        if not record.can_bid_in_auction:
+        if not record.can_bid_in_auction and not (record.auction.use_check_in_mode and not record.checked_in):
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
         if record.checked_in:
             result += '<span class="badge bg-success ms-1 me-1" title="Checked in">Checked in</span>'
         elif record.auction.use_check_in_mode:
-            result += '<span class="badge bg-secondary ms-1 me-1" title="Not checked in">Not checked in</span>'
             if self.can_manage_check_in:
                 check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
                 result += (

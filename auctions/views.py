@@ -3330,12 +3330,13 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
         bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
         html = f"""
-<div class="modal fade" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div class="modal fade show" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" style="display:block;">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button" class="btn-close" onclick="closeModal()" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
         <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
@@ -3354,14 +3355,34 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
           </small>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
           <button type="submit" class="btn btn-success">Save</button>
         </div>
       </form>
     </div>
   </div>
 </div>
-<div id="modal-backdrop" class="modal-backdrop fade show" style="display:none;"></div>
+<script>
+(function() {{
+  clearTimeout(window._modalCloseTimer);
+  function closeModal() {{
+    var container = document.getElementById("modals-here");
+    var backdrop = document.getElementById("modal-backdrop");
+    var modal = document.getElementById("modal");
+    if (backdrop) {{ backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }}
+    if (modal) {{ modal.classList.remove("show"); modal.style.pointerEvents = "none"; }}
+    document.removeEventListener("keydown", escHandler);
+    window._modalCloseTimer = setTimeout(function() {{ if (container) container.innerHTML = ""; }}, 300);
+  }}
+  window.closeModal = closeModal;
+  function escHandler(e) {{ if (e.key === "Escape") closeModal(); }}
+  document.addEventListener("keydown", escHandler);
+  var bd = document.getElementById("modal-backdrop");
+  if (bd) bd.addEventListener("click", closeModal);
+  var input = document.getElementById("checkin_bidder_number");
+  if (input) {{ input.focus(); input.select(); }}
+}})();
+</script>
 """
         return HttpResponse(html)
 
