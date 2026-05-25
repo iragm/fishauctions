@@ -16099,7 +16099,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
         default_points = (
             club.points_per_lot
             if club.points_per_lot > 0
-            else (lot.species_category.bap_points if lot.species_category and lot.species_category.bap_points else 5)
+            else (lot.species_category.bap_points if lot.species_category else 5)
         )
         return render(
             request,
