@@ -209,23 +209,41 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
 @receiver(pre_save, sender="auctions.ClubMember")
 def stash_previous_clubmember_state(sender, instance, **kwargs):
     """Snapshot per-club auction-permission fields so post_save can detect changes
-    and propagate them to linked shadow AuctionTOS records."""
+    and propagate them to linked shadow AuctionTOS records.
+
+    Also snapshots wallet-relevant fields (name, membership_number,
+    membership_expiration_date) so update_google_wallet_object_on_member_change
+    can detect when a PATCH to the member's Wallet pass is needed.
+    """
     if instance.pk:
         from .models import ClubMember
 
         prev = (
             ClubMember.objects.filter(pk=instance.pk)
-            .values("bidder_number", "bidding_allowed", "selling_allowed")
+            .values(
+                "bidder_number",
+                "bidding_allowed",
+                "selling_allowed",
+                "name",
+                "membership_number",
+                "membership_expiration_date",
+            )
             .first()
             or {}
         )
         instance._previous_bidder_number = prev.get("bidder_number")
         instance._previous_bidding_allowed = prev.get("bidding_allowed")
         instance._previous_selling_allowed = prev.get("selling_allowed")
+        instance._previous_name = prev.get("name") or ""
+        instance._previous_membership_number = prev.get("membership_number")
+        instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
     else:
         instance._previous_bidder_number = None
         instance._previous_bidding_allowed = None
         instance._previous_selling_allowed = None
+        instance._previous_name = ""
+        instance._previous_membership_number = None
+        instance._previous_membership_expiration_date = None
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -269,6 +287,33 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 )
                 continue
             AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def update_google_wallet_object_on_member_change(sender, instance, created, **kwargs):
+    """When wallet-visible member fields change, PATCH the member's Wallet object.
+
+    Watches: name, membership_number, membership_expiration_date.
+    New members have no Wallet object yet (they haven't clicked "Add to Wallet"),
+    so update_generic_object_for_member silently skips 404s — no harm done.
+    """
+    if created:
+        return
+    prev_name = getattr(instance, "_previous_name", "")
+    prev_number = getattr(instance, "_previous_membership_number", None)
+    prev_expiry = getattr(instance, "_previous_membership_expiration_date", None)
+    current_expiry = instance.membership_expiration_date
+
+    if (
+        prev_name == (instance.name or "")
+        and prev_number == instance.membership_number
+        and prev_expiry == current_expiry
+    ):
+        return
+
+    from .tasks import update_google_wallet_object_for_member
+
+    transaction.on_commit(lambda: update_google_wallet_object_for_member.delay(instance.pk))
 
 
 @receiver(pre_save, sender="auctions.Lot")
