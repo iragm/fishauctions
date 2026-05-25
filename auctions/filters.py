@@ -1049,15 +1049,19 @@ class ClubMemberFilter(django_filters.FilterSet):
     def filter_queryset(self, queryset):
         """Apply is_deleted default before delegating to field-level filters.
 
-        Deactivated members are hidden unless the user explicitly types 'deactivated'.
+        Deactivated members are hidden unless the user explicitly types 'deactivated',
+        or there is a search query that returns no active members — in which case the
+        search expands to include deactivated members so renames/leftovers stay findable.
         """
         query_value = (self.data.get("query") or "").lower()
         show_deactivated = "deactivated" in query_value.split()
         if show_deactivated:
-            queryset = queryset.filter(is_deleted=True)
-        else:
-            queryset = queryset.filter(is_deleted=False)
-        return super().filter_queryset(queryset)
+            return super().filter_queryset(queryset.filter(is_deleted=True))
+        active_filtered = super().filter_queryset(queryset.filter(is_deleted=False))
+        search_tokens = [t for t in query_value.split() if t != "deactivated"]
+        if search_tokens and not active_filtered.exists():
+            return super().filter_queryset(queryset.filter(is_deleted=True))
+        return active_filtered
 
     def clubmember_search(self, queryset, name, value):
         """Support text search including special tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
