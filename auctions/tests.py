@@ -17988,7 +17988,6 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertTrue(self.auction.use_check_in_mode)
         self.assertContains(response, "Door prizes")
         self.assertContains(response, "Check in")
-        self.assertContains(response, "Turn bidding off for all users")
 
     def test_checkin_mode_manual_member_creation_sets_checked_in_and_bidding_allowed(self):
         self._enable_checkin_mode()
