@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.db.utils import OperationalError
 
 from auctions.models import Lot
@@ -13,7 +14,9 @@ class Command(BaseCommand):
                 is_deleted=False,
                 bap_auto_reason="",
                 auction__club__enable_breeder_award_program=True,
+                winning_price__isnull=False,
             )
+            .filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False))
             .exclude(bap_award__isnull=False)
             .select_related(
                 "auction__club",

@@ -5980,6 +5980,7 @@ class Lot(models.Model):
     @property
     def lot_link(self):
         """Simplest link to access this lot with"""
+        lot_pk = self.pk or self.lot_number
         if self.auction:
             lot_number_display = self.lot_number_display
             try:
@@ -6002,10 +6003,9 @@ class Lot(models.Model):
             except NoReverseMatch:
                 # Fall back to PK-based lot URLs for lots with invalid custom_lot_number/slug route pieces.
                 logger.debug("Falling back to PK lot URL for lot=%s auction=%s", self.pk, self.auction_id)
-                pass
         if self.slug:
-            return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
-        return reverse("lot_by_pk", kwargs={"pk": self.lot_number})
+            return reverse("lot_by_pk_and_slug", kwargs={"pk": lot_pk, "slug": self.slug})
+        return reverse("lot_by_pk", kwargs={"pk": lot_pk})
 
     @property
     def full_lot_link(self):

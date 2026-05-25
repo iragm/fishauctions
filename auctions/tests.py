@@ -4593,7 +4593,17 @@ class LotListViewTests(StandardTestCase):
         self.online_auction.save(update_fields=["use_seller_dash_lot_numbering"])
         self.lot.custom_lot_number = "bad-lot!"
         self.lot.save(update_fields=["custom_lot_number"])
-        self.assertTrue(self.lot.lot_link.startswith("/lots/"))
+        self.assertTrue(self.lot.lot_link.startswith(f"/lots/{self.lot.pk}/"))
+
+    def test_all_lots_page_handles_invalid_custom_lot_number_slug(self):
+        self.online_auction.use_seller_dash_lot_numbering = True
+        self.online_auction.save(update_fields=["use_seller_dash_lot_numbering"])
+        self.lot.custom_lot_number = "xx RH-5"
+        self.lot.save(update_fields=["custom_lot_number"])
+
+        response = self.client.get("/lots/all/")
+
+        self.assertEqual(response.status_code, 200)
 
     def test_auction_lot_list_csv_export_includes_custom_dropdown(self):
         self.online_auction.use_custom_dropdown_field = "allow"
@@ -15915,6 +15925,14 @@ class LotBapEligibilityTests(TestCase):
         ineligible.refresh_from_db()
         self.assertEqual(eligible.bap_auto_reason, "")
         self.assertEqual(ineligible.bap_auto_reason, "not_bred")
+
+    def test_backfill_bap_reasons_command_skips_unsold_lots(self):
+        unsold = self._make_lot(lot_name="Unsold fish", winning_price=None, auctiontos_winner=None)
+
+        call_command("backfill_bap_reasons")
+
+        unsold.refresh_from_db()
+        self.assertEqual(unsold.bap_auto_reason, "")
 
 
 class BapBackfillMigrationTests(TestCase):
