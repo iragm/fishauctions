@@ -5452,7 +5452,11 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
-        if self.quantity < club.min_quantity:
+        category_name = self.species_category.name if self.species_category else None
+        ignore_quantity = (club.separate_hap and category_name == "Aquatic plants") or (
+            club.separate_cap and category_name == "Live food cultures"
+        )
+        if not ignore_quantity and self.quantity < club.min_quantity:
             return "low_quantity"
         if not self.species_category or self.species_category.bap_points == 0:
             return "category_not_eligible"

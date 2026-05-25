@@ -26,7 +26,6 @@ def backfill_bap_reasons(apps, schema_editor):
     lots_to_check = (
         Lot.objects.filter(
             is_deleted=False,
-            bap_auto_reason="",  # not yet processed
             auction__club__enable_breeder_award_program=True,
         )
         .exclude(bap_award__isnull=False)  # already has an award — reason is implicitly "eligible"
@@ -42,8 +41,8 @@ def backfill_bap_reasons(apps, schema_editor):
     updates = []
     try:
         for lot in lots_to_check.iterator(chunk_size=500):
-            reason = lot.sold_lot_no_bap_reason  # None = eligible; non-None = ineligible key
-            if reason:  # only update ineligible lots; eligible ones are already correct ("")
+            reason = lot.sold_lot_no_bap_reason or ""  # None = eligible -> ""
+            if lot.bap_auto_reason != reason:
                 lot.bap_auto_reason = reason
                 updates.append(lot)
     except OperationalError:
