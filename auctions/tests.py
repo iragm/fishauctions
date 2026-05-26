@@ -4345,6 +4345,10 @@ class UserDataMergeIntoTests(TestCase):
         self.assertEqual(self.auction.created_by, self.target_user)
         self.assertEqual(self.club.payment_user, self.target_user)
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+        self.assertTrue(
+            InvoiceAdjustment.objects.filter(invoice__auctiontos_user=self.target_tos, notes="move me").exists()
+        )
+        self.assertFalse(Invoice.objects.filter(pk=self.source_invoice.pk).exists())
         self.assertEqual(self.seller_lot.auctiontos_seller, self.target_tos)
         self.assertEqual(self.seller_lot.user, self.target_user)
         self.assertEqual(self.winner_lot.auctiontos_winner, self.target_tos)
@@ -4400,11 +4404,15 @@ class UserDataMergeIntoTests(TestCase):
             stdout=out,
         )
 
+        self.membership_invoice.refresh_from_db()
+        self.target_user.userdata.refresh_from_db()
         self.assertIn(
             f"Moved data from {self.source_user.username} to {self.target_user.username}.",
             out.getvalue(),
         )
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+        self.assertEqual(self.membership_invoice.buyer, self.target_user)
+        self.assertEqual(self.target_user.userdata.phone_number, "555-0000")
 
 
 class AuctionViewPermissionTests(StandardTestCase):

@@ -6,8 +6,9 @@ class Command(BaseCommand):
     help = "Move application data from one user account to another without deleting the source account"
 
     def add_arguments(self, parser):
-        parser.add_argument("user_to_empty", help="Username or numeric id of the account to empty")
-        parser.add_argument("user_where_it_should_go", help="Username or numeric id of the account to keep")
+        help_text = "Username or numeric id of the account (all-digit values are treated as ids first)"
+        parser.add_argument("user_to_empty", help=help_text)
+        parser.add_argument("user_where_it_should_go", help=help_text)
 
     def get_user(self, identifier):
         user_model = get_user_model()
