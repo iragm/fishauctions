@@ -5465,17 +5465,35 @@ class Lot(models.Model):
         # When CAP is disabled they have no BAP track, so treat them as ineligible.
         if not club.separate_cap and category_name == "Live food cultures":
             return "category_not_eligible"
-        ignore_quantity = (club.separate_hap and category_name == "Aquatic plants") or (
-            club.separate_cap and category_name in ("Live food cultures", "Snails and other inverts")
-        )
-        if not ignore_quantity and self.quantity < club.min_quantity:
-            return "low_quantity"
-        if not self.species_category or self.species_category.bap_points == 0:
-            return "category_not_eligible"
+        # Compute seller identity early so not_long_enough can be checked before low_quantity.
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         seller_email = (self.auctiontos_seller.email if self.auctiontos_seller else None) or (
             seller_user.email if seller_user else None
         )
+        # Check not_long_enough before low_quantity so it takes priority when both conditions are true.
+        if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
+            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
+            base_prior = Lot.objects.filter(
+                auction__club=club,
+                lot_name=self.lot_name,
+                bap_points_awarded__gt=0,
+                date_end__gte=cutoff,
+            ).exclude(pk=self.pk)
+            prior = False
+            if seller_user:
+                prior = base_prior.filter(user=seller_user).exists()
+            if not prior and seller_email:
+                prior = base_prior.filter(
+                    Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
+                ).exists()
+            if prior:
+                return "not_long_enough"
+        # HAP/culture categories (plants, snails, live food) are never blocked by quantity minimums.
+        ignore_quantity = category_name in ("Aquatic plants", "Live food cultures", "Snails and other inverts")
+        if not ignore_quantity and self.quantity < club.min_quantity:
+            return "low_quantity"
+        if not self.species_category or self.species_category.bap_points == 0:
+            return "category_not_eligible"
         member = None
         if seller_user:
             member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
@@ -5497,21 +5515,6 @@ class Lot(models.Model):
                 valid = False
             if not valid:
                 return "not_active_member"
-        if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
-            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
-            base_prior = Lot.objects.filter(
-                auction__club=club,
-                lot_name=self.lot_name,
-                bap_points_awarded__gt=0,
-                date_end__gte=cutoff,
-            ).exclude(pk=self.pk)
-            prior = False
-            if seller_user:
-                prior = base_prior.filter(user=seller_user).exists()
-            if not prior and seller_email:
-                prior = base_prior.filter(auctiontos_seller__email__iexact=seller_email).exists()
-            if prior:
-                return "not_long_enough"
         return None
 
     @property
