@@ -7363,30 +7363,40 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 if str(request.GET.get("make_club_admin", "")).lower() in ("1", "true"):
                     creator = self.auction.created_by
                     creator_club = getattr(creator.userdata, "club", None)
-                    if (
-                        creator_club
-                        and creator_club.members.filter(user=creator, permission_admin=True).exists() is False
-                    ):
-                        member, _ = ClubMember.objects.get_or_create(
-                            club=creator_club,
-                            user=creator,
-                            defaults={
-                                "name": creator.get_full_name(),
-                                "source": "manually_added",
-                            },
-                        )
-                        if not member.permission_admin:
-                            member.permission_admin = True
-                            member.save(update_fields=["permission_admin"])
+                    if creator_club:
+                        # Fill contact info from user account; get_or_create won't duplicate.
+                        member = ClubMember.objects.filter(club=creator_club, user=creator).first()
+                        if not member:
+                            member = ClubMember(
+                                club=creator_club,
+                                user=creator,
+                                source="manually_added",
+                            )
+                        # Always populate contact fields from user data (safe to overwrite blanks).
+                        member.name = member.name or creator.get_full_name() or creator.username
+                        if not member.email:
+                            member.email = creator.email or None
+                        if not member.phone_number:
+                            member.phone_number = getattr(creator.userdata, "phone_number", None) or None
+                        if not member.address:
+                            member.address = getattr(creator.userdata, "address", None) or ""
+                        member.permission_admin = True
+                        member.save()
+                        # Assign all auctions created by this user that lack a club to creator_club.
+                        unassigned = Auction.objects.filter(created_by=creator, club__isnull=True)
+                        assigned_count = unassigned.count()
+                        unassigned.update(club=creator_club)
                         ClubHistory.objects.create(
                             club=creator_club,
                             user=request.user,
-                            action=f"Granted admin permissions to {creator.get_full_name() or creator.username} via auction admin panel",
+                            action=f"Granted admin permissions to {creator.get_full_name() or creator.username} via auction admin panel"
+                            + (f"; assigned {assigned_count} auction(s) to club" if assigned_count else ""),
                             applies_to="MEMBERS",
                         )
                         messages.success(
                             request,
-                            f"{creator.username} is now an admin of {creator_club.name}",
+                            f"{creator.username} is now an admin of {creator_club.name}"
+                            + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
                         )
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
@@ -7461,15 +7471,18 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        # Show "make club admin" button to superusers when auction creator has a club but no admin member
+        # Show "make club admin" button to superusers when auction creator has a club in their profile.
+        # Show when: creator isn't yet an admin of that club, OR this auction has no club assigned yet.
         if self.request.user.is_superuser and self.auction.created_by:
             creator_club = getattr(self.auction.created_by.userdata, "club", None)
-            if (
-                creator_club
-                and not creator_club.members.filter(user=self.auction.created_by, permission_admin=True).exists()
-            ):
-                context["can_make_club_admin"] = True
-                context["creator_club"] = creator_club
+            if creator_club:
+                creator_is_admin = creator_club.members.filter(
+                    user=self.auction.created_by, permission_admin=True, is_deleted=False
+                ).exists()
+                auction_needs_club = not self.auction.club
+                if not creator_is_admin or auction_needs_club:
+                    context["can_make_club_admin"] = True
+                    context["creator_club"] = creator_club
         if self.auction.closed:
             context["ended"] = True
             messages.info(
@@ -13084,7 +13097,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             )
             context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
             if member:
-                context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:30]
+                context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:25]
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
