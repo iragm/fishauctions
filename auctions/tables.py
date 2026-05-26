@@ -814,7 +814,7 @@ class ClubBapLotHTMxTable(tables.Table):
 
     def render_lot_name(self, value, record):
         url = record.get_absolute_url()
-        return mark_safe(f'<a href="{url}">{value}</a>')
+        return format_html('<a href="{}">{}</a>', url, value)
 
     def render_seller_name(self, value, record):
         return value.name if value else "—"
