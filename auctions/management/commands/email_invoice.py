@@ -24,6 +24,7 @@ class Command(BaseCommand):
                 current_site = Site.objects.get_current()
                 mail.send(
                     email,
+                    sender=invoice.auction.sender_email,
                     headers={"Reply-to": contact_email},
                     template="invoice_ready",
                     context={

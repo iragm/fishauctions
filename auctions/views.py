@@ -135,6 +135,7 @@ from .forms import (
     ChangeUserPreferencesForm,
     ClubBapSettingsForm,
     ClubEditForm,
+    ClubEmailSettingsForm,
     ClubMemberAdminForm,
     ClubMemberMergeReviewForm,
     ClubMemberMergeTargetForm,
@@ -687,6 +688,10 @@ class ClubViewMixin:
     @property
     def can_edit_settings(self):
         return self.user_has_club_permission("permission_edit_club")
+
+    @property
+    def email_routing_enabled(self):
+        return settings.SES_ROUTE_EMAILS_ENABLED
 
     @property
     def can_manage_bap(self):
@@ -14478,6 +14483,46 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             club=self.club,
             user=self.request.user,
             action="Updated membership settings",
+            applies_to="SETTINGS",
+        )
+        return result
+
+
+class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    active_tab = "email_settings"
+    template_name = "auctions/club_email_settings.html"
+    form_class = ClubEmailSettingsForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not settings.SES_ROUTE_EMAILS_ENABLED:
+            raise Http404
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "Email settings saved.")
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated email settings",
             applies_to="SETTINGS",
         )
         return result

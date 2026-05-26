@@ -52,6 +52,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
+from .email_routing import admin_routing_email, build_routed_sender_address
 from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
@@ -670,6 +671,22 @@ class Club(models.Model):
         related_name="club_payment_destinations",
         help_text="Club dues are sent to this user's connected payment account.",
     )
+    auction_email_member = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_auction_email_destinations",
+        help_text="Incoming mail for club-slug-auctions@your-domain is forwarded to this member.",
+    )
+    membership_email_member = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_membership_email_destinations",
+        help_text="Incoming mail for club-slug-memberships@your-domain is forwarded to this member.",
+    )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
         help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
@@ -764,6 +781,49 @@ class Club(models.Model):
                 kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
         self.description = sanitize_summernote_html(self.description)
         super().save(*args, **kwargs)
+
+    def _first_email_member(self, permission_filter):
+        return (
+            self.members.filter(is_deleted=False)
+            .filter((Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email="")))
+            .filter(permission_filter)
+            .order_by("pk")
+            .first()
+        )
+
+    @property
+    def auction_email_recipient(self):
+        member = self.auction_email_member
+        if member and member.club_id == self.pk and member.routing_email and not member.is_deleted:
+            return member
+        return self._first_email_member(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+
+    @property
+    def membership_email_recipient(self):
+        member = self.membership_email_member
+        if member and member.club_id == self.pk and member.routing_email and not member.is_deleted:
+            return member
+        return self._first_email_member(Q(permission_admin=True) | Q(permission_edit_club=True))
+
+    @property
+    def auction_routing_email(self):
+        recipient = self.auction_email_recipient
+        return recipient.routing_email if recipient and recipient.routing_email else admin_routing_email()
+
+    @property
+    def membership_routing_email(self):
+        recipient = self.membership_email_recipient
+        if recipient and recipient.routing_email:
+            return recipient.routing_email
+        return self.auction_routing_email or admin_routing_email()
+
+    @property
+    def auction_sender_email(self):
+        return build_routed_sender_address(f"{self.slug}-auctions")
+
+    @property
+    def membership_sender_email(self):
+        return build_routed_sender_address(f"{self.slug}-memberships")
 
 
 class ClubDiscordRole(models.Model):
@@ -985,6 +1045,14 @@ class ClubMember(ContactRecord):
         if self.email:
             return self.email
         return f"Member #{self.pk}"
+
+    @property
+    def routing_email(self):
+        if self.email:
+            return self.email
+        if self.user and self.user.email:
+            return self.user.email
+        return ""
 
     @property
     def membership_number_visible(self) -> bool:
@@ -1857,6 +1925,10 @@ class Auction(models.Model):
         if not self.title.lower().startswith("the "):
             result = "The " + result
         return result
+
+    @property
+    def sender_email(self):
+        return build_routed_sender_address(self.slug)
 
     @property
     def currency(self):
@@ -6867,7 +6939,6 @@ class Invoice(models.Model):
             or 0
         )
 
-    @property
     def location(self):
         """Pickup location selected by the user"""
         if self.auctiontos_user:

@@ -162,6 +162,7 @@ def send_invoice_notification(self, invoice_pk):
         current_site = Site.objects.get_current()
         mail.send(
             email,
+            sender=invoice.auction.sender_email,
             headers={"Reply-to": contact_email},
             template="invoice_ready",
             context={
@@ -316,6 +317,7 @@ def update_expired_membership_discord_roles(self):
             fallback_reply_to = settings.ADMINS[0][1]
         mail.send(
             member.email,
+            sender=club.membership_sender_email,
             template="club_membership_expiring",
             headers={"Reply-to": (club.contact_email or fallback_reply_to)},
             context={

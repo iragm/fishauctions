@@ -18,6 +18,7 @@ def send_tos_notification(template, tos):
     current_site = Site.objects.get_current()
     mail.send(
         tos.user.email,
+        sender=tos.auction.sender_email,
         template=template,
         headers={"Reply-to": tos.auction.created_by.email},
         context={
@@ -167,6 +168,7 @@ class Command(BaseCommand):
                 current_site = Site.objects.get_current()
                 mail.send(
                     email,
+                    sender=campaign.auction.sender_email,
                     template="join_auction_reminder",
                     headers={"Reply-to": campaign.auction.created_by.email},
                     context={

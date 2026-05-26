@@ -3777,6 +3777,14 @@ class _PaymentUserChoiceField(forms.ModelChoiceField):
         return f"{obj.username}{suffix}"
 
 
+class _ClubEmailMemberChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, obj):
+        email = obj.routing_email
+        if obj.name and email:
+            return f"{obj.name} <{email}>"
+        return email or str(obj)
+
+
 class ClubMembershipSettingsForm(forms.ModelForm):
     """Form for club admins to configure membership and payment settings."""
 
@@ -3877,6 +3885,55 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
             self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
         return cleaned_data
+
+
+class ClubEmailSettingsForm(forms.ModelForm):
+    class Meta:
+        model = Club
+        fields = [
+            "auction_email_member",
+            "membership_email_member",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "auction_email_member",
+            "membership_email_member",
+        )
+        self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
+        club = self.instance
+        if club and club.pk:
+            base_qs = (
+                club.members.filter(is_deleted=False)
+                .filter((Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email="")))
+                .order_by("name", "email")
+            )
+            auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+            membership_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+        else:
+            auction_qs = ClubMember.objects.none()
+            membership_qs = ClubMember.objects.none()
+        self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
+            queryset=auction_qs,
+            required=False,
+            label="Auction replies",
+            help_text=(
+                f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
+                "Leave blank to fall back to the first club admin or auction manager with an email address."
+            ),
+        )
+        self.fields["membership_email_member"] = _ClubEmailMemberChoiceField(
+            queryset=membership_qs,
+            required=False,
+            label="Membership replies",
+            help_text=(
+                f"Replies sent to {club.membership_sender_email or 'club-slug-memberships@your-domain'} are routed to this member. "
+                "Leave blank to fall back to the first club admin or club editor with an email address."
+            ),
+        )
 
 
 class ClubBapSettingsForm(forms.ModelForm):

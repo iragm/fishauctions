@@ -151,6 +151,11 @@ AWS_SES_REGION_NAME="us-east-1"
 AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
 AWS_SES_CONFIGURATION_SET="secret"
 ```
+With SES enabled, normal site mail is sent from `info@SITE_DOMAIN` automatically. Club and auction mail can also send from
+`club-slug-auctions@SITE_DOMAIN`, `club-slug-memberships@SITE_DOMAIN`, and `auction-slug@SITE_DOMAIN`.
+Set up the matching SES DNS records for your domain (MX for inbound mail, TXT for SPF, and the DKIM records SES gives you), then in the club
+Setup → Emails page choose who should receive auction and membership replies. This Emails page is only shown when
+`POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"`.
 
 To set up payments for your auctions, note that:
 * Only auctions created by a site admin (superuser) will be able process payments with the configuration described below (but see the next point for the one exception).
