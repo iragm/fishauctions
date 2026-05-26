@@ -13687,6 +13687,74 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(list(delegating_lot.images), [self.url_image])
         self.assertEqual(delegating_lot.thumbnail, self.url_image)
 
+    def test_lot_detail_renders_auto_image_from_url(self):
+        """Lot detail should render URL-only auto images without trying to access an uploaded file"""
+        self.user.userdata.auto_add_images = True
+        self.user.userdata.save(update_fields=["auto_add_images"])
+        self.online_auction.auto_add_images = True
+        self.online_auction.save(update_fields=["auto_add_images"])
+
+        source_lot = Lot.objects.create(
+            lot_name="Auto image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        LotImage.objects.create(
+            lot_number=source_lot,
+            url="https://example.com/auto-image.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+        target_lot = Lot.objects.create(
+            lot_name="Auto image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+        )
+
+        response = self.client.get(target_lot.lot_link)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "https://example.com/auto-image.jpg")
+
+    def test_htmx_lot_renders_auto_image_from_url(self):
+        """HTMX lot view should render URL-only auto images without trying to access an uploaded file"""
+        self.client.force_login(self.admin_user)
+        self.user.userdata.auto_add_images = True
+        self.user.userdata.save(update_fields=["auto_add_images"])
+        self.online_auction.auto_add_images = True
+        self.online_auction.save(update_fields=["auto_add_images"])
+
+        source_lot = Lot.objects.create(
+            lot_name="Auto image lot simple",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        LotImage.objects.create(
+            lot_number=source_lot,
+            url="https://example.com/auto-image-simple.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+        target_lot = Lot.objects.create(
+            lot_name="Auto image lot simple",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+        )
+
+        response = self.client.get(
+            reverse(
+                "htmx_lot",
+                kwargs={"slug": self.online_auction.slug, "custom_lot_number": target_lot.lot_number_display},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "https://example.com/auto-image-simple.jpg")
+
     def test_image_url_form_integration(self):
         """Submitting a lot edit form with image_url set should create a LotImage"""
         self.client.login(username="my_lot", password="testpassword")

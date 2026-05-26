@@ -14,7 +14,7 @@
           {% if lot.auto_image %}
             <div class="col-md-6 offset-md1">
             {% if lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
-            <img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+            <img src="{{ lot.auto_image.display_url }}" class="img-fluid"><br>
             <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
             </div>
           {% endif %}
