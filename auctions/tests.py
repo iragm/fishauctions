@@ -13687,8 +13687,8 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(list(delegating_lot.images), [self.url_image])
         self.assertEqual(delegating_lot.thumbnail, self.url_image)
 
-    def test_view_lot_renders_auto_image_from_url(self):
-        """ViewLot should render URL-only auto images without trying to access an uploaded file"""
+    def test_lot_detail_renders_auto_image_from_url(self):
+        """Lot detail should render URL-only auto images without trying to access an uploaded file"""
         self.user.userdata.auto_add_images = True
         self.user.userdata.save(update_fields=["auto_add_images"])
         self.online_auction.auto_add_images = True
@@ -13718,8 +13718,8 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "https://example.com/auto-image.jpg")
 
-    def test_view_lot_simple_renders_auto_image_from_url(self):
-        """ViewLotSimple should render URL-only auto images without trying to access an uploaded file"""
+    def test_htmx_lot_renders_auto_image_from_url(self):
+        """HTMX lot view should render URL-only auto images without trying to access an uploaded file"""
         self.client.force_login(self.admin_user)
         self.user.userdata.auto_add_images = True
         self.user.userdata.save(update_fields=["auto_add_images"])
