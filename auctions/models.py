@@ -6939,6 +6939,7 @@ class Invoice(models.Model):
             or 0
         )
 
+    @property
     def location(self):
         """Pickup location selected by the user"""
         if self.auctiontos_user:

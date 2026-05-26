@@ -369,7 +369,7 @@ else:
 POST_OFFICE_EMAIL_BACKEND = os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend")
 _parsed_site_domain = urlsplit(f"//{os.environ.get('SITE_DOMAIN', '127.0.0.1')}")
 EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or os.environ.get("SITE_DOMAIN", "127.0.0.1")).strip().lower()
-SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND.startswith("django_ses.") and bool(EMAIL_ROUTING_DOMAIN)
+SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED
