@@ -34,6 +34,18 @@ def admin_routing_email():
 
 
 def resolve_routed_recipient(local_part):
+    """Return the forwarding email address for the given alias local-part.
+
+    Recognised aliases:
+    - ``info`` → site admin email
+    - ``<club-slug>-auctions`` → club auction routing email (admin fallback if no member configured)
+    - ``<club-slug>-memberships`` → club membership routing email (admin fallback if no member configured)
+    - ``<auction-slug>`` → auction creator email
+
+    Returns ``None`` for any alias that does not match a known pattern or
+    refers to a club/auction that does not exist.  Callers should treat
+    ``None`` as "drop this message" rather than falling back to a catch-all.
+    """
     local_part = (local_part or "").strip().lower()
     if not local_part:
         return None
