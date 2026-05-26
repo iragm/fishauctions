@@ -1410,7 +1410,12 @@ class Category(models.Model):
     """Picklist of species.  Used for product, lot, and interest"""
 
     name = models.CharField(max_length=255)
-    name_on_label = models.CharField(max_length=255, default="")
+    name_on_label = models.CharField(
+        max_length=255,
+        default="",
+        blank=True,
+        help_text="Short name printed on lot labels. Leave blank to use the full category name.",
+    )
     bap_points = models.PositiveIntegerField(
         default=5,
         help_text="BAP points awarded for a sold lot in this category. Set to 0 to make this category ineligible.",
@@ -5437,9 +5442,10 @@ class Lot(models.Model):
         """Label for the points field: Culture, HAP, or BAP depending on club settings and category."""
         if self.auction and self.auction.club:
             club = self.auction.club
-            if club.separate_cap and self.species_category and self.species_category.name == "Live food cultures":
+            cat = self.species_category.name if self.species_category else None
+            if club.separate_cap and cat in ("Live food cultures", "Snails and other inverts"):
                 return "Culture"
-            if club.separate_hap and self.species_category and self.species_category.name == "Aquatic plants":
+            if club.separate_hap and cat == "Aquatic plants":
                 return "HAP"
         return "BAP"
 
@@ -5455,8 +5461,12 @@ class Lot(models.Model):
         if not self.i_bred_this_fish:
             return "not_bred"
         category_name = self.species_category.name if self.species_category else None
+        # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
+        # When CAP is disabled they have no BAP track, so treat them as ineligible.
+        if not club.separate_cap and category_name == "Live food cultures":
+            return "category_not_eligible"
         ignore_quantity = (club.separate_hap and category_name == "Aquatic plants") or (
-            club.separate_cap and category_name == "Live food cultures"
+            club.separate_cap and category_name in ("Live food cultures", "Snails and other inverts")
         )
         if not ignore_quantity and self.quantity < club.min_quantity:
             return "low_quantity"

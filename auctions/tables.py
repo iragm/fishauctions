@@ -813,7 +813,8 @@ class ClubBapLotHTMxTable(tables.Table):
     actions = tables.Column(empty_values=(), verbose_name="Actions", orderable=False)
 
     def render_lot_name(self, value, record):
-        return value
+        url = record.get_absolute_url()
+        return format_html('<a href="{}">{}</a>', url, value)
 
     def render_seller_name(self, value, record):
         return value.name if value else "—"
@@ -835,7 +836,11 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        default_points = self.club.points_per_lot if self.club and self.club.points_per_lot > 0 else 5
+        default_points = (
+            self.club.points_per_lot
+            if self.club and self.club.points_per_lot > 0
+            else (record.species_category.bap_points if record.species_category else 5)
+        )
         return mark_safe(
             render_to_string(
                 "auctions/bap_lot_buttons.html",

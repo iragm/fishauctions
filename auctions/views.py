@@ -2133,6 +2133,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                 "Culture points",
                 "Points reason",
                 "Points club",
+                "Lot URL",
             ]
         )
         for lot in lots:
@@ -2166,6 +2167,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                     cap_pts,
                     points_reason,
                     points_club,
+                    "https://" + lot.full_lot_link,
                 ]
             )
         return response
@@ -14606,10 +14608,11 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
     def get_template_names(self):
         if self.request.htmx:
             hx_target = self.request.headers.get("HX-Target", "")
-            if hx_target == "lots-table-container":
-                return "tables/table_generic.html"
-            return "auctions/club_bap_lots_fragment.html"
-        return "auctions/club_bap_lots.html"
+            # "lots-table-container" = filter input swap; "table-container" = pagination/sort click via bootstrap_htmx.html
+            if hx_target in ("lots-table-container", "table-container"):
+                return ["tables/table_generic.html"]
+            return ["auctions/club_bap_lots_fragment.html"]
+        return ["auctions/club_bap_lots.html"]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -16093,7 +16096,11 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        default_points = club.points_per_lot if club.points_per_lot > 0 else 5
+        default_points = (
+            club.points_per_lot
+            if club.points_per_lot > 0
+            else (lot.species_category.bap_points if lot.species_category else 5)
+        )
         return render(
             request,
             "auctions/bap_lot_buttons.html",
