@@ -15931,6 +15931,26 @@ class LotBapEligibilityTests(TestCase):
         )
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
+    def test_same_name_rule_uses_prior_lot_user_email(self):
+        self.club.days_between_same_name_lots = 30
+        self.club.save(update_fields=["days_between_same_name_lots"])
+        prior_user = User.objects.create_user(username="other_email_match", password="testpass", email=self.user.email)
+        prior_tos = AuctionTOS.objects.create(user=prior_user, auction=self.auction, pickup_location=self.location)
+        prior_tos.email = "different@example.com"
+        prior_tos.save(update_fields=["email"])
+        self._make_lot(
+            lot_name="Repeat Name",
+            user=prior_user,
+            auctiontos_seller=prior_tos,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(
+            lot_name="Repeat Name",
+            date_end=timezone.now(),
+        )
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
     def test_sold_lot_no_bap_reason_not_sold(self):
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)
         self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")

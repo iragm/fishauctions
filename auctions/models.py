@@ -5483,7 +5483,9 @@ class Lot(models.Model):
             if seller_user:
                 prior = base_prior.filter(user=seller_user).exists()
             if not prior and seller_email:
-                prior = base_prior.filter(auctiontos_seller__email__iexact=seller_email).exists()
+                prior = base_prior.filter(
+                    Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
+                ).exists()
             if prior:
                 return "not_long_enough"
         # HAP/culture categories (plants, snails, live food) are never blocked by quantity minimums.
