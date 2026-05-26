@@ -815,7 +815,7 @@ class Club(models.Model):
         recipient = self.membership_email_recipient
         if recipient and recipient.routing_email:
             return recipient.routing_email
-        return self.auction_routing_email or admin_routing_email()
+        return admin_routing_email()
 
     @property
     def auction_sender_email(self):
