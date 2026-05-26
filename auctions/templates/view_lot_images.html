@@ -290,7 +290,7 @@ function deactivate_lot() {
                     </div>
                     {% else %}
                         {% if lot.auto_image %}
-                            <br><img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+                            <br><img src="{{ lot.auto_image.display_url }}" class="img-fluid"><br>
                             <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
                             <br>
                             {% if lot.user == request.user %}
