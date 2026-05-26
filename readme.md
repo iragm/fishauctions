@@ -162,22 +162,9 @@ Setup → Emails page choose who should receive auction and membership replies. 
 
 To receive replies sent to your sender aliases (e.g. `my-auction@yourdomain.com`) and forward them to the right club member:
 
-**1. Create an S3 bucket** for raw inbound messages (e.g. `my-site-ses-inbound`). Block public access. SES needs `s3:PutObject` permission — add this bucket policy (replace `REGION` and `ACCOUNT_ID`):
+**1. Create an SNS topic** (e.g. `ses-inbound-router`) in the same region as your SES receiving endpoint. No special configuration needed — standard topic, no encryption required.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "Service": "ses.amazonaws.com" },
-    "Action": "s3:PutObject",
-    "Resource": "arn:aws:s3:::my-site-ses-inbound/*",
-    "Condition": { "StringEquals": { "aws:Referer": "ACCOUNT_ID" } }
-  }]
-}
-```
-
-**2. Create a Lambda function** (`ses-inbound-router`, Python 3.12 runtime). Give its execution role `s3:GetObject` on the bucket and `ses:SendRawEmail` in SES.
+**2. Create a Lambda function** (`ses-inbound-router`, Python 3.12 runtime). Give its execution role `ses:SendRawEmail` in SES. No S3 permissions are needed.
 
 Set these environment variables on the Lambda:
 - `DJANGO_API_URL` — e.g. `https://yourdomain.com/api/v1/email-routing/resolve/`
@@ -185,6 +172,8 @@ Set these environment variables on the Lambda:
 - `RELAY_SENDER` — the address used to relay forwarded mail, e.g. `relay@yourdomain.com`
 - `RELAY_DISPLAY_NAME` — display name shown in the From field, e.g. `Club Relay` (optional, defaults to `Club Relay`)
 - `FALLBACK_RECIPIENT` — where to send mail if Django is unreachable, e.g. `info@yourdomain.com`
+
+Subscribe the Lambda to the SNS topic (SNS → *Create subscription*, Protocol: Lambda, select your function).
 
 Paste the following as the Lambda handler (`lambda_function.py`):
 
@@ -200,7 +189,6 @@ import urllib.request
 
 import boto3
 
-S3 = boto3.client("s3")
 SES = boto3.client("ses")
 
 DJANGO_API_URL = os.environ["DJANGO_API_URL"]
@@ -263,12 +251,18 @@ def strip_attachments(msg):
 
 
 def lambda_handler(event, context):
+    # SES delivers the full email (headers + body) via SNS for messages ≤ 150 KB.
+    # Larger messages are truncated by SNS and won't have a usable body.
     record = event["Records"][0]
-    bucket = record["s3"]["bucket"]["name"]
-    key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+    notification = json.loads(record["Sns"]["Message"])
 
-    raw = S3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    msg = email.message_from_bytes(raw)
+    raw_content = notification.get("content")
+    if not raw_content:
+        # Message exceeded the 150 KB SNS limit (very unusual without attachments).
+        print("[ses-router] dropping oversized message with no content")
+        return {"status": "dropped", "reason": "no content"}
+
+    msg = email.message_from_string(raw_content)
 
     # Determine which alias received the message.
     to_header = msg.get("To", "")
@@ -315,9 +309,7 @@ def lambda_handler(event, context):
 **3. Create an SES Receipt Rule** (in *SES → Email receiving → Rule sets*):
 
 - **Recipients**: leave blank to catch all addresses for your domain, or list specific aliases
-- **Actions** (in order):
-  1. **S3** — deliver to the bucket you created above
-  2. **Lambda** — invoke the function you created above (async invocation)
+- **Actions**: add a single **SNS** action — select the topic you created above
 - Enable the rule set if it isn't already active
 
 **4. Add the MX record** for your domain pointing to the SES inbound SMTP endpoint:
