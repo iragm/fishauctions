@@ -183,12 +183,15 @@ Set these environment variables on the Lambda:
 - `DJANGO_API_URL` — e.g. `https://yourdomain.com/api/v1/email-routing/resolve/`
 - `INBOUND_ROUTING_SECRET` — must match the `INBOUND_ROUTING_SECRET` in your Django `.env`
 - `RELAY_SENDER` — the address used to relay forwarded mail, e.g. `relay@yourdomain.com`
+- `RELAY_DISPLAY_NAME` — display name shown in the From field, e.g. `Club Relay` (optional, defaults to `Club Relay`)
 - `FALLBACK_RECIPIENT` — where to send mail if Django is unreachable, e.g. `info@yourdomain.com`
 
 Paste the following as the Lambda handler (`lambda_function.py`):
 
 ```python
 import email
+import email.mime.multipart
+import email.mime.text
 import json
 import os
 import urllib.error
@@ -203,11 +206,19 @@ SES = boto3.client("ses")
 DJANGO_API_URL = os.environ["DJANGO_API_URL"]
 ROUTING_SECRET = os.environ["INBOUND_ROUTING_SECRET"]
 RELAY_SENDER = os.environ["RELAY_SENDER"]
+RELAY_DISPLAY_NAME = os.environ.get("RELAY_DISPLAY_NAME", "Club Relay")
 FALLBACK_RECIPIENT = os.environ["FALLBACK_RECIPIENT"]
+
+# Sentinel: address is valid but should be dropped (not a network error).
+_DROP = object()
 
 
 def resolve_recipient(local_part):
-    """Ask Django which address to forward this alias to."""
+    """Ask Django which address to forward this alias to.
+
+    Returns the recipient email address, _DROP if the address is not a
+    recognised alias, or FALLBACK_RECIPIENT if Django is unreachable.
+    """
     params = urllib.parse.urlencode({"address": local_part})
     req = urllib.request.Request(
         f"{DJANGO_API_URL}?{params}",
@@ -217,9 +228,38 @@ def resolve_recipient(local_part):
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
             return data.get("recipient") or FALLBACK_RECIPIENT
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            # Django says this alias doesn't exist — drop silently.
+            return _DROP
+        print(f"[ses-router] resolve_recipient HTTP error {exc.code} for {local_part!r}: {exc}")
+        return FALLBACK_RECIPIENT
     except Exception as exc:
         print(f"[ses-router] resolve_recipient failed for {local_part!r}: {exc}")
         return FALLBACK_RECIPIENT
+
+
+def strip_attachments(msg):
+    """Recursively remove all attachment and non-text parts from a MIME message."""
+    if not msg.is_multipart():
+        return
+
+    def keep_part(part):
+        disposition = (part.get_content_disposition() or "").lower()
+        if "attachment" in disposition:
+            return False
+        ct = part.get_content_type()
+        return ct.startswith("text/") or ct.startswith("multipart/")
+
+    def clean(part):
+        if not part.is_multipart():
+            return
+        kept = [p for p in part.get_payload() if keep_part(p)]
+        for p in kept:
+            clean(p)
+        part.set_payload(kept or [email.mime.text.MIMEText("[Attachments removed]", "plain")])
+
+    clean(msg)
 
 
 def lambda_handler(event, context):
@@ -237,16 +277,31 @@ def lambda_handler(event, context):
         local_part = to_header.split("@")[0].strip().lstrip("<").lower()
     else:
         local_part = to_header.strip().lower()
-    forward_to = resolve_recipient(local_part) if local_part else FALLBACK_RECIPIENT
 
-    # Build the forwarded message: keep body, rewrite envelope headers.
+    # Drop messages addressed to the relay sender itself — these are
+    # misrouted replies that should instead use the Reply-To header.
+    relay_local = RELAY_SENDER.split("@")[0].lower() if "@" in RELAY_SENDER else "relay"
+    if local_part == relay_local:
+        print(f"[ses-router] dropping message addressed to relay: {to_header!r}")
+        return {"status": "dropped", "reason": "relay address"}
+
+    # Resolve the forwarding target; drop if the alias isn't recognised.
+    forward_to = resolve_recipient(local_part) if local_part else _DROP
+    if forward_to is _DROP:
+        print(f"[ses-router] dropping message to unrecognised alias: {to_header!r}")
+        return {"status": "dropped", "reason": "unknown alias"}
+
+    # Remove all attachments before forwarding.
+    strip_attachments(msg)
+
+    # Rewrite envelope headers; SES will re-sign with its own DKIM key.
     del msg["To"]
     del msg["From"]
-    # Remove original DKIM signature; SES will add its own when re-sending.
+    del msg["Reply-To"]
     while "DKIM-Signature" in msg:
         del msg["DKIM-Signature"]
     msg["To"] = forward_to
-    msg["From"] = RELAY_SENDER
+    msg["From"] = f"{RELAY_DISPLAY_NAME} <{RELAY_SENDER}>"
     msg["Reply-To"] = original_sender
 
     SES.send_raw_email(

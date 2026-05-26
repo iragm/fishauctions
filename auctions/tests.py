@@ -15905,10 +15905,18 @@ class ClubEmailRoutingTests(TestCase):
     @override_settings(
         ADMINS=[("Admin", "admin@example.com")], SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish"
     )
-    def test_resolve_routed_recipient_falls_back_to_admin(self):
+    def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
+        """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
         club = Club.objects.create(name="Fallback Club")
+        # Club exists but no email_member configured → falls back to admin via routing_email property
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-memberships"), "admin@example.com")
+        # No club with this slug → None (drop)
+        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
+        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-memberships"))
+        # Completely unrecognized pattern → None (drop)
+        self.assertIsNone(resolve_routed_recipient("random-unknown-alias"))
+        self.assertIsNone(resolve_routed_recipient("relay"))
 
 
 class InboundEmailRoutingAPITests(TestCase):
@@ -16001,6 +16009,21 @@ class InboundEmailRoutingAPITests(TestCase):
     def test_returns_401_when_no_secret_configured(self):
         response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="anything")
         self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_404_for_unknown_alias(self):
+        """Completely unknown aliases should return 404 so the Lambda can drop them."""
+        response = self.client.get(self.url, {"address": "relay"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 404)
+        response = self.client.get(
+            self.url, {"address": "nonexistent-unknown-alias"}, HTTP_X_ROUTING_SECRET="test-secret"
+        )
+        self.assertEqual(response.status_code, 404)
 
 
 class AuctionEmailSenderTests(StandardTestCase):

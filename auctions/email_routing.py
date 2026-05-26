@@ -46,15 +46,15 @@ def resolve_routed_recipient(local_part):
     if local_part.endswith("-auctions"):
         club_slug = local_part.removesuffix("-auctions")
         club = Club.objects.filter(slug=club_slug).first()
-        return club.auction_routing_email if club else admin_routing_email()
+        return club.auction_routing_email if club else None
 
     if local_part.endswith("-memberships"):
         club_slug = local_part.removesuffix("-memberships")
         club = Club.objects.filter(slug=club_slug).first()
-        return club.membership_routing_email if club else admin_routing_email()
+        return club.membership_routing_email if club else None
 
     auction = Auction.objects.filter(slug=local_part).select_related("created_by").first()
     if auction and auction.created_by and auction.created_by.email:
         return auction.created_by.email
 
-    return admin_routing_email()
+    return None

@@ -15589,6 +15589,8 @@ class InboundEmailRoutingView(APIView):
         # Accept either a bare local-part or a full email; extract local-part only.
         local_part = address.split("@")[0]
         recipient = resolve_routed_recipient(local_part)
+        if recipient is None:
+            return Response({"error": "no recipient found for this address"}, status=404)
         return Response({"recipient": recipient})
 
 
