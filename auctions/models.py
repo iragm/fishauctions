@@ -7664,8 +7664,6 @@ class UserData(models.Model):
                 interest.save()
 
             for source_tos in list(AuctionTOS.objects.filter(user=source_user).select_related("auction")):
-                if not source_tos.pk:
-                    continue
                 target_tos = (
                     AuctionTOS.objects.filter(user=user_to_merge_to, auction=source_tos.auction)
                     .exclude(pk=source_tos.pk)

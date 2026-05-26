@@ -4191,6 +4191,7 @@ class UserDataMergeIntoTests(TestCase):
         )
 
         now = timezone.now()
+        self.now = now
         self.club = Club.objects.create(name="Merge Club", payment_user=self.source_user)
         self.auction = Auction.objects.create(
             created_by=self.source_user,
@@ -4359,7 +4360,7 @@ class UserDataMergeIntoTests(TestCase):
         self.assertEqual(self.target_member.email, "source.member@example.com")
         self.assertEqual(self.target_member.phone_number, "555-1111")
         self.assertTrue(self.target_member.permission_manage_bap)
-        self.assertEqual(self.target_member.membership_last_paid, timezone.now().date())
+        self.assertEqual(self.target_member.membership_last_paid, self.now.date())
         self.assertTrue(self.source_member.is_deleted)
         self.assertIsNone(self.source_member.user)
         self.assertEqual(Watch.objects.filter(user=self.target_user, lot_number=self.seller_lot).count(), 1)
