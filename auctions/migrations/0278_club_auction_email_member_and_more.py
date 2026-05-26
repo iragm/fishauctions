@@ -21,13 +21,13 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name="club",
-            name="membership_email_member",
+            name="contact_email_member",
             field=models.ForeignKey(
                 blank=True,
-                help_text="Incoming mail for club-slug-memberships@your-domain is forwarded to this member.",
+                help_text="Incoming mail for club-slug-contact@your-domain is forwarded to this member.",
                 null=True,
                 on_delete=models.SET_NULL,
-                related_name="club_membership_email_destinations",
+                related_name="club_contact_email_destinations",
                 to="auctions.clubmember",
             ),
         ),

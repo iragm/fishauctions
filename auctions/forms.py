@@ -3892,7 +3892,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         model = Club
         fields = [
             "auction_email_member",
-            "membership_email_member",
+            "contact_email_member",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -3901,7 +3901,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         self.helper.form_method = "post"
         self.helper.layout = Layout(
             "auction_email_member",
-            "membership_email_member",
+            "contact_email_member",
         )
         self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
         club = self.instance
@@ -3912,10 +3912,10 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 .order_by("name", "email")
             )
             auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
-            membership_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+            contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_edit_club=True))
         else:
             auction_qs = ClubMember.objects.none()
-            membership_qs = ClubMember.objects.none()
+            contact_qs = ClubMember.objects.none()
         self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
             queryset=auction_qs,
             required=False,
@@ -3925,12 +3925,12 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 "Leave blank to fall back to the first club admin or auction manager with an email address."
             ),
         )
-        self.fields["membership_email_member"] = _ClubEmailMemberChoiceField(
-            queryset=membership_qs,
+        self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
+            queryset=contact_qs,
             required=False,
-            label="Membership replies",
+            label="Contact replies",
             help_text=(
-                f"Replies sent to {club.membership_sender_email or 'club-slug-memberships@your-domain'} are routed to this member. "
+                f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
                 "Leave blank to fall back to the first club admin or club editor with an email address."
             ),
         )

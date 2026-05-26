@@ -15856,7 +15856,7 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "info@auction.fish")
         self.assertContains(response, f"{self.club.slug}-auctions@auction.fish")
-        self.assertContains(response, f"{self.club.slug}-memberships@auction.fish")
+        self.assertContains(response, f"{self.club.slug}-contact@auction.fish")
 
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_email_settings_save_updates_fields_and_creates_history(self):
@@ -15866,13 +15866,13 @@ class ClubSettingsViewTests(TestCase):
             self.email_url,
             {
                 "auction_email_member": str(self.auction_member.pk),
-                "membership_email_member": str(editor_member.pk),
+                "contact_email_member": str(editor_member.pk),
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.auction_email_member, self.auction_member)
-        self.assertEqual(self.club.membership_email_member, editor_member)
+        self.assertEqual(self.club.contact_email_member, editor_member)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
 
 
@@ -15887,9 +15887,9 @@ class ClubEmailRoutingTests(TestCase):
         creator = User.objects.create_user("auction_creator", email="creator@example.com", password="pw")
         membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
-        club.membership_email_member = membership_member
+        club.contact_email_member = membership_member
         club.auction_email_member = auction_member
-        club.save(update_fields=["membership_email_member", "auction_email_member"])
+        club.save(update_fields=["contact_email_member", "auction_email_member"])
         auction = Auction.objects.create(
             title="Routing Auction",
             created_by=creator,
@@ -15899,7 +15899,7 @@ class ClubEmailRoutingTests(TestCase):
 
         self.assertEqual(resolve_routed_recipient("info"), "admin@example.com")
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "auction@example.com")
-        self.assertEqual(resolve_routed_recipient(f"{club.slug}-memberships"), "membership@example.com")
+        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "membership@example.com")
         self.assertEqual(resolve_routed_recipient(auction.slug), "creator@example.com")
 
     @override_settings(
@@ -15910,10 +15910,10 @@ class ClubEmailRoutingTests(TestCase):
         club = Club.objects.create(name="Fallback Club")
         # Club exists but no email_member configured → falls back to admin via routing_email property
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
-        self.assertEqual(resolve_routed_recipient(f"{club.slug}-memberships"), "admin@example.com")
+        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "admin@example.com")
         # No club with this slug → None (drop)
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
-        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-memberships"))
+        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-contact"))
         # Completely unrecognized pattern → None (drop)
         self.assertIsNone(resolve_routed_recipient("random-unknown-alias"))
         self.assertIsNone(resolve_routed_recipient("relay"))
@@ -15934,6 +15934,7 @@ class InboundEmailRoutingAPITests(TestCase):
         response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["recipient"], "admin@example.com")
+        self.assertIn("display_name", response.json())
 
     @override_settings(
         ADMINS=[("Admin", "admin@example.com")],
@@ -15942,9 +15943,7 @@ class InboundEmailRoutingAPITests(TestCase):
         INBOUND_ROUTING_SECRET="test-secret",
     )
     def test_accepts_full_email_address(self):
-        response = self.client.get(
-            self.url, {"address": "info@auction.fish"}, HTTP_X_ROUTING_SECRET="test-secret"
-        )
+        response = self.client.get(self.url, {"address": "info@auction.fish"}, HTTP_X_ROUTING_SECRET="test-secret")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["recipient"], "admin@example.com")
 
@@ -15960,9 +15959,7 @@ class InboundEmailRoutingAPITests(TestCase):
         member = ClubMember.objects.create(club=club, user=user, permission_manage_auctions=True)
         club.auction_email_member = member
         club.save(update_fields=["auction_email_member"])
-        response = self.client.get(
-            self.url, {"address": f"{club.slug}-auctions"}, HTTP_X_ROUTING_SECRET="test-secret"
-        )
+        response = self.client.get(self.url, {"address": f"{club.slug}-auctions"}, HTTP_X_ROUTING_SECRET="test-secret")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["recipient"], "api_auction@example.com")
 
@@ -16026,6 +16023,31 @@ class InboundEmailRoutingAPITests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class AuctionSlugSanitizationTests(TestCase):
+    """Auction slugs must not end in -auctions or -contact (email routing collision)."""
+
+    def _make_auction(self, title):
+        user = User.objects.create_user(username=f"slug_test_{title[:8]}", password="pw")
+        return Auction.objects.create(
+            title=title,
+            created_by=user,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+    def test_slug_strips_auctions_suffix(self):
+        auction = self._make_auction("Spring Auctions")
+        self.assertFalse(auction.slug.endswith("-auctions"), f"slug was {auction.slug!r}")
+
+    def test_slug_strips_contact_suffix(self):
+        auction = self._make_auction("Club Contact")
+        self.assertFalse(auction.slug.endswith("-contact"), f"slug was {auction.slug!r}")
+
+    def test_slug_unaffected_when_no_reserved_suffix(self):
+        auction = self._make_auction("Spring Auction 2024")
+        self.assertIn("spring", auction.slug)
+
+
 class AuctionEmailSenderTests(StandardTestCase):
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_send_tos_notification_uses_auction_slug_sender(self):
@@ -16054,7 +16076,7 @@ class ClubEmailSettingsFormTests(TestCase):
             set(form.fields["auction_email_member"].queryset.values_list("pk", flat=True)), {auction_member.pk}
         )
         self.assertEqual(
-            set(form.fields["membership_email_member"].queryset.values_list("pk", flat=True)),
+            set(form.fields["contact_email_member"].queryset.values_list("pk", flat=True)),
             {membership_member.pk},
         )
 

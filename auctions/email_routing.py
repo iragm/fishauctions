@@ -33,24 +33,24 @@ def admin_routing_email():
     return getattr(settings, "DEFAULT_FROM_EMAIL", "")
 
 
-def resolve_routed_recipient(local_part):
-    """Return the forwarding email address for the given alias local-part.
+def resolve_routing_info(local_part):
+    """Return forwarding info for the given alias local-part as a dict, or None.
 
     Recognised aliases:
     - ``info`` → site admin email
     - ``<club-slug>-auctions`` → club auction routing email (admin fallback if no member configured)
-    - ``<club-slug>-memberships`` → club membership routing email (admin fallback if no member configured)
+    - ``<club-slug>-contact`` → club contact routing email (admin fallback if no member configured)
     - ``<auction-slug>`` → auction creator email
 
-    Returns ``None`` for any alias that does not match a known pattern or
-    refers to a club/auction that does not exist.  Callers should treat
-    ``None`` as "drop this message" rather than falling back to a catch-all.
+    Returns a dict ``{"recipient": <email>, "display_name": <name>}`` when
+    the alias is recognised, or ``None`` if the alias does not match any known
+    pattern.  Callers should treat ``None`` as "drop this message".
     """
     local_part = (local_part or "").strip().lower()
     if not local_part:
         return None
     if local_part == "info":
-        return admin_routing_email()
+        return {"recipient": admin_routing_email(), "display_name": "Info"}
 
     Club = apps.get_model("auctions", "Club")
     Auction = apps.get_model("auctions", "Auction")
@@ -58,15 +58,29 @@ def resolve_routed_recipient(local_part):
     if local_part.endswith("-auctions"):
         club_slug = local_part.removesuffix("-auctions")
         club = Club.objects.filter(slug=club_slug).first()
-        return club.auction_routing_email if club else None
+        if not club:
+            return None
+        return {"recipient": club.auction_routing_email, "display_name": club.name}
 
-    if local_part.endswith("-memberships"):
-        club_slug = local_part.removesuffix("-memberships")
+    if local_part.endswith("-contact"):
+        club_slug = local_part.removesuffix("-contact")
         club = Club.objects.filter(slug=club_slug).first()
-        return club.membership_routing_email if club else None
+        if not club:
+            return None
+        return {"recipient": club.contact_routing_email, "display_name": club.name}
 
     auction = Auction.objects.filter(slug=local_part).select_related("created_by").first()
     if auction and auction.created_by and auction.created_by.email:
-        return auction.created_by.email
+        return {"recipient": auction.created_by.email, "display_name": auction.title}
 
     return None
+
+
+def resolve_routed_recipient(local_part):
+    """Return the forwarding email address for the given alias local-part, or None.
+
+    Thin wrapper around :func:`resolve_routing_info` for callers that only
+    need the recipient address.
+    """
+    info = resolve_routing_info(local_part)
+    return info["recipient"] if info else None

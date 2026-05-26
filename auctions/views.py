@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import re
+import secrets
 import uuid
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -15560,7 +15561,7 @@ class InboundEmailRoutingView(APIView):
     GET /api/v1/email-routing/resolve/?address=<local_part_or_full_email>
 
     Returns:
-        200 {"recipient": "user@example.com"}
+        200 {"recipient": "user@example.com", "display_name": "Spring Auction 2024"}
         400 {"error": "address parameter is required"}
         401 {"error": "invalid or missing routing secret"}
         503 {"error": "email routing is not enabled"}
@@ -15570,9 +15571,7 @@ class InboundEmailRoutingView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        import secrets
-
-        from .email_routing import email_routing_enabled, resolve_routed_recipient
+        from .email_routing import email_routing_enabled, resolve_routing_info
 
         secret = getattr(settings, "INBOUND_ROUTING_SECRET", "")
         provided = request.META.get("HTTP_X_ROUTING_SECRET", "")
@@ -15588,10 +15587,10 @@ class InboundEmailRoutingView(APIView):
 
         # Accept either a bare local-part or a full email; extract local-part only.
         local_part = address.split("@")[0]
-        recipient = resolve_routed_recipient(local_part)
-        if recipient is None:
+        info = resolve_routing_info(local_part)
+        if info is None:
             return Response({"error": "no recipient found for this address"}, status=404)
-        return Response({"recipient": recipient})
+        return Response({"recipient": info["recipient"], "display_name": info["display_name"]})
 
 
 # ---------------------------------------------------------------------------

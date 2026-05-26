@@ -679,13 +679,13 @@ class Club(models.Model):
         related_name="club_auction_email_destinations",
         help_text="Incoming mail for club-slug-auctions@your-domain is forwarded to this member.",
     )
-    membership_email_member = models.ForeignKey(
+    contact_email_member = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="club_membership_email_destinations",
-        help_text="Incoming mail for club-slug-memberships@your-domain is forwarded to this member.",
+        related_name="club_contact_email_destinations",
+        help_text="Incoming mail for club-slug-contact@your-domain is forwarded to this member.",
     )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
@@ -805,8 +805,8 @@ class Club(models.Model):
         return self._first_email_member(Q(permission_admin=True) | Q(permission_manage_auctions=True))
 
     @property
-    def membership_email_recipient(self):
-        member = self.membership_email_member
+    def contact_email_recipient(self):
+        member = self.contact_email_member
         if (
             member
             and member.club_id == self.pk
@@ -823,8 +823,8 @@ class Club(models.Model):
         return recipient.routing_email if recipient and recipient.routing_email else admin_routing_email()
 
     @property
-    def membership_routing_email(self):
-        recipient = self.membership_email_recipient
+    def contact_routing_email(self):
+        recipient = self.contact_email_recipient
         if recipient and recipient.routing_email:
             return recipient.routing_email
         return admin_routing_email()
@@ -834,8 +834,8 @@ class Club(models.Model):
         return build_routed_sender_address(f"{self.slug}-auctions")
 
     @property
-    def membership_sender_email(self):
-        return build_routed_sender_address(f"{self.slug}-memberships")
+    def contact_sender_email(self):
+        return build_routed_sender_address(f"{self.slug}-contact")
 
 
 class ClubDiscordRole(models.Model):
@@ -1523,12 +1523,28 @@ class Product(models.Model):
         verbose_name_plural = "Products and species"
 
 
+def _slugify_auction_title(value):
+    """Slugify an auction title, stripping reserved suffixes used for email routing.
+
+    Slugs ending in ``-auctions`` or ``-contact`` would collide with the club
+    email routing aliases ``<club-slug>-auctions`` and ``<club-slug>-contact``,
+    so those suffixes are silently removed at slug-generation time.
+    """
+    from django.utils.text import slugify
+
+    slug = slugify(value)
+    for suffix in ("-auctions", "-contact"):
+        if slug.endswith(suffix):
+            slug = slug[: -len(suffix)].rstrip("-")
+    return slug or slugify(value)  # fall back to unsanitised slug if stripping leaves nothing
+
+
 class Auction(models.Model):
     """An auction is a collection of lots"""
 
     title = models.CharField("Auction name", max_length=255, blank=False, null=False)
     title.help_text = "This is the name people will see when joining your auction"
-    slug = AutoSlugField(populate_from="title", unique=True)
+    slug = AutoSlugField(populate_from="title", unique=True, slugify=_slugify_auction_title)
     is_online = models.BooleanField(default=True)
     is_online.help_text = "Is this is an online auction with in-person pickup at one or more locations?"
     sealed_bid = models.BooleanField(default=False)

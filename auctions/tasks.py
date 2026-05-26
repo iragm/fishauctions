@@ -317,7 +317,7 @@ def update_expired_membership_discord_roles(self):
             fallback_reply_to = settings.ADMINS[0][1]
         mail.send(
             member.email,
-            sender=club.membership_sender_email,
+            sender=club.contact_sender_email,
             template="club_membership_expiring",
             headers={"Reply-to": (club.contact_email or fallback_reply_to)},
             context={
