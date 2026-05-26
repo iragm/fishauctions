@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from django.db.models import F
 from django.utils import timezone
 
 from auctions.models import BapAward, Lot
@@ -34,18 +35,7 @@ class Command(BaseCommand):
             auctiontos_winner__isnull=False,
             winning_price__isnull=False,
         )
-        end_filled = 0
-        end_updates = []
-        for lot in lots_missing_end.iterator(chunk_size=500):
-            lot.date_end = lot.date_posted
-            end_updates.append(lot)
-            if len(end_updates) >= 500:
-                Lot.objects.bulk_update(end_updates, ["date_end"], batch_size=500)
-                end_filled += len(end_updates)
-                end_updates.clear()
-        if end_updates:
-            Lot.objects.bulk_update(end_updates, ["date_end"], batch_size=500)
-            end_filled += len(end_updates)
+        end_filled = lots_missing_end.update(date_end=F("date_posted"))
         self.stdout.write(f"Step 2: filled date_end from date_posted on {end_filled} sold lot(s).")
 
         # ── Step 3: Fix BapAward.date when lot had no date_end ──────────────────
