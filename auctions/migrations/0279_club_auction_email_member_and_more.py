@@ -4,6 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0277_backfill_clubmember_user"),
+        ("auctions", "0278_category_name_on_label_blank"),
     ]
 
     operations = [
