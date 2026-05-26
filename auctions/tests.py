@@ -4186,9 +4186,6 @@ class UserDataMergeIntoTests(TestCase):
         self.target_user = User.objects.create_user(
             username="merge_target", password="testpass", email="merge_target@example.com"
         )
-        self.other_user = User.objects.create_user(
-            username="merge_other", password="testpass", email="merge_other@example.com"
-        )
 
         now = timezone.now()
         self.now = now

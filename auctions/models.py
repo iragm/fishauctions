@@ -7598,11 +7598,6 @@ class UserData(models.Model):
             if update_fields:
                 target_item.save(update_fields=list(update_fields))
 
-        def merge_interest(target_item, source_item):
-            if source_item.interest > target_item.interest:
-                target_item.interest = source_item.interest
-                target_item.save(update_fields=["interest"])
-
         with transaction.atomic():
             target_updates = set()
             fields_to_copy_if_missing = [
@@ -7659,8 +7654,24 @@ class UserData(models.Model):
             merge_unique_relation(UserIgnoreCategory, "category_id")
             merge_unique_relation(Watch, "lot_number_id")
             merge_unique_relation(ChatSubscription, "lot_id", merge=merge_chat_subscription)
-            merge_unique_relation(UserInterestCategory, "category_id", merge=merge_interest)
-            for interest in UserInterestCategory.objects.filter(user=user_to_merge_to):
+            updated_interest_ids = set()
+            existing_interests = {
+                item.category_id: item for item in UserInterestCategory.objects.filter(user=user_to_merge_to)
+            }
+            for interest in list(UserInterestCategory.objects.filter(user=source_user)):
+                target_interest = existing_interests.get(interest.category_id)
+                if target_interest:
+                    if interest.interest > target_interest.interest:
+                        target_interest.interest = interest.interest
+                        target_interest.save(update_fields=["interest"])
+                    updated_interest_ids.add(target_interest.pk)
+                    interest.delete()
+                    continue
+                interest.user = user_to_merge_to
+                interest.save(update_fields=["user"])
+                existing_interests[interest.category_id] = interest
+                updated_interest_ids.add(interest.pk)
+            for interest in UserInterestCategory.objects.filter(pk__in=updated_interest_ids):
                 interest.save()
 
             for source_tos in list(AuctionTOS.objects.filter(user=source_user).select_related("auction")):
@@ -7742,7 +7753,7 @@ class UserData(models.Model):
                 if source_member.culture_points_ytd and not target_member.culture_points_ytd:
                     target_member.culture_points_ytd = source_member.culture_points_ytd
                     member_updates.add("culture_points_ytd")
-                if source_member.is_deleted and not target_member.is_deleted:
+                if not source_member.is_deleted and target_member.is_deleted:
                     target_member.is_deleted = False
                     member_updates.add("is_deleted")
                 if member_updates:
