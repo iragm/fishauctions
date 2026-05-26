@@ -18,7 +18,7 @@ from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import (
     BooleanField,
     Case,
@@ -7555,6 +7555,284 @@ class UserData(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s data"
+
+    def merge_into(self, user_to_merge_to):
+        if not user_to_merge_to or not getattr(user_to_merge_to, "pk", None):
+            msg = "A saved user is required as the merge target."
+            raise ValueError(msg)
+        if user_to_merge_to == self.user:
+            msg = "Cannot merge a user into itself."
+            raise ValueError(msg)
+
+        source_user = self.user
+        target_userdata, _ = UserData.objects.get_or_create(user=user_to_merge_to)
+
+        def merge_unique_relation(model, key_field, merge=None):
+            existing = {getattr(item, key_field): item for item in model.objects.filter(user=user_to_merge_to)}
+            for item in list(model.objects.filter(user=source_user)):
+                key = getattr(item, key_field)
+                target_item = existing.get(key)
+                if target_item:
+                    if merge:
+                        merge(target_item, item)
+                    item.delete()
+                    continue
+                item.user = user_to_merge_to
+                item.save(update_fields=["user"])
+                existing[key] = item
+
+        def merge_chat_subscription(target_item, source_item):
+            update_fields = set()
+            if source_item.last_seen and (not target_item.last_seen or source_item.last_seen > target_item.last_seen):
+                target_item.last_seen = source_item.last_seen
+                update_fields.add("last_seen")
+            if source_item.last_notification_sent and (
+                not target_item.last_notification_sent
+                or source_item.last_notification_sent > target_item.last_notification_sent
+            ):
+                target_item.last_notification_sent = source_item.last_notification_sent
+                update_fields.add("last_notification_sent")
+            if source_item.unsubscribed and not target_item.unsubscribed:
+                target_item.unsubscribed = True
+                update_fields.add("unsubscribed")
+            if update_fields:
+                target_item.save(update_fields=list(update_fields))
+
+        def merge_interest(target_item, source_item):
+            if source_item.interest > target_item.interest:
+                target_item.interest = source_item.interest
+                target_item.save(update_fields=["interest"])
+
+        with transaction.atomic():
+            target_updates = set()
+            fields_to_copy_if_missing = [
+                "phone_number",
+                "address",
+                "location",
+                "club",
+                "last_auction_used",
+                "location_coordinates",
+                "paypal_email_address",
+                "preferred_bidder_number",
+                "timezone",
+            ]
+            for field in fields_to_copy_if_missing:
+                source_value = getattr(self, field, None)
+                target_value = getattr(target_userdata, field, None)
+                if target_value in (None, "") and source_value not in (None, ""):
+                    setattr(target_userdata, field, source_value)
+                    target_updates.add(field)
+            if not target_userdata.latitude and self.latitude:
+                target_userdata.latitude = self.latitude
+                target_updates.add("latitude")
+            if not target_userdata.longitude and self.longitude:
+                target_userdata.longitude = self.longitude
+                target_updates.add("longitude")
+            if self.credit:
+                target_userdata.credit = (target_userdata.credit or 0) + self.credit
+                target_updates.add("credit")
+            for field in [
+                "can_submit_standalone_lots",
+                "can_create_club_auctions",
+                "paypal_enabled",
+                "square_enabled",
+                "is_trusted",
+            ]:
+                if getattr(self, field) and not getattr(target_userdata, field):
+                    setattr(target_userdata, field, True)
+                    target_updates.add(field)
+            if target_updates:
+                target_userdata.save(update_fields=list(target_updates))
+
+            Auction.objects.filter(created_by=source_user).update(created_by=user_to_merge_to)
+            Club.objects.filter(payment_user=source_user).update(payment_user=user_to_merge_to)
+            PickupLocation.objects.filter(user=source_user).update(user=user_to_merge_to)
+            Invoice.objects.filter(buyer=source_user).update(buyer=user_to_merge_to)
+            Lot.objects.filter(user=source_user).update(user=user_to_merge_to)
+            Lot.objects.filter(winner=source_user).update(winner=user_to_merge_to)
+            Bid.objects.filter(user=source_user).update(user=user_to_merge_to)
+            PageView.objects.filter(user=source_user).update(user=user_to_merge_to)
+            AuctionCampaign.objects.filter(user=source_user).update(user=user_to_merge_to)
+            SearchHistory.objects.filter(user=source_user).update(user=user_to_merge_to)
+
+            merge_unique_relation(AuctionIgnore, "auction_id")
+            merge_unique_relation(UserIgnoreCategory, "category_id")
+            merge_unique_relation(Watch, "lot_number_id")
+            merge_unique_relation(ChatSubscription, "lot_id", merge=merge_chat_subscription)
+            merge_unique_relation(UserInterestCategory, "category_id", merge=merge_interest)
+            for interest in UserInterestCategory.objects.filter(user=user_to_merge_to):
+                interest.save()
+
+            for source_tos in list(AuctionTOS.objects.filter(user=source_user).select_related("auction")):
+                if not source_tos.pk:
+                    continue
+                target_tos = (
+                    AuctionTOS.objects.filter(user=user_to_merge_to, auction=source_tos.auction)
+                    .exclude(pk=source_tos.pk)
+                    .order_by("createdon")
+                    .first()
+                )
+                if target_tos:
+                    target_tos.merge_duplicate(
+                        source_tos,
+                        reason=f"merged from user account {source_user.username}",
+                    )
+                else:
+                    source_tos.user = user_to_merge_to
+                    source_tos.save()
+
+            for source_member in list(ClubMember.objects.filter(user=source_user).select_related("club")):
+                target_member = (
+                    ClubMember.objects.filter(club=source_member.club, user=user_to_merge_to)
+                    .exclude(pk=source_member.pk)
+                    .order_by("pk")
+                    .first()
+                )
+                if not target_member:
+                    source_member.user = user_to_merge_to
+                    source_member.save(update_fields=["user"])
+                    continue
+
+                member_updates = set()
+                for field in [
+                    "name",
+                    "email",
+                    "phone_number",
+                    "address",
+                    "discord_id",
+                    "discord_username",
+                    "discord_roles",
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "membership_expiration_reminder_due",
+                    "discord_role_override",
+                    "last_discord_role_assigned",
+                    "bidder_number",
+                ]:
+                    source_value = getattr(source_member, field, None)
+                    target_value = getattr(target_member, field, None)
+                    if target_value in (None, "") and source_value not in (None, ""):
+                        setattr(target_member, field, source_value)
+                        member_updates.add(field)
+                for field in [
+                    "permission_admin",
+                    "permission_view",
+                    "permission_export",
+                    "permission_add_edit",
+                    "permission_edit_club",
+                    "permission_manage_auctions",
+                    "permission_manage_bap",
+                ]:
+                    if getattr(source_member, field) and not getattr(target_member, field):
+                        setattr(target_member, field, True)
+                        member_updates.add(field)
+                if source_member.bap_points and not target_member.bap_points:
+                    target_member.bap_points = source_member.bap_points
+                    member_updates.add("bap_points")
+                if source_member.hap_points and not target_member.hap_points:
+                    target_member.hap_points = source_member.hap_points
+                    member_updates.add("hap_points")
+                if source_member.culture_points and not target_member.culture_points:
+                    target_member.culture_points = source_member.culture_points
+                    member_updates.add("culture_points")
+                if source_member.bap_points_ytd and not target_member.bap_points_ytd:
+                    target_member.bap_points_ytd = source_member.bap_points_ytd
+                    member_updates.add("bap_points_ytd")
+                if source_member.hap_points_ytd and not target_member.hap_points_ytd:
+                    target_member.hap_points_ytd = source_member.hap_points_ytd
+                    member_updates.add("hap_points_ytd")
+                if source_member.culture_points_ytd and not target_member.culture_points_ytd:
+                    target_member.culture_points_ytd = source_member.culture_points_ytd
+                    member_updates.add("culture_points_ytd")
+                if source_member.is_deleted and not target_member.is_deleted:
+                    target_member.is_deleted = False
+                    member_updates.add("is_deleted")
+                if member_updates:
+                    target_member.save(update_fields=list(member_updates))
+
+                BapAward.objects.filter(club_member=source_member).update(club_member=target_member)
+                InvoicePayment.objects.filter(club_member=source_member).update(club_member=target_member)
+                AuctionTOS.objects.filter(clubmember=source_member).update(clubmember=target_member)
+                if target_member.bap_awards.exists():
+                    BapAward.recalculate_member_points(target_member)
+                source_member.user = None
+                source_member.is_deleted = True
+                source_member.save(update_fields=["user", "is_deleted"])
+
+            for model, field_names in [
+                (
+                    PayPalSeller,
+                    ["paypal_merchant_id", "currency", "payer_email"],
+                ),
+                (
+                    SquareSeller,
+                    [
+                        "square_merchant_id",
+                        "access_token",
+                        "refresh_token",
+                        "token_expires_at",
+                        "currency",
+                        "payer_email",
+                    ],
+                ),
+            ]:
+                source_record = model.objects.filter(user=source_user).first()
+                if not source_record:
+                    continue
+                target_record = model.objects.filter(user=user_to_merge_to).first()
+                if not target_record:
+                    source_record.user = user_to_merge_to
+                    source_record.save(update_fields=["user"])
+                    continue
+                payment_updates = set()
+                for field in field_names:
+                    source_value = getattr(source_record, field, None)
+                    target_value = getattr(target_record, field, None)
+                    if target_value in (None, "") and source_value not in (None, ""):
+                        setattr(target_record, field, source_value)
+                        payment_updates.add(field)
+                if payment_updates:
+                    target_record.save(update_fields=list(payment_updates))
+                source_record.delete()
+
+            self.phone_number = None
+            self.address = None
+            self.location = None
+            self.club = None
+            self.last_auction_used = None
+            self.latitude = 0
+            self.longitude = 0
+            self.location_coordinates = None
+            self.paypal_email_address = None
+            self.credit = 0
+            self.preferred_bidder_number = ""
+            self.can_submit_standalone_lots = get_default_can_submit_lots()
+            self.can_create_club_auctions = get_default_can_create_auctions()
+            self.paypal_enabled = get_default_paypal_enabled()
+            self.square_enabled = get_default_square_enabled()
+            self.is_trusted = get_default_is_trusted()
+            self.save(
+                update_fields=[
+                    "phone_number",
+                    "address",
+                    "location",
+                    "club",
+                    "last_auction_used",
+                    "latitude",
+                    "longitude",
+                    "location_coordinates",
+                    "paypal_email_address",
+                    "credit",
+                    "preferred_bidder_number",
+                    "can_submit_standalone_lots",
+                    "can_create_club_auctions",
+                    "paypal_enabled",
+                    "square_enabled",
+                    "is_trusted",
+                ]
+            )
+
+        return target_userdata
 
     def set_next_promo(self):
         """Set next_promo_email_at to the next Wednesday at 10 AM in user's local time,
