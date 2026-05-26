@@ -150,12 +150,124 @@ AWS_SESSION_PROFILE="default"
 AWS_SES_REGION_NAME="us-east-1"
 AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
 AWS_SES_CONFIGURATION_SET="secret"
+INBOUND_ROUTING_SECRET="change-me-to-a-long-random-secret"
 ```
 With SES enabled, normal site mail is sent from `info@SITE_DOMAIN` automatically. Club and auction mail can also send from
 `club-slug-auctions@SITE_DOMAIN`, `club-slug-memberships@SITE_DOMAIN`, and `auction-slug@SITE_DOMAIN`.
 Set up the matching SES DNS records for your domain (MX for inbound mail, TXT for SPF, and the DKIM records SES gives you), then in the club
 Setup → Emails page choose who should receive auction and membership replies. This Emails page is only shown when
 `POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"`.
+
+### Setting up SES inbound mail
+
+To receive replies sent to your sender aliases (e.g. `my-auction@yourdomain.com`) and forward them to the right club member:
+
+**1. Create an S3 bucket** for raw inbound messages (e.g. `my-site-ses-inbound`). Block public access. SES needs `s3:PutObject` permission — add this bucket policy (replace `REGION` and `ACCOUNT_ID`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Service": "ses.amazonaws.com" },
+    "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::my-site-ses-inbound/*",
+    "Condition": { "StringEquals": { "aws:Referer": "ACCOUNT_ID" } }
+  }]
+}
+```
+
+**2. Create a Lambda function** (`ses-inbound-router`, Python 3.12 runtime). Give its execution role `s3:GetObject` on the bucket and `ses:SendRawEmail` in SES.
+
+Set these environment variables on the Lambda:
+- `DJANGO_API_URL` — e.g. `https://yourdomain.com/api/v1/email-routing/resolve/`
+- `INBOUND_ROUTING_SECRET` — must match the `INBOUND_ROUTING_SECRET` in your Django `.env`
+- `RELAY_SENDER` — the address used to relay forwarded mail, e.g. `relay@yourdomain.com`
+- `FALLBACK_RECIPIENT` — where to send mail if Django is unreachable, e.g. `info@yourdomain.com`
+
+Paste the following as the Lambda handler (`lambda_function.py`):
+
+```python
+import email
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+
+import boto3
+
+S3 = boto3.client("s3")
+SES = boto3.client("ses")
+
+DJANGO_API_URL = os.environ["DJANGO_API_URL"]
+ROUTING_SECRET = os.environ["INBOUND_ROUTING_SECRET"]
+RELAY_SENDER = os.environ["RELAY_SENDER"]
+FALLBACK_RECIPIENT = os.environ["FALLBACK_RECIPIENT"]
+
+
+def resolve_recipient(local_part):
+    """Ask Django which address to forward this alias to."""
+    params = urllib.parse.urlencode({"address": local_part})
+    req = urllib.request.Request(
+        f"{DJANGO_API_URL}?{params}",
+        headers={"X-Routing-Secret": ROUTING_SECRET},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            return data.get("recipient") or FALLBACK_RECIPIENT
+    except Exception:
+        return FALLBACK_RECIPIENT
+
+
+def lambda_handler(event, context):
+    record = event["Records"][0]
+    bucket = record["s3"]["bucket"]["name"]
+    key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+
+    raw = S3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    msg = email.message_from_bytes(raw)
+
+    # Determine which alias received the message.
+    to_header = msg.get("To", "")
+    original_sender = msg.get("From", "")
+    local_part = to_header.split("@")[0].strip().lstrip("<").lower()
+    forward_to = resolve_recipient(local_part)
+
+    # Build the forwarded message: keep body, rewrite envelope headers.
+    del msg["To"]
+    del msg["From"]
+    del msg["DKIM-Signature"]  # remove original DKIM; SES will re-sign
+    msg["To"] = forward_to
+    msg["From"] = RELAY_SENDER
+    msg["Reply-To"] = original_sender
+
+    SES.send_raw_email(
+        Source=RELAY_SENDER,
+        Destinations=[forward_to],
+        RawMessage={"Data": msg.as_bytes()},
+    )
+    return {"status": "forwarded", "to": forward_to}
+```
+
+**3. Create an SES Receipt Rule** (in *SES → Email receiving → Rule sets*):
+
+- **Recipients**: leave blank to catch all addresses for your domain, or list specific aliases
+- **Actions** (in order):
+  1. **S3** — deliver to the bucket you created above
+  2. **Lambda** — invoke the function you created above (async invocation)
+- Enable the rule set if it isn't already active
+
+**4. Add the MX record** for your domain pointing to the SES inbound SMTP endpoint:
+
+```
+MX  10  inbound-smtp.us-east-1.amazonaws.com
+```
+
+(Replace the region if you are not in `us-east-1`.)
+
+After these steps, replies to any `auction-slug@yourdomain.com` or `club-slug-auctions@yourdomain.com` address will be automatically forwarded to the club member configured in Setup → Emails.
 
 To set up payments for your auctions, note that:
 * Only auctions created by a site admin (superuser) will be able process payments with the configuration described below (but see the next point for the one exception).

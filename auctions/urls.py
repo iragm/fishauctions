@@ -709,6 +709,7 @@ urlpatterns = [
         views.ClubMemberBapAwardAPIView.as_view(),
         name="api_club_member_bap_awards",
     ),
+    path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),

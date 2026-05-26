@@ -15546,6 +15546,51 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
 
 
 # ---------------------------------------------------------------------------
+# Inbound email routing API
+# ---------------------------------------------------------------------------
+
+
+class InboundEmailRoutingView(APIView):
+    """Resolve an inbound email address to its forwarding recipient.
+
+    Called by the SES inbound Lambda to determine where to forward a message.
+    Requires a shared secret supplied via the ``X-Routing-Secret`` header (must
+    match the ``INBOUND_ROUTING_SECRET`` Django setting).
+
+    GET /api/v1/email-routing/resolve/?address=<local_part_or_full_email>
+
+    Returns:
+        200 {"recipient": "user@example.com"}
+        400 {"error": "address parameter is required"}
+        401 {"error": "invalid or missing routing secret"}
+        503 {"error": "email routing is not enabled"}
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .email_routing import email_routing_enabled, resolve_routed_recipient
+
+        secret = getattr(settings, "INBOUND_ROUTING_SECRET", "")
+        provided = request.META.get("HTTP_X_ROUTING_SECRET", "")
+        if not secret or not provided or provided != secret:
+            return Response({"error": "invalid or missing routing secret"}, status=401)
+
+        if not email_routing_enabled():
+            return Response({"error": "email routing is not enabled"}, status=503)
+
+        address = (request.query_params.get("address") or "").strip().lower()
+        if not address:
+            return Response({"error": "address parameter is required"}, status=400)
+
+        # Accept either a bare local-part or a full email; extract local-part only.
+        local_part = address.split("@")[0]
+        recipient = resolve_routed_recipient(local_part)
+        return Response({"recipient": recipient})
+
+
+# ---------------------------------------------------------------------------
 # Discord integration helpers and views
 # ---------------------------------------------------------------------------
 

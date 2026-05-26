@@ -15911,6 +15911,98 @@ class ClubEmailRoutingTests(TestCase):
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-memberships"), "admin@example.com")
 
 
+class InboundEmailRoutingAPITests(TestCase):
+    """Tests for the InboundEmailRoutingView API endpoint."""
+
+    url = "/api/v1/email-routing/resolve/"
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_resolves_info_to_admin(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "admin@example.com")
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_accepts_full_email_address(self):
+        response = self.client.get(
+            self.url, {"address": "info@auction.fish"}, HTTP_X_ROUTING_SECRET="test-secret"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "admin@example.com")
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_resolves_club_auction_alias(self):
+        club = Club.objects.create(name="API Routing Club")
+        user = User.objects.create_user("api_route_user", "api_auction@example.com", "pw")
+        member = ClubMember.objects.create(club=club, user=user, permission_manage_auctions=True)
+        club.auction_email_member = member
+        club.save(update_fields=["auction_email_member"])
+        response = self.client.get(
+            self.url, {"address": f"{club.slug}-auctions"}, HTTP_X_ROUTING_SECRET="test-secret"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "api_auction@example.com")
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_401_for_wrong_secret(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="wrong-secret")
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_401_for_missing_secret(self):
+        response = self.client.get(self.url, {"address": "info"})
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_400_for_missing_address(self):
+        response = self.client.get(self.url, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=False,
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_503_when_routing_disabled(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 503)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="",
+    )
+    def test_returns_401_when_no_secret_configured(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="anything")
+        self.assertEqual(response.status_code, 401)
+
+
 class AuctionEmailSenderTests(StandardTestCase):
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_send_tos_notification_uses_auction_slug_sender(self):
