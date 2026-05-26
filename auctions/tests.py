@@ -18214,6 +18214,12 @@ class ManageUsersThroughClubTests(TestCase):
         self.joiner.userdata.preferred_bidder_number = "246"
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        # Pre-assign distinct bidder numbers to the other setUp club members so that
+        # _rebuild_auctiontos_from_club cannot randomly consume "246" when generating
+        # numbers for them (they have no preferred_bidder_number, so randint(1,999) is
+        # used, which has a ~0.3% chance of picking 246 and making this test flaky).
+        for idx, m in enumerate(ClubMember.objects.filter(club=self.club).exclude(pk=member.pk), start=1):
+            ClubMember.objects.filter(pk=m.pk).update(bidder_number=str(idx))
         form = AuctionEditForm(
             data={**self._auction_form_data(), "manage_users_through_club": "all"},
             instance=self.auction,
