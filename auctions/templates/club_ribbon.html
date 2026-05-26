@@ -35,7 +35,7 @@
   {% endif %}
   {% if view.can_edit_settings or view.can_manage_bap %}
   <li class="nav-item dropdown">
-    <a class="nav-link dropdown-toggle {% if view.active_tab in 'edit,membership,email_settings,bap_settings,discord,api_keys,history' %}active{% endif %}"
+    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'api_keys' or view.active_tab == 'history' %}active{% endif %}"
        href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-sliders"></i><span class="d-none d-md-inline"> Setup</span>
     </a>

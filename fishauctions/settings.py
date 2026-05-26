@@ -367,8 +367,9 @@ else:
 # EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 POST_OFFICE_EMAIL_BACKEND = os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend")
-_parsed_site_domain = urlsplit(f"//{os.environ.get('SITE_DOMAIN', '127.0.0.1')}")
-EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or os.environ.get("SITE_DOMAIN", "127.0.0.1")).strip().lower()
+_site_domain_raw = os.environ.get("SITE_DOMAIN", "127.0.0.1").strip()
+_parsed_site_domain = urlsplit(_site_domain_raw if "://" in _site_domain_raw else f"//{_site_domain_raw}")
+EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or _site_domain_raw).strip().lower()
 SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"

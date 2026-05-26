@@ -794,14 +794,26 @@ class Club(models.Model):
     @property
     def auction_email_recipient(self):
         member = self.auction_email_member
-        if member and member.club_id == self.pk and member.routing_email and not member.is_deleted:
+        if (
+            member
+            and member.club_id == self.pk
+            and member.routing_email
+            and not member.is_deleted
+            and (member.permission_admin or member.permission_manage_auctions)
+        ):
             return member
         return self._first_email_member(Q(permission_admin=True) | Q(permission_manage_auctions=True))
 
     @property
     def membership_email_recipient(self):
         member = self.membership_email_member
-        if member and member.club_id == self.pk and member.routing_email and not member.is_deleted:
+        if (
+            member
+            and member.club_id == self.pk
+            and member.routing_email
+            and not member.is_deleted
+            and (member.permission_admin or member.permission_edit_club)
+        ):
             return member
         return self._first_email_member(Q(permission_admin=True) | Q(permission_edit_club=True))
 
