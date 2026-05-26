@@ -391,7 +391,7 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 # https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-files.html
 # AWS_SESSION_PROFILE = os.environ.get('AWS_SESSION_PROFILE', 'default')
 AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
-AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", 'email.us-east-1.amazonaws.com"')
+AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
 AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
