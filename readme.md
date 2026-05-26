@@ -217,7 +217,8 @@ def resolve_recipient(local_part):
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
             return data.get("recipient") or FALLBACK_RECIPIENT
-    except Exception:
+    except Exception as exc:
+        print(f"[ses-router] resolve_recipient failed for {local_part!r}: {exc}")
         return FALLBACK_RECIPIENT
 
 
@@ -232,13 +233,18 @@ def lambda_handler(event, context):
     # Determine which alias received the message.
     to_header = msg.get("To", "")
     original_sender = msg.get("From", "")
-    local_part = to_header.split("@")[0].strip().lstrip("<").lower()
-    forward_to = resolve_recipient(local_part)
+    if "@" in to_header:
+        local_part = to_header.split("@")[0].strip().lstrip("<").lower()
+    else:
+        local_part = to_header.strip().lower()
+    forward_to = resolve_recipient(local_part) if local_part else FALLBACK_RECIPIENT
 
     # Build the forwarded message: keep body, rewrite envelope headers.
     del msg["To"]
     del msg["From"]
-    del msg["DKIM-Signature"]  # remove original DKIM; SES will re-sign
+    # Remove original DKIM signature; SES will add its own when re-sending.
+    while "DKIM-Signature" in msg:
+        del msg["DKIM-Signature"]
     msg["To"] = forward_to
     msg["From"] = RELAY_SENDER
     msg["Reply-To"] = original_sender

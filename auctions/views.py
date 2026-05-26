@@ -15570,11 +15570,13 @@ class InboundEmailRoutingView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
+        import secrets
+
         from .email_routing import email_routing_enabled, resolve_routed_recipient
 
         secret = getattr(settings, "INBOUND_ROUTING_SECRET", "")
         provided = request.META.get("HTTP_X_ROUTING_SECRET", "")
-        if not secret or not provided or provided != secret:
+        if not secret or not provided or not secrets.compare_digest(provided, secret):
             return Response({"error": "invalid or missing routing secret"}, status=401)
 
         if not email_routing_enabled():
