@@ -16067,7 +16067,7 @@ class ClubEmailSettingsFormTests(TestCase):
             "email_form_membership", email="membership@example.com", password="pw"
         )
         auction_user = User.objects.create_user("email_form_auction", email="auction@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
 
         form = ClubEmailSettingsForm(instance=club)
