@@ -6,11 +6,14 @@
 {{ form.media }}
 {% include "club_ribbon.html" %}
 
-<p class="text-muted">
-  General site mail sends from <code>info@{{ email_domain }}</code>. Club mail can also send from
-  <code>{{ club.slug }}-auctions@{{ email_domain }}</code> and
-  <code>{{ club.slug }}-contact@{{ email_domain }}</code>.
+<p class="mb-2">
+  We offer a free forwarding address for club communications &mdash; this allows your club email to stay constant even if you change the person in charge of communications.
 </p>
+
+<div class="alert alert-info mb-3" role="alert">
+  <i class="bi bi-lightbulb-fill me-1"></i>
+  If you already have a shared Gmail account you use for club communications, you should add them as a club member, grant that account auction and membership permissions, and then select their name for both options here.
+</div>
 
 {% crispy form %}
 

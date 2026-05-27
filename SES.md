@@ -429,10 +429,16 @@ SNS Topic ──► Lambda
 
 Recognised alias patterns:
 
-| Alias | Routes to |
-|---|---|
-| `info@yourdomain.com` | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
-| `<club-slug>-auctions@yourdomain.com` | Club's configured auction contact, or first auction admin, or site admin |
-| `<club-slug>-contact@yourdomain.com` | Club's configured contact member, or first club editor, or site admin |
-| `<auction-slug>@yourdomain.com` | Auction creator's email |
-| anything else | Dropped |
+| Alias | Priority order | Final fallback |
+|---|---|---|
+| `info@yourdomain.com` | — | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
+| `<club-slug>-auctions@yourdomain.com` | Configured member → oldest non-admin auction manager → oldest admin | Site admin |
+| `<club-slug>-contact@yourdomain.com` | Configured member → oldest non-admin membership manager → oldest admin | **Dropped** (no fallback) |
+| `<auction-slug>@yourdomain.com` | Club's non-admin auction manager → club admin → auction creator | Dropped if no creator email |
+| anything else | — | Dropped |
+
+**Priority notes:**
+- "Configured member" means the specific club member selected on the Email Settings page; this takes precedence over the automatic fallback order.
+- For `*-auctions` and auction slugs, non-admin members with the **Manage auctions** permission are preferred over admins, keeping auction replies away from full admins unless no specialist is available.
+- For `*-contact`, non-admin members with the **Manage membership** permission are preferred. If no such member exists and there are no admins, the message is **dropped silently** — configure at least one member with admin or membership permissions to receive contact mail.
+- When SES routing is active, outbound auction emails no longer set a `Reply-To` header. Replies naturally reach `<auction-slug>@yourdomain.com` (the `From` address) and are routed by Lambda, adding a `[Auction Name]` subject prefix so recipients know the context.

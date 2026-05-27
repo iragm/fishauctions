@@ -154,26 +154,32 @@ def send_invoice_notification(self, invoice_pk):
     )
 
     if should_send_email:
+        from auctions.email_routing import email_routing_enabled
+
         email = invoice.auctiontos_user.email
         subject = f"Your invoice for {invoice.label} is ready"
         if invoice.status == "PAID":
             subject = f"Thanks for being part of {invoice.label}"
         contact_email = invoice.auction.created_by.email
         current_site = Site.objects.get_current()
-        mail.send(
-            email,
-            sender=invoice.auction.sender_email,
-            headers={"Reply-to": contact_email},
-            template="invoice_ready",
-            context={
+        # When SES routing is active, replies go to the auction sender address
+        # automatically (Lambda routes them). Skip the Reply-To header so users
+        # reply to the routed address rather than the creator's personal inbox.
+        send_kwargs = {
+            "sender": invoice.auction.sender_email,
+            "template": "invoice_ready",
+            "context": {
                 "subject": subject,
                 "name": invoice.auctiontos_user.name,
                 "domain": current_site.domain,
                 "location": invoice.location,
                 "invoice": invoice,
-                "reply_to_email": contact_email,
             },
-        )
+        }
+        if not email_routing_enabled():
+            send_kwargs["headers"] = {"Reply-to": contact_email}
+            send_kwargs["context"]["reply_to_email"] = contact_email
+        mail.send(email, **send_kwargs)
         # Add history entry about the email being sent
         AuctionHistory.objects.create(
             auction=invoice.auction,
