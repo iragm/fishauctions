@@ -12,13 +12,14 @@
 {% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact or show_club_map %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if member %}
-  <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="membership-panel">
+  <button type="button" class="btn btn-sm btn-success" data-club-panel-toggle="membership-panel">
     <i class="bi bi-person-badge"></i> Membership
   </button>
   {% elif club.allow_joining %}
-  <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="join-panel">
-    <i class="bi bi-person-fill-add"></i> Join
-  </button>
+  <form method="post" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-person-fill-add"></i> Join</button>
+  </form>
   {% endif %}
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
@@ -47,7 +48,6 @@
 {% if member %}
   <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">
-      <h5 class="card-title">Your membership</h5>
       {% include "partials/club_member_uuid_card.html" %}
       {% if show_membership_payment_button %}
       <div class="mt-3">
@@ -58,16 +58,6 @@
       {% endif %}
     </div>
   </div>
-{% elif club.allow_joining %}
-  <div class="card mb-3 d-none" id="join-panel">
-    <div class="card-body">
-      <h5 class="card-title">Join {{ club.name }}</h5>
-      <form method="post" class="mb-0">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-person-fill-add"></i> Join {{ club.name }}</button>
-      </form>
-    </div>
-  </div>
 {% else %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
 {% endif %}
@@ -76,11 +66,6 @@
 <div class="card mb-3 d-none" id="map-panel">
   <div class="card-body">
     <div id="club-map-canvas" style="width:100%; height:350px;"></div>
-    <div class="mt-3">
-      <a class="btn btn-sm btn-outline-primary" href="{{ club_map_directions_url }}" target="_blank" rel="noopener noreferrer">
-        <i class="bi bi-sign-turn-right"></i> Get directions
-      </a>
-    </div>
   </div>
 </div>
 {% endif %}
@@ -89,24 +74,24 @@
 {# ── Tabbed layout when BAP is enabled ─────────────────────────────── #}
 <ul class="nav nav-tabs mb-3" id="clubTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" type="button" role="tab">Auctions</button>
+    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" data-tab-url="{% url 'club_detail' club.slug %}" type="button" role="tab">Auctions</button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" type="button" role="tab">BAP</button>
+    <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'bap' %}" type="button" role="tab">BAP</button>
   </li>
   {% if club.separate_hap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" type="button" role="tab">HAP</button>
+    <button class="nav-link {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'hap' %}" type="button" role="tab">HAP</button>
   </li>
   {% endif %}
   {% if club.separate_cap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
+    <button class="nav-link {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'culture' %}" type="button" role="tab">Culture</button>
   </li>
   {% endif %}
   {% if my_bap_awards is not None %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" type="button" role="tab">My Points</button>
+    <button class="nav-link {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'my-points' %}" type="button" role="tab">My Points</button>
   </li>
   {% endif %}
 </ul>
@@ -352,6 +337,13 @@ async
     window._clubMapApiReady = true;
     maybeInitClubMap();
   };
+
+  document.querySelectorAll('#clubTabs [data-tab-url]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', function () {
+      var url = this.getAttribute('data-tab-url');
+      if (url) history.pushState({}, '', url);
+    });
+  });
 })();
 </script>
 {% endblock %}

@@ -30,7 +30,7 @@
 </div>
 
 <div id="lots-table-container"
-     hx-get="{% url 'club_bap_lots' club.slug %}"
+     hx-get=""
      hx-trigger="bapLotListChanged from:body"
      hx-swap="innerHTML">
   {% render_table table %}
