@@ -15156,6 +15156,144 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return kwargs
 
 
+class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Club-level charts for auctions and membership growth."""
+
+    active_tab = "stats"
+    template_name = "auctions/club_stats.html"
+    membership_window_days = 365 * 5
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _format_chart_date(self, value):
+        if timezone.is_aware(value):
+            value = timezone.localtime(value)
+        return value.strftime("%b %-d, %Y")
+
+    def _paid_member_filter(self):
+        today = timezone.now().date()
+        if self.club.membership_system == "january_first":
+            paid_cutoff = date_type(today.year, 1, 1)
+        else:
+            paid_cutoff = today - timedelta(days=365)
+        return Q(membership_expiration_date__gte=today) | (
+            Q(membership_expiration_date__isnull=True) & Q(membership_last_paid__gte=paid_cutoff)
+        )
+
+    def get_auction_stats_chart_data(self):
+        auctions = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start", "pk")
+        labels = []
+        gross_values = []
+        lot_values = []
+        participant_values = []
+        for auction in auctions:
+            labels.append(self._format_chart_date(auction.date_start))
+            gross_values.append(float(auction.gross or 0))
+            lot_values.append(auction.total_lots)
+            participants_qs = auction.tos_qs
+            if auction.use_check_in_mode:
+                participant_values.append(participants_qs.filter(checked_in__isnull=False).count())
+            else:
+                participant_values.append(participants_qs.filter(auctiontos__isnull=False).distinct().count())
+        return {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Gross",
+                    "data": gross_values,
+                    "borderColor": "#4bc0c0",
+                    "backgroundColor": "rgba(75, 192, 192, 0.2)",
+                    "fill": False,
+                    "lineTension": 0,
+                },
+                {
+                    "label": "Lots",
+                    "data": lot_values,
+                    "borderColor": "#36a2eb",
+                    "backgroundColor": "rgba(54, 162, 235, 0.2)",
+                    "fill": False,
+                    "lineTension": 0,
+                },
+                {
+                    "label": "Participants",
+                    "data": participant_values,
+                    "borderColor": "#ff9f40",
+                    "backgroundColor": "rgba(255, 159, 64, 0.2)",
+                    "fill": False,
+                    "lineTension": 0,
+                },
+            ],
+        }
+
+    def get_membership_growth_chart_data(self):
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=self.membership_window_days)
+        total_days = (end_date - start_date).days
+        start_dt = timezone.make_aware(
+            datetime.combine(start_date, datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        end_dt = timezone.make_aware(
+            datetime.combine(end_date + timedelta(days=1), datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        paid_filter = self._paid_member_filter()
+        members_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        window_qs = members_qs.filter(createdon__gte=start_dt, createdon__lt=end_dt)
+        initial_total = members_qs.filter(createdon__lt=start_dt).count()
+        initial_paid = members_qs.filter(createdon__lt=start_dt).filter(paid_filter).count()
+
+        def daily_count(qs):
+            return (
+                qs.annotate(join_date=TruncDay("createdon"))
+                .values("join_date")
+                .annotate(count=Count("pk"))
+                .order_by("join_date")
+            )
+
+        def make_cumulative(daily_qs, initial):
+            date_counts = {item["join_date"].date(): item["count"] for item in daily_qs}
+            cumulative = []
+            running = initial
+            for i in range(total_days + 1):
+                running += date_counts.get(start_date + timedelta(days=i), 0)
+                cumulative.append(running)
+            return cumulative
+
+        return {
+            "labels": [(start_date + timedelta(days=i)).strftime("%b %-d, %Y") for i in range(total_days + 1)],
+            "datasets": [
+                {
+                    "label": "Members",
+                    "data": make_cumulative(daily_count(window_qs), initial_total),
+                    "borderColor": "#9966ff",
+                    "backgroundColor": "rgba(153, 102, 255, 0.2)",
+                    "fill": False,
+                    "lineTension": 0,
+                },
+                {
+                    "label": "Paid members",
+                    "data": make_cumulative(daily_count(window_qs.filter(paid_filter)), initial_paid),
+                    "borderColor": "#4caf50",
+                    "backgroundColor": "rgba(76, 175, 80, 0.2)",
+                    "fill": False,
+                    "lineTension": 0,
+                },
+            ],
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["club_auction_stats"] = self.get_auction_stats_chart_data()
+        context["club_membership_growth"] = self.get_membership_growth_chart_data()
+        return context
+
+
 class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):
     """Import club members from a CSV file"""
 

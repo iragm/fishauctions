@@ -35,7 +35,7 @@
   {% endif %}
   {% if view.can_edit_settings or view.can_manage_bap %}
   <li class="nav-item dropdown">
-    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'api_keys' or view.active_tab == 'history' %}active{% endif %}"
+    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'api_keys' %}active{% endif %}"
        href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-sliders"></i><span class="d-none d-md-inline"> Setup</span>
     </a>
@@ -56,10 +56,18 @@
       <li><a class="dropdown-item {% if view.active_tab == 'discord' %}active{% endif %}" href="{% url 'club_discord_config' club.slug %}"><i class="bi bi-discord"></i> Discord Setup</a></li>
       <li><a class="dropdown-item {% if view.active_tab == 'api_keys' %}active{% endif %}" href="{% url 'club_api_keys' club.slug %}"><i class="bi bi-key"></i> API Keys</a></li>
       {% endif %}
-      {% if view.can_access_admin %}
-      <li><hr class="dropdown-divider"></li>
+    </ul>
+  </li>
+  {% endif %}
+  {% if view.can_access_admin %}
+  <li class="nav-item dropdown">
+    <a class="nav-link dropdown-toggle {% if view.active_tab == 'history' or view.active_tab == 'stats' %}active{% endif %}"
+       href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-three-dots"></i><span class="d-none d-md-inline"> More</span>
+    </a>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item {% if view.active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up"></i> Stats</a></li>
       <li><a class="dropdown-item {% if view.active_tab == 'history' %}active{% endif %}" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>
-      {% endif %}
     </ul>
   </li>
   {% endif %}
