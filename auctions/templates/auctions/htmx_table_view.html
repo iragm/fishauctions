@@ -66,8 +66,11 @@
         history.replaceState({}, '', newUrl);
 
         document.querySelectorAll('[data-query-sync-url]').forEach(function (link) {
-          const baseUrl = link.dataset.querySyncUrl || link.getAttribute('href').split('?')[0];
-          link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
+          const href = link.getAttribute('href');
+          const baseUrl = link.dataset.querySyncUrl || (href ? href.split('?')[0] : '');
+          if (baseUrl) {
+            link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
+          }
         });
       }
 

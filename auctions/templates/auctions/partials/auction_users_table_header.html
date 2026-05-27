@@ -1,5 +1,5 @@
 {% if auction.is_club_managed %}
-  <small class="d-none d-md-inline">This auction's users are managed through <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a>. Edits sync to the club member record.<br></small>
+  <small class="d-none d-md-inline">This auction's users are managed through <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a>. Edits sync to the club member record.<br /></small>
   <div class="btn-group d-none d-md-inline-flex">
     {% if auction.manage_users_through_club == 'checkin' %}
       <a class="btn btn-sm btn-info" href="{% url 'clubmember_create' slug=auction.club.slug %}?auction={{ auction.slug }}"
@@ -16,7 +16,7 @@
     {% endif %}
   </div>
 {% else %}
-  <small>This is a list of people in your auction. Click on a name to edit that user.<br></small>
+  <small>This is a list of people in your auction. Click on a name to edit that user.<br /></small>
   <div class="btn-group d-none d-md-inline-flex">
     <button class="btn btn-sm btn-info"
             hx-get="/api/auctiontos/{{ auction.slug }}/"
