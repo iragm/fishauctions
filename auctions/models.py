@@ -3488,7 +3488,7 @@ class Auction(models.Model):
             "club_stats": {
                 "gross": self.gross,
                 "total_lots": self.total_lots,
-                "participants": participants,
+                "checked_in": participants,
             },
         }
 

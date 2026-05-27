@@ -14875,7 +14875,7 @@ class ClubViewTests(TestCase):
             name="Old paid member",
             membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
         )
-        ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 6))
+        ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 11))
         new_paid_member = ClubMember.objects.create(
             club=self.club,
             name="New paid member",
@@ -14896,7 +14896,7 @@ class ClubViewTests(TestCase):
         auction_datasets = {dataset["label"]: dataset["data"] for dataset in auction_chart["datasets"]}
         self.assertEqual(auction_datasets["Gross"], [10.0, 20.0])
         self.assertEqual(auction_datasets["Lots"], [1, 2])
-        self.assertEqual(auction_datasets["Participants"], [1, 1])
+        self.assertEqual(auction_datasets["Checked in"], [1, 1])
 
         membership_chart = response.context["club_membership_growth"]
         membership_datasets = {dataset["label"]: dataset["data"] for dataset in membership_chart["datasets"]}

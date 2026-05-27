@@ -10,7 +10,7 @@
     <div class="card">
       <div class="card-body">
         <h4 class="card-title">Auction stats over time</h4>
-        <p class="text-muted small">X axis is each auction&rsquo;s start date. Participants use invoices unless the auction uses check-in mode, in which case checked-in attendees are counted.</p>
+        <p class="text-muted small">Participants is a count of invoices unless the auction uses check-in mode, in which case all checked-in attendees are counted.</p>
         <div style="height: 350px;">
           <canvas id="club-auction-stats-chart"></canvas>
         </div>
@@ -21,7 +21,7 @@
     <div class="card">
       <div class="card-body">
         <h4 class="card-title">Cumulative members over time</h4>
-        <p class="text-muted small">Five-year cumulative totals by join date, with current paid members shown as a separate series.</p>
+        <p class="text-muted small">Totals by join date.  Paid members includes everyone who is currently paid - lapses in membership are not tracked.</p>
         <div style="height: 350px;">
           <canvas id="club-membership-growth-chart"></canvas>
         </div>

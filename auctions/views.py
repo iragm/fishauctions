@@ -15161,7 +15161,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
     active_tab = "stats"
     template_name = "auctions/club_stats.html"
-    membership_window_days = 365 * 5
+    membership_window_days = 365 * 10
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -15199,7 +15199,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             auction_misc = self._get_cached_club_stats(auction)
             gross = auction_misc.get("gross")
             total_lots = auction_misc.get("total_lots")
-            participants = auction_misc.get("participants")
+            participants = auction_misc.get("checked_in") or auction_misc.get("participants")
             labels.append(self._format_chart_date(auction.date_start))
             gross_values.append(round(float(gross), 2) if gross is not None else 0)
             lot_values.append(total_lots if total_lots is not None else 0)
@@ -15222,7 +15222,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "fill": False,
                 },
                 {
-                    "label": "Participants",
+                    "label": "Checked in",
                     "data": participant_values,
                     "borderColor": "#ff9f40",
                     "backgroundColor": "rgba(255, 159, 64, 0.2)",
