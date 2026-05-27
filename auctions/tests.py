@@ -15776,7 +15776,7 @@ class ClubSettingsViewTests(TestCase):
             username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
         )
         self.club = Club.objects.create(name="Settings Club", enable_membership=True)
-        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True, permission_add_edit=True)
         self.auction_member = ClubMember.objects.create(
             club=self.club,
             user=self.auction_manager,
