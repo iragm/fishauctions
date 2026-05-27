@@ -61,6 +61,7 @@ Lambda → *Configuration* → *Environment variables*:
 | `RELAY_SENDER` | `relay@yourdomain.com` | Address used as From when forwarding |
 | `RELAY_DISPLAY_NAME` | `Club Relay` | Display name in forwarded From field (optional) |
 | `FALLBACK_RECIPIENT` | `info@yourdomain.com` | Where to send mail if Django is unreachable |
+| `RELAY_CONFIGURATION_SET` | `fishauctions-prod` | SES configuration set for relay sends (optional — omit unless your account enforces one; if you see `ConfigurationSetDoesNotExist` errors, either set this or clear the account-level default in SES → Account dashboard) |
 
 **Generate the secret** — use a minimum 40-character random string:
 
@@ -94,6 +95,9 @@ ROUTING_SECRET = os.environ["INBOUND_ROUTING_SECRET"]
 RELAY_SENDER = os.environ["RELAY_SENDER"]
 RELAY_DISPLAY_NAME = os.environ.get("RELAY_DISPLAY_NAME", "Club Relay")
 FALLBACK_RECIPIENT = os.environ["FALLBACK_RECIPIENT"]
+# Optional: set to your SES configuration set name if your account requires one.
+# Leave unset (or empty) to send without a configuration set.
+RELAY_CONFIGURATION_SET = os.environ.get("RELAY_CONFIGURATION_SET", "").strip()
 
 # Refuse to parse messages larger than this before even touching the MIME tree.
 # SNS caps delivery at 150 KB, so anything larger means SNS truncated the body;
@@ -216,7 +220,7 @@ def lambda_handler(event, context):
         print(f"[ses-router] dropping message exceeding size cap ({len(raw_content)} bytes)")
         return {"status": "dropped", "reason": "message too large"}
 
-    msg = email.message_from_string(raw_content)
+    msg = email.message_from_bytes(raw_content.encode() if isinstance(raw_content, str) else raw_content)
 
     # Drop automated replies (out-of-office, vacation notices, delivery reports).
     # Forwarding these back causes mail loops and clutters the recipient's inbox.
@@ -225,8 +229,12 @@ def lambda_handler(event, context):
         return {"status": "dropped", "reason": "autoreply"}
 
     # Determine which alias received the message.
-    # Use parseaddr() to handle display names like "Club Name" <club@domain.com>.
-    _, to_addr = email.utils.parseaddr(msg.get("To", ""))
+    # Prefer the envelope destination from SES metadata — more reliable than
+    # the To header, which may be absent (BCC) or contain a different address.
+    destinations = notification.get("mail", {}).get("destination", [])
+    to_addr = destinations[0] if destinations else ""
+    if not to_addr:
+        _, to_addr = email.utils.parseaddr(msg.get("To", ""))
     original_sender = msg.get("From", "")
     if "@" in to_addr:
         local_part = to_addr.split("@")[0].strip().lower()
@@ -267,12 +275,16 @@ def lambda_handler(event, context):
     msg["Auto-Submitted"] = "auto-forwarded"
     msg["X-Auto-Response-Suppress"] = "All"
 
+    send_kwargs = {
+        "Source": RELAY_SENDER,
+        "Destinations": [forward_to],
+        "RawMessage": {"Data": msg.as_bytes()},
+    }
+    if RELAY_CONFIGURATION_SET:
+        send_kwargs["ConfigurationSetName"] = RELAY_CONFIGURATION_SET
+
     try:
-        SES.send_raw_email(
-            Source=RELAY_SENDER,
-            Destinations=[forward_to],
-            RawMessage={"Data": msg.as_bytes()},
-        )
+        SES.send_raw_email(**send_kwargs)
     except Exception as exc:
         print(f"[ses-router] SES.send_raw_email failed forwarding to {forward_to!r}: {exc}")
         # Attempt fallback delivery if the primary recipient wasn't already the fallback.
