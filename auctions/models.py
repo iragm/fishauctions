@@ -624,6 +624,7 @@ class Club(models.Model):
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
+    discord_invite_link = models.CharField(max_length=255, blank=True, null=True)
     contact_email = models.CharField(
         max_length=255,
         blank=True,

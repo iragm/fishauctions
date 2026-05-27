@@ -53,7 +53,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay
+from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay, TruncMonth
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
@@ -152,6 +152,7 @@ from .forms import (
     InvoiceAdjustmentForm,
     InvoiceAdjustmentFormSetHelper,
     LabelPrintFieldsForm,
+    LotCategoryForm,
     LotFormSetHelper,
     LotRefundForm,
     MultiAuctionTOSPrintLabelForm,
@@ -663,6 +664,98 @@ def _bap_leaderboard(club, field, current_member):
         rank = qs.filter(**{f"{field}__gt": getattr(current_member, field)}).count() + 1
         result.append((rank, current_member, True))
     return result
+
+
+def _last_n_month_starts(count):
+    month = timezone.now().date().replace(day=1)
+    months = []
+    for _ in range(count):
+        months.append(month)
+        if month.month == 1:
+            month = month.replace(year=month.year - 1, month=12)
+        else:
+            month = month.replace(month=month.month - 1)
+    return list(reversed(months))
+
+
+def _club_points_chart_data(club, member):
+    if not member:
+        return None
+
+    months = _last_n_month_starts(60)
+    start_month = months[0]
+    monthly_awards = (
+        BapAward.objects.filter(club_member=member, date__gte=start_month)
+        .annotate(month=TruncMonth("date"))
+        .values("month")
+        .annotate(
+            bap_total=Sum("points"),
+            hap_total=Sum("hap_points"),
+            culture_total=Sum("cap_points"),
+        )
+        .order_by("month")
+    )
+    monthly_totals = {
+        (item["month"] if isinstance(item["month"], date_type) else item["month"].date()).replace(day=1): {
+            "bap": item["bap_total"] or 0,
+            "hap": item["hap_total"] or 0,
+            "culture": item["culture_total"] or 0,
+        }
+        for item in monthly_awards
+    }
+    initial_totals = BapAward.objects.filter(club_member=member, date__lt=start_month).aggregate(
+        bap_total=Sum("points"),
+        hap_total=Sum("hap_points"),
+        culture_total=Sum("cap_points"),
+    )
+
+    running_bap = initial_totals["bap_total"] or 0
+    running_hap = initial_totals["hap_total"] or 0
+    running_culture = initial_totals["culture_total"] or 0
+    bap_data = []
+    hap_data = []
+    culture_data = []
+
+    for month in months:
+        totals = monthly_totals.get(month, {})
+        running_bap += totals.get("bap", 0)
+        running_hap += totals.get("hap", 0)
+        running_culture += totals.get("culture", 0)
+        bap_data.append(running_bap)
+        hap_data.append(running_hap)
+        culture_data.append(running_culture)
+
+    datasets = [
+        {
+            "label": "BAP",
+            "borderColor": "#198754",
+            "backgroundColor": "rgba(25, 135, 84, 0.15)",
+            "fill": False,
+            "data": bap_data,
+        }
+    ]
+    if club.separate_hap:
+        datasets.append(
+            {
+                "label": "HAP",
+                "borderColor": "#0d6efd",
+                "backgroundColor": "rgba(13, 110, 253, 0.15)",
+                "fill": False,
+                "data": hap_data,
+            }
+        )
+    if club.separate_cap:
+        datasets.append(
+            {
+                "label": "Culture",
+                "borderColor": "#fd7e14",
+                "backgroundColor": "rgba(253, 126, 20, 0.15)",
+                "fill": False,
+                "data": culture_data,
+            }
+        )
+
+    return {"labels": [month.strftime("%b %Y") for month in months], "datasets": datasets}
 
 
 class ClubViewMixin:
@@ -13087,23 +13180,34 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
         club = self.club
+        requested_tab = (self.kwargs.get("tab") or self.request.GET.get("tab") or "auctions").lower()
+        available_tabs = {"auctions"}
         if club.enable_breeder_award_program:
             context["show_bap_tabs"] = True
             context["bap_leaderboard"] = _bap_leaderboard(club, "bap_points", member)
             context["bap_leaderboard_ytd"] = _bap_leaderboard(club, "bap_points_ytd", member)
+            available_tabs.add("bap")
             context["hap_leaderboard"] = _bap_leaderboard(club, "hap_points", member) if club.separate_hap else []
             context["hap_leaderboard_ytd"] = (
                 _bap_leaderboard(club, "hap_points_ytd", member) if club.separate_hap else []
             )
+            if club.separate_hap:
+                available_tabs.add("hap")
             context["culture_leaderboard"] = (
                 _bap_leaderboard(club, "culture_points", member) if club.separate_cap else []
             )
             context["culture_leaderboard_ytd"] = (
                 _bap_leaderboard(club, "culture_points_ytd", member) if club.separate_cap else []
             )
+            if club.separate_cap:
+                available_tabs.add("culture")
             context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+            context["my_bap_awards"] = None
+            context["my_points_chart_data"] = None
             if member:
                 context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:25]
+                context["my_points_chart_data"] = _club_points_chart_data(club, member)
+                available_tabs.add("my-points")
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -13120,6 +13224,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 context["hap_leaderboard"] = ClubMember.objects.filter(
                     club=club, is_deleted=False, hap_points__gt=0
                 ).order_by("-hap_points")[:10]
+        context["active_club_tab"] = requested_tab if requested_tab in available_tabs else "auctions"
         context["can_access_admin"] = self.user_has_club_permission(
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
@@ -13143,12 +13248,20 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             and member
             and renewal_soon
         )
+        show_club_map = self.club.latitude is not None and self.club.longitude is not None
+        context["show_club_map"] = show_club_map
+        if show_club_map:
+            context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+            directions_query = self.club.location or f"{self.club.latitude},{self.club.longitude}"
+            context["club_map_directions_url"] = (
+                "https://www.google.com/maps/search/?api=1&query=" + quote_plus(directions_query)
+            )
         if can_manage_auctions:
-            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")
+            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[:10]
         else:
             context["club_auctions"] = Auction.objects.filter(
                 club=self.club, promote_this_auction=True, is_deleted=False
-            ).order_by("-date_start")
+            ).order_by("-date_start")[:10]
         return context
 
     def post(self, request, *args, **kwargs):
@@ -13718,8 +13831,6 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     applies_to="MEMBERS",
                 )
             messages.success(request, f"{saved} updated.")
-            # Reassign Discord role whenever the record is saved from the admin UI
-            saved.maybe_assign_discord_role()
             return self._redirect_to_club_admin(member.club)
         return render(
             request,
@@ -13977,7 +14088,6 @@ class ClubMemberRenewView(APIView):
         member.save(
             update_fields=["membership_last_paid", "membership_expiration_date", "membership_expiration_reminder_due"]
         )
-        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
@@ -14221,7 +14331,6 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
         member.membership_expiration_date = new_expiration
         member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
-        member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
@@ -14682,6 +14791,51 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["club"] = self.club
         return kwargs
+
+
+class ClubBapLotCategoryView(APIView):
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_lot(self, request, pk):
+        lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
+        club = lot.auction.club if lot.auction else None
+        if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
+            raise PermissionDenied()
+        return lot, club
+
+    def get(self, request, pk):
+        lot, _club = self._get_lot(request, pk)
+        form = LotCategoryForm(instance=lot, post_url=reverse("club_bap_lot_category", kwargs={"pk": lot.pk}))
+        return render(
+            request,
+            "auctions/generic_admin_form.html",
+            {"form": form, "modal_title": f"Set category — {lot.lot_name}"},
+        )
+
+    def post(self, request, pk):
+        lot, club = self._get_lot(request, pk)
+        form = LotCategoryForm(request.POST, instance=lot, post_url=reverse("club_bap_lot_category", kwargs={"pk": lot.pk}))
+        if form.is_valid():
+            updated_lot = form.save(commit=False)
+            update_fields = ["species_category"]
+            if not BapAward.objects.filter(lot=updated_lot).exists() and not updated_lot.manually_approved:
+                updated_lot.bap_points_awarded = 0
+                updated_lot.bap_auto_reason = updated_lot.sold_lot_no_bap_reason or ""
+                update_fields.extend(["bap_points_awarded", "bap_auto_reason"])
+            updated_lot.save(update_fields=update_fields)
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Updated lot category for {updated_lot.lot_name}",
+                applies_to="BAP",
+            )
+            return HttpResponse("<script>closeModal(); htmx.trigger(document.body, 'bapLotListChanged');</script>")
+        return render(
+            request,
+            "auctions/generic_admin_form.html",
+            {"form": form, "modal_title": f"Set category — {lot.lot_name}"},
+        )
 
 
 class BapAwardAdminView(APIView):

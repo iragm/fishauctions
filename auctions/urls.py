@@ -603,6 +603,11 @@ urlpatterns = [
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
+    re_path(
+        r"^clubs/(?P<slug>[-\w]+)/(?P<tab>bap|hap|culture|my-points)$",
+        views.ClubDetailView.as_view(),
+        name="club_detail_tab",
+    ),
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
     path(
         "clubs/<slug:slug>/member/<uuid:uuid>/",
@@ -626,6 +631,7 @@ urlpatterns = [
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
     path("clubs/<slug:slug>/bap/", views.ClubBapView.as_view(), name="club_bap"),
     path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
+    path("clubs/bap/lots/<int:pk>/category/", views.ClubBapLotCategoryView.as_view(), name="club_bap_lot_category"),
     path("clubs/<slug:slug>/bap/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     # API key management (login-required UI)
