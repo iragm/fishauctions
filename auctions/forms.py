@@ -3976,7 +3976,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             label="Contact replies",
             help_text=(
                 f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or manage membership member with an email address{_fallback_label(contact_fallback)}."
+                f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
             ),
         )
 
