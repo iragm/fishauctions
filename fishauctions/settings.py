@@ -377,6 +377,7 @@ DEFAULT_FROM_EMAIL = (
     if SES_ROUTE_EMAILS_ENABLED
     else os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
 )
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 POST_OFFICE = {
     "MAX_RETRIES": 4,
