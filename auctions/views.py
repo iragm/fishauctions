@@ -265,7 +265,7 @@ class HTMxTableView(SingleTableMixin, FilterView):
             return self.htmx_template_name
         template_name = getattr(self, "template_name", None)
         if not template_name:
-            msg = f"{self.__class__.__name__} must define template_name"
+            msg = f"{self.__class__.__name__} must define 'template_name' when not using htmx requests"
             raise ImproperlyConfigured(msg)
         return template_name
 

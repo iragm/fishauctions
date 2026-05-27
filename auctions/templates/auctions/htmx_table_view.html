@@ -67,7 +67,8 @@
 
         document.querySelectorAll('[data-query-sync-url]').forEach(function (link) {
           const href = link.getAttribute('href');
-          const baseUrl = link.dataset.querySyncUrl || (href ? href.split('?')[0] : '');
+          const normalizedHref = href && href.trim() ? href.split('?')[0] : '';
+          const baseUrl = link.dataset.querySyncUrl || normalizedHref;
           if (baseUrl) {
             link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
           }
