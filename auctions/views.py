@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import re
+import secrets
 import uuid
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -135,6 +136,7 @@ from .forms import (
     ChangeUserPreferencesForm,
     ClubBapSettingsForm,
     ClubEditForm,
+    ClubEmailSettingsForm,
     ClubMemberAdminForm,
     ClubMemberMergeReviewForm,
     ClubMemberMergeTargetForm,
@@ -687,6 +689,10 @@ class ClubViewMixin:
     @property
     def can_edit_settings(self):
         return self.user_has_club_permission("permission_edit_club")
+
+    @property
+    def email_routing_enabled(self):
+        return settings.SES_ROUTE_EMAILS_ENABLED
 
     @property
     def can_manage_bap(self):
@@ -14498,6 +14504,46 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
+class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    active_tab = "email_settings"
+    template_name = "auctions/club_email_settings.html"
+    form_class = ClubEmailSettingsForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not settings.SES_ROUTE_EMAILS_ENABLED:
+            raise Http404
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "Email settings saved.")
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated email settings",
+            applies_to="SETTINGS",
+        )
+        return result
+
+
 class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit BAP (Breeder Award Program) settings for a club. Requires permission_manage_bap."""
 
@@ -15514,6 +15560,53 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
             applies_to="BAP",
         )
         return Response({"id": award.pk, "member_id": member.pk, "points": award.points}, status=201)
+
+
+# ---------------------------------------------------------------------------
+# Inbound email routing API
+# ---------------------------------------------------------------------------
+
+
+class InboundEmailRoutingView(APIView):
+    """Resolve an inbound email address to its forwarding recipient.
+
+    Called by the SES inbound Lambda to determine where to forward a message.
+    Requires a shared secret supplied via the ``X-Routing-Secret`` header (must
+    match the ``INBOUND_ROUTING_SECRET`` Django setting).
+
+    GET /api/v1/email-routing/resolve/?address=<local_part_or_full_email>
+
+    Returns:
+        200 {"recipient": "user@example.com", "display_name": "Spring Auction 2024"}
+        400 {"error": "address parameter is required"}
+        401 {"error": "invalid or missing routing secret"}
+        503 {"error": "email routing is not enabled"}
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .email_routing import email_routing_enabled, resolve_routing_info
+
+        secret = getattr(settings, "INBOUND_ROUTING_SECRET", "")
+        provided = request.META.get("HTTP_X_ROUTING_SECRET", "")
+        if not secret or not provided or not secrets.compare_digest(provided, secret):
+            return Response({"error": "invalid or missing routing secret"}, status=401)
+
+        if not email_routing_enabled():
+            return Response({"error": "email routing is not enabled"}, status=503)
+
+        address = (request.query_params.get("address") or "").strip().lower()
+        if not address:
+            return Response({"error": "address parameter is required"}, status=400)
+
+        # Accept either a bare local-part or a full email; extract local-part only.
+        local_part = address.split("@")[0]
+        info = resolve_routing_info(local_part)
+        if info is None:
+            return Response({"error": "no recipient found for this address"}, status=404)
+        return Response({"recipient": info["recipient"], "display_name": info["display_name"]})
 
 
 # ---------------------------------------------------------------------------

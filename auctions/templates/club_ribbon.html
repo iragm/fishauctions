@@ -35,7 +35,7 @@
   {% endif %}
   {% if view.can_edit_settings or view.can_manage_bap %}
   <li class="nav-item dropdown">
-    <a class="nav-link dropdown-toggle {% if view.active_tab in 'edit,membership,bap_settings,discord,api_keys,history' %}active{% endif %}"
+    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'api_keys' or view.active_tab == 'history' %}active{% endif %}"
        href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-sliders"></i><span class="d-none d-md-inline"> Setup</span>
     </a>
@@ -44,6 +44,9 @@
       <li><a class="dropdown-item {% if view.active_tab == 'edit' %}active{% endif %}" href="{% url 'club_edit' club.slug %}"><i class="bi bi-gear"></i> Club Setup</a></li>
       {% if club.enable_membership %}
       <li><a class="dropdown-item {% if view.active_tab == 'membership' %}active{% endif %}" href="{% url 'club_membership_settings' club.slug %}"><i class="bi bi-people-fill"></i> Membership and Payments</a></li>
+      {% endif %}
+      {% if view.email_routing_enabled %}
+      <li><a class="dropdown-item {% if view.active_tab == 'email_settings' %}active{% endif %}" href="{% url 'club_email_settings' club.slug %}"><i class="bi bi-envelope-fill"></i> Emails</a></li>
       {% endif %}
       {% endif %}
       {% if view.can_manage_bap %}

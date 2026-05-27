@@ -14,6 +14,7 @@ import datetime
 import os
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
@@ -365,11 +366,23 @@ else:
 
 # EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
+POST_OFFICE_EMAIL_BACKEND = os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend")
+_site_domain_raw = os.environ.get("SITE_DOMAIN", "127.0.0.1").strip()
+_parsed_site_domain = urlsplit(_site_domain_raw if "://" in _site_domain_raw else f"//{_site_domain_raw}")
+EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or _site_domain_raw).strip().lower()
+SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
+INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "")
+DEFAULT_FROM_EMAIL = (
+    f"info@{EMAIL_ROUTING_DOMAIN}"
+    if SES_ROUTE_EMAILS_ENABLED
+    else os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
+)
+
 POST_OFFICE = {
     "MAX_RETRIES": 4,
     "RETRY_INTERVAL": datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
     "BACKENDS": {
-        "default": os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend"),
+        "default": POST_OFFICE_EMAIL_BACKEND,
     },
     "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
@@ -380,17 +393,16 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 # https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-files.html
 # AWS_SESSION_PROFILE = os.environ.get('AWS_SESSION_PROFILE', 'default')
 AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
-AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", 'email.us-east-1.amazonaws.com"')
+AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
-AWS_SES_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
+AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
 
 EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = os.environ.get("EMAIL_PORT", 587)
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "user@example.com")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "unsecure")
-DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
 EMAIL_SUBJECT_PREFIX = ""
 
 RECAPTCHA_PUBLIC_KEY = os.environ.get("RECAPTCHA_PUBLIC_KEY", "unsecure")

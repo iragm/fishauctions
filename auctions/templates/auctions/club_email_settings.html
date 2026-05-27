@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Email Settings &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{{ form.media }}
+{% include "club_ribbon.html" %}
+
+<p class="text-muted">
+  General site mail sends from <code>info@{{ email_domain }}</code>. Club mail can also send from
+  <code>{{ club.slug }}-auctions@{{ email_domain }}</code> and
+  <code>{{ club.slug }}-contact@{{ email_domain }}</code>.
+</p>
+
+{% crispy form %}
+
+<div id="modals-here"></div>
+{% endblock %}

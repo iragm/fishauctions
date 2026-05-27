@@ -622,6 +622,7 @@ urlpatterns = [
         views.ClubMembershipSettingsView.as_view(),
         name="club_membership_settings",
     ),
+    path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
     path("clubs/<slug:slug>/bap/", views.ClubBapView.as_view(), name="club_bap"),
     path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
@@ -708,6 +709,7 @@ urlpatterns = [
         views.ClubMemberBapAwardAPIView.as_view(),
         name="api_club_member_bap_awards",
     ),
+    path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),
