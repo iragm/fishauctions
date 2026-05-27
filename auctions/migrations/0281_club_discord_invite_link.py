@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0279_club_auction_email_member_and_more"),
+        ("auctions", "0280_remove_reply_to_from_email_templates"),
     ]
 
     operations = [

@@ -16139,7 +16139,7 @@ class ClubSettingsViewTests(TestCase):
             username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
         )
         self.club = Club.objects.create(name="Settings Club", enable_membership=True)
-        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True, permission_add_edit=True)
         self.auction_member = ClubMember.objects.create(
             club=self.club,
             user=self.auction_manager,
@@ -16250,7 +16250,7 @@ class ClubEmailRoutingTests(TestCase):
         membership_user = User.objects.create_user("membership_route", email="membership@example.com", password="pw")
         auction_user = User.objects.create_user("auction_route", email="auction@example.com", password="pw")
         creator = User.objects.create_user("auction_creator", email="creator@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
         club.contact_email_member = membership_member
         club.auction_email_member = auction_member
@@ -16273,9 +16273,9 @@ class ClubEmailRoutingTests(TestCase):
     def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
         """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
         club = Club.objects.create(name="Fallback Club")
-        # Club exists but no email_member configured → falls back to admin via routing_email property
+        # Club exists but no members configured → auctions falls back to site admin, contact is dropped
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
-        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "admin@example.com")
+        self.assertIsNone(resolve_routed_recipient(f"{club.slug}-contact"))
         # No club with this slug → None (drop)
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-contact"))
@@ -16432,7 +16432,7 @@ class ClubEmailSettingsFormTests(TestCase):
             "email_form_membership", email="membership@example.com", password="pw"
         )
         auction_user = User.objects.create_user("email_form_auction", email="auction@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
 
         form = ClubEmailSettingsForm(instance=club)

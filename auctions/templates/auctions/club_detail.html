@@ -9,7 +9,7 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or show_club_map %}
+{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact or show_club_map %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if member %}
   <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="membership-panel">
@@ -28,6 +28,9 @@
   {% endif %}
   {% if club.discord_invite_link %}
   <a href="{% if club.discord_invite_link|slice:':4' != 'http' %}https://{% endif %}{{ club.discord_invite_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
+  {% endif %}
+  {% if has_club_contact and request.user.is_authenticated %}
+  <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
   {% if show_club_map %}
   <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="map-panel">

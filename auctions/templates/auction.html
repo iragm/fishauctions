@@ -161,6 +161,11 @@ function initMap() {
                         <div class="col-12 col-md-auto">
                             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-info btn-sm w-100"><i class="bi bi-bag"></i> My Invoice</a>
                         </div>
+                        {% if auction_contact_email and request.user.is_authenticated %}
+                        <div class="col-12 col-md-auto">
+                            <a href="mailto:{{ auction_contact_email }}" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
+                        </div>
+                        {% endif %}
                         {% if request.user.is_authenticated and user_has_lots %}
                         <div class="col-12 col-md-auto">
                             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>

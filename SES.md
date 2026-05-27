@@ -61,6 +61,7 @@ Lambda → *Configuration* → *Environment variables*:
 | `RELAY_SENDER` | `relay@yourdomain.com` | Address used as From when forwarding |
 | `RELAY_DISPLAY_NAME` | `Club Relay` | Display name in forwarded From field (optional) |
 | `FALLBACK_RECIPIENT` | `info@yourdomain.com` | Where to send mail if Django is unreachable |
+| `RELAY_CONFIGURATION_SET` | `fishauctions-prod` | SES configuration set for relay sends (optional — omit unless your account enforces one; if you see `ConfigurationSetDoesNotExist` errors, either set this or clear the account-level default in SES → Account dashboard) |
 
 **Generate the secret** — use a minimum 40-character random string:
 
@@ -75,6 +76,7 @@ Copy the output into both the Lambda env var and `INBOUND_ROUTING_SECRET` in you
 Lambda → *Code* tab → replace the contents of `lambda_function.py` with the code below → *Deploy*
 
 ```python
+import base64
 import email
 import email.mime.multipart
 import email.mime.text
@@ -94,6 +96,9 @@ ROUTING_SECRET = os.environ["INBOUND_ROUTING_SECRET"]
 RELAY_SENDER = os.environ["RELAY_SENDER"]
 RELAY_DISPLAY_NAME = os.environ.get("RELAY_DISPLAY_NAME", "Club Relay")
 FALLBACK_RECIPIENT = os.environ["FALLBACK_RECIPIENT"]
+# Optional: set to your SES configuration set name if your account requires one.
+# Leave unset (or empty) to send without a configuration set.
+RELAY_CONFIGURATION_SET = os.environ.get("RELAY_CONFIGURATION_SET", "").strip()
 
 # Refuse to parse messages larger than this before even touching the MIME tree.
 # SNS caps delivery at 150 KB, so anything larger means SNS truncated the body;
@@ -211,12 +216,21 @@ def lambda_handler(event, context):
         print("[ses-router] dropping oversized message with no content")
         return {"status": "dropped", "reason": "no content"}
 
+    # The SES receipt rule's SNS action must be configured with Base64 encoding —
+    # UTF-8 mode silently corrupts non-ASCII bytes (encoded headers, quoted-printable
+    # bodies, etc.), producing a "jumbled text" forward.
+    try:
+        raw_bytes = base64.b64decode(raw_content, validate=True)
+    except (ValueError, TypeError) as exc:
+        print(f"[ses-router] dropping message with non-base64 content: {exc}")
+        return {"status": "dropped", "reason": "invalid content encoding"}
+
     # Guard against pathological payloads before handing to the MIME parser.
-    if len(raw_content) > _MAX_RAW_BYTES:
-        print(f"[ses-router] dropping message exceeding size cap ({len(raw_content)} bytes)")
+    if len(raw_bytes) > _MAX_RAW_BYTES:
+        print(f"[ses-router] dropping message exceeding size cap ({len(raw_bytes)} bytes)")
         return {"status": "dropped", "reason": "message too large"}
 
-    msg = email.message_from_string(raw_content)
+    msg = email.message_from_bytes(raw_bytes)
 
     # Drop automated replies (out-of-office, vacation notices, delivery reports).
     # Forwarding these back causes mail loops and clutters the recipient's inbox.
@@ -225,8 +239,12 @@ def lambda_handler(event, context):
         return {"status": "dropped", "reason": "autoreply"}
 
     # Determine which alias received the message.
-    # Use parseaddr() to handle display names like "Club Name" <club@domain.com>.
-    _, to_addr = email.utils.parseaddr(msg.get("To", ""))
+    # Prefer the envelope destination from SES metadata — more reliable than
+    # the To header, which may be absent (BCC) or contain a different address.
+    destinations = notification.get("mail", {}).get("destination", [])
+    to_addr = destinations[0] if destinations else ""
+    if not to_addr:
+        _, to_addr = email.utils.parseaddr(msg.get("To", ""))
     original_sender = msg.get("From", "")
     if "@" in to_addr:
         local_part = to_addr.split("@")[0].strip().lower()
@@ -267,12 +285,16 @@ def lambda_handler(event, context):
     msg["Auto-Submitted"] = "auto-forwarded"
     msg["X-Auto-Response-Suppress"] = "All"
 
+    send_kwargs = {
+        "Source": RELAY_SENDER,
+        "Destinations": [forward_to],
+        "RawMessage": {"Data": msg.as_bytes()},
+    }
+    if RELAY_CONFIGURATION_SET:
+        send_kwargs["ConfigurationSetName"] = RELAY_CONFIGURATION_SET
+
     try:
-        SES.send_raw_email(
-            Source=RELAY_SENDER,
-            Destinations=[forward_to],
-            RawMessage={"Data": msg.as_bytes()},
-        )
+        SES.send_raw_email(**send_kwargs)
     except Exception as exc:
         print(f"[ses-router] SES.send_raw_email failed forwarding to {forward_to!r}: {exc}")
         # Attempt fallback delivery if the primary recipient wasn't already the fallback.
@@ -323,7 +345,7 @@ Lambda → *Configuration* → *Triggers* should now show the SNS trigger.
 - SES → *Email receiving* → *Rule sets* → create or select a rule set
 - *Create rule* → name it `route-all`
 - **Recipients**: leave blank to catch all addresses for your domain
-- **Actions**: add a single **SNS** action → select `ses-inbound-router`
+- **Actions**: add a single **SNS** action → select `ses-inbound-router` → set **Encoding: Base64** (the default UTF-8 setting silently corrupts non-ASCII bytes and produces jumbled forwarded text — the Lambda expects Base64)
 - Enable the rule and make sure the rule set itself is **Active** (rule sets have a separate active/inactive toggle)
 
 ---
@@ -407,10 +429,16 @@ SNS Topic ──► Lambda
 
 Recognised alias patterns:
 
-| Alias | Routes to |
-|---|---|
-| `info@yourdomain.com` | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
-| `<club-slug>-auctions@yourdomain.com` | Club's configured auction contact, or first auction admin, or site admin |
-| `<club-slug>-contact@yourdomain.com` | Club's configured contact member, or first club editor, or site admin |
-| `<auction-slug>@yourdomain.com` | Auction creator's email |
-| anything else | Dropped |
+| Alias | Priority order | Final fallback |
+|---|---|---|
+| `info@yourdomain.com` | — | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
+| `<club-slug>-auctions@yourdomain.com` | Configured member → oldest non-admin auction manager → oldest admin | Site admin |
+| `<club-slug>-contact@yourdomain.com` | Configured member → oldest non-admin membership manager → oldest admin | **Dropped** (no fallback) |
+| `<auction-slug>@yourdomain.com` | Club's non-admin auction manager → club admin → auction creator | Dropped if no creator email |
+| anything else | — | Dropped |
+
+**Priority notes:**
+- "Configured member" means the specific club member selected on the Email Settings page; this takes precedence over the automatic fallback order.
+- For `*-auctions` and auction slugs, non-admin members with the **Manage auctions** permission are preferred over admins, keeping auction replies away from full admins unless no specialist is available.
+- For `*-contact`, non-admin members with the **Manage membership** permission are preferred. If no such member exists and there are no admins, the message is **dropped silently** — configure at least one member with admin or membership permissions to receive contact mail.
+- When SES routing is active, outbound auction emails no longer set a `Reply-To` header. Replies naturally reach `<auction-slug>@yourdomain.com` (the `From` address) and are routed by Lambda, adding a `[Auction Name]` subject prefix so recipients know the context.

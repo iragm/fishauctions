@@ -3940,17 +3940,34 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 .order_by("name", "email")
             )
             auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
-            contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+            contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_add_edit=True))
+            # Determine the fallback person shown in the help text
+            auction_fallback = club._first_email_member_by_priority(Q(permission_manage_auctions=True))
+            contact_fallback = club._first_email_member_by_priority(Q(permission_add_edit=True))
         else:
             auction_qs = ClubMember.objects.none()
             contact_qs = ClubMember.objects.none()
+            auction_fallback = None
+            contact_fallback = None
+
+        def _fallback_label(member):
+            if not member:
+                return ""
+            name = member.name or member.routing_email
+            email = member.routing_email
+            if name and email and name != email:
+                return f" ({name} <{email}>)"
+            if email:
+                return f" ({email})"
+            return ""
+
         self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
             queryset=auction_qs,
             required=False,
             label="Auction replies",
             help_text=(
                 f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
-                "Leave blank to fall back to the first club admin or auction manager with an email address."
+                f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
             ),
         )
         self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
@@ -3959,7 +3976,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             label="Contact replies",
             help_text=(
                 f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                "Leave blank to fall back to the first club admin or club editor with an email address."
+                f"Leave blank to fall back to the first club admin or manage membership member with an email address{_fallback_label(contact_fallback)}."
             ),
         )
 

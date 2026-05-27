@@ -7661,6 +7661,16 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             },
         )
         context["rewrite_url"] = self.rewrite_url
+        # Email button: shown to authenticated users when the auction belongs to a club
+        if self.auction.club:
+            from .email_routing import email_routing_enabled
+
+            if email_routing_enabled():
+                context["auction_contact_email"] = self.auction.sender_email
+            else:
+                context["auction_contact_email"] = self.auction.club.contact_email or None
+        else:
+            context["auction_contact_email"] = None
         return context
 
     def post(self, request, *args, **kwargs):
@@ -13267,6 +13277,20 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["club_auctions"] = Auction.objects.filter(
                 club=self.club, promote_this_auction=True, is_deleted=False
             ).order_by("-date_start")[:CLUB_DETAIL_AUCTION_LIMIT]
+        # Email button: visible to authenticated users when someone can be reached at this club.
+        from .email_routing import email_routing_enabled
+
+        if email_routing_enabled():
+            # SES routing active: show button only when a real recipient is configured
+            # (permission_add_edit member, admin, or manual override).
+            contact_recipient = self.club.contact_email_recipient
+            has_club_contact = bool(contact_recipient)
+            context["club_contact_email"] = self.club.contact_sender_email if has_club_contact else None
+        else:
+            # No SES: rely on the plain contact_email address field.
+            has_club_contact = bool(self.club.contact_email)
+            context["club_contact_email"] = self.club.contact_email or None
+        context["has_club_contact"] = has_club_contact
         return context
 
     def post(self, request, *args, **kwargs):
@@ -15748,8 +15772,8 @@ class InboundEmailRoutingView(APIView):
     def get(self, request):
         from .email_routing import email_routing_enabled, resolve_routing_info
 
-        secret = getattr(settings, "INBOUND_ROUTING_SECRET", "")
-        provided = request.META.get("HTTP_X_ROUTING_SECRET", "")
+        secret = (getattr(settings, "INBOUND_ROUTING_SECRET", "") or "").strip()
+        provided = (request.META.get("HTTP_X_ROUTING_SECRET", "") or "").strip()
         if not secret or not provided or not secrets.compare_digest(provided, secret):
             return Response({"error": "invalid or missing routing secret"}, status=401)
 

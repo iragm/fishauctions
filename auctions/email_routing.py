@@ -38,13 +38,15 @@ def resolve_routing_info(local_part):
 
     Recognised aliases:
     - ``info`` → site admin email
-    - ``<club-slug>-auctions`` → club auction routing email (admin fallback if no member configured)
-    - ``<club-slug>-contact`` → club contact routing email (admin fallback if no member configured)
-    - ``<auction-slug>`` → auction creator email
+    - ``<club-slug>-auctions`` → oldest non-admin auction manager → oldest admin → site admin
+    - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → **drop**
+    - ``<auction-slug>`` → if club: oldest non-admin auction manager → oldest admin → auction creator;
+                           if no club: auction creator directly
 
     Returns a dict ``{"recipient": <email>, "display_name": <name>}`` when
     the alias is recognised, or ``None`` if the alias does not match any known
-    pattern.  Callers should treat ``None`` as "drop this message".
+    pattern (or the club contact has no configured recipient).
+    Callers should treat ``None`` as "drop this message".
     """
     local_part = (local_part or "").strip().lower()
     if not local_part:
@@ -67,11 +69,22 @@ def resolve_routing_info(local_part):
         club = Club.objects.filter(slug=club_slug).first()
         if not club:
             return None
-        return {"recipient": club.contact_routing_email, "display_name": club.name}
+        routing_email = club.contact_routing_email
+        if not routing_email:
+            return None
+        return {"recipient": routing_email, "display_name": club.name}
 
-    auction = Auction.objects.filter(slug=local_part).select_related("created_by").first()
-    if auction and auction.created_by and auction.created_by.email:
-        return {"recipient": auction.created_by.email, "display_name": auction.title}
+    auction = Auction.objects.filter(slug=local_part, is_deleted=False).select_related("created_by", "club").first()
+    if auction:
+        # If the auction belongs to a club, route through the club's auction recipient
+        # (non-admin auction manager first, then admin, then auction creator).
+        if auction.club:
+            recipient = auction.club.auction_email_recipient
+            if recipient and recipient.routing_email:
+                return {"recipient": recipient.routing_email, "display_name": auction.title}
+        # Fall back to the auction creator's email
+        if auction.created_by and auction.created_by.email:
+            return {"recipient": auction.created_by.email, "display_name": auction.title}
 
     return None
 

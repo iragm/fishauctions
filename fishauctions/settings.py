@@ -371,12 +371,13 @@ _site_domain_raw = os.environ.get("SITE_DOMAIN", "127.0.0.1").strip()
 _parsed_site_domain = urlsplit(_site_domain_raw if "://" in _site_domain_raw else f"//{_site_domain_raw}")
 EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or _site_domain_raw).strip().lower()
 SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
-INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "")
+INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED
     else os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
 )
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 POST_OFFICE = {
     "MAX_RETRIES": 4,
