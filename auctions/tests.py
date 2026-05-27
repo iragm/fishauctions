@@ -15908,9 +15908,9 @@ class ClubEmailRoutingTests(TestCase):
     def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
         """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
         club = Club.objects.create(name="Fallback Club")
-        # Club exists but no email_member configured → falls back to admin via routing_email property
+        # Club exists but no members configured → auctions falls back to site admin, contact is dropped
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
-        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "admin@example.com")
+        self.assertIsNone(resolve_routed_recipient(f"{club.slug}-contact"))
         # No club with this slug → None (drop)
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-contact"))
