@@ -15885,7 +15885,7 @@ class ClubEmailRoutingTests(TestCase):
         membership_user = User.objects.create_user("membership_route", email="membership@example.com", password="pw")
         auction_user = User.objects.create_user("auction_route", email="auction@example.com", password="pw")
         creator = User.objects.create_user("auction_creator", email="creator@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
         club.contact_email_member = membership_member
         club.auction_email_member = auction_member
