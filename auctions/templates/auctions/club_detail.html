@@ -18,7 +18,7 @@
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
   {% if has_club_contact and request.user.is_authenticated %}
-  <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-envelope"></i> Email</a>
+  <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
 </div>
 {% endif %}

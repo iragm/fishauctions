@@ -39,7 +39,7 @@ def resolve_routing_info(local_part):
     Recognised aliases:
     - ``info`` → site admin email
     - ``<club-slug>-auctions`` → oldest non-admin auction manager → oldest admin → site admin
-    - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → **drop**
+    - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → site admin
     - ``<auction-slug>`` → if club: oldest non-admin auction manager → oldest admin → auction creator;
                            if no club: auction creator directly
 
@@ -69,11 +69,7 @@ def resolve_routing_info(local_part):
         club = Club.objects.filter(slug=club_slug).first()
         if not club:
             return None
-        routing_email = club.contact_routing_email
-        if not routing_email:
-            # No member configured and no admin fallback — drop the message
-            return None
-        return {"recipient": routing_email, "display_name": club.name}
+        return {"recipient": club.contact_routing_email, "display_name": club.name}
 
     auction = Auction.objects.filter(slug=local_part, is_deleted=False).select_related("created_by", "club").first()
     if auction:

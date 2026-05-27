@@ -831,11 +831,11 @@ class Club(models.Model):
 
     @property
     def contact_routing_email(self):
-        """Return the routing email for club contact messages, or None to drop the message."""
+        """Return the routing email for club contact messages, falling back to the site admin."""
         recipient = self.contact_email_recipient
         if recipient and recipient.routing_email:
             return recipient.routing_email
-        return None
+        return admin_routing_email()
 
     @property
     def auction_sender_email(self):
