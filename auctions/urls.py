@@ -628,6 +628,7 @@ urlpatterns = [
     path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
     path("clubs/<slug:slug>/bap/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
+    path("clubs/<slug:slug>/admin/stats/", views.ClubStatsView.as_view(), name="club_stats"),
     # API key management (login-required UI)
     path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
     path("clubs/<slug:slug>/api-keys/create/", views.ClubAPIKeyCreateView.as_view(), name="club_api_key_create"),

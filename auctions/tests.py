@@ -14794,6 +14794,117 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_club_stats_owner_can_access(self):
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("club_stats", kwargs={"slug": self.club.slug}))
+
+    def test_club_stats_chart_data_uses_checkins_and_membership_growth(self):
+        self.client.login(username="club_owner2", password="testpass")
+        now = timezone.now()
+        normal_auction = Auction.objects.create(
+            title="Normal club auction",
+            date_start=now - datetime.timedelta(days=60),
+            date_end=now - datetime.timedelta(days=59),
+            created_by=self.owner,
+            club=self.club,
+        )
+        normal_location = PickupLocation.objects.create(
+            name="Normal pickup",
+            auction=normal_auction,
+            pickup_time=now + datetime.timedelta(days=1),
+        )
+        normal_tos = AuctionTOS.objects.create(
+            auction=normal_auction, pickup_location=normal_location, name="Normal bidder"
+        )
+        Lot.objects.create(
+            lot_name="Normal lot",
+            auction=normal_auction,
+            auctiontos_seller=normal_tos,
+            quantity=1,
+            winning_price=10,
+        )
+        Invoice.objects.create(auction=normal_auction, auctiontos_user=normal_tos)
+
+        checkin_auction = Auction.objects.create(
+            title="Check-in club auction",
+            date_start=now - datetime.timedelta(days=30),
+            date_end=now - datetime.timedelta(days=29),
+            created_by=self.owner,
+            club=self.club,
+            manage_users_through_club="checkin",
+        )
+        checkin_location = PickupLocation.objects.create(
+            name="Check-in pickup",
+            auction=checkin_auction,
+            pickup_time=now + datetime.timedelta(days=2),
+        )
+        checked_in_tos = AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Checked in bidder",
+            checked_in=now,
+        )
+        AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Not checked in bidder",
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 1",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=5,
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 2",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=15,
+        )
+        # Club stats charts read from cached auction stats, so populate caches for these test auctions.
+        normal_auction.recalculate_stats()
+        checkin_auction.recalculate_stats()
+
+        old_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="Old paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 11))
+        new_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=new_paid_member.pk).update(createdon=now - datetime.timedelta(days=20))
+        new_unpaid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New unpaid member",
+            membership_expiration_date=timezone.now().date() - datetime.timedelta(days=1),
+        )
+        ClubMember.objects.filter(pk=new_unpaid_member.pk).update(createdon=now - datetime.timedelta(days=10))
+
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+        auction_chart = response.context["club_auction_stats"]
+        auction_datasets = {dataset["label"]: dataset["data"] for dataset in auction_chart["datasets"]}
+        self.assertEqual(auction_datasets["Gross"], [10.0, 20.0])
+        self.assertEqual(auction_datasets["Lots"], [1, 2])
+        self.assertEqual(auction_datasets["Checked in"], [1, 1])
+
+        membership_chart = response.context["club_membership_growth"]
+        membership_datasets = {dataset["label"]: dataset["data"] for dataset in membership_chart["datasets"]}
+        self.assertEqual(membership_datasets["Members"][0], 1)
+        self.assertEqual(membership_datasets["Paid members"][0], 1)
+        self.assertEqual(membership_datasets["Members"][-1], 4)
+        self.assertEqual(membership_datasets["Paid members"][-1], 2)
+
     def test_club_404_for_invalid_slug(self):
         """Non-existent club slug returns 404"""
         self.client.login(username="club_owner2", password="testpass")
@@ -14818,6 +14929,12 @@ class ClubViewTests(TestCase):
     def test_club_history_anonymous_redirects_to_login(self):
         """Anonymous user accessing club_history should be redirected to login"""
         url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_stats_anonymous_redirects_to_login(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
@@ -14881,7 +14998,7 @@ class ClubViewTests(TestCase):
         """Superuser can access all club views"""
         User.objects.create_superuser(username="su_test", password="testpass", email="su@example.com")
         self.client.login(username="su_test", password="testpass")
-        for url_name in ["club_admin", "club_edit", "club_history"]:
+        for url_name in ["club_admin", "club_edit", "club_history", "club_stats"]:
             url = reverse(url_name, kwargs={"slug": self.club.slug})
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
@@ -14954,6 +15071,12 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
 
+    def test_anonymous_redirected_from_club_stats(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
     def test_anonymous_redirected_from_renew_page(self):
         url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
         response = self.client.get(url)
@@ -14987,6 +15110,11 @@ class ClubPermissionTests(TestCase):
     def test_non_member_blocked_from_club_history(self):
         self._login(self.non_member)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_stats(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
     def test_non_member_blocked_from_renew_page(self):
@@ -15048,6 +15176,11 @@ class ClubPermissionTests(TestCase):
     def test_view_only_can_access_history(self):
         self._login(self.view_user)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_can_access_stats(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
     def test_view_only_blocked_from_club_edit(self):
@@ -15203,6 +15336,7 @@ class ClubPermissionTests(TestCase):
             ("club_admin", {"slug": self.club.slug}),
             ("club_edit", {"slug": self.club.slug}),
             ("club_history", {"slug": self.club.slug}),
+            ("club_stats", {"slug": self.club.slug}),
             ("club_membership_settings", {"slug": self.club.slug}),
             ("club_bap_settings", {"slug": self.club.slug}),
             ("club_bap", {"slug": self.club.slug}),
