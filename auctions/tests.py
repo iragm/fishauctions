@@ -4906,6 +4906,26 @@ class LotListViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, ", Habitat")
 
+    def test_auction_lot_admin_uses_shared_query_sync_for_export_and_bulk_actions(self):
+        self.online_auction.is_online = False
+        self.online_auction.save(update_fields=["is_online"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(
+            reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}),
+            {"query": f"seller:{self.online_tos.bidder_number}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["htmx_table_header_template"],
+            "auctions/partials/auction_lots_table_header.html",
+        )
+        self.assertContains(
+            response,
+            f'href="{reverse("lot_list", kwargs={"slug": self.online_auction.slug})}?query=seller%3A{self.online_tos.bidder_number}"',
+        )
+        self.assertContains(response, 'data-query-sync-hx-vals="query"')
+        self.assertContains(response, f'"query": "seller:{self.online_tos.bidder_number}"')
+
 
 class MyLotsViewTests(StandardTestCase):
     """Test my lots view with different user types"""
@@ -13385,6 +13405,30 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function setFieldNote(fieldId, message)")
         self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+        self.assertContains(response, "class HtmxModal")
+        self.assertContains(response, "document.body.appendChild(this.root);")
+
+    def test_add_user_modal_save_uses_modal_close_action(self):
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.post(
+            url,
+            {
+                "name": "Brand New User",
+                "email": "brand-new@example.com",
+                "pickup_location": self.location.pk,
+                "bidder_number": "",
+                "phone_number": "",
+                "address": "",
+                "is_admin": False,
+                "bidding_allowed": True,
+                "selling_allowed": True,
+                "is_club_member": False,
+                "memo": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "closeModal('reload-page');")
 
 
 class AuctionTOSMergeViewTests(StandardTestCase):

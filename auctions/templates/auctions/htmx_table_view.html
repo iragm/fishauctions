@@ -73,6 +73,22 @@
             link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
           }
         });
+
+        document.querySelectorAll('[data-query-sync-hx-vals]').forEach(function (element) {
+          const paramName = element.dataset.querySyncHxVals || 'query';
+          let hxVals = {};
+          try {
+            hxVals = JSON.parse(element.getAttribute('hx-vals') || '{}');
+          } catch (error) {
+            hxVals = {};
+          }
+          if (query) {
+            hxVals[paramName] = query;
+          } else {
+            delete hxVals[paramName];
+          }
+          element.setAttribute('hx-vals', JSON.stringify(hxVals));
+        });
       }
 
       function syncFilterCheckboxes() {

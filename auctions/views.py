@@ -3201,6 +3201,7 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     table_class = LotHTMxTable
     filterset_class = LotAdminFilter
     template_name = "auctions/auction_lot_admin.html"
+    htmx_table_header_template = "auctions/partials/auction_lots_table_header.html"
     # paginate_by = 50
 
     def get_queryset(self):
@@ -7047,7 +7048,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             obj.is_club_member = form.cleaned_data["is_club_member"]
             obj.memo = form.cleaned_data["memo"]
             obj.save()
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return HttpResponse("<script>closeModal('reload-page');</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
             name = form.cleaned_data.get("name")
