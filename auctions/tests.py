@@ -14794,7 +14794,6 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
-
     def test_club_stats_owner_can_access(self):
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_stats", kwargs={"slug": self.club.slug})
@@ -14817,7 +14816,9 @@ class ClubViewTests(TestCase):
             auction=normal_auction,
             pickup_time=now + datetime.timedelta(days=1),
         )
-        normal_tos = AuctionTOS.objects.create(auction=normal_auction, pickup_location=normal_location, name="Normal bidder")
+        normal_tos = AuctionTOS.objects.create(
+            auction=normal_auction, pickup_location=normal_location, name="Normal bidder"
+        )
         Lot.objects.create(
             lot_name="Normal lot",
             auction=normal_auction,
