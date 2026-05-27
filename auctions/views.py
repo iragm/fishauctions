@@ -15211,7 +15211,6 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#4bc0c0",
                     "backgroundColor": "rgba(75, 192, 192, 0.2)",
                     "fill": False,
-                    "lineTension": 0,
                 },
                 {
                     "label": "Lots",
@@ -15219,7 +15218,6 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#36a2eb",
                     "backgroundColor": "rgba(54, 162, 235, 0.2)",
                     "fill": False,
-                    "lineTension": 0,
                 },
                 {
                     "label": "Participants",
@@ -15227,7 +15225,6 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#ff9f40",
                     "backgroundColor": "rgba(255, 159, 64, 0.2)",
                     "fill": False,
-                    "lineTension": 0,
                 },
             ],
         }
@@ -15276,7 +15273,6 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#9966ff",
                     "backgroundColor": "rgba(153, 102, 255, 0.2)",
                     "fill": False,
-                    "lineTension": 0,
                 },
                 {
                     "label": "Paid members",
@@ -15284,7 +15280,6 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#4caf50",
                     "backgroundColor": "rgba(76, 175, 80, 0.2)",
                     "fill": False,
-                    "lineTension": 0,
                 },
             ],
         }
