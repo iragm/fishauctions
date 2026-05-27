@@ -3464,6 +3464,17 @@ class Auction(models.Model):
         # QR code scans
         qr_scans = self.number_of_lots_with_scanned_qr
 
+        if self.use_check_in_mode:
+            participants = AuctionTOS.objects.filter(auction=self, checked_in__isnull=False).count()
+        else:
+            participants = (
+                Invoice.objects.filter(auction=self)
+                .exclude(auctiontos_user__isnull=True)
+                .values("auctiontos_user")
+                .distinct()
+                .count()
+            )
+
         return {
             "total_unique_views": total_views,
             "logged_in_unique_views": user_views,
@@ -3474,6 +3485,11 @@ class Auction(models.Model):
             "reminder_email_click_rate": reminder_email_click_rate,
             "reminder_email_join_rate": reminder_email_join_rate,
             "number_of_lots_with_scanned_qr": qr_scans,
+            "club_stats": {
+                "gross": self.gross,
+                "total_lots": self.total_lots,
+                "participants": participants,
+            },
         }
 
     def _make_stats_json_serializable(self, obj):

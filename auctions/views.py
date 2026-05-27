@@ -15184,6 +15184,11 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             Q(membership_expiration_date__isnull=True) & Q(membership_last_paid__gte=paid_cutoff)
         )
 
+    def _get_cached_club_stats(self, auction):
+        cached_stats = auction.cached_stats or {}
+        misc_stats = cached_stats.get("misc") or {}
+        return misc_stats.get("club_stats") or {}
+
     def get_auction_stats_chart_data(self):
         auctions = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start", "pk")
         labels = []
@@ -15191,17 +15196,14 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         lot_values = []
         participant_values = []
         for auction in auctions:
+            auction_misc = self._get_cached_club_stats(auction)
+            gross = auction_misc.get("gross")
+            total_lots = auction_misc.get("total_lots")
+            participants = auction_misc.get("participants")
             labels.append(self._format_chart_date(auction.date_start))
-            gross_values.append(float(auction.gross or 0))
-            lot_values.append(auction.total_lots)
-            participants_qs = auction.tos_qs
-            if auction.use_check_in_mode:
-                participant_values.append(participants_qs.filter(checked_in__isnull=False).count())
-            else:
-                participants_with_invoice = participants_qs.annotate(
-                    has_invoice=Exists(Invoice.objects.filter(auctiontos_user=OuterRef("pk")))
-                )
-                participant_values.append(participants_with_invoice.filter(has_invoice=True).count())
+            gross_values.append(round(float(gross), 2) if gross is not None else 0)
+            lot_values.append(total_lots if total_lots is not None else 0)
+            participant_values.append(participants if participants is not None else 0)
         return {
             "labels": labels,
             "datasets": [

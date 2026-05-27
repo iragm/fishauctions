@@ -14866,6 +14866,9 @@ class ClubViewTests(TestCase):
             quantity=1,
             winning_price=15,
         )
+        # Club stats charts read from cached auction stats, so populate caches for these test auctions.
+        normal_auction.recalculate_stats()
+        checkin_auction.recalculate_stats()
 
         old_paid_member = ClubMember.objects.create(
             club=self.club,
