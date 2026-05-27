@@ -4981,7 +4981,6 @@ class AuctionUsersViewTests(StandardTestCase):
         assert ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid") not in response.context["possible_filters"]
 
 
-
 class LotCreateViewTests(StandardTestCase):
     """Test lot creation with different user types"""
 
