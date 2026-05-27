@@ -15198,7 +15198,10 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             if auction.use_check_in_mode:
                 participant_values.append(participants_qs.filter(checked_in__isnull=False).count())
             else:
-                participant_values.append(participants_qs.filter(auctiontos__isnull=False).distinct().count())
+                participants_with_invoice = participants_qs.annotate(
+                    has_invoice=Exists(Invoice.objects.filter(auctiontos_user=OuterRef("pk")))
+                )
+                participant_values.append(participants_with_invoice.filter(has_invoice=True).count())
         return {
             "labels": labels,
             "datasets": [
