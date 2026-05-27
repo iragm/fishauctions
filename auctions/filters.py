@@ -1312,6 +1312,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
             queryset = queryset.filter(user_query)
 
         for category_filter in category_filters:
+            # Support slug-style filters like category:foo-bar for categories named "Foo Bar".
             category_search = category_filter.replace("-", " ")
             queryset = queryset.filter(
                 Q(species_category__name__icontains=category_filter)

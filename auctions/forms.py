@@ -3768,7 +3768,10 @@ class LotCategoryForm(forms.ModelForm):
         fields = ["species_category"]
 
     def __init__(self, *args, **kwargs):
-        post_url = kwargs.pop("post_url")
+        post_url = kwargs.pop("post_url", None)
+        if not post_url:
+            msg = "LotCategoryForm requires a post_url."
+            raise ValueError(msg)
         super().__init__(*args, **kwargs)
         self.fields["species_category"].queryset = Category.objects.all().order_by("name")
         self.helper = FormHelper()

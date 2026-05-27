@@ -758,6 +758,9 @@ def _club_points_chart_data(club, member):
     return {"labels": [month.strftime("%b %Y") for month in months], "datasets": datasets}
 
 
+CLUB_DETAIL_AUCTION_LIMIT = 10
+
+
 class ClubViewMixin:
     """For club permissions, similar to AuctionViewMixin"""
 
@@ -13257,11 +13260,13 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 "https://www.google.com/maps/search/?api=1&query=" + quote_plus(directions_query)
             )
         if can_manage_auctions:
-            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[:10]
+            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[
+                :CLUB_DETAIL_AUCTION_LIMIT
+            ]
         else:
             context["club_auctions"] = Auction.objects.filter(
                 club=self.club, promote_this_auction=True, is_deleted=False
-            ).order_by("-date_start")[:10]
+            ).order_by("-date_start")[:CLUB_DETAIL_AUCTION_LIMIT]
         return context
 
     def post(self, request, *args, **kwargs):

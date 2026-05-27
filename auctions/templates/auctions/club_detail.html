@@ -258,7 +258,7 @@
 {% block extra_js %}
 {% if show_club_map %}
 <script
-src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initClubMap&libraries=&v=weekly&libraries=marker"
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initClubMap&v=weekly&libraries=marker"
 async
 ></script>
 {% endif %}
@@ -313,7 +313,10 @@ async
     if (window._clubMapRendered || !window._clubMapApiReady) return;
     var mapCanvas = document.getElementById('club-map-canvas');
     if (!mapCanvas || mapCanvas.closest('.d-none')) return;
-    var center = {lat: {{ club.latitude|default:"0" }}, lng: {{ club.longitude|default:"0" }}};
+    var center = {
+      lat: Number('{{ club.latitude|default:"0"|escapejs }}'),
+      lng: Number('{{ club.longitude|default:"0"|escapejs }}')
+    };
     var map = new google.maps.Map(mapCanvas, {center: center, zoom: 9, mapId: 'club_detail_map'});
     var marker = new google.maps.marker.AdvancedMarkerElement({
       position: center,
