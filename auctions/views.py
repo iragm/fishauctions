@@ -252,6 +252,46 @@ class AdminEmailMixin:
         return context
 
 
+class HTMxTableView(SingleTableMixin, FilterView):
+    """Shared behavior for list views that render a full page plus an HTMX table partial."""
+
+    htmx_template_name = "tables/table_generic.html"
+    filter_placeholder_text = None
+    possible_filters = ()
+    htmx_table_header_template = None
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return self.htmx_template_name
+        template_name = getattr(self, "template_name", None)
+        if not template_name:
+            msg = f"{self.__class__.__name__} must define template_name"
+            raise ImproperlyConfigured(msg)
+        return template_name
+
+    def get_filter_placeholder_text(self):
+        return self.filter_placeholder_text
+
+    def get_possible_filters(self):
+        return list(self.possible_filters)
+
+    def get_htmx_table_header_template(self):
+        return self.htmx_table_header_template
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        filter_placeholder_text = self.get_filter_placeholder_text()
+        context["filter_placeholder_text"] = filter_placeholder_text
+        context["possible_filters"] = self.get_possible_filters()
+        context["htmx_table_header_template"] = self.get_htmx_table_header_template()
+        filterset = context.get("filter")
+        if filterset and filter_placeholder_text:
+            query_field = filterset.form.fields.get("query")
+            if query_field:
+                query_field.widget.attrs["placeholder"] = filter_placeholder_text
+        return context
+
+
 class AuctionViewMixin:
     """For auction permissions, this will try to set self.auction based on the url's slug,
     then see if the user has permission or not
@@ -1203,20 +1243,14 @@ class MyBids(LotListView):
         return context
 
 
-class MyLots(SingleTableMixin, FilterView):
+class MyLots(HTMxTableView):
     """Selling dashboard.  List of lots added by this user."""
 
     model = Lot
     table_class = LotHTMxTableForUsers
     filterset_class = LotAdminFilter
+    template_name = "auctions/lot_user.html"
     # paginate_by = 100
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/lot_user.html"
-        return template_name
 
     def dispatch(self, request, *args, **kwargs):
         # "filter" is the bookmarkable URL param; "query" is what the HTMX form posts.
@@ -3137,20 +3171,14 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
         return JsonResponse({"success": False, "error": "Invalid action"})
 
 
-class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     model = AuctionHistory
     table_class = AuctionHistoryHTMxTable
     filterset_class = AuctionHistoryFilter
+    template_name = "auctions/auction_history.html"
 
     def get_queryset(self):
         return AuctionHistory.objects.filter(auction=self.auction).order_by("-timestamp")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/auction_history.html"
-        return template_name
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3163,7 +3191,7 @@ class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin,
         return kwargs
 
 
-class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
     At some point, it may make sense to subclass AllLots here, but I think the needs of the two views are so different that it doesn't make sense
@@ -3172,17 +3200,11 @@ class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filter
     model = Lot
     table_class = LotHTMxTable
     filterset_class = LotAdminFilter
+    template_name = "auctions/auction_lot_admin.html"
     # paginate_by = 50
 
     def get_queryset(self):
         return Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/auction_lot_admin.html"
-        return template_name
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3217,12 +3239,14 @@ class AuctionHelp(LoginRequiredMixin, AdminEmailMixin, AuctionViewMixin, Templat
         return context
 
 
-class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of users (AuctionTOS) associated with an auction"""
 
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
+    template_name = "auction_users.html"
+    htmx_table_header_template = "auctions/partials/auction_users_table_header.html"
     allow_non_admins = True  # gated via can_add_edit_people for finer-grained club permission
     # paginate_by = 100
 
@@ -3230,18 +3254,55 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
         _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
         return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
 
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auction_users.html"
-        return template_name
-
     def get_table_kwargs(self):
         kwargs = super().get_table_kwargs()
         kwargs["request"] = self.request
         kwargs["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
         return kwargs
+
+    def get_filter_placeholder_text(self):
+        return "Filter by bidder number, name, email..."
+
+    def get_possible_filters(self):
+        filters = []
+        if self.auction.online_bidding != "disable":
+            filters.extend(
+                [
+                    ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid"),
+                    ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid"),
+                ]
+            )
+        filters.extend(
+            [
+                ("<i class='bi bi-exclamation-octagon-fill'></i> Can't sell", "no_sell"),
+                ("<i class='bi bi-envelope-exclamation-fill'></i> Only invalid email", "email_bad"),
+                ("<i class='bi bi-envelope-check-fill'></i> Only verified email", "email_good"),
+                ("<i class='bi bi-people-fill'></i> Possible duplicate", "duplicate"),
+                ("<small class='text-muted'>Users with an invoice that is:</small>", ""),
+                ("<i class='bi bi-bag'></i> Open", "open"),
+                ("<i class='bi bi-bag-check'></i> Ready", "ready"),
+                ("<i class='bi bi-bag-heart'></i> Paid", "paid"),
+                ("<i class='bi bi-bag-dash'></i> Owes the club", "owes_club"),
+                ("<i class='bi bi-bag-plus'></i> Club owes", "club_owes"),
+                ("<i class='bi bi-eye-fill'></i> User has seen", "seen"),
+                ("<i class='bi bi-eye-slash-fill'></i> User has not seen", "unseen"),
+            ]
+        )
+        if self.auction.is_online:
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Find problematic users:</small>", ""),
+                    ("<i class='bi bi-exclamation-circle'></i> Least engagement first", "sus"),
+                ]
+            )
+        filters.append(
+            (
+                "<i class='bi bi-patch-plus-fill'></i> "
+                "<a href='https://github.com/iragm/fishauctions/issues/215'>Suggest a new filter</a>",
+                "",
+            )
+        )
+        return filters
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -7799,19 +7860,13 @@ class MyAccount(LoginRequiredMixin, RedirectView):
         return reverse("userpage", kwargs={"slug": self.request.user.username})
 
 
-class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
+class AllAuctions(LocationMixin, HTMxTableView):
     model = Auction
     no_location_message = "Set your location to see how far away auctions are"
     table_class = AuctionHTMxTable
     filterset_class = AuctionFilter
+    template_name = "all_auctions.html"
     # paginate_by = 100
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "all_auctions.html"
-        return template_name
 
     def get_queryset(self):
         last_auction_pk = -1
@@ -13265,13 +13320,14 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         return context
 
 
-class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Admin panel for a club"""
 
     active_tab = "members"
     model = ClubMember
     table_class = ClubMemberHTMxTable
     filterset_class = ClubMemberFilter
+    template_name = "auctions/club_admin.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -13284,11 +13340,6 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
     def get_queryset(self):
         # is_deleted filtering is handled by ClubMemberFilter.filter_queryset (default: hide deactivated)
         return ClubMember.objects.filter(club=self.club).order_by("name")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_admin.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -14584,13 +14635,14 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
-class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Main BAP admin page — awarded points tab."""
 
     active_tab = "bap_awards"
     model = BapAward
     table_class = BapAwardHTMxTable
     filterset_class = BapAwardFilter
+    template_name = "auctions/club_bap.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14607,11 +14659,6 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterVie
             .order_by("-date")
         )
 
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_bap.html"
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -14624,7 +14671,7 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterVie
         return kwargs
 
 
-class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Pending BAP page — lots from this club's auctions awaiting point assignment."""
 
     active_tab = "bap_lots"
@@ -15123,13 +15170,14 @@ class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": pk}))
 
 
-class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """History log for a club"""
 
     active_tab = "history"
     model = ClubHistory
     table_class = ClubHistoryHTMxTable
     filterset_class = ClubHistoryFilter
+    template_name = "auctions/club_history.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -15139,11 +15187,6 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
 
     def get_queryset(self):
         return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_history.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

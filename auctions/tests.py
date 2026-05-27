@@ -4955,17 +4955,31 @@ class AuctionUsersViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
-    def test_auction_users_query_sync_script_handles_checkbox_filters(self):
-        """User filter page keeps query URL/export sync for checkbox-driven updates"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
+    def test_auction_users_context_configures_shared_htmx_filter_ui(self):
+        """Auction users view defines placeholder text and filter choices for the shared HTMX template."""
+        self.client.force_login(self.admin_user)
         url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
+        assert response.context["filter_placeholder_text"] == "Filter by bidder number, name, email..."
+        assert ("<i class='bi bi-exclamation-octagon-fill'></i> Can't sell", "no_sell") in response.context[
+            "possible_filters"
+        ]
         content = response.content.decode(response.charset or "utf-8")
-        assert "syncQueryUrlAndExport" in content
-        assert "queryInput.addEventListener('input', syncQueryUrlAndExport);" in content
-        assert "syncQueryUrlAndExport({ target: queryInput });" in content
-        assert '$("#id_query").trigger("blur");' in content
+        assert 'data-filter-key="no_sell"' in content
+        assert "syncQueryUrlAndLinks" in content
+        assert 'data-query-sync-url="' in content
+
+    def test_auction_users_context_omits_bidding_filters_when_online_bidding_disabled(self):
+        self.online_auction.online_bidding = "disable"
+        self.online_auction.save(update_fields=["online_bidding"])
+        self.client.force_login(self.admin_user)
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid") not in response.context["possible_filters"]
+        assert ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid") not in response.context["possible_filters"]
+
 
 
 class LotCreateViewTests(StandardTestCase):

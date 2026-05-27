@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+
+{% block content %}
+  {% block htmx_table_ribbon %}{% endblock %}
+
+  {% if htmx_table_header_template %}
+    {% include htmx_table_header_template %}
+  {% endif %}
+
+  {% if possible_filters %}
+    <span class="dropdown">
+      <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-filter"></i> Filters
+      </button>
+      <div class="dropdown-menu">
+        {% for filter_label, filter_key in possible_filters %}
+          {% if filter_key %}
+            <label class="dropdown-item">
+              <input type="checkbox" class="htmx-table-filter" data-filter-key="{{ filter_key }}"> {{ filter_label|safe }}
+            </label>
+          {% else %}
+            <span class="dropdown-item">{{ filter_label|safe }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </span>
+  {% endif %}
+
+  <form class="col-sm-12 mt-2">
+    {% crispy filter.form %}
+  </form>
+
+  {% render_table table %}
+
+  <div id="modals-here"></div>
+{% endblock %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script>
+    (function () {
+      const queryInput = document.getElementById('id_query');
+      if (!queryInput) {
+        return;
+      }
+
+      function escapeRegex(value) {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+
+      function normalizeKeyword(value) {
+        return (value || '').replaceAll('_', ' ').trim();
+      }
+
+      function syncQueryUrlAndLinks() {
+        const query = queryInput.value.trim();
+        const newUrl = new URL(window.location);
+        if (query) {
+          newUrl.searchParams.set('query', query);
+        } else {
+          newUrl.searchParams.delete('query');
+        }
+        history.replaceState({}, '', newUrl);
+
+        document.querySelectorAll('[data-query-sync-url]').forEach(function (link) {
+          const baseUrl = link.dataset.querySyncUrl || link.getAttribute('href').split('?')[0];
+          link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
+        });
+      }
+
+      function syncFilterCheckboxes() {
+        const queryValue = queryInput.value;
+        document.querySelectorAll('.htmx-table-filter').forEach(function (checkbox) {
+          const keyword = normalizeKeyword(checkbox.dataset.filterKey);
+          const regex = new RegExp('(^|\\s)' + escapeRegex(keyword) + '(?=\\s|$)', 'g');
+          checkbox.checked = regex.test(queryValue);
+        });
+      }
+
+      function dispatchQueryEvents() {
+        queryInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true }));
+        queryInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+      }
+
+      function updateKeyword(keyword, includeKeyword) {
+        const normalizedKeyword = normalizeKeyword(keyword);
+        const regex = new RegExp('(^|\\s)' + escapeRegex(normalizedKeyword) + '(?=\\s|$)', 'g');
+        let queryValue = queryInput.value.replace(regex, ' ').replace(/\s+/g, ' ').trim();
+        if (includeKeyword) {
+          queryValue = (queryValue + ' ' + normalizedKeyword).trim();
+        }
+        queryInput.value = queryValue;
+        dispatchQueryEvents();
+      }
+
+      document.querySelectorAll('.htmx-table-filter').forEach(function (checkbox) {
+        checkbox.addEventListener('change', function () {
+          updateKeyword(checkbox.dataset.filterKey, checkbox.checked);
+        });
+      });
+
+      queryInput.addEventListener('input', function () {
+        syncFilterCheckboxes();
+        syncQueryUrlAndLinks();
+      });
+      queryInput.addEventListener('blur', syncFilterCheckboxes);
+
+      if (window.bootstrap) {
+        document.querySelectorAll('[data-bs-title]').forEach(function (element) {
+          new bootstrap.Tooltip(element);
+        });
+      }
+
+      syncFilterCheckboxes();
+      syncQueryUrlAndLinks();
+    })();
+  </script>
+{% endblock %}
