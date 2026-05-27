@@ -289,9 +289,19 @@ async
 {% endif %}
 <script>
 (function () {
+  var panelToggleButtons = Array.from(document.querySelectorAll('[data-club-panel-toggle]'));
+  var togglablePanelIds = panelToggleButtons
+    .map(function (button) {
+      return button.getAttribute('data-club-panel-toggle');
+    })
+    .filter(function (panelId) {
+      return !!panelId;
+    });
+
   function hidePanels(exceptId) {
-    document.querySelectorAll('[id$="-panel"]').forEach(function (panel) {
-      if (panel.id !== exceptId && panel.classList.contains('card')) {
+    togglablePanelIds.forEach(function (panelId) {
+      var panel = document.getElementById(panelId);
+      if (panel && panel.id !== exceptId && panel.classList.contains('card')) {
         panel.classList.add('d-none');
       }
     });
@@ -320,7 +330,7 @@ async
     window._clubMapRendered = true;
   }
 
-  document.querySelectorAll('[data-club-panel-toggle]').forEach(function (button) {
+  panelToggleButtons.forEach(function (button) {
     button.addEventListener('click', function () {
       var panel = document.getElementById(this.getAttribute('data-club-panel-toggle'));
       if (!panel) return;

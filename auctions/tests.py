@@ -14803,7 +14803,12 @@ class ClubViewTests(TestCase):
         response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Join")
-        self.assertContains(response, 'data-club-panel-toggle="join-panel"')
+        self.assertContains(
+            response,
+            '<button type="submit" class="btn btn-sm btn-success">',
+            html=False,
+        )
+        self.assertNotContains(response, 'data-club-panel-toggle="join-panel"')
         self.assertContains(response, "Website")
         self.assertContains(response, "Facebook")
         self.assertContains(response, "Discord")
