@@ -76,6 +76,7 @@ Copy the output into both the Lambda env var and `INBOUND_ROUTING_SECRET` in you
 Lambda → *Code* tab → replace the contents of `lambda_function.py` with the code below → *Deploy*
 
 ```python
+import base64
 import email
 import email.mime.multipart
 import email.mime.text
@@ -215,12 +216,21 @@ def lambda_handler(event, context):
         print("[ses-router] dropping oversized message with no content")
         return {"status": "dropped", "reason": "no content"}
 
+    # The SES receipt rule's SNS action must be configured with Base64 encoding —
+    # UTF-8 mode silently corrupts non-ASCII bytes (encoded headers, quoted-printable
+    # bodies, etc.), producing a "jumbled text" forward.
+    try:
+        raw_bytes = base64.b64decode(raw_content, validate=True)
+    except (ValueError, TypeError) as exc:
+        print(f"[ses-router] dropping message with non-base64 content: {exc}")
+        return {"status": "dropped", "reason": "invalid content encoding"}
+
     # Guard against pathological payloads before handing to the MIME parser.
-    if len(raw_content) > _MAX_RAW_BYTES:
-        print(f"[ses-router] dropping message exceeding size cap ({len(raw_content)} bytes)")
+    if len(raw_bytes) > _MAX_RAW_BYTES:
+        print(f"[ses-router] dropping message exceeding size cap ({len(raw_bytes)} bytes)")
         return {"status": "dropped", "reason": "message too large"}
 
-    msg = email.message_from_bytes(raw_content.encode() if isinstance(raw_content, str) else raw_content)
+    msg = email.message_from_bytes(raw_bytes)
 
     # Drop automated replies (out-of-office, vacation notices, delivery reports).
     # Forwarding these back causes mail loops and clutters the recipient's inbox.
@@ -335,7 +345,7 @@ Lambda → *Configuration* → *Triggers* should now show the SNS trigger.
 - SES → *Email receiving* → *Rule sets* → create or select a rule set
 - *Create rule* → name it `route-all`
 - **Recipients**: leave blank to catch all addresses for your domain
-- **Actions**: add a single **SNS** action → select `ses-inbound-router`
+- **Actions**: add a single **SNS** action → select `ses-inbound-router` → set **Encoding: Base64** (the default UTF-8 setting silently corrupts non-ASCII bytes and produces jumbled forwarded text — the Lambda expects Base64)
 - Enable the rule and make sure the rule set itself is **Active** (rule sets have a separate active/inactive toggle)
 
 ---
@@ -419,10 +429,16 @@ SNS Topic ──► Lambda
 
 Recognised alias patterns:
 
-| Alias | Routes to |
-|---|---|
-| `info@yourdomain.com` | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
-| `<club-slug>-auctions@yourdomain.com` | Club's configured auction contact, or first auction admin, or site admin |
-| `<club-slug>-contact@yourdomain.com` | Club's configured contact member, or first club editor, or site admin |
-| `<auction-slug>@yourdomain.com` | Auction creator's email |
-| anything else | Dropped |
+| Alias | Priority order | Final fallback |
+|---|---|---|
+| `info@yourdomain.com` | — | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
+| `<club-slug>-auctions@yourdomain.com` | Configured member → oldest non-admin auction manager → oldest admin | Site admin |
+| `<club-slug>-contact@yourdomain.com` | Configured member → oldest non-admin membership manager → oldest admin | **Dropped** (no fallback) |
+| `<auction-slug>@yourdomain.com` | Club's non-admin auction manager → club admin → auction creator | Dropped if no creator email |
+| anything else | — | Dropped |
+
+**Priority notes:**
+- "Configured member" means the specific club member selected on the Email Settings page; this takes precedence over the automatic fallback order.
+- For `*-auctions` and auction slugs, non-admin members with the **Manage auctions** permission are preferred over admins, keeping auction replies away from full admins unless no specialist is available.
+- For `*-contact`, non-admin members with the **Manage membership** permission are preferred. If no such member exists and there are no admins, the message is **dropped silently** — configure at least one member with admin or membership permissions to receive contact mail.
+- When SES routing is active, outbound auction emails no longer set a `Reply-To` header. Replies naturally reach `<auction-slug>@yourdomain.com` (the `From` address) and are routed by Lambda, adding a `[Auction Name]` subject prefix so recipients know the context.

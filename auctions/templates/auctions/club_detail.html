@@ -9,13 +9,16 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if club.homepage or club.facebook_page %}
+{% if club.homepage or club.facebook_page or has_club_contact %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
   {% endif %}
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
+  {% endif %}
+  {% if has_club_contact and request.user.is_authenticated %}
+  <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
 </div>
 {% endif %}
