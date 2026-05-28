@@ -5554,7 +5554,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         )
         self.payment_user = User.objects.create_user(
             username="renewal_payment_user",
-            password='testpass',
+            password="testpass",
             email="renewal_payment_user@example.com",
         )
         PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_renewal")
@@ -5664,7 +5664,7 @@ class ClubMembershipEmailTaskTests(TestCase):
         )
         self.payment_user = User.objects.create_user(
             username="club_email_task_payment_user",
-            password='testpass',
+            password="testpass",
             email="club_email_task_payment_user@example.com",
         )
         PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_task")
@@ -16561,7 +16561,7 @@ class ClubSettingsViewTests(TestCase):
         self.club.save(update_fields=["membership_annual_fee"])
         payment_user = User.objects.create_user(
             username="club_settings_payment_user",
-            password='testpass',
+            password="testpass",
             email="club_settings_payment_user@example.com",
         )
         PayPalSeller.objects.create(user=payment_user, club=self.club, paypal_merchant_id="merchant_123")
