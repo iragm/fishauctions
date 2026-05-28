@@ -13266,8 +13266,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if show_club_map:
             context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
             directions_query = self.club.location or f"{self.club.latitude},{self.club.longitude}"
-            context["club_map_directions_url"] = (
-                "https://www.google.com/maps/search/?api=1&query=" + quote_plus(directions_query)
+            context["club_map_directions_url"] = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(
+                directions_query
             )
         if can_manage_auctions:
             context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[
@@ -14844,7 +14844,9 @@ class ClubBapLotCategoryView(APIView):
 
     def post(self, request, pk):
         lot, club = self._get_lot(request, pk)
-        form = LotCategoryForm(request.POST, instance=lot, post_url=reverse("club_bap_lot_category", kwargs={"pk": lot.pk}))
+        form = LotCategoryForm(
+            request.POST, instance=lot, post_url=reverse("club_bap_lot_category", kwargs={"pk": lot.pk})
+        )
         if form.is_valid():
             updated_lot = form.save(commit=False)
             update_fields = ["species_category"]

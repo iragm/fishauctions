@@ -16694,7 +16694,9 @@ class ClubBapLotsViewTests(TestCase):
             auction=self.other_auction,
             pickup_time=timezone.now() + datetime.timedelta(days=2),
         )
-        self.seller_tos = AuctionTOS.objects.create(user=self.seller_user, auction=self.auction, pickup_location=location)
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller_user, auction=self.auction, pickup_location=location
+        )
         self.other_seller_tos = AuctionTOS.objects.create(
             user=self.seller_user, auction=self.other_auction, pickup_location=other_location
         )
@@ -16739,7 +16741,9 @@ class ClubBapLotsViewTests(TestCase):
             manually_approved=True,
             date_end=timezone.now() - datetime.timedelta(days=1),
         )
-        BapAward.objects.create(club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5)
+        BapAward.objects.create(
+            club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5
+        )
         self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
 
     def test_anon_redirected_to_login(self):
@@ -16789,7 +16793,9 @@ class ClubBapLotsViewTests(TestCase):
 
     def test_query_supports_user_category_and_auction_keywords(self):
         self.client.login(username="bap_lots_user", password="testpass")
-        response = self.client.get(self.url, {"query": 'pending user:"Mike Smith" category:"Foo Bar" auction:spring-auction'})
+        response = self.client.get(
+            self.url, {"query": 'pending user:"Mike Smith" category:"Foo Bar" auction:spring-auction'}
+        )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Pending Foo Lot")
         self.assertNotContains(response, "Approved Egg Lot")
