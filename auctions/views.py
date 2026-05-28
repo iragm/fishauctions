@@ -167,7 +167,7 @@ from .forms import (
     UserLocation,
     validate_image_url,
 )
-from .helper_functions import bin_data
+from .helper_functions import bin_data, get_currency_symbol
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
@@ -15791,6 +15791,11 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             ).count(),
         }
 
+    def _club_currency_symbol(self):
+        seller = self.club.effective_paypal_seller or self.club.effective_square_seller
+        currency = seller.user.userdata.currency if (seller and seller.user) else "USD"
+        return get_currency_symbol(currency)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         filter_form, start_date, end_date = self._get_filter_form()
@@ -15799,6 +15804,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal(
             "0.00"
         )
+        currency_symbol = self._club_currency_symbol()
         context.update(
             {
                 "club": self.club,
@@ -15813,6 +15819,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 ),
                 "club_money_balance_form": ClubMoneyBalanceForm(initial={"account_balance": current_balance}),
                 "current_balance": current_balance,
+                "currency_symbol": currency_symbol,
                 "treasurer_export_url": reverse("club_treasurer_report_export", kwargs={"slug": self.club.slug}),
                 "can_manage_money": self.has_treasurer_permission(),
             }
@@ -15866,6 +15873,8 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         entry.club = self.club
         entry.created_by = request.user
         entry.save()
+        seller = self.club.effective_paypal_seller or self.club.effective_square_seller
+        currency = seller.user.userdata.currency if (seller and seller.user) else "USD"
         return JsonResponse(
             {
                 "ok": True,
@@ -15873,6 +15882,13 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                 "current_balance": str(
                     ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
                 ),
+                "entry": {
+                    "date": str(entry.date),
+                    "amount": str(entry.amount),
+                    "description": entry.description,
+                    "category_display": entry.get_category_display(),
+                    "currency_symbol": get_currency_symbol(currency),
+                },
             }
         )
 

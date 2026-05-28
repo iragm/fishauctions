@@ -18,6 +18,8 @@ document.addEventListener("DOMContentLoaded", function() {
     const currentBalance = document.getElementById("club-money-current-balance");
     const balanceModalEl = document.getElementById("balanceBooksModal");
 
+    const currencySymbol = "{{ currency_symbol|escapejs }}";
+
     function showBanner(message, level) {
         banner.className = "alert alert-" + level;
         banner.textContent = message;
@@ -66,7 +68,7 @@ document.addEventListener("DOMContentLoaded", function() {
         }
         showBanner(payload.message, "success");
         if (payload.current_balance && currentBalance) {
-            currentBalance.textContent = payload.current_balance;
+            currentBalance.textContent = currencySymbol + payload.current_balance;
         }
         successCallback(payload);
     }
@@ -94,7 +96,7 @@ document.addEventListener("DOMContentLoaded", function() {
     if (addForm) {
         addForm.addEventListener("submit", function(event) {
             event.preventDefault();
-            postForm(addForm, function() {
+            postForm(addForm, function(payload) {
                 addForm.reset();
                 if (amountBadge) {
                     amountBadge.className = "badge bg-secondary d-none";
@@ -103,6 +105,25 @@ document.addEventListener("DOMContentLoaded", function() {
                 const dateInput = document.getElementById("id_date");
                 if (dateInput) {
                     dateInput.value = "{{ club_money_form.initial.date|date:'Y-m-d' }}";
+                }
+                if (payload.entry) {
+                    const tbody = document.getElementById("report-entries-tbody");
+                    if (tbody) {
+                        const noRecordsRow = tbody.querySelector("td[colspan]");
+                        if (noRecordsRow) noRecordsRow.closest("tr").remove();
+                        const sym = payload.entry.currency_symbol || currencySymbol;
+                        const row = document.createElement("tr");
+                        function makeCell(text) {
+                            const td = document.createElement("td");
+                            td.textContent = text;
+                            return td;
+                        }
+                        row.appendChild(makeCell(payload.entry.date));
+                        row.appendChild(makeCell(sym + payload.entry.amount));
+                        row.appendChild(makeCell(payload.entry.description));
+                        row.appendChild(makeCell(payload.entry.category_display));
+                        tbody.insertBefore(row, tbody.firstChild);
+                    }
                 }
             });
         });
@@ -156,15 +177,15 @@ document.addEventListener("DOMContentLoaded", function() {
     <h5 class="card-title">{{ start_date }} - {{ end_date }}</h5>
     <div class="row">
       <div class="col-md-6">
-        <p class="mb-1"><strong>Gross:</strong> {{ report_summary.gross }}</p>
-        <p class="mb-1"><strong>Expenses:</strong> {{ report_summary.expenses }}</p>
-        <p class="mb-1"><strong>Revenue:</strong> {{ report_summary.revenue }}</p>
+        <p class="mb-1"><strong>Gross:</strong> {{ currency_symbol }}{{ report_summary.gross }}</p>
+        <p class="mb-1"><strong>Expenses:</strong> {{ currency_symbol }}{{ report_summary.expenses }}</p>
+        <p class="mb-1"><strong>Revenue:</strong> {{ currency_symbol }}{{ report_summary.revenue }}</p>
         <p class="mb-1"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }}</p>
       </div>
       <div class="col-md-6">
-        <p class="mb-1"><strong>Auction gross:</strong> {{ report_summary.auction_gross }}</p>
-        <p class="mb-1"><strong>Auction payouts:</strong> {{ report_summary.auction_payouts }}</p>
-        <p class="mb-1"><strong>Auction profit:</strong> {{ report_summary.auction_profit }}</p>
+        <p class="mb-1"><strong>Auction gross:</strong> {{ currency_symbol }}{{ report_summary.auction_gross }}</p>
+        <p class="mb-1"><strong>Auction payouts:</strong> {{ currency_symbol }}{{ report_summary.auction_payouts }}</p>
+        <p class="mb-1"><strong>Auction profit:</strong> {{ currency_symbol }}{{ report_summary.auction_profit }}</p>
         <p class="mb-1"><strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}</p>
       </div>
     </div>
@@ -179,7 +200,7 @@ document.addEventListener("DOMContentLoaded", function() {
   <button class="btn btn-outline-warning" type="button" data-bs-toggle="modal" data-bs-target="#balanceBooksModal">
     Balance books
   </button>
-  <div class="ms-auto text-muted small pt-2">Current balance: <span id="club-money-current-balance">{{ current_balance }}</span></div>
+  <div class="ms-auto text-muted small pt-2">Current balance: <span id="club-money-current-balance">{{ currency_symbol }}{{ current_balance }}</span></div>
 </div>
 
 <div class="collapse mb-4" id="club-money-add-record">
@@ -222,11 +243,11 @@ document.addEventListener("DOMContentLoaded", function() {
         <th>Category</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody id="report-entries-tbody">
       {% for entry in report_entries %}
       <tr>
         <td>{{ entry.date }}</td>
-        <td>{{ entry.amount }}</td>
+        <td>{{ currency_symbol }}{{ entry.amount }}</td>
         <td>{{ entry.description }}</td>
         <td>{{ entry.get_category_display }}</td>
       </tr>
