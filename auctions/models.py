@@ -8904,6 +8904,7 @@ class SquareSeller(models.Model):
             logger.exception("Square refund failed for payment %s: %s", payment.external_id, error_msg)
             return f"Square refund failed: {error_msg}"
 
+
 class UserInterestCategory(models.Model):
     """
     How interested is a user in a given category
