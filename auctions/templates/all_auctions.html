@@ -1,41 +1,42 @@
-{% extends "base.html" %}
-{% load render_table querystring_replace from django_tables2 %}
+{% extends "auctions/htmx_table_view.html" %}
+{% load querystring_replace from django_tables2 %}
+{% load render_table from django_tables2 %}
 {% load crispy_forms_tags %}
-{% block title %}Auctions
-{% endblock %}
-{% load static %}
-{% block content %}
-<h3>Auctions</h3>
-<div class='mb-3'>This is a list of club auctions which have been created on this site.</div>
-{% if show_new_auction_button %}
-<a href="{% url 'auction_confirm' %}" class='btn bg-info mb-3 text-white'><i class="bi bi-plus-circle"></i> Create a new auction</a><br>
-{% endif %}
-<form class="col-sm-12 mt-2">
-  {% crispy filter.form %}
-</form>
-<div id="nearby-filter-notice">
-{% if nearby_filter_active and not nearby_filter_auto_removed %}
-<small class="text-muted">Only showing nearby auctions. <a href="{% querystring_replace "nearby"="false" %}">Show all</a></small>
-{% elif nearby_filter_auto_removed %}
-<small class="text-muted">{{ nearby_filter_auto_removed }}</small>
-{% endif %}
-</div>
-<div class="progress d-none"> <div class="indeterminate"></div> </div>
-{% render_table table %}
 
-<small class="text-muted">Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
-  <ul>
-    <li>have "promote this auction" checked</li>
-    <li>are starting less than 90 days from today</li>
-    <li>were created less than 2 years ago</li>
-    {% if user.is_authenticated %}
-      {% if user_has_location %}
-        <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'preferences' %}?next=/auctions/">change in preferences</a></li>
-      {% else %}
-        <li><a href="{% url 'contact_info' %}">Set your exact location using the map here</a> to also see nearby auctions</li>
-      {% endif %}
-    {% endif %}
-  </ul>
-</small>
+{% block title %}Auctions{% endblock %}
+
+{% block htmx_table_filter_form %}
+  {{ block.super }}
+  <div id="nearby-filter-notice">
+  {% if nearby_filter_active and not nearby_filter_auto_removed %}
+    <small class="text-muted">Only showing nearby auctions. <a href="{% querystring_replace "nearby"="false" %}">Show all</a></small>
+  {% elif nearby_filter_auto_removed %}
+    <small class="text-muted">{{ nearby_filter_auto_removed }}</small>
+  {% endif %}
+  </div>
+  <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% endblock %}
-{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
+
+{% block htmx_table %}
+  {{ block.super }}
+
+  <small class="text-muted">Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
+    <ul>
+      <li>have "promote this auction" checked</li>
+      <li>are starting less than 90 days from today</li>
+      <li>were created less than 2 years ago</li>
+      {% if user.is_authenticated %}
+        {% if user_has_location %}
+          <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'preferences' %}?next=/auctions/">change in preferences</a></li>
+        {% else %}
+          <li><a href="{% url 'contact_info' %}">Set your exact location using the map here</a> to also see nearby auctions</li>
+        {% endif %}
+      {% endif %}
+    </ul>
+  </small>
+{% endblock %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script type='text/javascript'>pageView();</script>
+{% endblock %}

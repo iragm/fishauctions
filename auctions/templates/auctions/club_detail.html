@@ -160,7 +160,7 @@
       </li>
       {% endfor %}
     </ul>
-    <p class="text-muted mt-2 mb-0"><small>This page shows only your 25 most recent BAP points. To see all lots you've gotten BAP points for, <a href="{% url 'selling' %}?filter=bap">visit your selling dashboard and filter for BAP</a>.</small></p>
+    <p class="text-muted mt-2 mb-0"><small>This page shows only your 25 most recent BAP points. To see all lots you've gotten BAP points for, <a href="{% url 'selling' %}?query=bap">visit your selling dashboard and filter for BAP</a>.</small></p>
     {% else %}
     <p class="text-muted mt-3">No points recorded yet.</p>
     {% endif %}

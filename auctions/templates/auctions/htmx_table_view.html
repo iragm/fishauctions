@@ -29,11 +29,19 @@
     </span>
   {% endif %}
 
-  <form class="col-sm-12 mt-2">
-    {% crispy filter.form %}
-  </form>
+  {% block htmx_table_filter_form %}
+    <form class="col-sm-12 mt-2">
+      {% crispy filter.form %}
+    </form>
+  {% endblock %}
 
-  {% render_table table %}
+  {% block htmx_table %}
+    {% if no_results %}
+      <div class="table-container mt-2 mb-2">{{ no_results|safe }}</div>
+    {% else %}
+      {% render_table table %}
+    {% endif %}
+  {% endblock %}
 
   <div id="modals-here"></div>
 {% endblock %}

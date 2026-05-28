@@ -1971,7 +1971,8 @@ class LotRefundDialogTests(TestCase):
         data = {"partial_refund_percent": 50, "banned": False}
         response = self.client.post(self.lot_url, data)
         assert response.status_code == 200
-        self.assertContains(response, "<script>location.reload();</script>")
+        self.assertIn("closeModal", response.headers.get("HX-Trigger", ""))
+        self.assertIn("reload-page", response.headers.get("HX-Trigger", ""))
 
         # Check if the lot was updated
         updated_lot = Lot.objects.get(pk=self.lot.pk)
@@ -13405,8 +13406,8 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function setFieldNote(fieldId, message)")
         self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
-        self.assertContains(response, "class HtmxModal")
-        self.assertContains(response, "document.body.appendChild(this.root);")
+        self.assertContains(response, "data-htmx-modal-root")
+        self.assertContains(response, "window.mountHtmxModal(")
 
     def test_add_user_modal_save_uses_modal_close_action(self):
         self.client.login(username="admin_user", password="testpassword")
@@ -13428,7 +13429,9 @@ class MergeAuctionTOSTests(StandardTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "closeModal('reload-page');")
+        trigger = response.headers.get("HX-Trigger", "")
+        self.assertIn("closeModal", trigger)
+        self.assertIn("reload-page", trigger)
 
 
 class AuctionTOSMergeViewTests(StandardTestCase):
@@ -15085,12 +15088,20 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
-    def test_club_admin_search_falls_back_to_deactivated_when_active_empty(self):
+    def test_club_admin_search_hides_deactivated_by_default(self):
+        from .filters import ClubMemberFilter
+
+        ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
+        qs = ClubMember.objects.filter(club=self.club)
+        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        self.assertEqual(filtered.count(), 0)
+
+    def test_club_admin_search_includes_deactivated_when_token_present(self):
         from .filters import ClubMemberFilter
 
         deactivated = ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
         qs = ClubMember.objects.filter(club=self.club)
-        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        filtered = ClubMemberFilter({"query": "Retired Search deactivated"}, queryset=qs).qs
         self.assertEqual(list(filtered.values_list("pk", flat=True)), [deactivated.pk])
 
     def test_club_admin_search_prefers_active_results(self):
@@ -15448,7 +15459,8 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("closeModal", response.headers.get("HX-Trigger", ""))
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
 
@@ -17270,7 +17282,9 @@ class ClubMemberManagementViewTests(TestCase):
         created = ClubMember.objects.get(club=self.club, email="newmember@example.com")
         self.assertEqual(created.source, "manually_added")
         self.assertEqual(created.added_by, self.editor_user)
-        self.assertIn("location.reload", response.content.decode("utf-8"))
+        trigger = response.headers.get("HX-Trigger", "")
+        self.assertIn("closeModal", trigger)
+        self.assertIn("reload-page", trigger)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
 
     def test_viewer_cannot_create_member(self):
@@ -17394,7 +17408,10 @@ class ClubMemberManagementViewTests(TestCase):
     def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_delete", kwargs={"pk": self.source_member.pk}))
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        trigger = response.headers.get("HX-Trigger", "")
+        self.assertIn("closeModal", trigger)
+        self.assertIn("clubMemberListChanged", trigger)
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(

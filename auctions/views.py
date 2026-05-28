@@ -422,6 +422,31 @@ def _upsert_clubmember_shadow_tos(
     return tos
 
 
+def close_modal_response(action=None, *, event_name=None, redirect_url=None, table_selector=None, extra_triggers=None):
+    """Return an empty 200 whose HX-Trigger header asks the active HtmxModal to close.
+
+    The browser-side listener in auctions/static/js/htmx_modal.js reads the event detail and
+    runs `window.closeModal(detail)`. Use `extra_triggers={"name": detail, ...}` to fire other
+    HTMX triggers (e.g. a separate table-refresh event) in the same response.
+    """
+    if action and not event_name and not redirect_url and not table_selector:
+        payload = {"closeModal": action}
+    elif action:
+        detail = {"action": action}
+        if event_name is not None:
+            detail["eventName"] = event_name
+        if redirect_url is not None:
+            detail["redirectUrl"] = redirect_url
+        if table_selector is not None:
+            detail["tableSelector"] = table_selector
+        payload = {"closeModal": detail}
+    else:
+        payload = {"closeModal": {}}
+    if extra_triggers:
+        payload.update(extra_triggers)
+    return HttpResponse("", headers={"HX-Trigger": json.dumps(payload)})
+
+
 class IsAuthenticatedOrAPIKey(BasePermission):
     """Allow requests authenticated either as a user or with a club API key."""
 
@@ -1250,16 +1275,17 @@ class MyLots(HTMxTableView):
     table_class = LotHTMxTableForUsers
     filterset_class = LotAdminFilter
     template_name = "auctions/lot_user.html"
+    htmx_table_header_template = "auctions/partials/lot_user_table_header.html"
     # paginate_by = 100
 
     def dispatch(self, request, *args, **kwargs):
-        # "filter" is the bookmarkable URL param; "query" is what the HTMX form posts.
-        # When both are present (every HTMX refresh), "query" reflects the actual current input
-        # and must take precedence — otherwise ?filter=bap stays truthy even after the user clears it.
-        if "query" in request.GET:
-            filter_value = request.GET["query"].strip().lower()
-        else:
-            filter_value = request.GET.get("filter", "").strip().lower()
+        # Legacy ?filter=X bookmarks: canonicalize to ?query=X so the shared HTMX
+        # template's input pre-populates and its URL-sync stays consistent.
+        if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
+            params = request.GET.copy()
+            params["query"] = params.pop("filter")[0]
+            return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
+        filter_value = request.GET.get("query", "").strip().lower()
         qs = UserLotFilter(request=request).qs
         if filter_value == "bap":
             qs = qs.select_related("bap_award__club_member__club").annotate(
@@ -1272,11 +1298,7 @@ class MyLots(HTMxTableView):
         context = super().get_context_data(**kwargs)
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
-        if "query" in self.request.GET:
-            filter_value = self.request.GET["query"].strip().lower()
-        else:
-            filter_value = self.request.GET.get("filter", "").strip().lower()
-        context["filter_bap"] = filter_value == "bap"
+        context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
         return context
 
     def get(self, *args, **kwargs):
@@ -3336,12 +3358,16 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
             params["name"] = q
         param_str = f"?{urlencode(params)}" if params else ""
         auction = self.auction
-        if auction.manage_users_through_club == "checkin":
-            create_url = (
-                reverse("clubmember_create", kwargs={"slug": auction.club.slug})
-                + f"?auction={auction.slug}"
-                + (f"&{urlencode(params)}" if params else "")
-            )
+        # In club-managed auctions, AuctionTOSAdmin redirects new-user creates to clubmember_create
+        # — but the redirect drops query-string prefill. Route directly to clubmember_create instead,
+        # appending ?auction= only when the auction uses the check-in flow.
+        if auction.is_club_managed:
+            extra = {}
+            if auction.manage_users_through_club == "checkin":
+                extra["auction"] = auction.slug
+            combined = {**extra, **params}
+            qs = f"?{urlencode(combined)}" if combined else ""
+            create_url = reverse("clubmember_create", kwargs={"slug": auction.club.slug}) + qs
         else:
             create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
         return (
@@ -3405,13 +3431,14 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
         bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
         html = f"""
+<div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
 <div class="modal fade show" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" style="display:block;">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
-        <button type="button" class="btn-close" onclick="closeModal()" aria-label="Close"></button>
+        <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
         <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
@@ -3426,34 +3453,21 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
             placeholder="Auto"
           >
           <small class="text-muted mt-1 d-block">
-            If the bidder number entered here is in use by another user, their bidder number will be changed.
+            If the bidder number entered here is in use by another user, it'll be assigned to this user and the other user's bidder number will be changed.
           </small>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
           <button type="submit" class="btn btn-success">Save</button>
         </div>
       </form>
     </div>
   </div>
 </div>
+</div>
 <script>
-(function() {{
-  clearTimeout(window._modalCloseTimer);
-  function closeModal() {{
-    var container = document.getElementById("modals-here");
-    var backdrop = document.getElementById("modal-backdrop");
-    var modal = document.getElementById("modal");
-    if (backdrop) {{ backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }}
-    if (modal) {{ modal.classList.remove("show"); modal.style.pointerEvents = "none"; }}
-    document.removeEventListener("keydown", escHandler);
-    window._modalCloseTimer = setTimeout(function() {{ if (container) container.innerHTML = ""; }}, 300);
-  }}
-  window.closeModal = closeModal;
-  function escHandler(e) {{ if (e.key === "Escape") closeModal(); }}
-  document.addEventListener("keydown", escHandler);
-  var bd = document.getElementById("modal-backdrop");
-  if (bd) bd.addEventListener("click", closeModal);
+window.mountHtmxModal(document.currentScript.previousElementSibling);
+(function () {{
   var input = document.getElementById("checkin_bidder_number");
   if (input) {{ input.focus(); input.select(); }}
 }})();
@@ -3481,7 +3495,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
             user=request.user,
         )
         messages.success(request, f"Checked in {tos.name}.")
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
 
 class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -6578,8 +6592,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                             obj.auto_award_bap_points()
                         except Exception:
                             logger.exception("auto_award_bap_points failed for lot %s", obj.pk)
-            return HttpResponse("<script>location.reload();</script>", status=200)
-            # return HttpResponse("<script>closeModal();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -7048,8 +7061,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             obj.is_club_member = form.cleaned_data["is_club_member"]
             obj.memo = form.cleaned_data["memo"]
             obj.save()
-            return HttpResponse("<script>closeModal('reload-page');</script>", status=200)
-            # return HttpResponse("<script>closeModal();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             name = form.cleaned_data.get("name")
             if not name:
@@ -7867,6 +7879,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
     table_class = AuctionHTMxTable
     filterset_class = AuctionFilter
     template_name = "all_auctions.html"
+    htmx_table_header_template = "auctions/partials/all_auctions_table_header.html"
     # paginate_by = 100
 
     def get_queryset(self):
@@ -8768,7 +8781,7 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
                 )
             except Exception:
                 logger.exception("create_history failed for auction %s", self.auction.pk)
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         return self.form_invalid(form)
 
     def get_context_data(self, **kwargs):
@@ -8861,7 +8874,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             )
         except Exception:
             logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
 
 class MarkInvoicesReady(InvoiceBulkUpdateStatus):
@@ -8959,7 +8972,7 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
                 self.seller_invoice.recalculate()
             if self.winner_invoice:
                 self.winner_invoice.recalculate()
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -12588,7 +12601,7 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                         defaults={},
                     )
             self.auction.create_history(applies_to="USERS", action=actions[:-2], user=request.user)
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -13329,6 +13342,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     table_class = ClubMemberHTMxTable
     filterset_class = ClubMemberFilter
     template_name = "auctions/club_admin.html"
+    htmx_table_header_template = "auctions/partials/club_admin_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -13349,7 +13363,69 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         context["can_export"] = self.user_has_club_permission("permission_export")
         context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         context["can_edit_bap"] = self.user_has_club_permission("permission_manage_bap")
+        query = (self.request.GET.get("query") or "").strip()
+        filterset = context.get("filter")
+        filtered_empty = filterset is not None and query and not filterset.qs.exists()
+        if filtered_empty and "deactivated" not in query.lower().split():
+            context["no_results"] = self._build_no_results_html(query, context["can_add_edit"])
         return context
+
+    def _build_no_results_html(self, query, can_add_edit):
+        """Empty-state with a link to expand the search to deactivated members and (optionally) an
+        Add member button pre-populated from the search query."""
+        from urllib.parse import urlencode
+
+        from django.utils.html import escape, format_html
+
+        deactivated_query = f"{query} deactivated"
+        deactivated_qs = ClubMemberFilter(
+            {"query": deactivated_query}, queryset=self.get_queryset()
+        ).qs
+        deactivated_count = deactivated_qs.count()
+
+        bits = [
+            format_html(
+                '<p class="text-muted mb-2">No active members match <strong>{}</strong>.</p>',
+                query,
+            )
+        ]
+        if deactivated_count:
+            link_params = self.request.GET.copy()
+            link_params["query"] = deactivated_query
+            link_href = f"?{urlencode(link_params)}"
+            bits.append(
+                format_html(
+                    '<a href="{}" class="btn btn-sm btn-outline-secondary me-2">'
+                    '<i class="bi bi-archive"></i> Show {} deactivated</a>',
+                    link_href,
+                    deactivated_count,
+                )
+            )
+        if can_add_edit:
+            import re as _re
+
+            params = {}
+            digits_only = _re.sub(r"\D", "", query)
+            if len(digits_only) >= 7:
+                params["phone"] = query
+            elif "@" in query:
+                params["email"] = query
+            elif _re.fullmatch(r"[A-Za-z\s\-'.]+", query) and len(query) >= 2:
+                params["name"] = query
+            create_url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+            if params:
+                create_url += f"?{urlencode(params)}"
+            bits.append(
+                format_html(
+                    '<button class="btn btn-info btn-sm" '
+                    'hx-get="{}" hx-target="#modals-here" hx-trigger="click" '
+                    '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-person-fill-add"></i> Add member</button>',
+                    create_url,
+                )
+            )
+        body = "".join(str(b) for b in bits)
+        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))
 
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)
@@ -13489,7 +13565,7 @@ class ClubMemberAdminView(APIView):
     @staticmethod
     def _redirect_to_club_admin(club):
         """Close the modal and reload the page to reflect changes."""
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
     def _get_member_and_check_permission(self, request, pk):
         try:
@@ -14036,9 +14112,7 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
-        return HttpResponse(
-            '<script>closeModal(); document.body.dispatchEvent(new CustomEvent("clubMemberListChanged"));</script>'
-        )
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMembershipNumberView(APIView):
@@ -14147,7 +14221,7 @@ class ClubMemberDeleteView(APIView):
             action=f"Deactivated member {member}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204)
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMemberReactivateView(APIView):
@@ -14200,7 +14274,7 @@ class ClubMemberPermanentDeleteView(APIView):
             action=f"Permanently deleted member {member_name}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204)
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMemberConfirmView(APIView):
@@ -14644,6 +14718,7 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     table_class = BapAwardHTMxTable
     filterset_class = BapAwardFilter
     template_name = "auctions/club_bap.html"
+    htmx_table_header_template = "auctions/partials/club_bap_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14679,6 +14754,8 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     model = Lot
     table_class = ClubBapLotHTMxTable
     filterset_class = ClubBapLotFilter
+    template_name = "auctions/club_bap_lots.html"
+    htmx_table_header_template = "auctions/partials/club_bap_lots_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14711,15 +14788,6 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             .prefetch_related("bap_award")
             .order_by("-date_end")
         )
-
-    def get_template_names(self):
-        if self.request.htmx:
-            hx_target = self.request.headers.get("HX-Target", "")
-            # "lots-table-container" = filter input swap; "table-container" = pagination/sort click via bootstrap_htmx.html
-            if hx_target in ("lots-table-container", "table-container"):
-                return ["tables/table_generic.html"]
-            return ["auctions/club_bap_lots_fragment.html"]
-        return ["auctions/club_bap_lots.html"]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -14844,9 +14912,8 @@ class BapAwardAdminView(APIView):
                 action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
                 applies_to="BAP",
             )
-            return HttpResponse(
-                "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
-                "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+            return close_modal_response(
+                "trigger-event", event_name="bapAwardListChanged,bapLotListChanged"
             )
         return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
 
@@ -14876,9 +14943,8 @@ class BapAwardDeleteView(APIView):
             action=f"Deleted BAP award for {member_name}",
             applies_to="BAP",
         )
-        return HttpResponse(
-            "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
-            "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+        return close_modal_response(
+            "trigger-event", event_name="bapAwardListChanged,bapLotListChanged"
         )
 
 
