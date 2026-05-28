@@ -8760,11 +8760,13 @@ class SquareSeller(models.Model):
             logger.exception("Error fetching Square location for user %s: %s", self.user.pk, e)
             return None
 
-    def create_payment_link(self, invoice, request):
+    def create_payment_link(self, invoice, request, member_pk=""):
         """Create a Square payment link for the given invoice
         Args:
             invoice: Invoice object to create payment for
             request: HttpRequest object for building redirect URL
+            member_pk: Optional ClubMember pk; when set on a club invoice the
+                Square redirect lands on that member's member-number page.
         Returns:
             tuple: (payment_url, error_message) - payment_url is None if error occurs
         """
@@ -8846,7 +8848,24 @@ class SquareSeller(models.Model):
                     }
 
             if invoice.club:
-                redirect_url = request.build_absolute_uri(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
+                club_path = None
+                if member_pk:
+                    member = ClubMember.objects.filter(
+                        pk=member_pk, club=invoice.club, is_deleted=False
+                    ).first()
+                    if member and member.membership_number:
+                        club_path = reverse(
+                            "club_member_by_number",
+                            kwargs={"slug": invoice.club.slug, "number": member.membership_number},
+                        )
+                    elif member:
+                        club_path = reverse(
+                            "club_member_by_uuid",
+                            kwargs={"slug": invoice.club.slug, "uuid": member.uuid},
+                        )
+                if not club_path:
+                    club_path = reverse("club_detail", kwargs={"slug": invoice.club.slug})
+                redirect_url = request.build_absolute_uri(club_path)
             else:
                 redirect_url = request.build_absolute_uri(
                     reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})

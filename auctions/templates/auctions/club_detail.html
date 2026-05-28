@@ -49,13 +49,7 @@
   <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">
       {% include "partials/club_member_uuid_card.html" %}
-      {% if show_membership_payment_button %}
-      <div class="mt-3">
-        <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
-          <i class="bi bi-credit-card"></i> Renew Membership
-        </a>
-      </div>
-      {% endif %}
+      {% include "partials/membership_payment_inline.html" %}
     </div>
   </div>
 {% else %}

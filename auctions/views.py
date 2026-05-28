@@ -9305,7 +9305,7 @@ class PayPalAPIMixin:
         """GET from a PayPal API endpoint and return parsed JSON."""
         return self._paypal_request("GET", endpoint, params=params, include_bn_code=include_bn_code)
 
-    def create_order(self, invoice):
+    def create_order(self, invoice, member_pk=""):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
         currency = invoice.currency
@@ -9420,7 +9420,9 @@ class PayPalAPIMixin:
             # },
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
-                "return_url": self.request.build_absolute_uri(reverse("paypal_success")),
+                "return_url": self.request.build_absolute_uri(
+                    reverse("paypal_success") + (f"?member_pk={member_pk}" if member_pk else "")
+                ),
                 "cancel_url": self.request.build_absolute_uri(
                     reverse("club_detail", kwargs={"slug": invoice.club.slug})
                     if invoice.club and not invoice.auction
@@ -9860,6 +9862,24 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         return self.get_success_url()
 
 
+def _club_membership_success_url(club, member_pk):
+    """Pick the best post-payment URL for a club membership invoice.
+
+    Prefers the member-number page (the canonical landing per product spec),
+    falls back to the UUID page (works without a membership number), and
+    finally to the club detail page.
+    """
+    if club and member_pk:
+        member = ClubMember.objects.filter(pk=member_pk, club=club, is_deleted=False).first()
+        if member and member.membership_number:
+            return reverse("club_member_by_number", kwargs={"slug": club.slug, "number": member.membership_number})
+        if member:
+            return reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid})
+    if club:
+        return reverse("club_detail", kwargs={"slug": club.slug})
+    return None
+
+
 class CreatePayPalOrderView(PayPalAPIMixin, View):
     """Create a PayPal order for an invoice and redirect to PayPal checkout"""
 
@@ -9880,8 +9900,9 @@ class CreatePayPalOrderView(PayPalAPIMixin, View):
 
     def post(self, request, *args, **kwargs):
         """Create the order"""
+        member_pk = request.POST.get("member_pk") or request.GET.get("member_pk") or ""
         try:
-            approval_url = self.create_order(self.invoice)
+            approval_url = self.create_order(self.invoice, member_pk=member_pk)
         except (requests.RequestException, PayPalRequestError):
             messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
             return self._invoice_error_redirect(self.invoice)
@@ -9901,8 +9922,9 @@ class PayPalSuccessView(PayPalAPIMixin, View):
             messages.error(request, error)
         else:
             messages.success(request, "Payment completed successfully. Thank you!")
+        member_pk = request.GET.get("member_pk") or ""
         if invoice and invoice.club:
-            return redirect(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
+            return redirect(_club_membership_success_url(invoice.club, member_pk))
         if invoice:
             return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
         return redirect(reverse("home"))
@@ -9938,7 +9960,7 @@ class SquareAPIMixin:
     Delegates to SquareSeller model methods for Square API operations
     All operations require OAuth - no platform credentials"""
 
-    def create_payment_link(self, invoice):
+    def create_payment_link(self, invoice, member_pk=""):
         """Create a Square payment link using SquareSeller model methods
         Returns tuple: (payment_url, error_message)
         """
@@ -9953,7 +9975,7 @@ class SquareAPIMixin:
         if not seller:
             return None, "Seller has not connected their Square account"
 
-        return seller.create_payment_link(invoice, self.request)
+        return seller.create_payment_link(invoice, self.request, member_pk=member_pk)
 
 
 class SquareConnectView(LoginRequiredMixin, View):
@@ -10144,7 +10166,8 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
 
     def post(self, request, *args, **kwargs):
         """Create the payment link"""
-        payment_url, error_message = self.create_payment_link(self.invoice)
+        member_pk = request.POST.get("member_pk") or request.GET.get("member_pk") or ""
+        payment_url, error_message = self.create_payment_link(self.invoice, member_pk=member_pk)
         if not payment_url:
             messages.error(
                 request, error_message or "Failed to create Square payment link. Please try again or contact support."
@@ -13429,18 +13452,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["can_manage_auctions"] = can_manage_auctions
         membership_expiration_date = member.membership_expiration_date if member else None
         context["membership_expiration_date"] = membership_expiration_date
-        renewal_soon = False
-        if membership_expiration_date:
-            renewal_soon = membership_expiration_date <= timezone.now().date() + timedelta(days=30)
-        elif member and self.club.membership_annual_fee and not member.membership_expiration_date:
-            renewal_soon = True
-        context["show_membership_payment_button"] = bool(
-            self.club.enable_club_page
-            and (self.club.can_accept_paypal or self.club.can_accept_square)
-            and self.club.membership_annual_fee
-            and member
-            and renewal_soon
-        )
+        membership_invoice = None
+        show_membership_payment_button = False
+        if member:
+            _, _, should_show_payment, _ = _membership_renewal_state(self.club, member)
+            if should_show_payment:
+                membership_invoice = _get_or_create_membership_invoice(self.club, member)
+                show_membership_payment_button = True
+        context["membership_invoice"] = membership_invoice
+        context["show_membership_payment_button"] = show_membership_payment_button
         show_club_map = self.club.latitude is not None and self.club.longitude is not None
         context["show_club_map"] = show_club_map
         if show_club_map:
@@ -13510,6 +13530,50 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
 
 
+def _get_or_create_membership_invoice(club, member):
+    """Find or create an unpaid renewal invoice for this member's club."""
+    invoice = None
+    if member.email:
+        invoice = Invoice.objects.filter(
+            club=club,
+            auction=None,
+            auctiontos_user__email__iexact=member.email,
+            renewal_processed=False,
+            status="UNPAID",
+        ).first()
+    if invoice is None and member.user:
+        invoice = Invoice.objects.filter(
+            club=club,
+            auction=None,
+            buyer=member.user,
+            renewal_processed=False,
+            status="UNPAID",
+        ).first()
+    if invoice is None:
+        invoice = Invoice.objects.create(
+            club=club,
+            buyer=member.user or None,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+    return invoice
+
+
+def _membership_renewal_state(club, member):
+    """Return (is_expired, expiring_soon, should_show_payment, can_pay)."""
+    today = timezone.now().date()
+    expiration = member.membership_expiration_date
+    is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
+    expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
+    can_pay = bool(
+        club.enable_club_page
+        and club.membership_annual_fee
+        and (club.can_accept_paypal or club.can_accept_square)
+    )
+    should_show_payment = can_pay and (is_expired or expiring_soon or not member.is_paid_member)
+    return is_expired, expiring_soon, should_show_payment, can_pay
+
+
 class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
     """Public, UUID-keyed page that shows a member's name and wallet-add buttons.
 
@@ -13529,45 +13593,10 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         context["member"] = member
         context["apple_wallet_enabled"] = _apple_configured()
 
-        # Payment button: show 30 days before expiration (and when expired/unpaid),
-        # gated to clubs that have a renewal fee and accept online payments.
-        today = timezone.now().date()
-        expiration = member.membership_expiration_date
-        is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
-        expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
-        can_pay = bool(
-            self.club.enable_club_page
-            and self.club.membership_annual_fee
-            and (self.club.can_accept_paypal or self.club.can_accept_square)
+        is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
+        context["membership_invoice"] = (
+            _get_or_create_membership_invoice(self.club, member) if should_show_payment else None
         )
-        payment_link = ""
-        if can_pay and (is_expired or expiring_soon or not member.is_paid_member):
-            invoice = None
-            if member.email:
-                invoice = Invoice.objects.filter(
-                    club=self.club,
-                    auction=None,
-                    auctiontos_user__email__iexact=member.email,
-                    renewal_processed=False,
-                    status="UNPAID",
-                ).first()
-            if invoice is None and member.user:
-                invoice = Invoice.objects.filter(
-                    club=self.club,
-                    auction=None,
-                    buyer=member.user,
-                    renewal_processed=False,
-                    status="UNPAID",
-                ).first()
-            if invoice is None:
-                invoice = Invoice.objects.create(
-                    club=self.club,
-                    buyer=member.user or None,
-                    status="UNPAID",
-                    renewal_needed=True,
-                )
-            payment_link = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
-        context["payment_link"] = payment_link
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
         return context
@@ -13583,50 +13612,16 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         member = get_object_or_404(ClubMember, club=self.club, membership_number=kwargs["number"], is_deleted=False)
-        today = timezone.now().date()
-        expiration = member.membership_expiration_date
-        is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
-        expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
-        can_pay = bool(
-            self.club.enable_club_page
-            and self.club.membership_annual_fee
-            and (self.club.can_accept_paypal or self.club.can_accept_square)
-        )
-        payment_link = ""
-        if can_pay:
-            # Find or create an unpaid membership invoice so payment can happen without login
-            invoice = None
-            if member.email:
-                invoice = Invoice.objects.filter(
-                    club=self.club,
-                    auction=None,
-                    auctiontos_user__email__iexact=member.email,
-                    renewal_processed=False,
-                    status="UNPAID",
-                ).first()
-            if invoice is None and member.user:
-                invoice = Invoice.objects.filter(
-                    club=self.club,
-                    auction=None,
-                    buyer=member.user,
-                    renewal_processed=False,
-                    status="UNPAID",
-                ).first()
-            if invoice is None:
-                invoice = Invoice.objects.create(
-                    club=self.club,
-                    buyer=member.user or None,
-                    status="UNPAID",
-                    renewal_needed=True,
-                )
-            payment_link = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
         context["club"] = self.club
         context["member"] = member
-        context["expiration"] = expiration
+        context["expiration"] = member.membership_expiration_date
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
         context["is_paid_member"] = member.is_paid_member
-        context["payment_link"] = payment_link
+        context["membership_invoice"] = (
+            _get_or_create_membership_invoice(self.club, member) if should_show_payment else None
+        )
         return context
 
 
