@@ -18065,6 +18065,10 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
 
     def test_setting_auction_club_backfills_existing_invoice_history(self):
         invoice = Invoice.objects.get_or_create(auctiontos_user=self.admin_in_person_tos)[0]
+        self.in_person_lot.winning_price = Decimal("20.00")
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.active = False
+        self.in_person_lot.save(update_fields=["winning_price", "auctiontos_winner", "active"])
         ClubMoney.objects.all().delete()
         self.in_person_auction.club = self.club
         self.in_person_auction.save(update_fields=["club"])

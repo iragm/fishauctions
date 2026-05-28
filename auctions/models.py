@@ -2027,7 +2027,12 @@ class Auction(models.Model):
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
-            for invoice in Invoice.objects.filter(auction=self).select_related("auction", "auctiontos_user"):
+            invoices = (
+                Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
+                .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
+                .distinct()
+            )
+            for invoice in invoices:
                 invoice.create_club_payment_history(force_current_state=True)
 
     def find_user(self, name="", email="", exclude_pk=None):
@@ -7194,10 +7199,11 @@ class Invoice(models.Model):
             self.create_club_payment_history(previous_status=previous_status)
 
     def create_club_payment_history(self, previous_status=None, force_current_state=False, acting_user=None):
-        if not self.auction or not self.auction.club_id:
+        auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
+        if not auction or not auction.club_id:
             return []
-        club = self.auction.club
-        event_date = self.auction.date_start.date() if self.auction.date_start else timezone.localdate()
+        club = auction.club
+        event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
         entries = []
         money_field = Decimal("0.01")
 
@@ -7229,17 +7235,17 @@ class Invoice(models.Model):
             _add_entry(
                 -_quantize(self.total_sold) * multiplier,
                 ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT,
-                f"Auction seller payout for {_invoice_label()} in {self.auction}",
+                f"Auction seller payout for {_invoice_label()} in {auction}",
             )
             _add_entry(
                 _quantize(self.total_sold_club_cut) * multiplier,
                 ClubMoney.CATEGORY_AUCTION_PROFIT,
-                f"Auction profit for {_invoice_label()} in {self.auction}",
+                f"Auction profit for {_invoice_label()} in {auction}",
             )
             _add_entry(
                 _quantize(self.membership_fee_amount) * multiplier,
                 ClubMoney.CATEGORY_MEMBERSHIP,
-                f"Membership renewal for {_invoice_label()} in {self.auction}",
+                f"Membership renewal for {_invoice_label()} in {auction}",
             )
             for adjustment in self.adjustments.exclude(amount=0):
                 if adjustment.adjustment_type == "DISCOUNT":
@@ -7248,7 +7254,7 @@ class Invoice(models.Model):
                 else:
                     amount = _quantize(adjustment.amount) * multiplier
                     category = ClubMoney.CATEGORY_DONATION
-                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {self.auction}"
+                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {auction}"
                 _add_entry(amount, category, description)
 
         outstanding_amount = -_quantize(self.net_after_payments)
@@ -7266,7 +7272,7 @@ class Invoice(models.Model):
                 _add_entry(
                     outstanding_amount,
                     ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {self.auction}",
+                    f"Outstanding invoice for {_invoice_label()} in {auction}",
                 )
             if new_status == "PAID":
                 _add_paid_entries(Decimal(1))
@@ -7276,7 +7282,7 @@ class Invoice(models.Model):
                 _add_entry(
                     outstanding_amount * direction,
                     ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {self.auction}",
+                    f"Outstanding invoice for {_invoice_label()} in {auction}",
                 )
             if old_status == "PAID" and new_status != "PAID":
                 _add_paid_entries(Decimal(-1))

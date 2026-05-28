@@ -6,9 +6,14 @@ from django.db import migrations, models
 def backfill_club_money(apps, schema_editor):
     from auctions.models import Invoice
 
-    for invoice in Invoice.objects.filter(auction__club__isnull=False).select_related("auction", "auction__club").iterator(
-        chunk_size=200
-    ):
+    queryset = (
+        Invoice.objects.filter(
+            models.Q(auction__club__isnull=False) | models.Q(auction__isnull=True, auctiontos_user__auction__club__isnull=False)
+        )
+        .select_related("auction", "auction__club", "auctiontos_user", "auctiontos_user__auction")
+        .distinct()
+    )
+    for invoice in queryset.iterator(chunk_size=200):
         invoice.create_club_payment_history(force_current_state=True)
 
 

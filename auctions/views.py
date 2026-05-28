@@ -800,7 +800,7 @@ class ClubViewMixin:
 
     @property
     def can_manage_money(self):
-        return self.user_has_club_permission("permission_money")
+        return self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
 
     @property
     def can_access_admin(self):
@@ -14631,7 +14631,9 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
