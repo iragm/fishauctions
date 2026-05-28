@@ -1254,6 +1254,9 @@ class ClubMember(ContactRecord):
         # Assign the target role (if any); bail if the bot can't manage it
         if role:
             if not role.bot_can_manage:
+                # Removals already ran; record the target so the daily task doesn't re-trigger
+                if role_sync_succeeded:
+                    ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
                 return
             try:
                 response = _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
