@@ -814,7 +814,18 @@ class ClubBapLotHTMxTable(tables.Table):
 
     def render_lot_name(self, value, record):
         url = record.get_absolute_url()
-        return format_html('<a href="{}">{}</a>', url, value)
+        category_name = record.species_category.name if record.species_category else "Uncategorized"
+        category_url = reverse("club_bap_lot_category", kwargs={"pk": record.pk})
+        return format_html(
+            '<a href="{}">{}</a><div class="mt-1">'
+            '<button type="button" class="badge bg-secondary border-0" '
+            'hx-get="{}" hx-target="#modals-here" hx-swap="innerHTML">{}</button>'
+            "</div>",
+            url,
+            value,
+            category_url,
+            category_name,
+        )
 
     def render_seller_name(self, value, record):
         return value.name if value else "—"

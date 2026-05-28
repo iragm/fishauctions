@@ -345,7 +345,10 @@ Lambda → *Configuration* → *Triggers* should now show the SNS trigger.
 - SES → *Email receiving* → *Rule sets* → create or select a rule set
 - *Create rule* → name it `route-all`
 - **Recipients**: leave blank to catch all addresses for your domain
-- **Actions**: add a single **SNS** action → select `ses-inbound-router` → set **Encoding: Base64** (the default UTF-8 setting silently corrupts non-ASCII bytes and produces jumbled forwarded text — the Lambda expects Base64)
+- **Actions**: add a single **SNS** action → select `ses-inbound-router`
+  → set **Encoding: Base64**
+  (the default UTF-8 setting silently corrupts non-ASCII bytes and produces
+  jumbled forwarded text — the Lambda expects Base64)
 - Enable the rule and make sure the rule set itself is **Active** (rule sets have a separate active/inactive toggle)
 
 ---

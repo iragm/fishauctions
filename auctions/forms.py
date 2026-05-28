@@ -3710,6 +3710,7 @@ class ClubEditForm(forms.ModelForm):
             "icon",
             "homepage",
             "facebook_page",
+            "discord_invite_link",
             "enable_club_page",
             "allow_joining",
             "enable_breeder_award_program",
@@ -3726,6 +3727,7 @@ class ClubEditForm(forms.ModelForm):
         widgets = {
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
             "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
+            "discord_invite_link": forms.URLInput(attrs={"placeholder": "https://discord.gg/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
             "location": forms.TextInput(attrs={"placeholder": "Search for your club's location"}),
         }
@@ -3742,6 +3744,7 @@ class ClubEditForm(forms.ModelForm):
             "icon",
             "homepage",
             "facebook_page",
+            "discord_invite_link",
             Div(
                 Div("enable_club_page", css_class="col-3"),
                 Div("allow_joining", css_class="col-3"),
@@ -3757,6 +3760,31 @@ class ClubEditForm(forms.ModelForm):
             ),
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class LotCategoryForm(forms.ModelForm):
+    class Meta:
+        model = Lot
+        fields = ["species_category"]
+
+    def __init__(self, *args, **kwargs):
+        post_url = kwargs.pop("post_url", None)
+        if not post_url:
+            msg = "LotCategoryForm requires a post_url."
+            raise ValueError(msg)
+        super().__init__(*args, **kwargs)
+        self.fields["species_category"].queryset = Category.objects.all().order_by("name")
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.attrs = {"hx-post": post_url, "hx-target": "#modals-here", "hx-swap": "innerHTML"}
+        self.helper.layout = Layout(
+            "species_category",
+            Div(
+                HTML('<button type="submit" class="btn btn-primary">Save</button>'),
+                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                css_class="d-flex gap-2",
+            ),
+        )
 
 
 class _PaymentUserChoiceField(forms.ModelChoiceField):
@@ -3948,7 +3976,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             label="Contact replies",
             help_text=(
                 f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or manage membership member with an email address{_fallback_label(contact_fallback)}."
+                f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
             ),
         )
 

@@ -624,6 +624,7 @@ class Club(models.Model):
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
+    discord_invite_link = models.CharField(max_length=255, blank=True, null=True)
     contact_email = models.CharField(
         max_length=255,
         blank=True,
@@ -792,7 +793,7 @@ class Club(models.Model):
         email_filter = (Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email=""))
         qs = self.members.filter(is_deleted=False).filter(email_filter)
         # Prefer non-admin specialist first (e.g. auction manager, membership manager)
-        result = qs.filter(specific_permission, permission_admin=False).order_by("pk").first()
+        result = qs.filter(specific_permission & Q(permission_admin=False)).order_by("pk").first()
         if result:
             return result
         # Fall back to the oldest admin

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags bap_filters membership_tags qr_code %}
+{% load crispy_forms_tags bap_filters membership_tags qr_code static %}
 {% block title %}{{ club.name }}{% endblock %}
 
 {% block content %}
@@ -9,16 +9,34 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if club.homepage or club.facebook_page or has_club_contact %}
+{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact or show_club_map %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if member %}
+  <button type="button" class="btn btn-sm btn-success" data-club-panel-toggle="membership-panel">
+    <i class="bi bi-person-badge"></i> Membership
+  </button>
+  {% elif club.allow_joining %}
+  <form method="post" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-person-fill-add"></i> Join</button>
+  </form>
+  {% endif %}
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
   {% endif %}
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
+  {% if club.discord_invite_link %}
+  <a href="{% if club.discord_invite_link|slice:':4' != 'http' %}https://{% endif %}{{ club.discord_invite_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
+  {% endif %}
   {% if has_club_contact and request.user.is_authenticated %}
   <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
+  {% endif %}
+  {% if show_club_map %}
+  <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="map-panel">
+    <i class="bi bi-map"></i> Map
+  </button>
   {% endif %}
 </div>
 {% endif %}
@@ -28,16 +46,9 @@
 {% endif %}
 
 {% if member %}
-  <div class="card mb-3">
+  <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">
-      <h5 class="card-title">Your membership</h5>
       {% include "partials/club_member_uuid_card.html" %}
-      <div class="mt-3 text-center">
-        {% if is_membership_owner %}
-        <a class="btn btn-link btn-sm" href="{% url 'club_member_by_number' slug=club.slug number=member.membership_number %}">View membership details</a>
-        {% endif %}
-      </div>
-
       {% if show_membership_payment_button %}
       <div class="mt-3">
         <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
@@ -47,37 +58,40 @@
       {% endif %}
     </div>
   </div>
-{% elif club.allow_joining %}
-  <form method="post">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-success mb-3"><i class="bi bi-person-fill-add"></i> Join {{ club.name }}</button>
-  </form>
 {% else %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
+{% endif %}
+
+{% if show_club_map %}
+<div class="card mb-3 d-none" id="map-panel">
+  <div class="card-body">
+    <div id="club-map-canvas" style="width:100%; height:350px;"></div>
+  </div>
+</div>
 {% endif %}
 
 {% if show_bap_tabs %}
 {# ── Tabbed layout when BAP is enabled ─────────────────────────────── #}
 <ul class="nav nav-tabs mb-3" id="clubTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link active" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" type="button" role="tab">Auctions</button>
+    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" data-tab-url="{% url 'club_detail' club.slug %}" type="button" role="tab">Auctions</button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" type="button" role="tab">BAP</button>
+    <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'bap' %}" type="button" role="tab">BAP</button>
   </li>
   {% if club.separate_hap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" type="button" role="tab">HAP</button>
+    <button class="nav-link {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'hap' %}" type="button" role="tab">HAP</button>
   </li>
   {% endif %}
   {% if club.separate_cap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
+    <button class="nav-link {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'culture' %}" type="button" role="tab">Culture</button>
   </li>
   {% endif %}
   {% if my_bap_awards is not None %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" type="button" role="tab">My Points</button>
+    <button class="nav-link {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'my-points' %}" type="button" role="tab">My Points</button>
   </li>
   {% endif %}
 </ul>
@@ -85,7 +99,7 @@
 <div class="tab-content" id="clubTabContent">
 
   {# Auctions tab #}
-  <div class="tab-pane fade show active" id="auctions-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'auctions' %}show active{% endif %}" id="auctions-tab" role="tabpanel">
     {% if club_auctions %}
     <ul class="list-group">
       {% for auction in club_auctions %}
@@ -106,7 +120,7 @@
   </div>
 
   {# BAP leaderboard tab #}
-  <div class="tab-pane fade" id="bap-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'bap' %}show active{% endif %}" id="bap-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle" checked>
       <label class="form-check-label" for="ytd-toggle">Year to date only</label>
@@ -121,7 +135,7 @@
 
   {% if club.separate_hap %}
   {# HAP leaderboard tab #}
-  <div class="tab-pane fade" id="hap-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'hap' %}show active{% endif %}" id="hap-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle-hap" checked>
       <label class="form-check-label" for="ytd-toggle-hap">Year to date only</label>
@@ -137,7 +151,7 @@
 
   {% if club.separate_cap %}
   {# Culture leaderboard tab #}
-  <div class="tab-pane fade" id="culture-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'culture' %}show active{% endif %}" id="culture-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle-culture" checked>
       <label class="form-check-label" for="ytd-toggle-culture">Year to date only</label>
@@ -153,7 +167,14 @@
 
   {% if my_bap_awards is not None %}
   {# My Points tab #}
-  <div class="tab-pane fade" id="my-points-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'my-points' %}show active{% endif %}" id="my-points-tab" role="tabpanel">
+    {% if my_points_chart_data %}
+    <div class="mt-3 mb-4">
+      <h5>Cumulative points over time</h5>
+      <canvas id="my-points-chart" height="110"></canvas>
+    </div>
+    {{ my_points_chart_data|json_script:"my-points-chart-data" }}
+    {% endif %}
     {% if my_bap_awards %}
     <ul class="list-group list-group-flush mt-2">
       {% for award in my_bap_awards %}
@@ -223,7 +244,14 @@
 {% endblock %}
 
 {% block extra_js %}
+{% if show_club_map %}
+<script
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initClubMap&v=weekly&libraries=marker"
+async
+></script>
+{% endif %}
 {% if show_bap_tabs %}
+<script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
 (function () {
   function wireToggle(toggleId, ytdId, alltimeId) {
@@ -237,7 +265,95 @@
   wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
   wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
   wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+
+  var chartDataElement = document.getElementById('my-points-chart-data');
+  var chartCanvas = document.getElementById('my-points-chart');
+  if (chartDataElement && chartCanvas && typeof Chart !== 'undefined') {
+    var ctx = chartCanvas.getContext('2d');
+    var chartData = JSON.parse(chartDataElement.textContent);
+    new Chart(ctx, {
+      type: 'line',
+      data: chartData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        scales: {
+          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 } }],
+          yAxes: [{ ticks: { beginAtZero: true } }],
+        },
+      },
+    });
+  }
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+  var panelToggleButtons = Array.from(document.querySelectorAll('[data-club-panel-toggle]'));
+  var togglablePanelIds = panelToggleButtons
+    .map(function (button) {
+      return button.getAttribute('data-club-panel-toggle');
+    })
+    .filter(function (panelId) {
+      return !!panelId;
+    });
+
+  function hidePanels(exceptId) {
+    togglablePanelIds.forEach(function (panelId) {
+      var panel = document.getElementById(panelId);
+      if (panel && panel.id !== exceptId && panel.classList.contains('card')) {
+        panel.classList.add('d-none');
+      }
+    });
+  }
+
+  function maybeInitClubMap() {
+    if (window._clubMapRendered || !window._clubMapApiReady) return;
+    var mapCanvas = document.getElementById('club-map-canvas');
+    if (!mapCanvas || mapCanvas.closest('.d-none')) return;
+    var center = {
+      lat: Number('{{ club.latitude|default:"0"|escapejs }}'),
+      lng: Number('{{ club.longitude|default:"0"|escapejs }}')
+    };
+    var map = new google.maps.Map(mapCanvas, {center: center, zoom: 9, mapId: 'club_detail_map'});
+    var marker = new google.maps.marker.AdvancedMarkerElement({
+      position: center,
+      map: map,
+      title: '{{ club.name|escapejs }}',
+    });
+    var infoWindow = new google.maps.InfoWindow({
+      content: '<div style="color:black;"><strong>{{ club.name|escapejs }}</strong><br><a href="{{ club_map_directions_url|escapejs }}" target="_blank" rel="noopener noreferrer">Get directions</a></div>',
+    });
+    marker.addListener('click', function () {
+      infoWindow.open(map, marker);
+    });
+    window._clubMapRendered = true;
+  }
+
+  panelToggleButtons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      var panel = document.getElementById(this.getAttribute('data-club-panel-toggle'));
+      if (!panel) return;
+      var shouldHide = !panel.classList.contains('d-none');
+      hidePanels(panel.id);
+      panel.classList.toggle('d-none', shouldHide);
+      if (!shouldHide && panel.id === 'map-panel') {
+        maybeInitClubMap();
+      }
+    });
+  });
+
+  window.initClubMap = function () {
+    window._clubMapApiReady = true;
+    maybeInitClubMap();
+  };
+
+  document.querySelectorAll('#clubTabs [data-tab-url]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', function () {
+      var url = this.getAttribute('data-tab-url');
+      if (url) history.pushState({}, '', url);
+    });
+  });
+})();
+</script>
 {% endblock %}
