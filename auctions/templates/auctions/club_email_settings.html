@@ -27,15 +27,11 @@
 {% else %}
 <div class="alert alert-info mb-3" role="alert">
   <i class="bi bi-info-circle-fill me-1"></i>
-  Outgoing membership emails will be sent on behalf of
-  {% if email_fallback_member %}
-    <strong>{{ email_fallback_member.name|default:email_fallback_member.routing_email }}</strong>
-    {% if email_fallback_member.routing_email and email_fallback_member.name and email_fallback_member.name != email_fallback_member.routing_email %}
-      (<code>{{ email_fallback_member.routing_email }}</code>)
-    {% endif %}
-    &mdash; the oldest club member with membership management permissions.
+  Replies to outgoing membership emails will be sent to
+  {% if club.contact_email %}
+    <code>{{ club.contact_email }}</code>.
   {% else %}
-    the oldest club member with membership management permissions (none found yet).
+    the site admin.
   {% endif %}
 </div>
 {% endif %}
