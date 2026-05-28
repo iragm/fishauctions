@@ -8,7 +8,8 @@ def backfill_club_money(apps, schema_editor):
 
     queryset = (
         Invoice.objects.filter(
-            models.Q(auction__club__isnull=False) | models.Q(auction__isnull=True, auctiontos_user__auction__club__isnull=False)
+            models.Q(auction__club__isnull=False)
+            | models.Q(auction__isnull=True, auctiontos_user__auction__club__isnull=False)
         )
         .select_related("auction", "auction__club", "auctiontos_user", "auctiontos_user__auction")
         .distinct()
@@ -67,7 +68,9 @@ class Migration(migrations.Migration):
                 ("createdon", models.DateTimeField(auto_now_add=True)),
                 (
                     "club",
-                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="money", to="auctions.club"),
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="money", to="auctions.club"
+                    ),
                 ),
                 (
                     "created_by",

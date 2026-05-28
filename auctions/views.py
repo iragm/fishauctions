@@ -800,7 +800,9 @@ class ClubViewMixin:
 
     @property
     def can_manage_money(self):
-        return self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+        return self.user_has_club_permission("permission_money") or self.user_has_club_permission(
+            "permission_edit_club"
+        )
 
     @property
     def can_access_admin(self):
@@ -15513,7 +15515,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
     def has_treasurer_permission(self):
-        return self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+        return self.user_has_club_permission("permission_money") or self.user_has_club_permission(
+            "permission_edit_club"
+        )
 
     def _default_date_values(self):
         today = timezone.localdate()
@@ -15568,7 +15572,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         filter_form, start_date, end_date = self._get_filter_form()
         entries_qs = self._filtered_entries(start_date, end_date)
         entries = list(entries_qs)
-        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal(
+            "0.00"
+        )
         context.update(
             {
                 "club": self.club,
@@ -15609,7 +15615,9 @@ class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
         response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-treasurer-report.csv"'
         writer = csv.writer(response)
         writer.writerow(["date", "amount", "description", "category"])
-        for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by("date", "pk"):
+        for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by(
+            "date", "pk"
+        ):
             writer.writerow([entry.date.isoformat(), entry.amount, entry.description, entry.category])
         return response
 
@@ -15624,7 +15632,9 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        category_choices = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] != ClubMoney.CATEGORY_ADJUSTMENT]
+        category_choices = [
+            choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] != ClubMoney.CATEGORY_ADJUSTMENT
+        ]
         form = ClubMoneyForm(request.POST, category_choices=category_choices)
         if not form.is_valid():
             return JsonResponse({"ok": False, "errors": form.errors}, status=400)
@@ -15656,7 +15666,9 @@ class ClubMoneyBalanceView(LoginRequiredMixin, ClubViewMixin, View):
         form = ClubMoneyBalanceForm(request.POST)
         if not form.is_valid():
             return JsonResponse({"ok": False, "errors": form.errors}, status=400)
-        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal(
+            "0.00"
+        )
         account_balance = form.cleaned_data["account_balance"]
         adjustment = account_balance - current_balance
         if adjustment:

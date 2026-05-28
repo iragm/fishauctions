@@ -7220,7 +7220,7 @@ class Invoice(models.Model):
                     invoice=self,
                     date=event_date,
                     amount=amount,
-                    description=description[:ClubMoney.DESCRIPTION_MAX_LENGTH],
+                    description=description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
                     category=category,
                     created_by=acting_user,
                 )

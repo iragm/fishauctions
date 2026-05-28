@@ -4422,6 +4422,7 @@ class ClubMoneyBalanceForm(forms.Form):
         super().__init__(*args, **kwargs)
         add_bootstrap_classes(self)
 
+
 class ClubMemberMergeTargetForm(forms.Form):
     target = forms.CharField(
         widget=autocomplete.Select2(

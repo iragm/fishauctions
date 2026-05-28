@@ -17997,7 +17997,13 @@ class ClubMembershipSettingsFormPaymentUserTests(TestCase):
         self.plain_member = _make_member("plain_u")
 
         # Give each user a Square account so they are payment-eligible
-        for user in [self.admin_user, self.edit_club_user, self.money_user, self.manage_auctions_user, self.plain_member]:
+        for user in [
+            self.admin_user,
+            self.edit_club_user,
+            self.money_user,
+            self.manage_auctions_user,
+            self.plain_member,
+        ]:
             SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
 
     def _get_payment_user_ids(self):
@@ -18024,7 +18030,9 @@ class ClubMembershipSettingsFormPaymentUserTests(TestCase):
 class ClubMoneyInvoiceHistoryTests(StandardTestCase):
     def setUp(self):
         super().setUp()
-        self.club = Club.objects.create(name="Ledger Club", enable_membership=True, membership_annual_fee=Decimal("15.00"))
+        self.club = Club.objects.create(
+            name="Ledger Club", enable_membership=True, membership_annual_fee=Decimal("15.00")
+        )
         self.online_auction.club = self.club
         self.online_auction.save(update_fields=["club"])
         ClubMoney.objects.all().delete()
@@ -18079,7 +18087,9 @@ class ClubTreasurerReportViewTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.owner = User.objects.create_user(username="treasury_owner", password="testpass", email="owner@example.com")
-        self.money_user = User.objects.create_user(username="treasury_user", password="testpass", email="money@example.com")
+        self.money_user = User.objects.create_user(
+            username="treasury_user", password="testpass", email="money@example.com"
+        )
         self.club = Club.objects.create(name="Treasury Club", enable_membership=True)
         ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
         ClubMember.objects.create(
