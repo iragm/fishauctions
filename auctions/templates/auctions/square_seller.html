@@ -80,7 +80,7 @@
     <li>You can mix Square and other payment methods: an auction admin can mark the invoice Paid manually, and optionally record the payment method in the memo field.</li>
     <li>Long lines at the end of in-person auctions? Not anymore: Multiple admins can run Quick Checkout Users at the same time on different devices to keep lines moving.</li>
     <li>Under your auction's rules, you can turn Square payments off or on at any time.  This option only appears when you have a Square account connected.</li>
-    <li>The auction creator's Square account is used for all payments in the auction - no need for other auction admins to link their own</li>
+    <li>For auctions tied to a club, the <em>club's</em> connected Square account is used for all payments (set on the club's membership settings page). Otherwise, the auction creator's account is used.</li>
     <li>There's no fine print here, no fees beyond the standard Square fees, and you can disable payments at any time.</li>
   </ul>
 
@@ -93,27 +93,11 @@
   </div>
 
   {% if seller %}
-    <small class="text-muted d-block mb-2">
-      You can only have one Square account connected at a time. Connecting a new account will disconnect the current one.
-    </small>
-    <div class="card mb-3">
-      <div class="card-body">
-        <h5 class="card-title mb-3">Currently connected Square account</h5>
-        <dl class="row mb-0">
-          <dt class="col-sm-4">Merchant ID</dt>
-          <dd class="col-sm-8">{{ seller.square_merchant_id|default:"—" }}</dd>
-
-          <dt class="col-sm-4">Payer email</dt>
-          <dd class="col-sm-8">{{ seller.payer_email|default:"—" }}</dd>
-
-          <dt class="col-sm-4">Currency</dt>
-          <dd class="col-sm-8">{{ seller.currency|default:"USD" }}</dd>
-        </dl>
-      </div>
-      <div class="card-footer d-flex gap-2">
-        <a href="{% url 'square_seller_delete' %}" class="btn btn-danger btn-sm">Disconnect Square</a>
-      </div>
-    </div>
+    {% url 'square_seller_delete' as disconnect_url %}
+    {% include "auctions/_payment_seller_card.html" with provider_label="Square" merchant_id=seller.square_merchant_id disconnect_url=disconnect_url warning="You can only have one Square account connected at a time. Connecting a new account will disconnect the current one." %}
+    {% if seller.club %}
+      <p class="small text-muted">This account is currently linked to the club <strong>{{ seller.club.name }}</strong>. Disconnecting will remove that link.</p>
+    {% endif %}
   {% endif %}
 </div>
 {% endblock %}

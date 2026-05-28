@@ -183,7 +183,9 @@ class Command(BaseCommand):
             and auction.lot_submission_start_date <= now
         ):
             lines = [f"**{auction.title}** lot submission is now open!"]
-            if auction.lot_submission_end_date:
+            if auction.lot_submission_end_date and (
+                not auction.date_start or auction.lot_submission_end_date < auction.date_start
+            ):
                 lines.append(f"Submit lots before <t:{int(auction.lot_submission_end_date.timestamp())}:f>")
             if auction.date_start:
                 lines.append(f"Auction starts <t:{int(auction.date_start.timestamp())}:f>")

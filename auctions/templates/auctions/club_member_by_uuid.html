@@ -6,6 +6,13 @@
   <div class="card-body">
     {% include "partials/club_member_uuid_card.html" %}
   </div>
+  {% if payment_link %}
+  <div class="border-top p-3 text-center">
+    <a class="btn btn-success" href="{{ payment_link }}">
+      <i class="bi bi-credit-card"></i> Pay membership
+    </a>
+  </div>
+  {% endif %}
   <div class="border-top d-flex flex-wrap justify-content-center gap-2 p-3">
     <a class="btn btn-link btn-sm" href="{% url 'club_detail' slug=club.slug %}">Club page</a>
   </div>

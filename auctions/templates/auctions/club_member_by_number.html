@@ -31,7 +31,7 @@
       <div class="alert alert-warning">No paid membership on record.</div>
     {% endif %}
 
-    {% if payment_link and is_expired or payment_link and not is_paid_member %}
+    {% if payment_link and (is_expired or not is_paid_member or expiring_soon) %}
       <div class="mt-3">
         <a class="btn btn-success" href="{{ payment_link }}">
           <i class="bi bi-credit-card"></i> Pay membership

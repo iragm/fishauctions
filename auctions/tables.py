@@ -425,6 +425,7 @@ class LotHTMxTableForUsers(tables.Table):
 _PERMISSION_BADGES = [
     ("permission_admin", "Admin"),
     ("permission_edit_club", "Edit club settings"),
+    ("permission_money", "Manage membership and payments"),
     ("permission_manage_auctions", "Manage auctions"),
     ("permission_manage_bap", "Award points"),
     ("permission_export", "Export data"),

@@ -664,13 +664,14 @@ class Club(models.Model):
             "barcode reader, QR code, and added to Google Wallet."
         ),
     )
-    payment_user = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="club_payment_destinations",
-        help_text="Club dues are sent to this user's connected payment account.",
+    use_site_paypal_account = models.BooleanField(
+        default=False,
+        verbose_name="Use site PayPal account",
+        help_text=(
+            "When checked, PayPal payments for this club use the site's own merchant account "
+            "(PAYPAL_CLIENT_ID / PAYPAL_SECRET from settings) instead of any linked PayPalSeller. "
+            "Only useful for site admins; Square has no platform-account equivalent."
+        ),
     )
     auction_email_member = models.ForeignKey(
         "ClubMember",
@@ -716,7 +717,6 @@ class Club(models.Model):
         help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",
     )
     allow_joining = models.BooleanField(default=False)
-    allow_integrated_payments = models.BooleanField(default=False)
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
         default=False,
@@ -845,6 +845,43 @@ class Club(models.Model):
     @property
     def contact_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-contact")
+
+    @property
+    def effective_paypal_seller(self):
+        """The PayPalSeller linked to this club, if any.
+
+        Does not consider ``use_site_paypal_account`` — callers that need the site
+        fallback should check ``uses_site_paypal`` separately.
+        """
+        return getattr(self, "paypal_seller", None)
+
+    @property
+    def effective_square_seller(self):
+        """The SquareSeller linked to this club, if any."""
+        return getattr(self, "square_seller", None)
+
+    @property
+    def uses_site_paypal(self):
+        """True when this club is configured to use the site's PayPal merchant account."""
+        return bool(
+            self.use_site_paypal_account
+            and getattr(settings, "PAYPAL_CLIENT_ID", "")
+            and getattr(settings, "PAYPAL_SECRET", "")
+        )
+
+    @property
+    def can_accept_paypal(self):
+        """True when this club has any PayPal route configured (linked seller OR site account)."""
+        if self.uses_site_paypal:
+            return True
+        seller = self.effective_paypal_seller
+        return bool(seller and seller.paypal_merchant_id)
+
+    @property
+    def can_accept_square(self):
+        """True when this club has a Square seller linked with an active merchant id."""
+        seller = self.effective_square_seller
+        return bool(seller and seller.square_merchant_id)
 
 
 class ClubDiscordRole(models.Model):
@@ -1018,7 +1055,11 @@ class ClubMember(ContactRecord):
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
     permission_edit_club = models.BooleanField(
         default=False,
-        help_text="Change club setup, Discord, API keys, payment settings, and membership settings.  Nearly as dangerous as admin.",
+        help_text="Change club setup, Discord, and API keys.  Nearly as dangerous as admin.",
+    )
+    permission_money = models.BooleanField(
+        default=False,
+        help_text="Manage membership/payment settings and view the treasurer's report.",
     )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
@@ -1055,6 +1096,7 @@ class ClubMember(ContactRecord):
                 self.permission_export,
                 self.permission_add_edit,
                 self.permission_edit_club,
+                self.permission_money,
                 self.permission_manage_auctions,
                 self.permission_manage_bap,
             ]
@@ -1212,6 +1254,9 @@ class ClubMember(ContactRecord):
         # Assign the target role (if any); bail if the bot can't manage it
         if role:
             if not role.bot_can_manage:
+                # Removals already ran; record the target so the daily task doesn't re-trigger
+                if role_sync_succeeded:
+                    ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
                 return
             try:
                 response = _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
@@ -1878,23 +1923,47 @@ class Auction(models.Model):
         return settings.UNTRUSTED_MESSAGE
 
     @property
-    def effective_payment_user(self):
-        """Return the user whose payment accounts should be used for this auction.
-        If the auction belongs to a club with integrated payments and a payment_user set,
-        that user's accounts are used instead of the auction creator's."""
-        if self.club and self.club.allow_integrated_payments and self.club.payment_user:
-            return self.club.payment_user
-        return self.created_by
+    def effective_paypal_seller(self):
+        """The PayPalSeller used for payments on this auction.
+
+        Club auctions always route through the club's linked seller (or site PayPal),
+        never the auction creator. Non-club auctions use the creator's personal seller.
+        Returns ``None`` if no route is configured.
+        """
+        if self.club:
+            return self.club.effective_paypal_seller
+        if self.created_by_id:
+            return PayPalSeller.objects.filter(user=self.created_by).first()
+        return None
+
+    @property
+    def effective_square_seller(self):
+        """The SquareSeller used for payments on this auction.
+
+        Same routing rules as ``effective_paypal_seller`` (no site fallback for Square).
+        """
+        from auctions.models import SquareSeller
+
+        if self.club:
+            return self.club.effective_square_seller
+        if self.created_by_id:
+            return SquareSeller.objects.filter(user=self.created_by).first()
+        return None
 
     @property
     def paypal_information(self):
         """
-        Return the merchant ID for PayPal payments
-        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
-        Fallback for admin users to use the site-wide api keys.
+        Return the merchant ID for PayPal payments.
+
+        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``.
+        - Non-club auctions: creator's PayPalSeller, or ``"admin"`` when creator is a superuser.
         """
-        user = self.effective_payment_user
-        seller = PayPalSeller.objects.filter(user=user).first()
+        if self.club:
+            if self.club.uses_site_paypal:
+                return "admin"
+            seller = self.club.effective_paypal_seller
+            return seller.paypal_merchant_id if seller else None
+        seller = self.effective_paypal_seller
         if seller:
             return seller.paypal_merchant_id
         if self.created_by and self.created_by.is_superuser:
@@ -1904,25 +1973,21 @@ class Auction(models.Model):
     @property
     def square_information(self):
         """
-        Return the merchant ID for Square payments
-        Uses club's payment_user if club has integrated payments, otherwise the auction creator.
-        Only returns ID if the effective user has linked their Square account via OAuth.
-        """
-        from auctions.models import SquareSeller
+        Return the merchant ID for Square payments.
 
-        user = self.effective_payment_user
-        seller = SquareSeller.objects.filter(user=user).first()
-        if seller:
-            return seller.square_merchant_id
-        return None
+        Only returns an ID if the effective seller has a linked Square OAuth account.
+        Site Square is not supported.
+        """
+        seller = self.effective_square_seller
+        return seller.square_merchant_id if seller else None
 
     @property
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
         this banner should only be shown to the auction creator.
-        Hidden when the club manages payments (banner doesn't apply to the creator)."""
-        if self.club and self.club.allow_integrated_payments:
+        Hidden when the auction has a club (the club's account is used, not the creator's)."""
+        if self.club:
             return False
         if self.dismissed_paypal_banner:
             return False
@@ -1932,8 +1997,6 @@ class Auction(models.Model):
             return False
         if self.created_by.userdata.never_show_paypal_connect:
             return False
-        # if self.enable_online_payments:
-        #    return False
         if PayPalSeller.objects.filter(user=self.created_by).first():
             return False
         return True
@@ -1943,10 +2006,10 @@ class Auction(models.Model):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
         this banner should only be shown to the auction creator.
-        Hidden when the club manages payments (banner doesn't apply to the creator)."""
+        Hidden when the auction has a club (the club's account is used, not the creator's)."""
         from auctions.models import SquareSeller
 
-        if self.club and self.club.allow_integrated_payments:
+        if self.club:
             return False
         if self.dismissed_square_banner:
             return False
@@ -2007,6 +2070,9 @@ class Auction(models.Model):
         return date_field
 
     def save(self, *args, **kwargs):
+        previous_club_id = None
+        if self.pk:
+            previous_club_id = Auction.objects.filter(pk=self.pk).values_list("club_id", flat=True).first()
         self.date_start = self.fix_year(self.date_start)
         self.lot_submission_start_date = self.fix_year(self.lot_submission_start_date)
         self.lot_submission_end_date = self.fix_year(self.lot_submission_end_date)
@@ -2018,6 +2084,14 @@ class Auction(models.Model):
         #    self.date_start = self.date_start.replace(year=current_year)
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
+        if previous_club_id is None and self.club_id:
+            invoices = (
+                Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
+                .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
+                .distinct()
+            )
+            for invoice in invoices:
+                invoice.create_club_payment_history(force_current_state=True)
 
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
@@ -6534,11 +6608,16 @@ class Invoice(models.Model):
 
     @property
     def currency(self):
-        """Get the currency for this invoice based on the auction creator or club payment user"""
+        """Get the currency for this invoice based on the auction creator or club's connected seller"""
+        # For club-managed auctions (or club-only invoices), derive currency from the club's seller
+        # so that PayPal/Square orders are created with the correct currency for the receiving account.
+        club = self.club or (self.auction.club if self.auction else None)
+        if club:
+            seller = club.effective_paypal_seller or club.effective_square_seller
+            if seller and seller.user:
+                return seller.user.userdata.currency
         if self.auction and self.auction.created_by:
             return self.auction.created_by.userdata.currency
-        if self.club and self.club.payment_user:
-            return self.club.payment_user.userdata.currency
         return "USD"
 
     @property
@@ -6602,20 +6681,14 @@ class Invoice(models.Model):
         if self.net_after_payments >= 0:
             return False
         if self.club:
-            if not self.club.payment_user:
+            if self.club.uses_site_paypal:
+                return True
+            seller = self.club.effective_paypal_seller
+            if not seller or not seller.paypal_merchant_id:
                 return False
-            payment_user = self.club.payment_user
-            if not payment_user.userdata.is_trusted:
+            if not seller.user.userdata.is_trusted:
                 return False
-            from auctions.models import PayPalSeller
-
-            has_paypal = (
-                payment_user.is_superuser
-                or PayPalSeller.objects.filter(user=payment_user, paypal_merchant_id__isnull=False)
-                .exclude(paypal_merchant_id="")
-                .exists()
-            )
-            return has_paypal
+            return True
         if not self.auction:
             return False
         if not self.auction.enable_online_payments:
@@ -6641,15 +6714,12 @@ class Invoice(models.Model):
         if self.net_after_payments >= 0:
             return False
         if self.club:
-            if not self.club.payment_user:
+            seller = self.club.effective_square_seller
+            if not seller or not seller.square_merchant_id:
                 return False
-            payment_user = self.club.payment_user
-            if not payment_user.userdata.is_trusted:
+            if not seller.user.userdata.is_trusted:
                 return False
-            from auctions.models import SquareSeller
-
-            seller = SquareSeller.objects.filter(user=payment_user).first()
-            return bool(seller and seller.square_merchant_id)
+            return True
         if not self.auction:
             return False
         if not self.auction.enable_square_payments:
@@ -6659,22 +6729,6 @@ class Invoice(models.Model):
         if not self.auction.created_by.userdata.square_enabled:
             return False
         if not self.auction.square_information:
-            return False
-        return True
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
-            return False
-        if self.status == "PAID":
-            return False
-        if self.net_after_payments >= 0:
-            return False
-        if (
-            self.auction
-            and not self.auction.created_by.is_superuser
-            and not self.auction.created_by.userdata.square_enabled
-            and not self.auction.square_information
-        ):
-            return False
-        if not self.auction:
             return False
         return True
 
@@ -7019,8 +7073,12 @@ class Invoice(models.Model):
                 return self.location.pickup_location_contact_email
         if self.auction:
             return self.auction.created_by.email
-        if self.club and self.club.payment_user:
-            return self.club.payment_user.email
+        if self.club:
+            seller = self.club.effective_paypal_seller or self.club.effective_square_seller
+            if seller and seller.user:
+                return seller.user.email
+            if self.club.contact_email:
+                return self.club.contact_email
         return None
 
     @property
@@ -7143,6 +7201,9 @@ class Invoice(models.Model):
         return Decimal(total)
 
     def save(self, *args, **kwargs):
+        previous_status = None
+        if self.pk:
+            previous_status = Invoice.objects.filter(pk=self.pk).values_list("status", flat=True).first()
         if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
@@ -7176,6 +7237,103 @@ class Invoice(models.Model):
                     InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
                 newer.delete()
                 self.recalculate()
+        if previous_status != self.status or previous_status is None:
+            self.create_club_payment_history(previous_status=previous_status)
+
+    def create_club_payment_history(self, previous_status=None, force_current_state=False, acting_user=None):
+        auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
+        if not auction or not auction.club_id:
+            return []
+        club = auction.club
+        event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
+        entries = []
+        quantize_precision = Decimal("0.01")
+
+        def _quantize(value):
+            return Decimal(value or 0).quantize(quantize_precision)
+
+        def _add_entry(amount, category, description):
+            amount = _quantize(amount)
+            if not amount:
+                return
+            entries.append(
+                ClubMoney(
+                    club=club,
+                    invoice=self,
+                    date=event_date,
+                    amount=amount,
+                    description=description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
+                    category=category,
+                    created_by=acting_user,
+                )
+            )
+
+        def _invoice_label():
+            if self.auctiontos_user and self.auctiontos_user.name:
+                return self.auctiontos_user.name
+            return f"invoice #{self.pk}"
+
+        def _add_paid_entries(multiplier):
+            _add_entry(
+                -_quantize(self.total_sold) * multiplier,
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT,
+                f"Auction seller payout for {_invoice_label()} in {auction}",
+            )
+            _add_entry(
+                _quantize(self.total_sold_club_cut) * multiplier,
+                ClubMoney.CATEGORY_AUCTION_PROFIT,
+                f"Auction profit for {_invoice_label()} in {auction}",
+            )
+            _add_entry(
+                _quantize(self.membership_fee_amount) * multiplier,
+                ClubMoney.CATEGORY_MEMBERSHIP,
+                f"Membership renewal for {_invoice_label()} in {auction}",
+            )
+            for adjustment in self.adjustments.exclude(amount=0):
+                if adjustment.adjustment_type == "DISCOUNT":
+                    amount = -_quantize(adjustment.amount) * multiplier
+                    category = ClubMoney.CATEGORY_REFUNDS
+                else:
+                    amount = _quantize(adjustment.amount) * multiplier
+                    category = ClubMoney.CATEGORY_DONATION
+                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {auction}"
+                _add_entry(amount, category, description)
+
+        outstanding_amount = -_quantize(self.net_after_payments)
+        old_status = previous_status
+        new_status = self.status
+        if force_current_state:
+            old_status = None
+        elif old_status == new_status:
+            return []
+
+        old_outstanding = old_status in ("DRAFT", "UNPAID")
+        new_outstanding = new_status in ("DRAFT", "UNPAID")
+        if force_current_state:
+            if new_outstanding:
+                _add_entry(
+                    outstanding_amount,
+                    ClubMoney.CATEGORY_UNPAID_INVOICES,
+                    f"Outstanding invoice for {_invoice_label()} in {auction}",
+                )
+            if new_status == "PAID":
+                _add_paid_entries(Decimal(1))
+        else:
+            if old_outstanding != new_outstanding:
+                direction = Decimal(1) if new_outstanding else Decimal(-1)
+                _add_entry(
+                    outstanding_amount * direction,
+                    ClubMoney.CATEGORY_UNPAID_INVOICES,
+                    f"Outstanding invoice for {_invoice_label()} in {auction}",
+                )
+            if old_status == "PAID" and new_status != "PAID":
+                _add_paid_entries(Decimal(-1))
+            elif old_status != "PAID" and new_status == "PAID":
+                _add_paid_entries(Decimal(1))
+
+        if entries:
+            ClubMoney.objects.bulk_create(entries)
+        return entries
 
 
 class InvoiceAdjustment(models.Model):
@@ -7260,6 +7418,49 @@ class InvoicePayment(models.Model):
 
     # def __str__(self):
     #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
+
+
+class ClubMoney(models.Model):
+    DESCRIPTION_MAX_LENGTH = 500
+    CATEGORY_DONATION = "donation"
+    CATEGORY_SPEAKER_COSTS = "speaker_costs"
+    CATEGORY_MEETING_LOCATION_COST = "meeting_location_cost"
+    CATEGORY_MEMBERSHIP = "membership"
+    CATEGORY_AUCTION_PROFIT = "auction_profit"
+    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
+    CATEGORY_UNPAID_INVOICES = "unpaid_invoices"
+    CATEGORY_REFUNDS = "refunds"
+    CATEGORY_ADJUSTMENT = "adjustment"
+    CATEGORY_CHOICES = (
+        (CATEGORY_DONATION, "Donation"),
+        (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
+        (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
+        (CATEGORY_MEMBERSHIP, "Membership"),
+        (CATEGORY_AUCTION_PROFIT, "Auction profit"),
+        (CATEGORY_AUCTION_SELLER_PAYOUT, "Auction seller payout"),
+        (CATEGORY_UNPAID_INVOICES, "Unpaid invoices"),
+        (CATEGORY_REFUNDS, "Refunds"),
+        (CATEGORY_ADJUSTMENT, "Adjustment"),
+    )
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="money")
+    invoice = models.ForeignKey("Invoice", null=True, blank=True, on_delete=models.SET_NULL, related_name="club_money")
+    source_auction = models.ForeignKey(
+        "Auction", null=True, blank=True, on_delete=models.SET_NULL, related_name="club_money"
+    )
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    date = models.DateField(db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.CharField(max_length=DESCRIPTION_MAX_LENGTH, blank=True, default="")
+    category = models.CharField(max_length=40, choices=CATEGORY_CHOICES)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-pk"]
+        verbose_name_plural = "Club money"
+
+    def __str__(self):
+        return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
 
 
 class Bid(models.Model):
@@ -7768,7 +7969,6 @@ class UserData(models.Model):
                 target_userdata.save(update_fields=list(target_updates))
 
             Auction.objects.filter(created_by=source_user).update(created_by=user_to_merge_to)
-            Club.objects.filter(payment_user=source_user).update(payment_user=user_to_merge_to)
             PickupLocation.objects.filter(user=source_user).update(user=user_to_merge_to)
             Invoice.objects.filter(buyer=source_user).update(buyer=user_to_merge_to)
             Lot.objects.filter(user=source_user).update(user=user_to_merge_to)
@@ -7857,6 +8057,7 @@ class UserData(models.Model):
                     "permission_export",
                     "permission_add_edit",
                     "permission_edit_club",
+                    "permission_money",
                     "permission_manage_auctions",
                     "permission_manage_bap",
                 ]:
@@ -8287,6 +8488,14 @@ class PayPalSeller(models.Model):
     """
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    club = models.OneToOneField(
+        Club,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="paypal_seller",
+        help_text="If set, this PayPal account is the one used for the club's payments.",
+    )
     paypal_merchant_id = models.CharField(max_length=64, blank=True, null=True)
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
@@ -8301,11 +8510,14 @@ class PayPalSeller(models.Model):
             result += self.payer_email
         else:
             result += f"{self.user.first_name} {self.user.last_name}'s PayPal account"
+        if self.club_id:
+            result += f" (linked to {self.club.name})"
         return result
 
     def delete(self):
-        auctions = Auction.objects.filter(created_by=self.user, enable_online_payments=True)
-        for auction in auctions:
+        # Disable PayPal on personal auctions of the OAuth user
+        personal_auctions = Auction.objects.filter(created_by=self.user, enable_online_payments=True, club__isnull=True)
+        for auction in personal_auctions:
             auction.create_history(
                 applies_to="INVOICES",
                 action=f"PayPal partner consent from {self.payer_email} has been revoked.  Relink your PayPal account to re-enable payments.",
@@ -8313,6 +8525,24 @@ class PayPalSeller(models.Model):
             )
             auction.enable_online_payments = False
             auction.save()
+        # Disable PayPal on club auctions if this seller was linked to the club
+        if self.club_id:
+            club = self.club
+            club_auctions = Auction.objects.filter(club=club, enable_online_payments=True)
+            for auction in club_auctions:
+                auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"PayPal account {self.payer_email or self.user} has been disconnected from {club.name}.",
+                    user=None,
+                )
+                auction.enable_online_payments = False
+                auction.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=None,
+                action=f"PayPal account disconnected ({self.payer_email or self.user})",
+                applies_to="SETTINGS",
+            )
         return super().delete()
 
 
@@ -8323,6 +8553,14 @@ class SquareSeller(models.Model):
     """
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    club = models.OneToOneField(
+        Club,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="square_seller",
+        help_text="If set, this Square account is the one used for the club's payments.",
+    )
     square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
     access_token = EncryptedCharField(max_length=500, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
@@ -8340,7 +8578,40 @@ class SquareSeller(models.Model):
             result += self.payer_email
         else:
             result += f"{self.user.first_name} {self.user.last_name}'s Square account"
+        if self.club_id:
+            result += f" (linked to {self.club.name})"
         return result
+
+    def delete(self):
+        # Disable Square on personal auctions of the OAuth user
+        personal_auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True, club__isnull=True)
+        for auction in personal_auctions:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Square account {self.payer_email or self.user} has been disconnected. Relink your Square account to re-enable payments.",
+                user=None,
+            )
+            auction.enable_square_payments = False
+            auction.save()
+        # Disable Square on club auctions if this seller was linked to the club
+        if self.club_id:
+            club = self.club
+            club_auctions = Auction.objects.filter(club=club, enable_square_payments=True)
+            for auction in club_auctions:
+                auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"Square account {self.payer_email or self.user} has been disconnected from {club.name}.",
+                    user=None,
+                )
+                auction.enable_square_payments = False
+                auction.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=None,
+                action=f"Square account disconnected ({self.payer_email or self.user})",
+                applies_to="SETTINGS",
+            )
+        return super().delete()
 
     def is_token_expired(self):
         """Check if the access token is expired or will expire soon (within 1 hour)"""
@@ -8635,18 +8906,6 @@ class SquareSeller(models.Model):
                 error_msg = e.body.get("message", str(e))
             logger.exception("Square refund failed for payment %s: %s", payment.external_id, error_msg)
             return f"Square refund failed: {error_msg}"
-
-    def delete(self):
-        auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)
-        for auction in auctions:
-            auction.create_history(
-                applies_to="INVOICES",
-                action=f"Square account from {self.payer_email or self.user} has been disconnected. Relink your Square account to re-enable payments.",
-                user=None,
-            )
-            auction.enable_square_payments = False
-            auction.save()
-        return super().delete()
 
 
 class UserInterestCategory(models.Model):

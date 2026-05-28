@@ -22,7 +22,6 @@ from django.forms import (
 )
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -38,6 +37,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
+    ClubMoney,
     Invoice,
     InvoiceAdjustment,
     Lot,
@@ -2002,34 +2002,38 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["club"].queryset = Club.objects.filter(pk__in=club_id_set).order_by("name")
         self.fields["club"].initial = self.instance.club if (self.instance and self.instance.pk) else None
 
-        # Determine effective payment user (club's payment_user if integrated payments are on)
-        payment_user = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
-        if (
-            self.instance
-            and self.instance.club
-            and self.instance.club.allow_integrated_payments
-            and self.instance.club.payment_user
-        ):
-            payment_user = self.instance.club.payment_user
+        # Resolve which payment accounts apply to this auction:
+        # - club auctions: the club's linked sellers (or site PayPal if enabled).
+        # - non-club auctions: the auction creator's personal sellers.
+        club = self.instance.club if (self.instance and self.instance.pk) else None
+        effective_creator = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
 
-        paypal_seller = PayPalSeller.objects.filter(user=payment_user).first()
+        if club:
+            paypal_seller = club.effective_paypal_seller
+            square_seller = club.effective_square_seller
+            uses_site_paypal = club.uses_site_paypal
+        else:
+            paypal_seller = PayPalSeller.objects.filter(user=effective_creator).first()
+            square_seller = SquareSeller.objects.filter(user=effective_creator).first()
+            uses_site_paypal = bool(
+                effective_creator
+                and effective_creator.is_superuser
+                and settings.PAYPAL_CLIENT_ID
+                and settings.PAYPAL_SECRET
+            )
+
         if paypal_seller:
             self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
+        elif uses_site_paypal:
+            self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
         else:
-            effective_creator = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
-            if effective_creator.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
-                # show payments option for superusers with site-wide PayPal configured
-                pass
-            else:
-                # Hide the field if no PayPal is connected
-                self.fields["enable_online_payments"].widget = forms.HiddenInput()
+            # Hide the field if no PayPal route is configured.
+            self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
-        square_seller = SquareSeller.objects.filter(user=payment_user).first()
         if square_seller:
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
-            # Square requires an actual linked seller record; the userdata flag alone
-            # is not enough because it can remain set after a disconnected/stale auth.
+            # Square requires an actual linked seller record (no site fallback).
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
         # These three fields are shown/hidden via JavaScript based on the club selection.
@@ -3787,24 +3791,6 @@ class LotCategoryForm(forms.ModelForm):
         )
 
 
-class _PaymentUserChoiceField(forms.ModelChoiceField):
-    """ModelChoiceField that appends the connected payment accounts to each user label."""
-
-    def __init__(self, *args, paypal_ids=None, square_ids=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.paypal_ids = paypal_ids or set()
-        self.square_ids = square_ids or set()
-
-    def label_from_instance(self, obj):
-        accounts = []
-        if obj.pk in self.paypal_ids:
-            accounts.append("PayPal")
-        if obj.pk in self.square_ids:
-            accounts.append("Square")
-        suffix = f" ({', '.join(accounts)})" if accounts else ""
-        return f"{obj.username}{suffix}"
-
-
 class _ClubEmailMemberChoiceField(forms.ModelChoiceField):
     def label_from_instance(self, obj):
         email = obj.routing_email
@@ -3814,7 +3800,11 @@ class _ClubEmailMemberChoiceField(forms.ModelChoiceField):
 
 
 class ClubMembershipSettingsForm(forms.ModelForm):
-    """Form for club admins to configure membership and payment settings."""
+    """Form for club admins to configure membership and payment settings.
+
+    The PayPal/Square seller for the club is managed separately (via the seller info
+    cards rendered on the same template), not as a field on this form.
+    """
 
     class Meta:
         model = Club
@@ -3823,9 +3813,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "payment_user",
             "send_membership_expiration_reminders",
-            "allow_integrated_payments",
         ]
         help_texts = {
             "membership_system": (
@@ -3833,11 +3821,10 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 "Rolling: memberships expire one year from the payment date."
             ),
             "membership_annual_fee": "Leave blank if free.",
-            "allow_integrated_payments": "Accept membership dues directly through the site.",
         }
 
     def __init__(self, *args, **kwargs):
-        current_user = kwargs.pop("current_user", None)
+        kwargs.pop("current_user", None)
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -3845,71 +3832,13 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "allow_integrated_payments",
-            "payment_user",
             "send_membership_expiration_reminders",
             "contact_email",
         )
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
-        club = self.instance
-        if club and club.pk:
-            admin_user_ids = (
-                club.members.filter(is_deleted=False)
-                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
-                .exclude(user__isnull=True)
-                .values_list("user_id", flat=True)
-            )
-            paypal_user_ids = set(
-                PayPalSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
-            )
-            square_user_ids = set(
-                SquareSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
-            )
-            eligible_ids = paypal_user_ids | square_user_ids
-            if settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
-                eligible_ids.update(
-                    User.objects.filter(is_superuser=True, id__in=admin_user_ids).values_list("id", flat=True)
-                )
-            payment_user_qs = User.objects.filter(id__in=eligible_ids).order_by("username")
-        else:
-            paypal_user_ids = set()
-            square_user_ids = set()
-            payment_user_qs = User.objects.none()
-        paypal_available = current_user and (
-            PayPalSeller.objects.filter(user=current_user).exists()
-            or (current_user.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET)
-        )
-        square_available = current_user and SquareSeller.objects.filter(user=current_user).exists()
-        if paypal_available or square_available:
-            connect_parts = []
-            if paypal_available:
-                connect_parts.append(f'<a href="{reverse("paypal_connect")}">PayPal</a>')
-            if square_available:
-                connect_parts.append(f'<a href="{reverse("square_connect")}">Square</a>')
-            payment_help = mark_safe(
-                "Payments are sent to this user's connected account. "
-                f"You can connect {' or '.join(connect_parts)} to take payments "
-            )
-        else:
-            payment_help = "Payments are not enabled for your account."
-        self.fields["payment_user"] = _PaymentUserChoiceField(
-            queryset=payment_user_qs,
-            paypal_ids=paypal_user_ids,
-            square_ids=square_user_ids,
-            required=False,
-            label="Payments go to",
-            help_text=payment_help,
-        )
 
     def clean(self):
         cleaned_data = super().clean()
-        allow_integrated = cleaned_data.get("allow_integrated_payments")
-        payment_user = cleaned_data.get("payment_user")
-        if allow_integrated and not payment_user:
-            self.add_error(
-                "payment_user",
-                "No payment method selected, choose an account that payments should go to",
-            )
         if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
             self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
         return cleaned_data
@@ -4337,6 +4266,7 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         fields = [
             "permission_admin",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
             "permission_export",
@@ -4348,7 +4278,8 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         labels = {
             "permission_admin": "Club admin — can do everything, including assigning permissions to other members",
-            "permission_edit_club": "Edit club settings — club setup, Discord, API keys, payment settings, and membership settings",
+            "permission_edit_club": "Edit club settings — club setup, Discord, and API keys",
+            "permission_money": "Manage membership and payments — membership/payment settings and treasurer's report",
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
             "permission_export": "CSV import/export — can import and export member data as CSV",
@@ -4372,6 +4303,54 @@ class ClubMemberPermissionsForm(forms.ModelForm):
                 css_class="modal-footer",
             ),
         )
+
+
+class ClubTreasurerReportForm(forms.Form):
+    start_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date"}),
+        required=False,
+    )
+    end_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date"}),
+        required=False,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        start_date = cleaned_data.get("start_date")
+        end_date = cleaned_data.get("end_date")
+        if start_date and end_date and start_date > end_date:
+            self.add_error("end_date", "End date must be on or after the start date.")
+        return cleaned_data
+
+
+class ClubMoneyForm(forms.ModelForm):
+    class Meta:
+        model = ClubMoney
+        fields = ["date", "amount", "description", "category"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+        }
+
+    def __init__(self, *args, category_choices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+        if category_choices is not None:
+            self.fields["category"].choices = category_choices
+
+
+class ClubMoneyBalanceForm(forms.Form):
+    account_balance = forms.DecimalField(
+        max_digits=10, decimal_places=2, label="Enter your actual bank account balance"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
 
 
 class ClubMemberMergeTargetForm(forms.Form):

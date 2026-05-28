@@ -352,6 +352,7 @@ class ClubAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "active",
+        "use_site_paypal_account",
         ("date_contacted", admin.EmptyFieldListFilter),
         ("date_contacted_for_in_person_auctions", admin.EmptyFieldListFilter),
         ("contact_email", admin.EmptyFieldListFilter),
@@ -359,12 +360,27 @@ class ClubAdmin(admin.ModelAdmin):
         ("latitude", admin.EmptyFieldListFilter),
         "interests",
     )
+    readonly_fields = ("connected_paypal_seller", "connected_square_seller")
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
         ClubAPIKeyInline,
     ]
     actions = [export_to_csv]
+
+    @admin.display(description="Connected PayPal seller")
+    def connected_paypal_seller(self, obj):
+        seller = getattr(obj, "paypal_seller", None)
+        if not seller:
+            return "—"
+        return f"{seller} (user: {seller.user})"
+
+    @admin.display(description="Connected Square seller")
+    def connected_square_seller(self, obj):
+        seller = getattr(obj, "square_seller", None)
+        if not seller:
+            return "—"
+        return f"{seller} (user: {seller.user})"
 
 
 class LocationAdmin(admin.ModelAdmin):
