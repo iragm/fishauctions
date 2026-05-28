@@ -1,5 +1,4 @@
-{# Inline membership renewal: fee + PayPal/Square buttons on one line (stacked on mobile).
-   Requires: membership_invoice (Invoice), member (ClubMember), club (Club). #}
+{# Inline membership renewal fee + payment buttons. Requires: membership_invoice, member, club. #}
 {% if membership_invoice and membership_invoice.show_payment_button %}
 <div class="mt-3 d-flex flex-column flex-md-row align-items-center justify-content-center gap-2">
   <strong class="me-md-2">Membership Fee: {{ membership_invoice.currency_symbol }}{{ club.membership_annual_fee|floatformat:"-2" }}</strong>

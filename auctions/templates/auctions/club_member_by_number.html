@@ -31,7 +31,11 @@
       <div class="alert alert-warning">No paid membership on record.</div>
     {% endif %}
 
-    {% include "partials/membership_payment_inline.html" %}
+    {% if membership_invoice %}
+      {% include "partials/membership_payment_inline.html" %}
+    {% elif club.membership_annual_fee and is_paid_member and not is_expired and not expiring_soon %}
+      <p class="text-muted small mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

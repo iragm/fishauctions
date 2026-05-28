@@ -49,7 +49,11 @@
   <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">
       {% include "partials/club_member_uuid_card.html" %}
-      {% include "partials/membership_payment_inline.html" %}
+      {% if membership_invoice %}
+        {% include "partials/membership_payment_inline.html" %}
+      {% elif club.membership_annual_fee and membership_is_paid_member and not membership_is_expired and not membership_expiring_soon %}
+        <p class="text-muted small text-center mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
+      {% endif %}
     </div>
   </div>
 {% else %}

@@ -617,7 +617,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 member.user = user
                 member.save(update_fields=["user"])
             today = timezone.now().date()
+            old_expiration = member.membership_expiration_date
             member.membership_expiration_date = _compute_member_renewal_expiration(club, member, today)
+            new_expiration = member.membership_expiration_date
             member.membership_last_paid = today
             if member.email:
                 member.email_address_status = "VALID"
@@ -653,17 +655,14 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
         member.maybe_assign_discord_role()
     except Exception:
         logger.exception("Failed to assign Discord role for club member %s", getattr(member, "pk", None))
-    payer_email = (
-        (invoice.buyer.email if invoice.buyer else None)
-        or (invoice.auctiontos_user.email if invoice.auctiontos_user else None)
-        or ""
-    )
-    id_suffix = f" (ID: {external_id})" if external_id else ""
-    payer_prefix = f"User {payer_email} " if payer_email else ""
+    old_exp_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
+    new_exp_str = new_expiration.strftime("%-m/%-d/%Y") if new_expiration else "unknown"
     auction = invoice.auction if invoice else None
     auction_suffix = f" for {auction}" if auction else ""
+    id_suffix = f" (ID: {external_id})" if external_id else ""
     action = (
-        f"{payer_prefix}renewed membership for {member.display_name} via {payment_method}{auction_suffix}{id_suffix}"
+        f"{member.display_name} renewed via {payment_method}{auction_suffix}; "
+        f"expiration {old_exp_str} → {new_exp_str}{id_suffix}"
     )
     try:
         ClubHistory.objects.create(
@@ -13454,13 +13453,22 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["membership_expiration_date"] = membership_expiration_date
         membership_invoice = None
         show_membership_payment_button = False
+        is_expired = False
+        expiring_soon = False
+        is_paid_member = False
         if member:
-            _, _, should_show_payment, _ = _membership_renewal_state(self.club, member)
+            _process_pending_membership_renewal_for_member(self.club, member)
+            member.refresh_from_db()
+            is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
+            is_paid_member = member.is_paid_member
             if should_show_payment:
                 membership_invoice = _get_or_create_membership_invoice(self.club, member)
                 show_membership_payment_button = True
         context["membership_invoice"] = membership_invoice
         context["show_membership_payment_button"] = show_membership_payment_button
+        context["membership_is_expired"] = is_expired
+        context["membership_expiring_soon"] = expiring_soon
+        context["membership_is_paid_member"] = is_paid_member
         show_club_map = self.club.latitude is not None and self.club.longitude is not None
         context["show_club_map"] = show_club_map
         if show_club_map:
@@ -13574,6 +13582,25 @@ def _membership_renewal_state(club, member):
     return is_expired, expiring_soon, should_show_payment, can_pay
 
 
+def _process_pending_membership_renewal_for_member(club, member):
+    """Process any PAID-but-unprocessed renewal invoice for this member.
+
+    Called on member page load so Square payments (webhook may arrive after redirect)
+    are picked up synchronously when the member views their page.
+    """
+    if not member.user:
+        return
+    paid_invoice = Invoice.objects.filter(
+        club=club,
+        buyer=member.user,
+        renewal_needed=True,
+        renewal_processed=False,
+        status="PAID",
+    ).first()
+    if paid_invoice:
+        _process_invoice_membership_renewal(paid_invoice)
+
+
 class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
     """Public, UUID-keyed page that shows a member's name and wallet-add buttons.
 
@@ -13587,6 +13614,8 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         member = get_object_or_404(ClubMember, club=self.club, uuid=kwargs["uuid"], is_deleted=False)
+        _process_pending_membership_renewal_for_member(self.club, member)
+        member.refresh_from_db()
         from auctions.apple_wallet import is_configured as _apple_configured
 
         context["club"] = self.club
@@ -13599,6 +13628,7 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         )
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
+        context["is_paid_member"] = member.is_paid_member
         return context
 
 
@@ -13612,6 +13642,8 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         member = get_object_or_404(ClubMember, club=self.club, membership_number=kwargs["number"], is_deleted=False)
+        _process_pending_membership_renewal_for_member(self.club, member)
+        member.refresh_from_db()
         is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
         context["club"] = self.club
         context["member"] = member
