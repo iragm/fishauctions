@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Stats - {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<div class="row g-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-body">
+        <h4 class="card-title">Auction stats over time</h4>
+        <p class="text-muted small">Participants is a count of invoices unless the auction uses check-in mode, in which case all checked-in attendees are counted.</p>
+        <div style="height: 350px;">
+          <canvas id="club-auction-stats-chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-12">
+    <div class="card">
+      <div class="card-body">
+        <h4 class="card-title">Cumulative members over time</h4>
+        <p class="text-muted small">Totals by join date.  Paid members includes everyone who is currently paid - lapses in membership are not tracked.</p>
+        <div style="height: 350px;">
+          <canvas id="club-membership-growth-chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{ club_auction_stats|json_script:"club-auction-stats-data" }}
+{{ club_membership_growth|json_script:"club-membership-growth-data" }}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/vendor/Chart.min.js' %}"></script>
+<script>
+  function renderClubStatsChart(canvasId, chartData, yAxisLabel) {
+    var ctx = document.getElementById(canvasId).getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: chartData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        elements: {
+          line: {
+            tension: 0
+          }
+        },
+        scales: {
+          yAxes: [{
+            ticks: {
+              beginAtZero: true
+            },
+            scaleLabel: {
+              display: !!yAxisLabel,
+              labelString: yAxisLabel
+            }
+          }]
+        }
+      }
+    });
+  }
+
+  renderClubStatsChart(
+    'club-auction-stats-chart',
+    JSON.parse(document.getElementById('club-auction-stats-data').textContent),
+    'Count / gross'
+  );
+  renderClubStatsChart(
+    'club-membership-growth-chart',
+    JSON.parse(document.getElementById('club-membership-growth-data').textContent),
+    'Members'
+  );
+</script>
+{% endblock %}

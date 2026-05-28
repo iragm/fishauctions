@@ -8,10 +8,14 @@
 {% endblock %}
 
 {% block htmx_table %}
-<div class="table-container"
-     hx-get=""
-     hx-trigger="clubMemberListChanged from:body"
-     hx-swap="outerHTML">
-  {% render_table table %}
-</div>
+{% if no_results %}
+  {{ block.super }}
+{% else %}
+  <div class="table-container"
+       hx-get=""
+       hx-trigger="clubMemberListChanged from:body"
+       hx-swap="outerHTML">
+    {% render_table table %}
+  </div>
+{% endif %}
 {% endblock %}

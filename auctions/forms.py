@@ -3710,6 +3710,7 @@ class ClubEditForm(forms.ModelForm):
             "icon",
             "homepage",
             "facebook_page",
+            "discord_invite_link",
             "enable_club_page",
             "allow_joining",
             "enable_breeder_award_program",
@@ -3726,6 +3727,7 @@ class ClubEditForm(forms.ModelForm):
         widgets = {
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
             "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
+            "discord_invite_link": forms.URLInput(attrs={"placeholder": "https://discord.gg/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
             "location": forms.TextInput(attrs={"placeholder": "Search for your club's location"}),
         }
@@ -3742,6 +3744,7 @@ class ClubEditForm(forms.ModelForm):
             "icon",
             "homepage",
             "facebook_page",
+            "discord_invite_link",
             Div(
                 Div("enable_club_page", css_class="col-3"),
                 Div("allow_joining", css_class="col-3"),
@@ -3757,6 +3760,31 @@ class ClubEditForm(forms.ModelForm):
             ),
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class LotCategoryForm(forms.ModelForm):
+    class Meta:
+        model = Lot
+        fields = ["species_category"]
+
+    def __init__(self, *args, **kwargs):
+        post_url = kwargs.pop("post_url", None)
+        if not post_url:
+            msg = "LotCategoryForm requires a post_url."
+            raise ValueError(msg)
+        super().__init__(*args, **kwargs)
+        self.fields["species_category"].queryset = Category.objects.all().order_by("name")
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.attrs = {"hx-post": post_url, "hx-target": "#modals-here", "hx-swap": "innerHTML"}
+        self.helper.layout = Layout(
+            "species_category",
+            Div(
+                HTML('<button type="submit" class="btn btn-primary">Save</button>'),
+                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                css_class="d-flex gap-2",
+            ),
+        )
 
 
 class _PaymentUserChoiceField(forms.ModelChoiceField):
@@ -3912,17 +3940,34 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 .order_by("name", "email")
             )
             auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
-            contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+            contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_add_edit=True))
+            # Determine the fallback person shown in the help text
+            auction_fallback = club._first_email_member_by_priority(Q(permission_manage_auctions=True))
+            contact_fallback = club._first_email_member_by_priority(Q(permission_add_edit=True))
         else:
             auction_qs = ClubMember.objects.none()
             contact_qs = ClubMember.objects.none()
+            auction_fallback = None
+            contact_fallback = None
+
+        def _fallback_label(member):
+            if not member:
+                return ""
+            name = member.name or member.routing_email
+            email = member.routing_email
+            if name and email and name != email:
+                return f" ({name} <{email}>)"
+            if email:
+                return f" ({email})"
+            return ""
+
         self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
             queryset=auction_qs,
             required=False,
             label="Auction replies",
             help_text=(
                 f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
-                "Leave blank to fall back to the first club admin or auction manager with an email address."
+                f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
             ),
         )
         self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
@@ -3931,7 +3976,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             label="Contact replies",
             help_text=(
                 f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                "Leave blank to fall back to the first club admin or club editor with an email address."
+                f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
             ),
         )
 

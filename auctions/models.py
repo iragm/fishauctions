@@ -624,6 +624,7 @@ class Club(models.Model):
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
+    discord_invite_link = models.CharField(max_length=255, blank=True, null=True)
     contact_email = models.CharField(
         max_length=255,
         blank=True,
@@ -782,14 +783,21 @@ class Club(models.Model):
         self.description = sanitize_summernote_html(self.description)
         super().save(*args, **kwargs)
 
-    def _first_email_member(self, permission_filter):
-        return (
-            self.members.filter(is_deleted=False)
-            .filter((Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email="")))
-            .filter(permission_filter)
-            .order_by("pk")
-            .first()
-        )
+    def _first_email_member_by_priority(self, specific_permission):
+        """Return the oldest active member with an email address, preferring non-admins.
+
+        First looks for a member with ``specific_permission`` who is *not* an admin.
+        If none found, falls back to the oldest admin member.  Returns ``None`` when
+        the club has no qualifying members at all.
+        """
+        email_filter = (Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email=""))
+        qs = self.members.filter(is_deleted=False).filter(email_filter)
+        # Prefer non-admin specialist first (e.g. auction manager, membership manager)
+        result = qs.filter(specific_permission & Q(permission_admin=False)).order_by("pk").first()
+        if result:
+            return result
+        # Fall back to the oldest admin
+        return qs.filter(permission_admin=True).order_by("pk").first()
 
     @property
     def auction_email_recipient(self):
@@ -802,7 +810,7 @@ class Club(models.Model):
             and (member.permission_admin or member.permission_manage_auctions)
         ):
             return member
-        return self._first_email_member(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+        return self._first_email_member_by_priority(Q(permission_manage_auctions=True))
 
     @property
     def contact_email_recipient(self):
@@ -812,10 +820,10 @@ class Club(models.Model):
             and member.club_id == self.pk
             and member.routing_email
             and not member.is_deleted
-            and (member.permission_admin or member.permission_edit_club)
+            and (member.permission_admin or member.permission_add_edit)
         ):
             return member
-        return self._first_email_member(Q(permission_admin=True) | Q(permission_edit_club=True))
+        return self._first_email_member_by_priority(Q(permission_add_edit=True))
 
     @property
     def auction_routing_email(self):
@@ -824,10 +832,11 @@ class Club(models.Model):
 
     @property
     def contact_routing_email(self):
+        """Return the routing email for club contact messages, or None to drop the message."""
         recipient = self.contact_email_recipient
         if recipient and recipient.routing_email:
             return recipient.routing_email
-        return admin_routing_email()
+        return None
 
     @property
     def auction_sender_email(self):
@@ -3464,6 +3473,17 @@ class Auction(models.Model):
         # QR code scans
         qr_scans = self.number_of_lots_with_scanned_qr
 
+        if self.use_check_in_mode:
+            participants = AuctionTOS.objects.filter(auction=self, checked_in__isnull=False).count()
+        else:
+            participants = (
+                Invoice.objects.filter(auction=self)
+                .exclude(auctiontos_user__isnull=True)
+                .values("auctiontos_user")
+                .distinct()
+                .count()
+            )
+
         return {
             "total_unique_views": total_views,
             "logged_in_unique_views": user_views,
@@ -3474,6 +3494,11 @@ class Auction(models.Model):
             "reminder_email_click_rate": reminder_email_click_rate,
             "reminder_email_join_rate": reminder_email_join_rate,
             "number_of_lots_with_scanned_qr": qr_scans,
+            "club_stats": {
+                "gross": self.gross,
+                "total_lots": self.total_lots,
+                "checked_in": participants,
+            },
         }
 
     def _make_stats_json_serializable(self, obj):

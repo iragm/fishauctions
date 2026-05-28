@@ -1,5 +1,6 @@
 import datetime
 import re
+import shlex
 
 import django_filters
 from crispy_forms.helper import FormHelper
@@ -1241,10 +1242,37 @@ class ClubBapLotFilter(django_filters.FilterSet):
         return self._apply_query(queryset, value)
 
     def _apply_query(self, queryset, value):
-        tokens = value.lower().split()
+        try:
+            tokens = shlex.split(value or "")
+        except ValueError:
+            tokens = (value or "").split()
         status_keywords = {"pending", "approved", "rejected"}
-        status = next((t for t in tokens if t in status_keywords), None)
-        search_tokens = [t for t in tokens if t not in status_keywords]
+        status = None
+        search_tokens = []
+        user_filters = []
+        category_filters = []
+        auction_filters = []
+
+        for token in tokens:
+            lowered = token.lower()
+            if lowered in status_keywords:
+                status = lowered
+                continue
+            if ":" in token:
+                key, raw_value = token.split(":", 1)
+                key = key.lower()
+                raw_value = raw_value.strip()
+                if key == "user" and raw_value:
+                    user_filters.append(raw_value)
+                    continue
+                if key == "category" and raw_value:
+                    category_filters.append(raw_value)
+                    continue
+                if key == "auction" and raw_value:
+                    auction_filters.append(raw_value)
+                    continue
+            search_tokens.append(token)
+
         search = " ".join(search_tokens)
 
         if status == "pending":
@@ -1256,6 +1284,39 @@ class ClubBapLotFilter(django_filters.FilterSet):
             # Manually dismissed with no BapAward
             queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
         # no status keyword = show all sold lots (no extra filter)
+
+        for user_filter in user_filters:
+            name_parts = user_filter.split()
+            user_query = (
+                Q(auctiontos_seller__name__icontains=user_filter)
+                | Q(auctiontos_seller__email__icontains=user_filter)
+                | Q(auctiontos_seller__user__username__icontains=user_filter)
+                | Q(user__username__icontains=user_filter)
+                | Q(auctiontos_seller__user__first_name__icontains=user_filter)
+                | Q(auctiontos_seller__user__last_name__icontains=user_filter)
+                | Q(user__first_name__icontains=user_filter)
+                | Q(user__last_name__icontains=user_filter)
+            )
+            if len(name_parts) > 1:
+                user_query |= Q(
+                    auctiontos_seller__user__first_name__icontains=name_parts[0],
+                    auctiontos_seller__user__last_name__icontains=name_parts[-1],
+                ) | Q(
+                    user__first_name__icontains=name_parts[0],
+                    user__last_name__icontains=name_parts[-1],
+                )
+            queryset = queryset.filter(user_query)
+
+        for category_filter in category_filters:
+            # Support slug-style filters like category:foo-bar for categories named "Foo Bar".
+            category_search = category_filter.replace("-", " ")
+            queryset = queryset.filter(
+                Q(species_category__name__icontains=category_filter)
+                | Q(species_category__name__icontains=category_search)
+            )
+
+        for auction_filter in auction_filters:
+            queryset = queryset.filter(auction__slug__iexact=auction_filter)
 
         if search:
             queryset = queryset.filter(

@@ -14817,6 +14817,63 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
+        self.club.enable_club_page = True
+        self.club.enable_breeder_award_program = True
+        self.club.homepage = "https://example.com"
+        self.club.facebook_page = "https://facebook.com/view-test-club"
+        self.club.discord_invite_link = "https://discord.gg/viewclub"
+        self.club.location = "123 Club St"
+        self.club.latitude = 39.5
+        self.club.longitude = -96.5
+        self.club.save()
+        BapAward.objects.create(club_member=self.owner_member, date=timezone.now().date(), points=4)
+        start = timezone.now() - datetime.timedelta(days=20)
+        end = timezone.now() - datetime.timedelta(days=10)
+        for i in range(11):
+            Auction.objects.create(
+                created_by=self.owner,
+                club=self.club,
+                title=f"Club Auction {i}",
+                date_start=start + datetime.timedelta(days=i),
+                date_end=end + datetime.timedelta(days=i),
+                winning_bid_percent_to_club=25,
+                lot_entry_fee=0,
+                unsold_lot_fee=0,
+                tax=0,
+            )
+        self.client.login(username="club_owner2", password="testpass")
+        response = self.client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "my-points"}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="my-points-tab-btn"')
+        self.assertContains(response, 'id="my-points-chart"')
+        self.assertContains(response, "Membership")
+        self.assertContains(response, "Discord")
+        self.assertContains(response, "Map")
+        self.assertNotContains(response, "View membership details")
+        self.assertContains(response, "Club Auction 10")
+        self.assertNotContains(response, "Club Auction 0")
+
+    def test_club_detail_shows_join_button_for_non_member(self):
+        self.club.enable_club_page = True
+        self.club.homepage = "https://example.com"
+        self.club.facebook_page = "https://facebook.com/view-test-club"
+        self.club.discord_invite_link = "https://discord.gg/viewclub"
+        self.club.save()
+        self.client.login(username="other2", password="testpass")
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Join")
+        self.assertContains(
+            response,
+            '<button type="submit" class="btn btn-sm btn-success">',
+            html=False,
+        )
+        self.assertNotContains(response, 'data-club-panel-toggle="join-panel"')
+        self.assertContains(response, "Website")
+        self.assertContains(response, "Facebook")
+        self.assertContains(response, "Discord")
+
     def test_club_admin_owner_can_access(self):
         """Club owner with admin role can access admin page"""
         self.client.login(username="club_owner2", password="testpass")
@@ -14855,6 +14912,117 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_club_stats_owner_can_access(self):
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("club_stats", kwargs={"slug": self.club.slug}))
+
+    def test_club_stats_chart_data_uses_checkins_and_membership_growth(self):
+        self.client.login(username="club_owner2", password="testpass")
+        now = timezone.now()
+        normal_auction = Auction.objects.create(
+            title="Normal club auction",
+            date_start=now - datetime.timedelta(days=60),
+            date_end=now - datetime.timedelta(days=59),
+            created_by=self.owner,
+            club=self.club,
+        )
+        normal_location = PickupLocation.objects.create(
+            name="Normal pickup",
+            auction=normal_auction,
+            pickup_time=now + datetime.timedelta(days=1),
+        )
+        normal_tos = AuctionTOS.objects.create(
+            auction=normal_auction, pickup_location=normal_location, name="Normal bidder"
+        )
+        Lot.objects.create(
+            lot_name="Normal lot",
+            auction=normal_auction,
+            auctiontos_seller=normal_tos,
+            quantity=1,
+            winning_price=10,
+        )
+        Invoice.objects.create(auction=normal_auction, auctiontos_user=normal_tos)
+
+        checkin_auction = Auction.objects.create(
+            title="Check-in club auction",
+            date_start=now - datetime.timedelta(days=30),
+            date_end=now - datetime.timedelta(days=29),
+            created_by=self.owner,
+            club=self.club,
+            manage_users_through_club="checkin",
+        )
+        checkin_location = PickupLocation.objects.create(
+            name="Check-in pickup",
+            auction=checkin_auction,
+            pickup_time=now + datetime.timedelta(days=2),
+        )
+        checked_in_tos = AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Checked in bidder",
+            checked_in=now,
+        )
+        AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Not checked in bidder",
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 1",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=5,
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 2",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=15,
+        )
+        # Club stats charts read from cached auction stats, so populate caches for these test auctions.
+        normal_auction.recalculate_stats()
+        checkin_auction.recalculate_stats()
+
+        old_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="Old paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 11))
+        new_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=new_paid_member.pk).update(createdon=now - datetime.timedelta(days=20))
+        new_unpaid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New unpaid member",
+            membership_expiration_date=timezone.now().date() - datetime.timedelta(days=1),
+        )
+        ClubMember.objects.filter(pk=new_unpaid_member.pk).update(createdon=now - datetime.timedelta(days=10))
+
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+        auction_chart = response.context["club_auction_stats"]
+        auction_datasets = {dataset["label"]: dataset["data"] for dataset in auction_chart["datasets"]}
+        self.assertEqual(auction_datasets["Gross"], [10.0, 20.0])
+        self.assertEqual(auction_datasets["Lots"], [1, 2])
+        self.assertEqual(auction_datasets["Checked in"], [1, 1])
+
+        membership_chart = response.context["club_membership_growth"]
+        membership_datasets = {dataset["label"]: dataset["data"] for dataset in membership_chart["datasets"]}
+        self.assertEqual(membership_datasets["Members"][0], 1)
+        self.assertEqual(membership_datasets["Paid members"][0], 1)
+        self.assertEqual(membership_datasets["Members"][-1], 4)
+        self.assertEqual(membership_datasets["Paid members"][-1], 2)
+
     def test_club_404_for_invalid_slug(self):
         """Non-existent club slug returns 404"""
         self.client.login(username="club_owner2", password="testpass")
@@ -14879,6 +15047,12 @@ class ClubViewTests(TestCase):
     def test_club_history_anonymous_redirects_to_login(self):
         """Anonymous user accessing club_history should be redirected to login"""
         url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_stats_anonymous_redirects_to_login(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
@@ -14942,7 +15116,7 @@ class ClubViewTests(TestCase):
         """Superuser can access all club views"""
         User.objects.create_superuser(username="su_test", password="testpass", email="su@example.com")
         self.client.login(username="su_test", password="testpass")
-        for url_name in ["club_admin", "club_edit", "club_history"]:
+        for url_name in ["club_admin", "club_edit", "club_history", "club_stats"]:
             url = reverse(url_name, kwargs={"slug": self.club.slug})
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
@@ -15015,6 +15189,12 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
 
+    def test_anonymous_redirected_from_club_stats(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
     def test_anonymous_redirected_from_renew_page(self):
         url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
         response = self.client.get(url)
@@ -15048,6 +15228,11 @@ class ClubPermissionTests(TestCase):
     def test_non_member_blocked_from_club_history(self):
         self._login(self.non_member)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_club_stats(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
     def test_non_member_blocked_from_renew_page(self):
@@ -15117,6 +15302,11 @@ class ClubPermissionTests(TestCase):
     def test_view_only_can_access_history(self):
         self._login(self.view_user)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_can_access_stats(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
     def test_view_only_blocked_from_club_edit(self):
@@ -15272,6 +15462,7 @@ class ClubPermissionTests(TestCase):
             ("club_admin", {"slug": self.club.slug}),
             ("club_edit", {"slug": self.club.slug}),
             ("club_history", {"slug": self.club.slug}),
+            ("club_stats", {"slug": self.club.slug}),
             ("club_membership_settings", {"slug": self.club.slug}),
             ("club_bap_settings", {"slug": self.club.slug}),
             ("club_bap", {"slug": self.club.slug}),
@@ -16157,7 +16348,7 @@ class ClubSettingsViewTests(TestCase):
             username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
         )
         self.club = Club.objects.create(name="Settings Club", enable_membership=True)
-        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True, permission_add_edit=True)
         self.auction_member = ClubMember.objects.create(
             club=self.club,
             user=self.auction_manager,
@@ -16176,6 +16367,7 @@ class ClubSettingsViewTests(TestCase):
                 "name": "Updated Settings Club",
                 "homepage": "https://example.com",
                 "facebook_page": "https://facebook.com/settingsclub",
+                "discord_invite_link": "https://discord.gg/settingsclub",
                 "enable_club_page": "on",
                 "allow_joining": "on",
                 "enable_breeder_award_program": "on",
@@ -16188,6 +16380,7 @@ class ClubSettingsViewTests(TestCase):
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": "updated-settings-club"}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.name, "Updated Settings Club")
+        self.assertEqual(self.club.discord_invite_link, "https://discord.gg/settingsclub")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated club settings").exists())
 
     def test_membership_settings_save_updates_fields_and_creates_history(self):
@@ -16266,7 +16459,7 @@ class ClubEmailRoutingTests(TestCase):
         membership_user = User.objects.create_user("membership_route", email="membership@example.com", password="pw")
         auction_user = User.objects.create_user("auction_route", email="auction@example.com", password="pw")
         creator = User.objects.create_user("auction_creator", email="creator@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
         club.contact_email_member = membership_member
         club.auction_email_member = auction_member
@@ -16289,9 +16482,9 @@ class ClubEmailRoutingTests(TestCase):
     def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
         """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
         club = Club.objects.create(name="Fallback Club")
-        # Club exists but no email_member configured → falls back to admin via routing_email property
+        # Club exists but no members configured → auctions falls back to site admin, contact is dropped
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
-        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "admin@example.com")
+        self.assertIsNone(resolve_routed_recipient(f"{club.slug}-contact"))
         # No club with this slug → None (drop)
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
         self.assertIsNone(resolve_routed_recipient("nonexistent-slug-contact"))
@@ -16448,7 +16641,7 @@ class ClubEmailSettingsFormTests(TestCase):
             "email_form_membership", email="membership@example.com", password="pw"
         )
         auction_user = User.objects.create_user("email_form_auction", email="auction@example.com", password="pw")
-        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_edit_club=True)
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
         auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
 
         form = ClubEmailSettingsForm(instance=club)
@@ -16657,6 +16850,104 @@ class ClubBapLotsViewTests(TestCase):
             username="bap_lots_plain", password="testpass", email="bap_lots_plain@example.com"
         )
         ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.seller_user = User.objects.create_user(
+            username="mike_seller",
+            password="testpass",
+            email="mike@example.com",
+            first_name="Mike",
+            last_name="Smith",
+        )
+        self.buyer_user = User.objects.create_user(username="bap_lots_buyer", password="testpass")
+        self.seller_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.seller_user,
+            name="Mike Smith",
+            email="mike@example.com",
+        )
+        self.category = Category.objects.create(name="Foo Bar", bap_points=5)
+        self.other_category = Category.objects.create(name="Egglayers", bap_points=4)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            club=self.club,
+            title="Spring Auction",
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            tax=0,
+        )
+        self.other_auction = Auction.objects.create(
+            created_by=self.owner,
+            club=self.club,
+            title="Summer Auction",
+            date_start=timezone.now() - datetime.timedelta(days=6),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="Club Hall",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        other_location = PickupLocation.objects.create(
+            name="Club Hall 2",
+            auction=self.other_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=2),
+        )
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller_user, auction=self.auction, pickup_location=location
+        )
+        self.other_seller_tos = AuctionTOS.objects.create(
+            user=self.seller_user, auction=self.other_auction, pickup_location=other_location
+        )
+        self.buyer_tos = AuctionTOS.objects.create(user=self.buyer_user, auction=self.auction, pickup_location=location)
+        self.other_buyer_tos = AuctionTOS.objects.create(
+            user=self.buyer_user, auction=self.other_auction, pickup_location=other_location
+        )
+        self.pending_lot = Lot.objects.create(
+            lot_name="Pending Foo Lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            auctiontos_winner=self.buyer_tos,
+            active=False,
+            winning_price=Decimal("12.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.category,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.approved_lot = Lot.objects.create(
+            lot_name="Approved Egg Lot",
+            auction=self.other_auction,
+            auctiontos_seller=self.other_seller_tos,
+            auctiontos_winner=self.other_buyer_tos,
+            active=False,
+            winning_price=Decimal("15.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.other_category,
+            date_end=timezone.now() - datetime.timedelta(days=2),
+        )
+        self.rejected_lot = Lot.objects.create(
+            lot_name="Rejected Lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            auctiontos_winner=self.buyer_tos,
+            active=False,
+            winning_price=Decimal("10.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.other_category,
+            manually_approved=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        BapAward.objects.create(
+            club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5
+        )
         self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
 
     def test_anon_redirected_to_login(self):
@@ -16686,17 +16977,45 @@ class ClubBapLotsViewTests(TestCase):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url, {"query": "pending"})
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
 
     def test_query_approved_filter(self):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url, {"query": "approved"})
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Approved Egg Lot")
+        self.assertNotContains(response, "Pending Foo Lot")
 
     def test_default_shows_pending_without_query(self):
         """No query param should still return 200 (defaults to pending filter)."""
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
+
+    def test_query_supports_user_category_and_auction_keywords(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(
+            self.url, {"query": 'pending user:"Mike Smith" category:"Foo Bar" auction:spring-auction'}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
+        self.assertNotContains(response, "Rejected Lot")
+
+    def test_category_badge_modal_updates_lot_category(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        url = reverse("club_bap_lot_category", kwargs={"pk": self.pending_lot.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Set category")
+        response = self.client.post(url, {"species_category": self.other_category.pk})
+        self.assertEqual(response.status_code, 200)
+        self.pending_lot.refresh_from_db()
+        self.assertEqual(self.pending_lot.species_category, self.other_category)
+        self.assertContains(response, "bapLotListChanged")
 
 
 class ClubAPIKeyModelTests(TestCase):
@@ -17326,6 +17645,13 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertTrue(
             ClubHistory.objects.filter(club=self.club, action__contains="Renewed membership for Source Member").exists()
         )
+
+    @patch("auctions.models.ClubMember.maybe_assign_discord_role")
+    def test_renew_endpoint_defers_discord_role_sync_to_daily_job(self, maybe_assign):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        maybe_assign.assert_not_called()
 
     def test_renew_rolling_extends_from_current_expiration_if_future(self):
         """Rolling: if current expiration is in future, extend from that date."""
