@@ -5552,6 +5552,12 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             enable_club_page=True,
             send_membership_expiration_reminders=True,
         )
+        self.payment_user = User.objects.create_user(
+            username="renewal_payment_user",
+            password='testpass',
+            email="renewal_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_renewal")
         self.online_auction.club = self.club
         self.online_auction.add_people_from_auction_to_club = True
         self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
@@ -17739,6 +17745,7 @@ class ClubMemberManagementViewTests(TestCase):
                 "phone_number": "",
                 "address": "",
                 "contact_status": "contact",
+                "send_welcome_email": "on",
                 "discord_role_auto_managed": "on",
                 "discord_role_override": "",
             },
@@ -17768,7 +17775,7 @@ class ClubMemberManagementViewTests(TestCase):
         response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.target_member.pk}))
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "id_send_welcome_email")
+        self.assertNotContains(response, 'type="checkbox" name="send_welcome_email"')
 
     def test_viewer_cannot_create_member(self):
         self.client.login(username="club_viewer", password="testpass")
