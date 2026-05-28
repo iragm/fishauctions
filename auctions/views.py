@@ -607,22 +607,52 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
         logger.exception("Failed to record ClubHistory for renewal of invoice %s", invoice.pk)
 
 
-def _disable_integrated_payments_if_only_method(user, method_label):
-    """If user is the payment_user for any clubs and has no remaining payment methods, disable integrated payments."""
-    has_paypal = PayPalSeller.objects.filter(user=user).exists()
-    has_square = SquareSeller.objects.filter(user=user).exists()
-    if has_paypal or has_square:
-        return
-    affected_clubs = Club.objects.filter(payment_user=user, allow_integrated_payments=True)
-    for club in affected_clubs:
-        club.allow_integrated_payments = False
-        club.save(update_fields=["allow_integrated_payments"])
-        ClubHistory.objects.create(
+PAYMENT_OAUTH_CLUB_SESSION_KEY = "payment_oauth_club_slug"
+
+
+def _user_can_manage_club_payments(user, club):
+    """Mirror the dispatch-level permission gate used by ClubMembershipSettingsView."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return (
+        ClubMember.objects.filter(
+            user=user,
             club=club,
-            user=None,
-            action=f"Integrated payments disabled: payment account unlinked {method_label}",
-            applies_to="SETTINGS",
+            is_deleted=False,
         )
+        .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_money=True))
+        .exists()
+    )
+
+
+def _stash_club_for_payment_oauth(request):
+    """If the request includes ?club=<slug> and the user can manage that club's payments,
+    store the slug in the session so the OAuth callback can link the new seller to it.
+    Returns the Club instance for callers that need it, or None.
+    """
+    slug = request.GET.get("club")
+    if not slug:
+        request.session.pop(PAYMENT_OAUTH_CLUB_SESSION_KEY, None)
+        return None
+    club = Club.objects.filter(slug=slug).first()
+    if not club or not _user_can_manage_club_payments(request.user, club):
+        request.session.pop(PAYMENT_OAUTH_CLUB_SESSION_KEY, None)
+        return None
+    request.session[PAYMENT_OAUTH_CLUB_SESSION_KEY] = slug
+    return club
+
+
+def _pop_club_for_payment_oauth(request):
+    """Retrieve and clear the pending club context from session. Returns Club or None."""
+    slug = request.session.pop(PAYMENT_OAUTH_CLUB_SESSION_KEY, None)
+    if not slug:
+        return None
+    club = Club.objects.filter(slug=slug).first()
+    if not club or not _user_can_manage_club_payments(request.user, club):
+        return None
+    return club
 
 
 def club_ids_available_for_contact_autofill(user):
@@ -9269,15 +9299,13 @@ class PayPalAPIMixin:
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
         if invoice.club:
-            from auctions.models import PayPalSeller
-
-            club_seller = PayPalSeller.objects.filter(user=invoice.club.payment_user).first()
-            if club_seller and club_seller.paypal_merchant_id:
-                paypal_merchant_id = club_seller.paypal_merchant_id
-            elif invoice.club.payment_user and invoice.club.payment_user.is_superuser:
+            if invoice.club.uses_site_paypal:
                 paypal_merchant_id = "admin"
             else:
-                paypal_merchant_id = None
+                club_seller = invoice.club.effective_paypal_seller
+                paypal_merchant_id = (
+                    club_seller.paypal_merchant_id if club_seller and club_seller.paypal_merchant_id else None
+                )
         elif invoice.auction:
             paypal_merchant_id = invoice.auction.paypal_information
         else:
@@ -9605,6 +9633,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
     """Start the PayPal onboarding process for a seller"""
 
     def get(self, request):
+        _stash_club_for_payment_oauth(request)
         tracking_id = request.user.userdata.unsubscribe_link
         payload = {
             "tracking_id": tracking_id,
@@ -9644,6 +9673,17 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
     """After onboarding, PayPal redirects here"""
 
     def get_success_url(self):
+        # If the user started the connect flow from a club's membership settings page,
+        # we already attached the seller to the club in self.get() — send them back there.
+        if getattr(self, "linked_club", None):
+            if self.error:
+                messages.error(self.request, self.error)
+            else:
+                messages.success(
+                    self.request,
+                    f"PayPal account linked to {self.linked_club.name}. Members can now pay dues directly on this site.",
+                )
+            return redirect(reverse("club_membership_settings", kwargs={"slug": self.linked_club.slug}))
         success_url = reverse("home")
         if self.request.user.userdata.last_auction_created:
             success_url = self.request.user.userdata.last_auction_created.get_absolute_url()
@@ -9660,6 +9700,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
     def get(self, request):
         self.error = None
         self.valid = False
+        self.linked_club = None
         tracking_id = request.GET.get("merchantId")
         merchant_id = request.GET.get("merchantIdInPayPal")
         partner_merchant_id = settings.PARTNER_MERCHANT_ID
@@ -9701,7 +9742,31 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         seller.paypal_merchant_id = merchant_id
         seller.payer_email = merchant_info.get("primary_email") or seller.payer_email
         seller.currency = currency
+        # If the connect flow originated from a club's settings page, link the seller to that club.
+        club = _pop_club_for_payment_oauth(request)
+        if club:
+            # If another seller is already linked to this club, detach it first to honor the
+            # OneToOneField uniqueness constraint.
+            existing = PayPalSeller.objects.filter(club=club).exclude(pk=seller.pk).first()
+            if existing:
+                existing.club = None
+                existing.save(update_fields=["club"])
+                ClubHistory.objects.create(
+                    club=club,
+                    user=request.user,
+                    action=f"Replaced PayPal account {existing.payer_email or existing.user}",
+                    applies_to="SETTINGS",
+                )
+            seller.club = club
+            self.linked_club = club
         seller.save()
+        if club:
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Connected PayPal account {seller.payer_email or seller.user}",
+                applies_to="SETTINGS",
+            )
         return self.get_success_url()
 
 
@@ -9774,10 +9839,6 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
     def get_object(self, queryset=None):
         return get_object_or_404(PayPalSeller, user=self.request.user)
 
-    def form_valid(self, form):
-        _disable_integrated_payments_if_only_method(self.request.user, "PayPal")
-        return super().form_valid(form)
-
     def get_success_url(self):
         return reverse("paypal_seller")
 
@@ -9793,14 +9854,13 @@ class SquareAPIMixin:
         """
         from auctions.models import SquareSeller
 
-        seller_user = (
-            invoice.club.payment_user if invoice.club else (invoice.auction.created_by if invoice.auction else None)
-        )
-        if not seller_user:
-            return None, "No seller account configured"
-        seller = SquareSeller.objects.filter(user=seller_user).first()
+        if invoice.club:
+            seller = invoice.club.effective_square_seller
+        elif invoice.auction:
+            seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        else:
+            seller = None
         if not seller:
-            logger.error("No SquareSeller for user %s", seller_user.pk)
             return None, "Seller has not connected their Square account"
 
         return seller.create_payment_link(invoice, self.request)
@@ -9810,6 +9870,7 @@ class SquareConnectView(LoginRequiredMixin, View):
     """Start the Square OAuth process for a seller"""
 
     def get(self, request):
+        _stash_club_for_payment_oauth(request)
         # Build Square OAuth URL
         # Use the user's unsubscribe_link as state parameter for security
         state = request.user.userdata.unsubscribe_link
@@ -9922,7 +9983,32 @@ class SquareCallbackView(LoginRequiredMixin, View):
                         seller.token_expires_at = expires_at
             seller.currency = currency
             seller.payer_email = email
+            club = _pop_club_for_payment_oauth(request)
+            if club:
+                existing = SquareSeller.objects.filter(club=club).exclude(pk=seller.pk).first()
+                if existing:
+                    existing.club = None
+                    existing.save(update_fields=["club"])
+                    ClubHistory.objects.create(
+                        club=club,
+                        user=request.user,
+                        action=f"Replaced Square account {existing.payer_email or existing.user}",
+                        applies_to="SETTINGS",
+                    )
+                seller.club = club
             seller.save()
+            if club:
+                ClubHistory.objects.create(
+                    club=club,
+                    user=request.user,
+                    action=f"Connected Square account {seller.payer_email or seller.user}",
+                    applies_to="SETTINGS",
+                )
+                messages.success(
+                    request,
+                    f"Square account linked to {club.name}. Members can now pay dues directly on this site.",
+                )
+                return redirect(reverse("club_membership_settings", kwargs={"slug": club.slug}))
 
             messages.success(
                 request,
@@ -10017,10 +10103,6 @@ class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):
 
     def get_object(self, queryset=None):
         return get_object_or_404(SquareSeller, user=self.request.user)
-
-    def form_valid(self, form):
-        _disable_integrated_payments_if_only_method(self.request.user, "Square")
-        return super().form_valid(form)
 
     def get_success_url(self):
         return reverse("square_seller")
@@ -12815,7 +12897,6 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             if merchant_id_in_paypal:
                 seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
             if seller:
-                _disable_integrated_payments_if_only_method(seller.user, "PayPal")
                 seller.delete()
                 logger.info("Revoked selling for merchant_id=%s", merchant_id_in_paypal)
             else:
@@ -13097,7 +13178,6 @@ class SquareWebhookView(SquareAPIMixin, View):
             if merchant_id:
                 square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
-                    _disable_integrated_payments_if_only_method(square_seller.user, "Square")
                     square_seller.delete()
         return HttpResponse(status=200)
 
@@ -13266,9 +13346,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             renewal_soon = True
         context["show_membership_payment_button"] = bool(
             self.club.enable_club_page
-            and self.club.allow_integrated_payments
+            and (self.club.can_accept_paypal or self.club.can_accept_square)
             and self.club.membership_annual_fee
-            and self.club.payment_user
             and member
             and renewal_soon
         )
@@ -13377,9 +13456,8 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
         can_pay = bool(
             self.club.enable_club_page
-            and self.club.allow_integrated_payments
             and self.club.membership_annual_fee
-            and self.club.payment_user
+            and (self.club.can_accept_paypal or self.club.can_accept_square)
         )
         payment_link = ""
         if can_pay:
@@ -14387,6 +14465,15 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             action=f"Set membership expiration for {member} to {new_expiration}",
             applies_to="MEMBERSHIP",
         )
+        if self.club.membership_annual_fee:
+            ClubMoney.objects.create(
+                club=self.club,
+                created_by=request.user,
+                date=timezone.localdate(),
+                amount=self.club.membership_annual_fee,
+                description=f"Manual membership renewal for {member}",
+                category=ClubMoney.CATEGORY_MEMBERSHIP,
+            )
         messages.success(request, f"Expiration date updated for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
@@ -14403,9 +14490,8 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
         self.get_club(kwargs.get("slug", ""))
         if not (
             self.club.enable_club_page
-            and self.club.allow_integrated_payments
             and self.club.membership_annual_fee
-            and self.club.payment_user
+            and (self.club.can_accept_paypal or self.club.can_accept_square)
         ):
             raise Http404
         return super().dispatch(request, *args, **kwargs)
@@ -14653,7 +14739,18 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["club"] = self.club
+        club = self.club
+        user = self.request.user
+        context["club"] = club
+        context["paypal_seller"] = club.effective_paypal_seller
+        context["square_seller"] = club.effective_square_seller
+        context["uses_site_paypal"] = club.uses_site_paypal
+        context["user_paypal_seller"] = PayPalSeller.objects.filter(user=user).first()
+        context["user_square_seller"] = SquareSeller.objects.filter(user=user).first()
+        context["paypal_configured"] = bool(settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET)
+        context["square_configured"] = bool(
+            getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
+        )
         return context
 
     def form_valid(self, form):
@@ -14665,6 +14762,78 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             applies_to="SETTINGS",
         )
         return result
+
+
+class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only endpoint used from the club membership settings page to link or
+    unlink the requesting user's PayPal/Square seller to this club.
+
+    Query / form parameters:
+      provider: ``paypal`` or ``square``
+      action:   ``attach`` (default) — set seller.club to this club
+                ``detach``            — clear the club's linked seller
+    """
+
+    http_method_names = ["post"]
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        provider = request.POST.get("provider") or request.GET.get("provider")
+        action = request.POST.get("action") or "attach"
+        if provider not in ("paypal", "square"):
+            messages.error(request, "Unknown payment provider.")
+            return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        model = PayPalSeller if provider == "paypal" else SquareSeller
+        provider_label = "PayPal" if provider == "paypal" else "Square"
+
+        if action == "detach":
+            seller = model.objects.filter(club=self.club).first()
+            if seller:
+                seller.club = None
+                seller.save(update_fields=["club"])
+                ClubHistory.objects.create(
+                    club=self.club,
+                    user=request.user,
+                    action=f"Disconnected {provider_label} account {seller.payer_email or seller.user}",
+                    applies_to="SETTINGS",
+                )
+                messages.success(request, f"{provider_label} account disconnected.")
+            return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+
+        # attach: use the requesting user's existing seller if they have one, otherwise
+        # send them through OAuth with the club context set.
+        seller = model.objects.filter(user=request.user).first()
+        if not seller:
+            connect_url = reverse("paypal_connect" if provider == "paypal" else "square_connect")
+            return redirect(f"{connect_url}?club={self.club.slug}")
+
+        existing = model.objects.filter(club=self.club).exclude(pk=seller.pk).first()
+        if existing:
+            existing.club = None
+            existing.save(update_fields=["club"])
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Replaced {provider_label} account {existing.payer_email or existing.user}",
+                applies_to="SETTINGS",
+            )
+        seller.club = self.club
+        seller.save(update_fields=["club"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Connected {provider_label} account {seller.payer_email or seller.user}",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, f"{provider_label} account linked to {self.club.name}.")
+        return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
 
 
 class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
@@ -15537,7 +15706,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in excluded]
 
     def _filtered_entries(self, start_date, end_date):
-        return ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by("date", "pk")
+        return ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by("-date", "-pk")
 
     def _money_sum(self, queryset, **filters):
         total = queryset.filter(**filters).aggregate(total=Sum("amount"))["total"]
@@ -15645,7 +15814,7 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return JsonResponse(
             {
                 "ok": True,
-                "message": f"Saved {entry.get_category_display()} record on {timezone.localtime(entry.createdon).isoformat(timespec='seconds')}.",
+                "message": f"Saved {entry.get_category_display()} record.",
                 "current_balance": str(
                     ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
                 ),

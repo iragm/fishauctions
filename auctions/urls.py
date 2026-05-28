@@ -627,6 +627,11 @@ urlpatterns = [
         views.ClubMembershipSettingsView.as_view(),
         name="club_membership_settings",
     ),
+    path(
+        "clubs/<slug:slug>/link-payment/",
+        views.ClubLinkPaymentAccountView.as_view(),
+        name="club_link_payment_account",
+    ),
     path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
     path("clubs/<slug:slug>/bap-admin/", views.ClubBapView.as_view(), name="club_bap"),

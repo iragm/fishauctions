@@ -4191,7 +4191,7 @@ class UserDataMergeIntoTests(TestCase):
 
         now = timezone.now()
         self.now = now
-        self.club = Club.objects.create(name="Merge Club", payment_user=self.source_user)
+        self.club = Club.objects.create(name="Merge Club")
         self.auction = Auction.objects.create(
             created_by=self.source_user,
             club=self.club,
@@ -4345,7 +4345,6 @@ class UserDataMergeIntoTests(TestCase):
         self.target_chat.refresh_from_db()
 
         self.assertEqual(self.auction.created_by, self.target_user)
-        self.assertEqual(self.club.payment_user, self.target_user)
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
         self.assertTrue(
             InvoiceAdjustment.objects.filter(invoice__auctiontos_user=self.target_tos, notes="move me").exists()
@@ -5516,7 +5515,6 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
             enable_club_page=True,
-            allow_integrated_payments=True,
             send_membership_expiration_reminders=True,
         )
         self.online_auction.club = self.club
@@ -16350,7 +16348,6 @@ class ClubSettingsViewTests(TestCase):
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
                 "membership_number_mode": "disabled",
-                "payment_user": "",
                 "send_membership_expiration_reminders": "on",
             },
         )
@@ -16360,15 +16357,17 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertTrue(self.club.send_membership_expiration_reminders)
-        self.assertFalse(self.club.allow_integrated_payments)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
         self.client.login(username="club_settings_editor", password="testpass")
-        response = self.client.get(self.membership_url)
+        with override_settings(PAYPAL_CLIENT_ID="test_id", PAYPAL_SECRET="test_secret"):
+            response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Allow integrated payments")
-        self.assertContains(response, "Payments are not enabled for your account.")
+        # The Payments section is always rendered; without a connected account or site PayPal,
+        # the user is prompted to connect.
+        self.assertContains(response, "Payments")
+        self.assertContains(response, "Connect a PayPal account for this club")
 
     def test_plain_member_cannot_access_membership_settings(self):
         self.client.login(username="club_settings_plain", password="testpass")
@@ -17803,10 +17802,8 @@ class ClubMembershipInvoiceTests(TestCase):
         self.club = Club.objects.create(
             name="Pay Club",
             enable_club_page=True,
-            allow_integrated_payments=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
-            payment_user=self.payment_user,
         )
         self.club_member = ClubMember.objects.create(
             club=self.club,
@@ -17827,6 +17824,10 @@ class ClubMembershipInvoiceTests(TestCase):
 
     def test_currency_uses_payment_user_currency(self):
         invoice = self._make_club_invoice()
+        # When no seller is linked, the invoice currency falls back to USD.
+        self.assertEqual(invoice.currency, "USD")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
+        invoice = self._make_club_invoice()
         self.assertEqual(invoice.currency, self.payment_user.userdata.currency)
 
     def test_membership_fee_amount_from_club(self):
@@ -17843,28 +17844,30 @@ class ClubMembershipInvoiceTests(TestCase):
 
     def test_show_paypal_button_true_for_trusted_paypal_user(self):
         invoice = self._make_club_invoice()
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.assertTrue(invoice.show_paypal_button)
 
     def test_show_paypal_button_false_for_untrusted_payment_user(self):
         self.payment_user.userdata.is_trusted = False
         self.payment_user.userdata.save()
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         invoice = self._make_club_invoice()
         self.assertFalse(invoice.show_paypal_button)
 
-    def test_show_paypal_button_true_for_superuser_payment_user(self):
-        self.payment_user.is_superuser = True
-        self.payment_user.save()
+    def test_show_paypal_button_true_when_use_site_paypal_account(self):
+        # Equivalent to the old "superuser payment_user" behaviour: site PayPal is used.
+        self.club.use_site_paypal_account = True
+        self.club.save()
         invoice = self._make_club_invoice()
         self.assertTrue(invoice.show_paypal_button)
 
     def test_show_paypal_button_false_when_already_paid(self):
         invoice = self._make_club_invoice(status="PAID")
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.assertFalse(invoice.show_paypal_button)
 
     def test_show_payment_button_true_when_paypal_available(self):
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         invoice = self._make_club_invoice()
         self.assertTrue(invoice.show_payment_button)
 
@@ -17928,23 +17931,25 @@ class ClubMembershipInvoiceTests(TestCase):
     # -- ClubMembershipPaymentView ---------------------------------------------
 
     def test_payment_view_404_when_not_configured(self):
-        self.club.allow_integrated_payments = False
-        self.club.save()
+        # No PayPalSeller, no SquareSeller, no use_site_paypal_account => not configured.
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 404)
 
     def test_payment_view_requires_login(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 302)
 
     def test_payment_view_accessible_for_member(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "30")
 
     def test_payment_view_creates_unpaid_invoice(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.client.login(username="club_member_u", password="testpass")
         self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertTrue(
@@ -17976,55 +17981,109 @@ class ClubMembershipInvoiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class ClubMembershipSettingsFormPaymentUserTests(TestCase):
-    """Confirm that the payment_user dropdown only includes members with admin or edit_club permission."""
+class ClubMembershipSettingsFormFieldsTests(TestCase):
+    """The form no longer exposes payment_user or allow_integrated_payments —
+    those are managed via the per-provider seller links (PayPalSeller.club /
+    SquareSeller.club) and Club.use_site_paypal_account in the Django admin.
+    """
 
     def setUp(self):
-        from .models import SquareSeller
-
         self.club = Club.objects.create(name="Test Club", enable_membership=True)
 
-        # Helper to create a User + ClubMember with specified permissions
-        def _make_member(username, **perms):
-            user = User.objects.create_user(username=username, password="pw")
-            ClubMember.objects.create(club=self.club, user=user, **perms)
-            return user
-
-        self.admin_user = _make_member("admin_u", permission_admin=True)
-        self.edit_club_user = _make_member("edit_club_u", permission_edit_club=True)
-        self.money_user = _make_member("money_u", permission_money=True)
-        self.manage_auctions_user = _make_member("manage_auctions_u", permission_manage_auctions=True)
-        self.plain_member = _make_member("plain_u")
-
-        # Give each user a Square account so they are payment-eligible
-        for user in [
-            self.admin_user,
-            self.edit_club_user,
-            self.money_user,
-            self.manage_auctions_user,
-            self.plain_member,
-        ]:
-            SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
-
-    def _get_payment_user_ids(self):
+    def test_payment_user_not_in_form(self):
         form = ClubMembershipSettingsForm(instance=self.club)
-        return set(form.fields["payment_user"].queryset.values_list("id", flat=True))
+        self.assertNotIn("payment_user", form.fields)
 
-    def test_admin_user_included(self):
-        self.assertIn(self.admin_user.pk, self._get_payment_user_ids())
+    def test_allow_integrated_payments_not_in_form(self):
+        form = ClubMembershipSettingsForm(instance=self.club)
+        self.assertNotIn("allow_integrated_payments", form.fields)
 
-    def test_edit_club_user_included(self):
-        self.assertIn(self.edit_club_user.pk, self._get_payment_user_ids())
 
-    def test_money_user_included(self):
-        self.assertIn(self.money_user.pk, self._get_payment_user_ids())
+class PaymentSellerClubLinkTests(TestCase):
+    """Behavioural tests for the new PayPalSeller.club / SquareSeller.club routing."""
 
-    def test_manage_auctions_only_user_excluded(self):
-        """A member with only permission_manage_auctions should not appear in the payment_user choices."""
-        self.assertNotIn(self.manage_auctions_user.pk, self._get_payment_user_ids())
+    def setUp(self):
+        self.creator = User.objects.create_user(username="creator", password="pw", email="creator@example.com")
+        self.creator.userdata.is_trusted = True
+        self.creator.userdata.paypal_enabled = True
+        self.creator.userdata.save()
 
-    def test_plain_member_excluded(self):
-        self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())
+        self.club_payer = User.objects.create_user(username="cpayer", password="pw", email="cpayer@example.com")
+        self.club_payer.userdata.is_trusted = True
+        self.club_payer.userdata.paypal_enabled = True
+        self.club_payer.userdata.save()
+
+        self.club = Club.objects.create(name="Routing Club")
+
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y")
+    def test_club_paypal_seller_takes_precedence_over_creator(self):
+        """A club auction routes through the club's PayPalSeller, not the auction creator's."""
+        PayPalSeller.objects.create(user=self.creator, paypal_merchant_id="creator_id")
+        PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="club_id")
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Club Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.assertEqual(auction.paypal_information, "club_id")
+
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y")
+    def test_use_site_paypal_account_returns_admin(self):
+        """When the club is flagged for site PayPal, paypal_information is the 'admin' sentinel."""
+        self.club.use_site_paypal_account = True
+        self.club.save()
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Site PayPal Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.assertEqual(auction.paypal_information, "admin")
+
+    def test_link_existing_seller_via_view(self):
+        """POSTing to club_link_payment_account attaches the user's seller to the club."""
+        admin_member = ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        self.assertIsNotNone(admin_member)
+        seller = PayPalSeller.objects.create(user=self.club_payer, paypal_merchant_id="cp_id")
+        self.client.login(username="cpayer", password="pw")
+        url = reverse("club_link_payment_account", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"provider": "paypal", "action": "attach"})
+        self.assertEqual(response.status_code, 302)
+        seller.refresh_from_db()
+        self.assertEqual(seller.club_id, self.club.pk)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+    def test_detach_seller_via_view(self):
+        ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="cp_id")
+        self.client.login(username="cpayer", password="pw")
+        url = reverse("club_link_payment_account", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"provider": "paypal", "action": "detach"})
+        self.assertEqual(response.status_code, 302)
+        seller = PayPalSeller.objects.get(user=self.club_payer)
+        self.assertIsNone(seller.club_id)
+
+    def test_disconnecting_seller_flips_club_auction_payments(self):
+        ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        seller = PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="cp_id")
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Disconnect Test Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+            enable_online_payments=True,
+        )
+        seller.delete()
+        auction.refresh_from_db()
+        self.assertFalse(auction.enable_online_payments)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
 
 
 class ClubMoneyInvoiceHistoryTests(StandardTestCase):

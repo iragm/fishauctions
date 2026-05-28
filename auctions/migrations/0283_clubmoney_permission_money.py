@@ -4,16 +4,43 @@ from django.db import migrations, models
 
 
 def backfill_club_money(apps, schema_editor):
-    from auctions.models import Invoice
-
-    queryset = (
-        Invoice.objects.filter(
+    # Fetch invoice IDs using the historical (apps-frozen) Invoice model so the SELECT
+    # only references columns that exist at this migration's point in history. Then load
+    # each invoice via the live model (deferring any fields added in later migrations)
+    # so we can call ``create_club_payment_history`` on it.
+    Invoice_historical = apps.get_model("auctions", "Invoice")
+    invoice_ids = list(
+        Invoice_historical.objects.filter(
             models.Q(auction__club__isnull=False)
             | models.Q(auction__isnull=True, auctiontos_user__auction__club__isnull=False)
         )
-        .select_related("auction", "auction__club", "auctiontos_user", "auctiontos_user__auction")
+        .values_list("pk", flat=True)
         .distinct()
     )
+    if not invoice_ids:
+        return
+
+    from auctions.models import Club, Invoice
+
+    # Defer fields added after this migration so the SELECT does not reference columns
+    # that don't yet exist when the migration runs on a fresh database.
+    historical_club = apps.get_model("auctions", "Club")
+    deferred_club_fields = [
+        f.name
+        for f in Club._meta.get_fields()
+        if getattr(f, "concrete", False)
+        and f.name not in {hf.name for hf in historical_club._meta.get_fields() if getattr(hf, "concrete", False)}
+    ]
+    deferred_lookups = [f"auction__club__{name}" for name in deferred_club_fields] + [
+        f"auctiontos_user__auction__club__{name}" for name in deferred_club_fields
+    ]
+
+    queryset = Invoice.objects.filter(pk__in=invoice_ids).select_related(
+        "auction", "auction__club", "auctiontos_user", "auctiontos_user__auction", "auctiontos_user__auction__club"
+    )
+    if deferred_lookups:
+        queryset = queryset.defer(*deferred_lookups)
+
     for invoice in queryset.iterator(chunk_size=200):
         invoice.create_club_payment_history(force_current_state=True)
 
