@@ -5,11 +5,14 @@ This module contains all Celery tasks that were previously run as cron jobs.
 Each task wraps a management command to maintain backward compatibility.
 """
 
+import datetime
 import json
 import logging
+from html import escape
 
 import requests
 from celery import shared_task
+from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
@@ -25,6 +28,76 @@ AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off schedul
 BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 
 logger = logging.getLogger(__name__)
+
+
+def _membership_email_reply_to(club):
+    fallback_reply_to = settings.DEFAULT_FROM_EMAIL
+    if settings.ADMINS:
+        fallback_reply_to = settings.ADMINS[0][1]
+    return club.contact_email or fallback_reply_to
+
+
+def _club_member_membership_link(member, current_site=None):
+    current_site = current_site or Site.objects.get_current()
+    return f"https://{current_site.domain}{member.member_page_url}"
+
+
+def _render_membership_email_html(member, intro_text, message_text, membership_link, club_icon_url):
+    html_parts = [f"Dear {escape(member.display_name)},<br><br>"]
+    if intro_text:
+        html_parts.append(escape(intro_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
+    html_parts.append(f"{escape(message_text)}<br><br>")
+    html_parts.append(f"<a href='{escape(membership_link)}'>View your membership</a><br><br>")
+    if club_icon_url:
+        html_parts.append(
+            f"<div><img src='{escape(club_icon_url)}' alt='{escape(member.club.name)}' "
+            "style='height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;'>"
+            f"{escape(member.club.name)}</div>"
+        )
+    else:
+        html_parts.append(escape(member.club.name))
+    return "".join(html_parts)
+
+
+def send_club_member_email(member, subject, message_text):
+    if not member.email or member.contact_status == "do_not_contact":
+        return False
+    current_site = Site.objects.get_current()
+    membership_link = _club_member_membership_link(member, current_site=current_site)
+    intro_text = (member.club.membership_email_template or "").strip()
+    text_parts = [f"Dear {member.display_name},", ""]
+    if intro_text:
+        text_parts.extend([intro_text, ""])
+    text_parts.extend([message_text, "", f"View your membership here: {membership_link}", "", member.club.name])
+    club_icon_url = ""
+    if member.club.icon:
+        club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
+    mail.send(
+        member.email,
+        sender=member.club.contact_sender_email,
+        subject=subject,
+        message="\n".join(text_parts),
+        html_message=_render_membership_email_html(
+            member,
+            intro_text=intro_text,
+            message_text=message_text,
+            membership_link=membership_link,
+            club_icon_url=club_icon_url,
+        ),
+        headers={"Reply-to": _membership_email_reply_to(member.club)},
+    )
+    return True
+
+
+def maybe_send_membership_renewal_confirmation(member):
+    if not member.club.send_membership_renewal_confirmation:
+        return False
+    return send_club_member_email(
+        member,
+        subject=f"Your membership with {member.club.name} has been renewed",
+        message_text=f"Your membership with {member.club.name} has been renewed.",
+    )
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -243,13 +316,9 @@ def update_expired_membership_discord_roles(self):
     Runs daily. Only members whose computed role differs from last_discord_role_assigned
     will trigger Discord API calls.
     """
-    from django.conf import settings
-    from django.contrib.sites.models import Site
-    from django.urls import reverse
     from django.utils import timezone
-    from post_office import mail
 
-    from auctions.models import ClubMember, Invoice
+    from auctions.models import ClubMember
 
     members = (
         ClubMember.objects.filter(
@@ -267,8 +336,6 @@ def update_expired_membership_discord_roles(self):
             member.maybe_assign_discord_role()
 
     # Zero out YTD BAP/HAP/CAP counters at the start of each new year
-    import datetime
-
     today = datetime.datetime.now(tz=datetime.timezone.utc).date()
     if today.month == 1 and today.day == 1:
         ClubMember.objects.filter(
@@ -276,65 +343,60 @@ def update_expired_membership_discord_roles(self):
             club__enable_breeder_award_program=True,
         ).update(bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0)
 
-    # Send membership expiration reminder emails
-    reminder_qs = (
-        ClubMember.objects.filter(
-            is_deleted=False,
-            club__send_membership_expiration_reminders=True,
-            club__membership_annual_fee__gt=0,
-            membership_expiration_date__isnull=False,
-            membership_expiration_reminder_due__lte=timezone.now(),
-            email__isnull=False,
-        )
-        .exclude(email="")
-        .exclude(contact_status="do_not_contact")
-        .select_related("club")
-    )
-    current_site = Site.objects.get_current()
-    for member in reminder_qs:
-        club = member.club
-        # Find or create an unpaid membership invoice for this member so the
-        # no-login link lets them pay without signing in.
-        invoice = Invoice.objects.filter(
-            club=club,
-            auction=None,
-            auctiontos_user__email__iexact=member.email,
-            renewal_processed=False,
-            status="UNPAID",
-        ).first()
-        if invoice is None and member.user:
-            invoice = Invoice.objects.filter(
-                club=club,
-                auction=None,
-                buyer=member.user,
-                renewal_processed=False,
-                status="UNPAID",
-            ).first()
-        if invoice is None:
-            invoice = Invoice.objects.create(
-                club=club,
-                buyer=member.user or None,
-                status="UNPAID",
-                renewal_needed=True,
+    now = timezone.now()
+    today = now.date()
+
+    welcome_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        welcome_email_sent=False,
+        createdon__lte=now - datetime.timedelta(hours=24),
+    ).select_related("club")
+    for member in welcome_qs:
+        update_fields = ["welcome_email_sent"]
+        member.welcome_email_sent = True
+        if member.source == "csv":
+            if member.send_welcome_email:
+                member.send_welcome_email = False
+                update_fields.append("send_welcome_email")
+            member.save(update_fields=update_fields)
+            continue
+        if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
+            send_club_member_email(
+                member,
+                subject=f"Welcome to the {member.club.name}!",
+                message_text=f"Welcome to {member.club.name}.",
             )
-        renew_url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
-        fallback_reply_to = settings.DEFAULT_FROM_EMAIL
-        if settings.ADMINS:
-            fallback_reply_to = settings.ADMINS[0][1]
-        mail.send(
-            member.email,
-            sender=club.contact_sender_email,
-            template="club_membership_expiring",
-            headers={"Reply-to": (club.contact_email or fallback_reply_to)},
-            context={
-                "name": member.display_name,
-                "club": club,
-                "domain": current_site.domain,
-                "navbar_brand": settings.NAVBAR_BRAND,
-                "renew_link": f"https://{current_site.domain}{renew_url}",
-                "member": member,
-            },
-        )
+        member.save(update_fields=update_fields)
+
+    reminder_30_days_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        membership_expiration_date__isnull=False,
+        membership_expiration_date__gte=today,
+        membership_expiration_reminder_30_days_due__lte=now,
+    ).select_related("club")
+    for member in reminder_30_days_qs:
+        if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
+            send_club_member_email(
+                member,
+                subject=f"Your membership with {member.club.name} expires in 30 days",
+                message_text=f"Your membership with {member.club.name} expires in 30 days.",
+            )
+        member.membership_expiration_reminder_30_days_due = None
+        member.save(update_fields=["membership_expiration_reminder_30_days_due"])
+
+    reminder_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        membership_expiration_date__isnull=False,
+        membership_expiration_date__gte=today,
+        membership_expiration_reminder_due__lte=now,
+    ).select_related("club")
+    for member in reminder_qs:
+        if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:
+            send_club_member_email(
+                member,
+                subject=f"Your membership with {member.club.name} expires tomorrow",
+                message_text=f"Your membership with {member.club.name} expires tomorrow.",
+            )
         member.membership_expiration_reminder_due = None
         member.save(update_fields=["membership_expiration_reminder_due"])
 

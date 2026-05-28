@@ -229,7 +229,11 @@ from .tables import (
     LotHTMxTable,
     LotHTMxTableForUsers,
 )
-from .tasks import cancel_invoice_notification, schedule_invoice_notification
+from .tasks import (
+    cancel_invoice_notification,
+    maybe_send_membership_renewal_confirmation,
+    schedule_invoice_notification,
+)
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -553,6 +557,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 update_fields=[
                     "membership_last_paid",
                     "membership_expiration_date",
+                    "membership_expiration_reminder_30_days_due",
                     "membership_expiration_reminder_due",
                     "email_address_status",
                 ]
@@ -601,6 +606,12 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
         )
     except Exception:
         logger.exception("Failed to record ClubHistory for renewal of invoice %s", invoice.pk)
+    try:
+        maybe_send_membership_renewal_confirmation(member)
+    except Exception:
+        logger.exception(
+            "Failed to send membership renewal confirmation for club member %s", getattr(member, "pk", None)
+        )
 
 
 def _disable_integrated_payments_if_only_method(user, method_label):
@@ -14115,7 +14126,12 @@ class ClubMemberRenewView(APIView):
         member.membership_expiration_date = self._new_expiration(member, today)
         member.membership_last_paid = today
         member.save(
-            update_fields=["membership_last_paid", "membership_expiration_date", "membership_expiration_reminder_due"]
+            update_fields=[
+                "membership_last_paid",
+                "membership_expiration_date",
+                "membership_expiration_reminder_30_days_due",
+                "membership_expiration_reminder_due",
+            ]
         )
         ClubHistory.objects.create(
             club=member.club,
@@ -14123,6 +14139,10 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
+        try:
+            maybe_send_membership_renewal_confirmation(member)
+        except Exception:
+            logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
         return HttpResponse(
             '<script>closeModal(); document.body.dispatchEvent(new CustomEvent("clubMemberListChanged"));</script>'
         )
@@ -14359,7 +14379,14 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             messages.error(request, "Invalid date.")
             return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
         member.membership_expiration_date = new_expiration
-        member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
+        member._preserve_membership_email_schedule = True
+        member.save(
+            update_fields=[
+                "membership_expiration_date",
+                "membership_expiration_reminder_30_days_due",
+                "membership_expiration_reminder_due",
+            ]
+        )
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
@@ -14652,8 +14679,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not settings.SES_ROUTE_EMAILS_ENABLED:
-            raise Http404
         if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
@@ -14669,6 +14694,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
+        context["show_email_routing"] = settings.SES_ROUTE_EMAILS_ENABLED
         return context
 
     def form_valid(self, form):
@@ -15567,6 +15593,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
                         contact_status=contact_status or "contact",
                         membership_last_paid=membership_last_paid,
                         membership_expiration_date=membership_expiration_date,
+                        send_welcome_email=False,
+                        welcome_email_sent=True,
                         source="csv",
                         added_by=self.request.user,
                         is_deleted=mark_deleted,

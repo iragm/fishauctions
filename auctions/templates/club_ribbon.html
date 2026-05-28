@@ -45,7 +45,7 @@
       {% if club.enable_membership %}
       <li><a class="dropdown-item {% if view.active_tab == 'membership' %}active{% endif %}" href="{% url 'club_membership_settings' club.slug %}"><i class="bi bi-people-fill"></i> Membership and Payments</a></li>
       {% endif %}
-      {% if view.email_routing_enabled %}
+      {% if view.email_routing_enabled or club.enable_membership %}
       <li><a class="dropdown-item {% if view.active_tab == 'email_settings' %}active{% endif %}" href="{% url 'club_email_settings' club.slug %}"><i class="bi bi-envelope-fill"></i> Emails</a></li>
       {% endif %}
       {% endif %}
