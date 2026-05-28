@@ -423,28 +423,27 @@ def _upsert_clubmember_shadow_tos(
 
 
 def close_modal_response(action=None, *, event_name=None, redirect_url=None, table_selector=None, extra_triggers=None):
-    """Return an empty 200 whose HX-Trigger header asks the active HtmxModal to close.
+    """Ask the active HtmxModal to close (with optional action) after a successful POST.
 
-    The browser-side listener in auctions/static/js/htmx_modal.js reads the event detail and
-    runs `window.closeModal(detail)`. Use `extra_triggers={"name": detail, ...}` to fire other
-    HTMX triggers (e.g. a separate table-refresh event) in the same response.
+    The response body is a tiny ``<script>`` that calls ``window.closeModal`` — HTMX evaluates
+    inline scripts in swapped content, which gives us a single, reliable invocation point that
+    works regardless of whether an HX-Trigger response-header listener is attached.
+
+    Pass ``extra_triggers={"event_name": detail, ...}`` to fire additional HTMX triggers (e.g.
+    a separate table-refresh event) in the same response via the ``HX-Trigger`` header.
     """
-    if action and not event_name and not redirect_url and not table_selector:
-        payload = {"closeModal": action}
-    elif action:
-        detail = {"action": action}
-        if event_name is not None:
-            detail["eventName"] = event_name
-        if redirect_url is not None:
-            detail["redirectUrl"] = redirect_url
-        if table_selector is not None:
-            detail["tableSelector"] = table_selector
-        payload = {"closeModal": detail}
-    else:
-        payload = {"closeModal": {}}
+    detail = {"action": action} if action else {}
+    if event_name is not None:
+        detail["eventName"] = event_name
+    if redirect_url is not None:
+        detail["redirectUrl"] = redirect_url
+    if table_selector is not None:
+        detail["tableSelector"] = table_selector
+    body = f"<script>window.closeModal({json.dumps(detail)});</script>"
+    headers = {}
     if extra_triggers:
-        payload.update(extra_triggers)
-    return HttpResponse("", headers={"HX-Trigger": json.dumps(payload)})
+        headers["HX-Trigger"] = json.dumps(extra_triggers)
+    return HttpResponse(body, headers=headers)
 
 
 class IsAuthenticatedOrAPIKey(BasePermission):
@@ -13393,7 +13392,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             link_href = f"?{urlencode(link_params)}"
             bits.append(
                 format_html(
-                    '<a href="{}" class="btn btn-sm btn-outline-secondary me-2">'
+                    '<a href="{}" class="btn btn-sm btn-secondary me-2">'
                     '<i class="bi bi-archive"></i> Show {} deactivated</a>',
                     link_href,
                     deactivated_count,
