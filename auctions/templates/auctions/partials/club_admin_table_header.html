@@ -1,0 +1,38 @@
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if can_add_edit %}
+  <button class="btn btn-sm btn-info"
+    hx-get="{% url 'clubmember_create' club.slug %}"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+    <i class="bi bi-person-fill-add"></i> Add member
+  </button>
+  {% endif %}
+
+  {% if can_export %}
+  <button class="btn btn-sm btn-info" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportMembers" aria-expanded="false" aria-controls="csvImportMembers">
+    <i class="bi bi-person-fill-up"></i> Import from CSV
+  </button>
+  <a id="export-btn"
+     class="btn btn-sm btn-secondary"
+     href="{% url 'club_member_export' club.slug %}"
+     data-query-sync-url="{% url 'club_member_export' club.slug %}">
+    <i class="bi bi-download"></i> Export current view
+  </a>
+  {% endif %}
+</div>
+
+{% if can_export %}
+<div class="collapse mb-3" id="csvImportMembers">
+  <div class="card card-body">
+    <h5>Import members from CSV</h5>
+    <small>Upload a CSV file with columns: <strong>Email</strong> (required), First Name, Last Name, Phone, Address, Memo, Discord ID, Contact Status, Membership Last Paid, Membership Expiration Date, Date Joined</small>
+    <br><small class="text-muted">Existing members matched by email will be overwritten. Dates can be partial (e.g. <em>2025</em> → Jan 1 2025, <em>2025-06</em> → Jun 1 2025). Contact Status accepts: <em>contact</em>, <em>non_essential</em>, or <em>do_not_contact</em>.</small>
+    <form method="POST" action="{% url 'club_member_import' club.slug %}" enctype="multipart/form-data" class="mt-2">
+      {% csrf_token %}
+      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
+      <button type="submit" class="btn btn-primary">Upload CSV</button>
+    </form>
+  </div>
+</div>
+{% endif %}

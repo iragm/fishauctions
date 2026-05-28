@@ -1,3 +1,4 @@
+<div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
 <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
   <div class="modal-dialog modal-dialog-centered">
@@ -15,7 +16,7 @@
         <p class="mb-0">New expiration will be: <strong>{{ new_expiration|date:"M j, Y" }}</strong></p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
         <button type="button" class="btn btn-primary"
           hx-post="{{ renew_url }}"
           hx-target="#modals-here">
@@ -25,22 +26,5 @@
     </div>
   </div>
 </div>
-<script>
-(function() {
-  clearTimeout(window._modalCloseTimer);
-  function closeModal() {
-    var container = document.getElementById("modals-here");
-    var backdrop = document.getElementById("modal-backdrop");
-    var modal = document.getElementById("modal");
-    if (backdrop) { backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }
-    if (modal) { modal.classList.remove("show"); modal.style.pointerEvents = "none"; }
-    document.removeEventListener("keydown", escHandler);
-    window._modalCloseTimer = setTimeout(function() { if (container) container.innerHTML = ""; }, 300);
-  }
-  window.closeModal = closeModal;
-  function escHandler(e) { if (e.key === "Escape") closeModal(); }
-  document.addEventListener("keydown", escHandler);
-  var bd = document.getElementById("modal-backdrop");
-  if (bd) bd.addEventListener("click", closeModal);
-})();
-</script>
+</div>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>

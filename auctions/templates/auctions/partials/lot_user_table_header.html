@@ -1,0 +1,17 @@
+<span class="">Looking to sell {{ website_focus }}?  Use this page to quickly create and manage your lots.</span><br><br>
+{% if userdata.can_submit_standalone_lots %}
+<small>It's free to use this site to sell {{ website_focus }} with or without an auction.  If you sell {{ website_focus }} without putting them in a club auction, promotional emails advertising your lots will go out every Wednesday.</small><br><br>
+{% endif %}
+{% if not userdata.email_me_when_people_comment_on_my_lots %}You've turned off email notifications when people comment on your lots.  You should probably turn that back on in <a href="{% url 'preferences' %}">preferences</a>.{% endif %}
+{% if not userdata.email_visible %}Your email is currently hidden.  You may want to make it visible in <a href="{% url 'preferences' %}">preferences</a>.{% endif %}
+{% if not userdata.email_me_when_people_comment_on_my_lots and not userdata.email_visible %}With both options turned off, <span class='text-warning'>people have no way to contact you on this site</span> and your sales will probably suffer.{% endif %}
+
+<small><span class='text-warning' id="last-auction-special"></span></small><br>
+<a href="{% url 'new_lot' %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Create new lot</a>
+{% if userdata.last_auction_used %}
+  {% if not userdata.last_auction_used.is_online and userdata.last_auction_used.allow_bulk_adding_lots %}
+    <a href="{% url 'bulk_add_lots_auto_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Bulk add lots to {{userdata.last_auction_used}}</a>
+  {% endif %}
+  <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-bag"></i> Invoice for {{userdata.last_auction_used}}</a>
+  <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-tags"></i> Print labels for {{userdata.last_auction_used}}</a>
+{% endif %}

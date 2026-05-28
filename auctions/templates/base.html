@@ -60,6 +60,7 @@ window.onload = function() {
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
+        <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
         {% endblock %}
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}

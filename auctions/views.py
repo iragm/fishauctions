@@ -253,6 +253,46 @@ class AdminEmailMixin:
         return context
 
 
+class HTMxTableView(SingleTableMixin, FilterView):
+    """Shared behavior for list views that render a full page plus an HTMX table partial."""
+
+    htmx_template_name = "tables/table_generic.html"
+    filter_placeholder_text = None
+    possible_filters = ()
+    htmx_table_header_template = None
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return self.htmx_template_name
+        template_name = getattr(self, "template_name", None)
+        if not template_name:
+            msg = f"{self.__class__.__name__} must define 'template_name' when not using htmx requests"
+            raise ImproperlyConfigured(msg)
+        return template_name
+
+    def get_filter_placeholder_text(self):
+        return self.filter_placeholder_text
+
+    def get_possible_filters(self):
+        return list(self.possible_filters)
+
+    def get_htmx_table_header_template(self):
+        return self.htmx_table_header_template
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        filter_placeholder_text = self.get_filter_placeholder_text()
+        context["filter_placeholder_text"] = filter_placeholder_text
+        context["possible_filters"] = self.get_possible_filters()
+        context["htmx_table_header_template"] = self.get_htmx_table_header_template()
+        filterset = context.get("filter")
+        if filterset and filter_placeholder_text:
+            query_field = filterset.form.fields.get("query")
+            if query_field:
+                query_field.widget.attrs["placeholder"] = filter_placeholder_text
+        return context
+
+
 class AuctionViewMixin:
     """For auction permissions, this will try to set self.auction based on the url's slug,
     then see if the user has permission or not
@@ -381,6 +421,30 @@ def _upsert_clubmember_shadow_tos(
         tos.checked_in = checked_in_at
     tos.save()
     return tos
+
+
+def close_modal_response(action=None, *, event_name=None, redirect_url=None, table_selector=None, extra_triggers=None):
+    """Ask the active HtmxModal to close (with optional action) after a successful POST.
+
+    The response body is a tiny ``<script>`` that calls ``window.closeModal`` — HTMX evaluates
+    inline scripts in swapped content, which gives us a single, reliable invocation point that
+    works regardless of whether an HX-Trigger response-header listener is attached.
+
+    Pass ``extra_triggers={"event_name": detail, ...}`` to fire additional HTMX triggers (e.g.
+    a separate table-refresh event) in the same response via the ``HX-Trigger`` header.
+    """
+    detail = {"action": action} if action else {}
+    if event_name is not None:
+        detail["eventName"] = event_name
+    if redirect_url is not None:
+        detail["redirectUrl"] = redirect_url
+    if table_selector is not None:
+        detail["tableSelector"] = table_selector
+    body = f"<script>window.closeModal({json.dumps(detail)});</script>"
+    headers = {}
+    if extra_triggers:
+        headers["HX-Trigger"] = json.dumps(extra_triggers)
+    return HttpResponse(body, headers=headers)
 
 
 class IsAuthenticatedOrAPIKey(BasePermission):
@@ -1299,29 +1363,24 @@ class MyBids(LotListView):
         return context
 
 
-class MyLots(SingleTableMixin, FilterView):
+class MyLots(HTMxTableView):
     """Selling dashboard.  List of lots added by this user."""
 
     model = Lot
     table_class = LotHTMxTableForUsers
     filterset_class = LotAdminFilter
+    template_name = "auctions/lot_user.html"
+    htmx_table_header_template = "auctions/partials/lot_user_table_header.html"
     # paginate_by = 100
 
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/lot_user.html"
-        return template_name
-
     def dispatch(self, request, *args, **kwargs):
-        # "filter" is the bookmarkable URL param; "query" is what the HTMX form posts.
-        # When both are present (every HTMX refresh), "query" reflects the actual current input
-        # and must take precedence — otherwise ?filter=bap stays truthy even after the user clears it.
-        if "query" in request.GET:
-            filter_value = request.GET["query"].strip().lower()
-        else:
-            filter_value = request.GET.get("filter", "").strip().lower()
+        # Legacy ?filter=X bookmarks: canonicalize to ?query=X so the shared HTMX
+        # template's input pre-populates and its URL-sync stays consistent.
+        if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
+            params = request.GET.copy()
+            params["query"] = params.pop("filter")[0]
+            return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
+        filter_value = request.GET.get("query", "").strip().lower()
         qs = UserLotFilter(request=request).qs
         if filter_value == "bap":
             qs = qs.select_related("bap_award__club_member__club").annotate(
@@ -1334,11 +1393,7 @@ class MyLots(SingleTableMixin, FilterView):
         context = super().get_context_data(**kwargs)
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
-        if "query" in self.request.GET:
-            filter_value = self.request.GET["query"].strip().lower()
-        else:
-            filter_value = self.request.GET.get("filter", "").strip().lower()
-        context["filter_bap"] = filter_value == "bap"
+        context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
         return context
 
     def get(self, *args, **kwargs):
@@ -3233,20 +3288,14 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
         return JsonResponse({"success": False, "error": "Invalid action"})
 
 
-class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     model = AuctionHistory
     table_class = AuctionHistoryHTMxTable
     filterset_class = AuctionHistoryFilter
+    template_name = "auctions/auction_history.html"
 
     def get_queryset(self):
         return AuctionHistory.objects.filter(auction=self.auction).order_by("-timestamp")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/auction_history.html"
-        return template_name
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3259,7 +3308,7 @@ class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin,
         return kwargs
 
 
-class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
     At some point, it may make sense to subclass AllLots here, but I think the needs of the two views are so different that it doesn't make sense
@@ -3268,17 +3317,12 @@ class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filter
     model = Lot
     table_class = LotHTMxTable
     filterset_class = LotAdminFilter
+    template_name = "auctions/auction_lot_admin.html"
+    htmx_table_header_template = "auctions/partials/auction_lots_table_header.html"
     # paginate_by = 50
 
     def get_queryset(self):
         return Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auctions/auction_lot_admin.html"
-        return template_name
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3313,12 +3357,14 @@ class AuctionHelp(LoginRequiredMixin, AdminEmailMixin, AuctionViewMixin, Templat
         return context
 
 
-class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of users (AuctionTOS) associated with an auction"""
 
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
+    template_name = "auction_users.html"
+    htmx_table_header_template = "auctions/partials/auction_users_table_header.html"
     allow_non_admins = True  # gated via can_add_edit_people for finer-grained club permission
     # paginate_by = 100
 
@@ -3326,18 +3372,55 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
         _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
         return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
 
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "auction_users.html"
-        return template_name
-
     def get_table_kwargs(self):
         kwargs = super().get_table_kwargs()
         kwargs["request"] = self.request
         kwargs["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
         return kwargs
+
+    def get_filter_placeholder_text(self):
+        return "Filter by bidder number, name, email..."
+
+    def get_possible_filters(self):
+        filters = []
+        if self.auction.online_bidding != "disable":
+            filters.extend(
+                [
+                    ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid"),
+                    ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid"),
+                ]
+            )
+        filters.extend(
+            [
+                ("<i class='bi bi-exclamation-octagon-fill'></i> Can't sell", "no_sell"),
+                ("<i class='bi bi-envelope-exclamation-fill'></i> Only invalid email", "email_bad"),
+                ("<i class='bi bi-envelope-check-fill'></i> Only verified email", "email_good"),
+                ("<i class='bi bi-people-fill'></i> Possible duplicate", "duplicate"),
+                ("<small class='text-muted'>Users with an invoice that is:</small>", ""),
+                ("<i class='bi bi-bag'></i> Open", "open"),
+                ("<i class='bi bi-bag-check'></i> Ready", "ready"),
+                ("<i class='bi bi-bag-heart'></i> Paid", "paid"),
+                ("<i class='bi bi-bag-dash'></i> Owes the club", "owes_club"),
+                ("<i class='bi bi-bag-plus'></i> Club owes", "club_owes"),
+                ("<i class='bi bi-eye-fill'></i> User has seen", "seen"),
+                ("<i class='bi bi-eye-slash-fill'></i> User has not seen", "unseen"),
+            ]
+        )
+        if self.auction.is_online:
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Find problematic users:</small>", ""),
+                    ("<i class='bi bi-exclamation-circle'></i> Least engagement first", "sus"),
+                ]
+            )
+        filters.append(
+            (
+                "<i class='bi bi-patch-plus-fill'></i> "
+                "<a href='https://github.com/iragm/fishauctions/issues/215'>Suggest a new filter</a>",
+                "",
+            )
+        )
+        return filters
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3370,12 +3453,16 @@ class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filte
             params["name"] = q
         param_str = f"?{urlencode(params)}" if params else ""
         auction = self.auction
-        if auction.manage_users_through_club == "checkin":
-            create_url = (
-                reverse("clubmember_create", kwargs={"slug": auction.club.slug})
-                + f"?auction={auction.slug}"
-                + (f"&{urlencode(params)}" if params else "")
-            )
+        # In club-managed auctions, AuctionTOSAdmin redirects new-user creates to clubmember_create
+        # — but the redirect drops query-string prefill. Route directly to clubmember_create instead,
+        # appending ?auction= only when the auction uses the check-in flow.
+        if auction.is_club_managed:
+            extra = {}
+            if auction.manage_users_through_club == "checkin":
+                extra["auction"] = auction.slug
+            combined = {**extra, **params}
+            qs = f"?{urlencode(combined)}" if combined else ""
+            create_url = reverse("clubmember_create", kwargs={"slug": auction.club.slug}) + qs
         else:
             create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
         return (
@@ -3439,13 +3526,14 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
         bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
         html = f"""
+<div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
 <div class="modal fade show" id="modal" tabindex="-1" aria-labelledby="checkInModalLabel" style="display:block;">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
-        <button type="button" class="btn-close" onclick="closeModal()" aria-label="Close"></button>
+        <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
         <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
@@ -3460,34 +3548,21 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
             placeholder="Auto"
           >
           <small class="text-muted mt-1 d-block">
-            If the bidder number entered here is in use by another user, their bidder number will be changed.
+            If the bidder number entered here is in use by another user, it'll be assigned to this user and the other user's bidder number will be changed.
           </small>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
           <button type="submit" class="btn btn-success">Save</button>
         </div>
       </form>
     </div>
   </div>
 </div>
+</div>
 <script>
-(function() {{
-  clearTimeout(window._modalCloseTimer);
-  function closeModal() {{
-    var container = document.getElementById("modals-here");
-    var backdrop = document.getElementById("modal-backdrop");
-    var modal = document.getElementById("modal");
-    if (backdrop) {{ backdrop.classList.remove("show"); backdrop.style.pointerEvents = "none"; }}
-    if (modal) {{ modal.classList.remove("show"); modal.style.pointerEvents = "none"; }}
-    document.removeEventListener("keydown", escHandler);
-    window._modalCloseTimer = setTimeout(function() {{ if (container) container.innerHTML = ""; }}, 300);
-  }}
-  window.closeModal = closeModal;
-  function escHandler(e) {{ if (e.key === "Escape") closeModal(); }}
-  document.addEventListener("keydown", escHandler);
-  var bd = document.getElementById("modal-backdrop");
-  if (bd) bd.addEventListener("click", closeModal);
+window.mountHtmxModal(document.currentScript.previousElementSibling);
+(function () {{
   var input = document.getElementById("checkin_bidder_number");
   if (input) {{ input.focus(); input.select(); }}
 }})();
@@ -3515,7 +3590,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
             user=request.user,
         )
         messages.success(request, f"Checked in {tos.name}.")
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
 
 class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -6612,8 +6687,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                             obj.auto_award_bap_points()
                         except Exception:
                             logger.exception("auto_award_bap_points failed for lot %s", obj.pk)
-            return HttpResponse("<script>location.reload();</script>", status=200)
-            # return HttpResponse("<script>closeModal();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -7082,8 +7156,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             obj.is_club_member = form.cleaned_data["is_club_member"]
             obj.memo = form.cleaned_data["memo"]
             obj.save()
-            return HttpResponse("<script>location.reload();</script>", status=200)
-            # return HttpResponse("<script>closeModal();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             name = form.cleaned_data.get("name")
             if not name:
@@ -7905,19 +7978,14 @@ class MyAccount(LoginRequiredMixin, RedirectView):
         return reverse("userpage", kwargs={"slug": self.request.user.username})
 
 
-class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
+class AllAuctions(LocationMixin, HTMxTableView):
     model = Auction
     no_location_message = "Set your location to see how far away auctions are"
     table_class = AuctionHTMxTable
     filterset_class = AuctionFilter
+    template_name = "all_auctions.html"
+    htmx_table_header_template = "auctions/partials/all_auctions_table_header.html"
     # paginate_by = 100
-
-    def get_template_names(self):
-        if self.request.htmx:
-            template_name = "tables/table_generic.html"
-        else:
-            template_name = "all_auctions.html"
-        return template_name
 
     def get_queryset(self):
         last_auction_pk = -1
@@ -8818,7 +8886,7 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
                 )
             except Exception:
                 logger.exception("create_history failed for auction %s", self.auction.pk)
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         return self.form_invalid(form)
 
     def get_context_data(self, **kwargs):
@@ -8911,7 +8979,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             )
         except Exception:
             logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
 
 class MarkInvoicesReady(InvoiceBulkUpdateStatus):
@@ -9009,7 +9077,7 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
                 self.seller_invoice.recalculate()
             if self.winner_invoice:
                 self.winner_invoice.recalculate()
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -12638,7 +12706,7 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                         defaults={},
                     )
             self.auction.create_history(applies_to="USERS", action=actions[:-2], user=request.user)
-            return HttpResponse("<script>location.reload();</script>", status=200)
+            return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
 
@@ -13407,13 +13475,15 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         return context
 
 
-class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Admin panel for a club"""
 
     active_tab = "members"
     model = ClubMember
     table_class = ClubMemberHTMxTable
     filterset_class = ClubMemberFilter
+    template_name = "auctions/club_admin.html"
+    htmx_table_header_template = "auctions/partials/club_admin_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -13427,11 +13497,6 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         # is_deleted filtering is handled by ClubMemberFilter.filter_queryset (default: hide deactivated)
         return ClubMember.objects.filter(club=self.club).order_by("name")
 
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_admin.html"
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -13439,7 +13504,67 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         context["can_export"] = self.user_has_club_permission("permission_export")
         context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         context["can_edit_bap"] = self.user_has_club_permission("permission_manage_bap")
+        query = (self.request.GET.get("query") or "").strip()
+        filterset = context.get("filter")
+        filtered_empty = filterset is not None and query and not filterset.qs.exists()
+        if filtered_empty and "deactivated" not in query.lower().split():
+            context["no_results"] = self._build_no_results_html(query, context["can_add_edit"])
         return context
+
+    def _build_no_results_html(self, query, can_add_edit):
+        """Empty-state with a link to expand the search to deactivated members and (optionally) an
+        Add member button pre-populated from the search query."""
+        from urllib.parse import urlencode
+
+        from django.utils.html import format_html
+
+        deactivated_query = f"{query} deactivated"
+        deactivated_qs = ClubMemberFilter({"query": deactivated_query}, queryset=self.get_queryset()).qs
+        deactivated_count = deactivated_qs.count()
+
+        bits = [
+            format_html(
+                '<p class="text-muted mb-2">No active members match <strong>{}</strong>.</p>',
+                query,
+            )
+        ]
+        if deactivated_count:
+            link_params = self.request.GET.copy()
+            link_params["query"] = deactivated_query
+            link_href = f"?{urlencode(link_params)}"
+            bits.append(
+                format_html(
+                    '<a href="{}" class="btn btn-sm btn-secondary me-2">'
+                    '<i class="bi bi-archive"></i> Show {} deactivated</a>',
+                    link_href,
+                    deactivated_count,
+                )
+            )
+        if can_add_edit:
+            import re as _re
+
+            params = {}
+            digits_only = _re.sub(r"\D", "", query)
+            if len(digits_only) >= 7:
+                params["phone"] = query
+            elif "@" in query:
+                params["email"] = query
+            elif _re.fullmatch(r"[A-Za-z\s\-'.]+", query) and len(query) >= 2:
+                params["name"] = query
+            create_url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+            if params:
+                create_url += f"?{urlencode(params)}"
+            bits.append(
+                format_html(
+                    '<button class="btn btn-info btn-sm" '
+                    'hx-get="{}" hx-target="#modals-here" hx-trigger="click" '
+                    '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    '<i class="bi bi-person-fill-add"></i> Add member</button>',
+                    create_url,
+                )
+            )
+        body = "".join(str(b) for b in bits)
+        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))
 
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)
@@ -13579,7 +13704,7 @@ class ClubMemberAdminView(APIView):
     @staticmethod
     def _redirect_to_club_admin(club):
         """Close the modal and reload the page to reflect changes."""
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return close_modal_response("reload-page")
 
     def _get_member_and_check_permission(self, request, pk):
         try:
@@ -14123,9 +14248,7 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
-        return HttpResponse(
-            '<script>closeModal(); document.body.dispatchEvent(new CustomEvent("clubMemberListChanged"));</script>'
-        )
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMembershipNumberView(APIView):
@@ -14234,7 +14357,7 @@ class ClubMemberDeleteView(APIView):
             action=f"Deactivated member {member}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204)
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMemberReactivateView(APIView):
@@ -14287,7 +14410,7 @@ class ClubMemberPermanentDeleteView(APIView):
             action=f"Permanently deleted member {member_name}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204)
+        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
 
 
 class ClubMemberConfirmView(APIView):
@@ -14722,13 +14845,15 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
-class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Main BAP admin page — awarded points tab."""
 
     active_tab = "bap_awards"
     model = BapAward
     table_class = BapAwardHTMxTable
     filterset_class = BapAwardFilter
+    template_name = "auctions/club_bap.html"
+    htmx_table_header_template = "auctions/partials/club_bap_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14745,11 +14870,6 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterVie
             .order_by("-date")
         )
 
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_bap.html"
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -14762,13 +14882,15 @@ class ClubBapView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterVie
         return kwargs
 
 
-class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """Pending BAP page — lots from this club's auctions awaiting point assignment."""
 
     active_tab = "bap_lots"
     model = Lot
     table_class = ClubBapLotHTMxTable
     filterset_class = ClubBapLotFilter
+    template_name = "auctions/club_bap_lots.html"
+    htmx_table_header_template = "auctions/partials/club_bap_lots_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -14801,15 +14923,6 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
             .prefetch_related("bap_award")
             .order_by("-date_end")
         )
-
-    def get_template_names(self):
-        if self.request.htmx:
-            hx_target = self.request.headers.get("HX-Target", "")
-            # "lots-table-container" = filter input swap; "table-container" = pagination/sort click via bootstrap_htmx.html
-            if hx_target in ("lots-table-container", "table-container"):
-                return ["tables/table_generic.html"]
-            return ["auctions/club_bap_lots_fragment.html"]
-        return ["auctions/club_bap_lots.html"]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -14981,9 +15094,10 @@ class BapAwardAdminView(APIView):
                 action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
                 applies_to="BAP",
             )
-            return HttpResponse(
-                "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
-                "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+            return close_modal_response(
+                "trigger-event",
+                event_name="bapAwardListChanged",
+                extra_triggers={"bapLotListChanged": True},
             )
         return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
 
@@ -15013,9 +15127,10 @@ class BapAwardDeleteView(APIView):
             action=f"Deleted BAP award for {member_name}",
             applies_to="BAP",
         )
-        return HttpResponse(
-            "<script>closeModal(); htmx.trigger(document.body, 'bapAwardListChanged'); "
-            "htmx.trigger(document.body, 'bapLotListChanged');</script>"
+        return close_modal_response(
+            "trigger-event",
+            event_name="bapAwardListChanged",
+            extra_triggers={"bapLotListChanged": True},
         )
 
 
@@ -15308,13 +15423,14 @@ class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": pk}))
 
 
-class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """History log for a club"""
 
     active_tab = "history"
     model = ClubHistory
     table_class = ClubHistoryHTMxTable
     filterset_class = ClubHistoryFilter
+    template_name = "auctions/club_history.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -15324,11 +15440,6 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
 
     def get_queryset(self):
         return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
-
-    def get_template_names(self):
-        if self.request.htmx:
-            return "tables/table_generic.html"
-        return "auctions/club_history.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

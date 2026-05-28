@@ -1,10 +1,8 @@
-{% extends "base.html" %}
-{% load render_table from django_tables2 %}
-{% load crispy_forms_tags %}
-{% block title %}Admin history for {{ auction }}{% endblock %}
-{% load static %}
+{% extends "auctions/htmx_table_view.html" %}
 
-{% block content %}
+{% block title %}Admin history for {{ auction }}{% endblock %}
+
+{% block htmx_table_ribbon %}
   {% include 'auction_ribbon.html' %}
   <small>A list of changes made to your auction.  Most of these changes will be made by your or other admins, but you can also see users making changes for themselves like joining or adding lots.  Some stuff that's not currently tracked:<ul>
     <li>Printing labels</li>
@@ -14,19 +12,4 @@
   </ul>
   <br>Feel like some of these (or other stuff) should be tracked here? Is there a filter missing that you want to see? <a href="https://github.com/iragm/fishauctions/issues/392">Leave comments and feedback here</a>
   </small>
-
-  <form class="col-sm-12 mt-2">
-    {% crispy filter.form %}
-  </form>
-  {# Progress indicator #}
-  {# <div class="progress"> <div class="indeterminate"></div>      </div>  #}
-  {# The actual table #}
-  {% render_table table %}
-  <div id="modals-here"></div>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-    //htmx.trigger('#filter-form', 'keyup');
-  </script>
 {% endblock %}

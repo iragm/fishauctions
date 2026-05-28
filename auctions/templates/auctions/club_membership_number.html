@@ -1,3 +1,4 @@
+<div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
 <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
   <div class="modal-dialog modal-dialog-centered">
@@ -17,49 +18,30 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>
+        <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
         <button type="button" class="btn btn-warning"
           hx-post="{% url 'club_member_membership_number' pk=member.pk %}"
-          hx-target="#modal"
-          hx-swap="outerHTML">
+          hx-target="#modals-here"
+          hx-swap="innerHTML">
           <i class="bi bi-arrow-clockwise me-1"></i>Reset
         </button>
       </div>
     </div>
   </div>
 </div>
+</div>
 <script>
+window.mountHtmxModal(document.currentScript.previousElementSibling);
 (function () {
-  clearTimeout(window._modalCloseTimer);
-
-  function closeModal() {
-    var container = document.getElementById('modals-here');
-    var backdrop = document.getElementById('modal-backdrop');
-    var modal = document.getElementById('modal');
-    if (backdrop) { backdrop.classList.remove('show'); backdrop.style.pointerEvents = 'none'; }
-    if (modal) { modal.classList.remove('show'); modal.style.pointerEvents = 'none'; }
-    document.removeEventListener('keydown', escHandler);
-    window._modalCloseTimer = setTimeout(function () { if (container) container.innerHTML = ''; }, 300);
-  }
-  window.closeModal = closeModal;
-
-  function escHandler(e) { if (e.key === 'Escape') closeModal(); }
-  document.addEventListener('keydown', escHandler);
-
-  var bd = document.getElementById('modal-backdrop');
-  if (bd) bd.addEventListener('click', closeModal);
-
-  // Copy button
   var copyBtn = document.getElementById('copy-membership-number');
   var copyIcon = document.getElementById('copy-icon');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', function () {
-      var val = document.getElementById('membership-number-value').value;
-      navigator.clipboard.writeText(val).then(function () {
-        copyIcon.className = 'bi bi-clipboard-check';
-        setTimeout(function () { copyIcon.className = 'bi bi-clipboard'; }, 2000);
-      });
+  if (!copyBtn) return;
+  copyBtn.addEventListener('click', function () {
+    var val = document.getElementById('membership-number-value').value;
+    navigator.clipboard.writeText(val).then(function () {
+      copyIcon.className = 'bi bi-clipboard-check';
+      setTimeout(function () { copyIcon.className = 'bi bi-clipboard'; }, 2000);
     });
-  }
+  });
 })();
 </script>

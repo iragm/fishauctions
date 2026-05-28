@@ -1971,7 +1971,9 @@ class LotRefundDialogTests(TestCase):
         data = {"partial_refund_percent": 50, "banned": False}
         response = self.client.post(self.lot_url, data)
         assert response.status_code == 200
-        self.assertContains(response, "<script>location.reload();</script>")
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
 
         # Check if the lot was updated
         updated_lot = Lot.objects.get(pk=self.lot.pk)
@@ -4906,6 +4908,26 @@ class LotListViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, ", Habitat")
 
+    def test_auction_lot_admin_uses_shared_query_sync_for_export_and_bulk_actions(self):
+        self.online_auction.is_online = False
+        self.online_auction.save(update_fields=["is_online"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(
+            reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}),
+            {"query": f"seller:{self.online_tos.bidder_number}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["htmx_table_header_template"],
+            "auctions/partials/auction_lots_table_header.html",
+        )
+        self.assertContains(
+            response,
+            f'href="{reverse("lot_list", kwargs={"slug": self.online_auction.slug})}?query=seller%3A{self.online_tos.bidder_number}"',
+        )
+        self.assertContains(response, 'data-query-sync-hx-vals="query"')
+        self.assertContains(response, f'"query": "seller:{self.online_tos.bidder_number}"')
+
 
 class MyLotsViewTests(StandardTestCase):
     """Test my lots view with different user types"""
@@ -4955,17 +4977,30 @@ class AuctionUsersViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
-    def test_auction_users_query_sync_script_handles_checkbox_filters(self):
-        """User filter page keeps query URL/export sync for checkbox-driven updates"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
+    def test_auction_users_context_configures_shared_htmx_filter_ui(self):
+        """Auction users view defines placeholder text and filter choices for the shared HTMX template."""
+        self.client.force_login(self.admin_user)
         url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
+        assert response.context["filter_placeholder_text"] == "Filter by bidder number, name, email..."
+        assert ("<i class='bi bi-exclamation-octagon-fill'></i> Can't sell", "no_sell") in response.context[
+            "possible_filters"
+        ]
         content = response.content.decode(response.charset or "utf-8")
-        assert "syncQueryUrlAndExport" in content
-        assert "queryInput.addEventListener('input', syncQueryUrlAndExport);" in content
-        assert "syncQueryUrlAndExport({ target: queryInput });" in content
-        assert '$("#id_query").trigger("blur");' in content
+        assert 'data-filter-key="no_sell"' in content
+        assert "syncQueryUrlAndLinks" in content
+        assert 'data-query-sync-url="' in content
+
+    def test_auction_users_context_omits_bidding_filters_when_online_bidding_disabled(self):
+        self.online_auction.online_bidding = "disable"
+        self.online_auction.save(update_fields=["online_bidding"])
+        self.client.force_login(self.admin_user)
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid") not in response.context["possible_filters"]
+        assert ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid") not in response.context["possible_filters"]
 
 
 class LotCreateViewTests(StandardTestCase):
@@ -13372,6 +13407,32 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function setFieldNote(fieldId, message)")
         self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+        self.assertContains(response, "data-htmx-modal-root")
+        self.assertContains(response, "window.mountHtmxModal(")
+
+    def test_add_user_modal_save_uses_modal_close_action(self):
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.post(
+            url,
+            {
+                "name": "Brand New User",
+                "email": "brand-new@example.com",
+                "pickup_location": self.location.pk,
+                "bidder_number": "",
+                "phone_number": "",
+                "address": "",
+                "is_admin": False,
+                "bidding_allowed": True,
+                "selling_allowed": True,
+                "is_club_member": False,
+                "memo": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
 
 
 class AuctionTOSMergeViewTests(StandardTestCase):
@@ -15213,12 +15274,20 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
-    def test_club_admin_search_falls_back_to_deactivated_when_active_empty(self):
+    def test_club_admin_search_hides_deactivated_by_default(self):
+        from .filters import ClubMemberFilter
+
+        ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
+        qs = ClubMember.objects.filter(club=self.club)
+        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        self.assertEqual(filtered.count(), 0)
+
+    def test_club_admin_search_includes_deactivated_when_token_present(self):
         from .filters import ClubMemberFilter
 
         deactivated = ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
         qs = ClubMember.objects.filter(club=self.club)
-        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        filtered = ClubMemberFilter({"query": "Retired Search deactivated"}, queryset=qs).qs
         self.assertEqual(list(filtered.values_list("pk", flat=True)), [deactivated.pk])
 
     def test_club_admin_search_prefers_active_results(self):
@@ -15582,7 +15651,8 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("closeModal", response.content.decode("utf-8"))
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
 
@@ -17532,7 +17602,9 @@ class ClubMemberManagementViewTests(TestCase):
         created = ClubMember.objects.get(club=self.club, email="newmember@example.com")
         self.assertEqual(created.source, "manually_added")
         self.assertEqual(created.added_by, self.editor_user)
-        self.assertIn("location.reload", response.content.decode("utf-8"))
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
 
     def test_viewer_cannot_create_member(self):
@@ -17663,7 +17735,10 @@ class ClubMemberManagementViewTests(TestCase):
     def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_delete", kwargs={"pk": self.source_member.pk}))
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("clubMemberListChanged", body)
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(
