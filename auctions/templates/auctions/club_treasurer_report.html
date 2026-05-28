@@ -132,7 +132,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% include "club_ribbon.html" %}
 
 <div class="text-dark bg-warning p-3 rounded mb-3">
-  This site is not financial software, data shown here are for reference only. It's up to your to verify the accuracy of your club's records
+  This site is not financial software, data shown here are for reference only. It's up to you to verify the accuracy of your club's records
 </div>
 
 <div id="club-money-banner" class="alert d-none"></div>
@@ -179,7 +179,7 @@ document.addEventListener("DOMContentLoaded", function() {
   <button class="btn btn-outline-warning" type="button" data-bs-toggle="modal" data-bs-target="#balanceBooksModal">
     Balance books
   </button>
-  <div class="ms-auto text-muted small pt-2">Current clubmoney total: <span id="club-money-current-balance">{{ current_balance }}</span></div>
+  <div class="ms-auto text-muted small pt-2">Current club money total: <span id="club-money-current-balance">{{ current_balance }}</span></div>
 </div>
 
 <div class="collapse mb-4" id="club-money-add-record">
@@ -248,7 +248,7 @@ document.addEventListener("DOMContentLoaded", function() {
       </div>
       <div class="modal-body">
         <div class="alert alert-warning">
-          This should really only be done once.
+          This creates an adjustment entry to reconcile your ledger with your actual account balance. Multiple adjustments usually mean there is another recordkeeping problem that should be fixed first.
         </div>
         <form id="club-money-balance-form" action="{% url 'club_money_balance' club.slug %}" method="post">
           {% csrf_token %}

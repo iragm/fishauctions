@@ -15566,7 +15566,8 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         filter_form, start_date, end_date = self._get_filter_form()
-        entries = list(self._filtered_entries(start_date, end_date))
+        entries_qs = self._filtered_entries(start_date, end_date)
+        entries = list(entries_qs)
         current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
         context.update(
             {
@@ -15575,7 +15576,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 "start_date": start_date,
                 "end_date": end_date,
                 "report_entries": entries,
-                "report_summary": self._report_summary(self._filtered_entries(start_date, end_date), start_date, end_date),
+                "report_summary": self._report_summary(entries_qs, start_date, end_date),
                 "club_money_form": ClubMoneyForm(
                     initial={"date": timezone.localdate()},
                     category_choices=self._manual_category_choices(),
@@ -15634,7 +15635,7 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return JsonResponse(
             {
                 "ok": True,
-                "message": f"Saved {entry.get_category_display()} record on {timezone.localtime(entry.createdon).strftime('%Y-%m-%d %H:%M:%S')}.",
+                "message": f"Saved {entry.get_category_display()} record on {timezone.localtime(entry.createdon).isoformat(timespec='seconds')}.",
                 "current_balance": str(
                     ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
                 ),

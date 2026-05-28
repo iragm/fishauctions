@@ -7205,10 +7205,10 @@ class Invoice(models.Model):
         club = auction.club
         event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
         entries = []
-        money_field = Decimal("0.01")
+        quantize_precision = Decimal("0.01")
 
         def _quantize(value):
-            return Decimal(value or 0).quantize(money_field)
+            return Decimal(value or 0).quantize(quantize_precision)
 
         def _add_entry(amount, category, description):
             amount = _quantize(amount)
@@ -7220,7 +7220,7 @@ class Invoice(models.Model):
                     invoice=self,
                     date=event_date,
                     amount=amount,
-                    description=description[:500],
+                    description=description[:ClubMoney.DESCRIPTION_MAX_LENGTH],
                     category=category,
                     created_by=acting_user,
                 )
@@ -7379,6 +7379,7 @@ class InvoicePayment(models.Model):
 
 
 class ClubMoney(models.Model):
+    DESCRIPTION_MAX_LENGTH = 500
     CATEGORY_DONATION = "donation"
     CATEGORY_SPEAKER_COSTS = "speaker_costs"
     CATEGORY_MEETING_LOCATION_COST = "meeting_location_cost"
@@ -7405,7 +7406,7 @@ class ClubMoney(models.Model):
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     date = models.DateField(db_index=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    description = models.CharField(max_length=500, blank=True, default="")
+    description = models.CharField(max_length=DESCRIPTION_MAX_LENGTH, blank=True, default="")
     category = models.CharField(max_length=40, choices=CATEGORY_CHOICES)
     createdon = models.DateTimeField(auto_now_add=True)
 
