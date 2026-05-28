@@ -3813,7 +3813,6 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "send_membership_expiration_reminders",
         ]
         help_texts = {
             "membership_system": (
@@ -3832,16 +3831,12 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "send_membership_expiration_reminders",
             "contact_email",
         )
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 
     def clean(self):
-        cleaned_data = super().clean()
-        if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
-            self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
-        return cleaned_data
+        return super().clean()
 
 
 class ClubEmailSettingsForm(forms.ModelForm):
@@ -3850,18 +3845,35 @@ class ClubEmailSettingsForm(forms.ModelForm):
         fields = [
             "auction_email_member",
             "contact_email_member",
+            "membership_email_template",
+            "send_welcome_email_to_new_members",
+            "send_membership_expiration_reminders_30_days",
+            "send_membership_expiration_reminders",
+            "send_membership_renewal_confirmation",
         ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        club = self.instance
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        payments_enabled = bool(club and club.membership_payment_emails_enabled)
         self.helper.layout = Layout(
-            "auction_email_member",
-            "contact_email_member",
+            Fieldset(
+                "Incoming email routing",
+                "auction_email_member",
+                "contact_email_member",
+            ),
+            Fieldset(
+                "Outgoing emails",
+                "membership_email_template",
+                "send_welcome_email_to_new_members",
+                "send_membership_expiration_reminders_30_days",
+                "send_membership_expiration_reminders",
+                "send_membership_renewal_confirmation",
+            ),
         )
         self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
-        club = self.instance
         if club and club.pk:
             base_qs = (
                 club.members.filter(is_deleted=False)
@@ -3908,6 +3920,27 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
             ),
         )
+        self.fields["membership_email_template"].widget = forms.Textarea(attrs={"rows": 6})
+        self.fields["membership_email_template"].label = "Shared club member email intro"
+        self.fields[
+            "membership_email_template"
+        ].help_text = "Optional text inserted after the greeting in welcome, expiration, and renewal emails."
+        self.fields["send_welcome_email_to_new_members"].label = "Send welcome letter to new club members"
+        self.fields[
+            "send_membership_expiration_reminders_30_days"
+        ].label = "Send expiration reminder 30 days before membership expires"
+        self.fields[
+            "send_membership_expiration_reminders"
+        ].label = "Send expiration reminder the day before membership expires"
+        self.fields["send_membership_renewal_confirmation"].label = "Send membership renewal confirmation"
+        reminder_help = (
+            "Requires integrated membership payments so the email can link members back to their renewal page."
+        )
+        self.fields["send_membership_expiration_reminders_30_days"].help_text = reminder_help
+        self.fields["send_membership_expiration_reminders"].help_text = reminder_help
+        if not payments_enabled:
+            self.fields["send_membership_expiration_reminders_30_days"].disabled = True
+            self.fields["send_membership_expiration_reminders"].disabled = True
 
 
 class ClubBapSettingsForm(forms.ModelForm):
@@ -4043,6 +4076,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
+            "send_welcome_email",
             "bidder_number",
             "bidding_allowed",
             "selling_allowed",
@@ -4113,6 +4147,19 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.fields["contact_status"].initial = (
                 self.instance.contact_status if self.instance and self.instance.pk else "contact"
             )
+        show_welcome_email = not (
+            self.instance and self.instance.pk and (self.instance.welcome_email_sent or self.instance.source == "csv")
+        )
+        if not show_welcome_email or in_auction_context:
+            self.fields["send_welcome_email"].widget = forms.HiddenInput()
+            self.fields["send_welcome_email"].required = False
+            instance_obj = self.instance if self.instance and self.instance.pk else None
+            self.fields["send_welcome_email"].initial = instance_obj.send_welcome_email if instance_obj else True
+        else:
+            self.fields["send_welcome_email"].label = "Send welcome letter"
+            self.fields["send_welcome_email"].required = False
+            if not (self.instance and self.instance.pk):
+                self.fields["send_welcome_email"].initial = True
 
         # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them.
         # BooleanField has required=True by default; set required=False so an absent/False value
@@ -4195,6 +4242,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             ),
             "address",
             *contact_status_fields,
+            "send_welcome_email",
             bidding_selling_row,
             *alt_fees_field,
             *pickup_field,

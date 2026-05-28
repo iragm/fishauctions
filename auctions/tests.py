@@ -5623,6 +5623,20 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
         self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
 
+    @patch("auctions.views.maybe_send_membership_renewal_confirmation")
+    def test_marking_invoice_paid_sends_membership_renewal_confirmation(self, mock_send):
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save(update_fields=["send_membership_renewal_confirmation"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+
+        self.assertEqual(response.status_code, 200)
+        mock_send.assert_called_once()
+
     def test_invoice_membership_block_hidden_for_free_membership(self):
         self.club.membership_annual_fee = None
         self.club.save(update_fields=["membership_annual_fee"])
@@ -5630,6 +5644,75 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         response = self.client.get(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Apply Renewal Club membership fee")
+
+
+class ClubMembershipEmailTaskTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Club Email Task Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_membership_expiration_reminders=True,
+            send_membership_expiration_reminders_30_days=True,
+            send_welcome_email_to_new_members=True,
+        )
+        self.payment_user = User.objects.create_user(
+            username="club_email_task_payment_user",
+            password='testpass',
+            email="club_email_task_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_task")
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            name="Email Member",
+            email="member@example.com",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_welcome_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.welcome_email_sent)
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Welcome to the {self.club.name}!")
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_30_day_expiration_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        self.member.welcome_email_sent = True
+        self.member.membership_expiration_reminder_30_days_due = timezone.now() - datetime.timedelta(minutes=1)
+        self.member.save(update_fields=["welcome_email_sent", "membership_expiration_reminder_30_days_due"])
+
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
+        self.assertEqual(
+            mock_send.call_args.kwargs["subject"], f"Your membership with {self.club.name} expires in 30 days"
+        )
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(
+            welcome_email_sent=True,
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=1),
+            membership_expiration_reminder_due=timezone.now() - datetime.timedelta(minutes=1),
+        )
+
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_due)
+        self.assertEqual(
+            mock_send.call_args.kwargs["subject"], f"Your membership with {self.club.name} expires tomorrow"
+        )
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -14903,7 +14986,7 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Membership email address")
         self.assertContains(response, "Replies to membership inquiries will be sent to this email")
-        self.assertContains(response, "id_send_membership_expiration_reminders")
+        self.assertNotContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
         """Club owner with admin permission can view history"""
@@ -15583,6 +15666,9 @@ class ClubMemberUpdateTests(TestCase):
         response = self.client.post(url, {"csv_file": csv_file})
         self.assertEqual(response.status_code, 302)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
+        imported = ClubMember.objects.get(club=self.club, email="newmember@example.com")
+        self.assertFalse(imported.send_welcome_email)
+        self.assertTrue(imported.welcome_email_sent)
 
     def test_csv_import_skips_rows_without_email(self):
         """CSV import skips rows with no email"""
@@ -16418,7 +16504,6 @@ class ClubSettingsViewTests(TestCase):
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
                 "membership_number_mode": "disabled",
-                "send_membership_expiration_reminders": "on",
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -16426,7 +16511,7 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.contact_email, "membership@example.com")
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
-        self.assertTrue(self.club.send_membership_expiration_reminders)
+        self.assertFalse(self.club.send_membership_expiration_reminders)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
@@ -16445,10 +16530,12 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     @override_settings(SES_ROUTE_EMAILS_ENABLED=False)
-    def test_email_settings_hidden_when_not_using_ses(self):
+    def test_email_settings_available_without_ses(self):
         self.client.login(username="club_settings_editor", password="testpass")
         response = self.client.get(self.email_url)
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Send welcome letter to new club members")
+        self.assertNotContains(response, "forwarding addresses")
 
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_email_settings_page_shows_when_using_ses(self):
@@ -16458,22 +16545,41 @@ class ClubSettingsViewTests(TestCase):
         self.assertContains(response, "info@auction.fish")
         self.assertContains(response, f"{self.club.slug}-auctions@auction.fish")
         self.assertContains(response, f"{self.club.slug}-contact@auction.fish")
+        self.assertContains(response, "Send expiration reminder 30 days before membership expires")
 
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_email_settings_save_updates_fields_and_creates_history(self):
         self.client.login(username="club_settings_editor", password="testpass")
         editor_member = ClubMember.objects.get(club=self.club, user=self.editor)
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        payment_user = User.objects.create_user(
+            username="club_settings_payment_user",
+            password='testpass',
+            email="club_settings_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=payment_user, club=self.club, paypal_merchant_id="merchant_123")
         response = self.client.post(
             self.email_url,
             {
                 "auction_email_member": str(self.auction_member.pk),
                 "contact_email_member": str(editor_member.pk),
+                "membership_email_template": "Thanks for being part of the club.",
+                "send_welcome_email_to_new_members": "on",
+                "send_membership_expiration_reminders_30_days": "on",
+                "send_membership_expiration_reminders": "on",
+                "send_membership_renewal_confirmation": "on",
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.auction_email_member, self.auction_member)
         self.assertEqual(self.club.contact_email_member, editor_member)
+        self.assertEqual(self.club.membership_email_template, "Thanks for being part of the club.")
+        self.assertTrue(self.club.send_welcome_email_to_new_members)
+        self.assertTrue(self.club.send_membership_expiration_reminders_30_days)
+        self.assertTrue(self.club.send_membership_expiration_reminders)
+        self.assertTrue(self.club.send_membership_renewal_confirmation)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
 
 
@@ -16680,6 +16786,13 @@ class ClubEmailSettingsFormTests(TestCase):
             set(form.fields["contact_email_member"].queryset.values_list("pk", flat=True)),
             {membership_member.pk},
         )
+
+    def test_expiration_reminder_fields_are_disabled_without_membership_payments(self):
+        club = Club.objects.create(name="No Payments Club", membership_annual_fee=Decimal("20.00"))
+        form = ClubEmailSettingsForm(instance=club)
+
+        self.assertTrue(form.fields["send_membership_expiration_reminders_30_days"].disabled)
+        self.assertTrue(form.fields["send_membership_expiration_reminders"].disabled)
 
 
 class LotBapEligibilityTests(TestCase):
@@ -17637,7 +17750,25 @@ class ClubMemberManagementViewTests(TestCase):
         body = response.content.decode("utf-8")
         self.assertIn("closeModal", body)
         self.assertIn("reload-page", body)
+        self.assertTrue(created.send_welcome_email)
+        self.assertFalse(created.welcome_email_sent)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
+
+    def test_unsent_welcome_checkbox_shows_on_member_edit_modal(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.target_member.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "id_send_welcome_email")
+
+    def test_sent_welcome_checkbox_hidden_on_member_edit_modal(self):
+        self.target_member.welcome_email_sent = True
+        self.target_member.save(update_fields=["welcome_email_sent"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.target_member.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "id_send_welcome_email")
 
     def test_viewer_cannot_create_member(self):
         self.client.login(username="club_viewer", password="testpass")

@@ -693,6 +693,10 @@ class Club(models.Model):
         default=False,
         help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
     )
+    send_membership_expiration_reminders_30_days = models.BooleanField(default=False)
+    send_membership_renewal_confirmation = models.BooleanField(default=False)
+    send_welcome_email_to_new_members = models.BooleanField(default=False)
+    membership_email_template = models.TextField(blank=True, default="")
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
         max_length=100,
@@ -883,6 +887,10 @@ class Club(models.Model):
         seller = self.effective_square_seller
         return bool(seller and seller.square_merchant_id)
 
+    @property
+    def membership_payment_emails_enabled(self):
+        return bool((self.membership_annual_fee or 0) > 0 and (self.can_accept_paypal or self.can_accept_square))
+
 
 class ClubDiscordRole(models.Model):
     """Discord roles associated with a club"""
@@ -1032,6 +1040,9 @@ class ClubMember(ContactRecord):
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
+    membership_expiration_reminder_30_days_due = models.DateTimeField(null=True, blank=True)
+    send_welcome_email = models.BooleanField(default=True)
+    welcome_email_sent = models.BooleanField(default=False)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
     added_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_club_members"
@@ -1312,8 +1323,13 @@ class ClubMember(ContactRecord):
         )
         return f"https://{domain}{path}"
 
-    def calculate_membership_expiration_reminder_due(self):
-        if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
+    def calculate_membership_expiration_reminder_due(self, days_before=1):
+        send_reminder = (
+            self.club.send_membership_expiration_reminders_30_days
+            if days_before == 30
+            else self.club.send_membership_expiration_reminders
+        )
+        if not send_reminder or not self.club.membership_payment_emails_enabled:
             return None
         expiration_date = self.membership_expiration_date
         if not expiration_date and self.membership_last_paid:
@@ -1324,7 +1340,7 @@ class ClubMember(ContactRecord):
                 expiration_date = paid + datetime.timedelta(days=365)
         if not expiration_date:
             return None
-        reminder_date = expiration_date - datetime.timedelta(days=1)
+        reminder_date = expiration_date - datetime.timedelta(days=days_before)
         return timezone.make_aware(datetime.datetime.combine(reminder_date, datetime.time(hour=12)))
 
     class Meta:
@@ -1352,11 +1368,16 @@ class ClubMember(ContactRecord):
         previous_expiration_date = None
         previous_email = None
         previous_reminder_due = None
+        previous_reminder_30_days_due = None
         if self.pk:
             prev = (
                 ClubMember.objects.filter(pk=self.pk)
                 .values(
-                    "membership_last_paid", "membership_expiration_date", "email", "membership_expiration_reminder_due"
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "email",
+                    "membership_expiration_reminder_due",
+                    "membership_expiration_reminder_30_days_due",
                 )
                 .first()
             )
@@ -1365,21 +1386,25 @@ class ClubMember(ContactRecord):
                 previous_expiration_date = prev["membership_expiration_date"]
                 previous_email = prev["email"]
                 previous_reminder_due = prev["membership_expiration_reminder_due"]
+                previous_reminder_30_days_due = prev["membership_expiration_reminder_30_days_due"]
         expiration_changed = (
             self.membership_last_paid != previous_membership_last_paid
             or self.membership_expiration_date != previous_expiration_date
         )
-        if expiration_changed:
-            new_reminder = self.calculate_membership_expiration_reminder_due()
-            if new_reminder is not None:
-                # If the recalculated reminder would fire sooner than the previous one
-                # (or the previous reminder was already sent/cleared), enforce a 30-day
-                # minimum from now so the email cannot be triggered again immediately.
-                if previous_reminder_due is None or new_reminder < previous_reminder_due:
-                    min_reminder = timezone.now() + datetime.timedelta(days=30)
-                    if new_reminder < min_reminder:
-                        new_reminder = min_reminder
+        if expiration_changed and not getattr(self, "_preserve_membership_email_schedule", False):
+            new_reminder = self.calculate_membership_expiration_reminder_due(days_before=1)
+            new_reminder_30_days = self.calculate_membership_expiration_reminder_due(days_before=30)
+            min_reminder = timezone.now() + datetime.timedelta(days=30)
+            if new_reminder is not None and (previous_reminder_due is None or new_reminder < previous_reminder_due):
+                if new_reminder < min_reminder:
+                    new_reminder = min_reminder
+            if new_reminder_30_days is not None and (
+                previous_reminder_30_days_due is None or new_reminder_30_days < previous_reminder_30_days_due
+            ):
+                if new_reminder_30_days < min_reminder:
+                    new_reminder_30_days = min_reminder
             self.membership_expiration_reminder_due = new_reminder
+            self.membership_expiration_reminder_30_days_due = new_reminder_30_days
         # Inherit email_address_status from another known record, same as AuctionTOS pattern
         if self.email and self.email != previous_email:
             self.email_address_status = "UNKNOWN"
