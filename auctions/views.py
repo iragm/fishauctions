@@ -9716,6 +9716,12 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         else:
             user = data.user
 
+        # Validate that the tracking_id belongs to the currently authenticated user to
+        # prevent cross-account linking (an attacker supplying another user's tracking_id).
+        if user != request.user:
+            self.error = "PayPal account does not match the logged-in user"
+            return self.get_success_url()
+
         # Fetch referral info from PayPal
         merchant_info = self.get_from_paypal(
             f"v1/customer/partners/{partner_merchant_id}/merchant-integrations/{merchant_id}"
@@ -13438,6 +13444,48 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         context["club"] = self.club
         context["member"] = member
         context["apple_wallet_enabled"] = _apple_configured()
+
+        # Payment button: show 30 days before expiration (and when expired/unpaid),
+        # gated to clubs that have a renewal fee and accept online payments.
+        today = timezone.now().date()
+        expiration = member.membership_expiration_date
+        is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
+        expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
+        can_pay = bool(
+            self.club.enable_club_page
+            and self.club.membership_annual_fee
+            and (self.club.can_accept_paypal or self.club.can_accept_square)
+        )
+        payment_link = ""
+        if can_pay and (is_expired or expiring_soon or not member.is_paid_member):
+            invoice = None
+            if member.email:
+                invoice = Invoice.objects.filter(
+                    club=self.club,
+                    auction=None,
+                    auctiontos_user__email__iexact=member.email,
+                    renewal_processed=False,
+                    status="UNPAID",
+                ).first()
+            if invoice is None and member.user:
+                invoice = Invoice.objects.filter(
+                    club=self.club,
+                    auction=None,
+                    buyer=member.user,
+                    renewal_processed=False,
+                    status="UNPAID",
+                ).first()
+            if invoice is None:
+                invoice = Invoice.objects.create(
+                    club=self.club,
+                    buyer=member.user or None,
+                    status="UNPAID",
+                    renewal_needed=True,
+                )
+            payment_link = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        context["payment_link"] = payment_link
+        context["is_expired"] = is_expired
+        context["expiring_soon"] = expiring_soon
         return context
 
 
@@ -13454,6 +13502,7 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         today = timezone.now().date()
         expiration = member.membership_expiration_date
         is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
+        expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
         can_pay = bool(
             self.club.enable_club_page
             and self.club.membership_annual_fee
@@ -13491,6 +13540,7 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         context["member"] = member
         context["expiration"] = expiration
         context["is_expired"] = is_expired
+        context["expiring_soon"] = expiring_soon
         context["is_paid_member"] = member.is_paid_member
         context["payment_link"] = payment_link
         return context

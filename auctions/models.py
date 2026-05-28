@@ -6606,12 +6606,15 @@ class Invoice(models.Model):
     @property
     def currency(self):
         """Get the currency for this invoice based on the auction creator or club's connected seller"""
-        if self.auction and self.auction.created_by:
-            return self.auction.created_by.userdata.currency
-        if self.club:
-            seller = self.club.effective_paypal_seller or self.club.effective_square_seller
+        # For club-managed auctions (or club-only invoices), derive currency from the club's seller
+        # so that PayPal/Square orders are created with the correct currency for the receiving account.
+        club = self.club or (self.auction.club if self.auction else None)
+        if club:
+            seller = club.effective_paypal_seller or club.effective_square_seller
             if seller and seller.user:
                 return seller.user.userdata.currency
+        if self.auction and self.auction.created_by:
+            return self.auction.created_by.userdata.currency
         return "USD"
 
     @property
@@ -6723,22 +6726,6 @@ class Invoice(models.Model):
         if not self.auction.created_by.userdata.square_enabled:
             return False
         if not self.auction.square_information:
-            return False
-        return True
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
-            return False
-        if self.status == "PAID":
-            return False
-        if self.net_after_payments >= 0:
-            return False
-        if (
-            self.auction
-            and not self.auction.created_by.is_superuser
-            and not self.auction.created_by.userdata.square_enabled
-            and not self.auction.square_information
-        ):
-            return False
-        if not self.auction:
             return False
         return True
 
