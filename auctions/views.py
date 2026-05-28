@@ -9719,6 +9719,11 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         # Validate that the tracking_id belongs to the currently authenticated user to
         # prevent cross-account linking (an attacker supplying another user's tracking_id).
         if user != request.user:
+            logger.warning(
+                "PayPal callback tracking_id mismatch: tracking_id belongs to user %s but request.user is %s",
+                user.pk,
+                request.user.pk,
+            )
             self.error = "PayPal account does not match the logged-in user"
             return self.get_success_url()
 
