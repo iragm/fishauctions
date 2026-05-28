@@ -15062,11 +15062,19 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             return next_url
         return reverse("club_detail", kwargs={"slug": self.object.slug})
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["show_email_routing"] = settings.SES_ROUTE_EMAILS_ENABLED
+        return kwargs
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
-        context["show_email_routing"] = settings.SES_ROUTE_EMAILS_ENABLED
+        show_email_routing = settings.SES_ROUTE_EMAILS_ENABLED
+        context["show_email_routing"] = show_email_routing
+        if not show_email_routing:
+            context["email_fallback_member"] = self.club._first_email_member_by_priority(Q(permission_add_edit=True))
         return context
 
     def form_valid(self, form):

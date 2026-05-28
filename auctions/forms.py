@@ -3853,17 +3853,22 @@ class ClubEmailSettingsForm(forms.ModelForm):
         ]
 
     def __init__(self, *args, **kwargs):
+        show_email_routing = kwargs.pop("show_email_routing", True)
         super().__init__(*args, **kwargs)
         club = self.instance
         self.helper = FormHelper()
         self.helper.form_method = "post"
         payments_enabled = bool(club and club.membership_payment_emails_enabled)
-        self.helper.layout = Layout(
-            Fieldset(
-                "Incoming email routing",
-                "auction_email_member",
-                "contact_email_member",
-            ),
+        layout_fields = []
+        if show_email_routing:
+            layout_fields.append(
+                Fieldset(
+                    "Incoming email routing",
+                    "auction_email_member",
+                    "contact_email_member",
+                )
+            )
+        layout_fields.append(
             Fieldset(
                 "Outgoing emails",
                 "membership_email_template",
@@ -3871,8 +3876,9 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 "send_membership_expiration_reminders_30_days",
                 "send_membership_expiration_reminders",
                 "send_membership_renewal_confirmation",
-            ),
+            )
         )
+        self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
         if club and club.pk:
             base_qs = (
