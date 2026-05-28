@@ -13378,9 +13378,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         from django.utils.html import escape, format_html
 
         deactivated_query = f"{query} deactivated"
-        deactivated_qs = ClubMemberFilter(
-            {"query": deactivated_query}, queryset=self.get_queryset()
-        ).qs
+        deactivated_qs = ClubMemberFilter({"query": deactivated_query}, queryset=self.get_queryset()).qs
         deactivated_count = deactivated_qs.count()
 
         bits = [
@@ -14912,9 +14910,7 @@ class BapAwardAdminView(APIView):
                 action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
                 applies_to="BAP",
             )
-            return close_modal_response(
-                "trigger-event", event_name="bapAwardListChanged,bapLotListChanged"
-            )
+            return close_modal_response("trigger-event", event_name="bapAwardListChanged,bapLotListChanged")
         return render(request, "auctions/generic_admin_form.html", self._build_context(club, award, form))
 
 
@@ -14943,9 +14939,7 @@ class BapAwardDeleteView(APIView):
             action=f"Deleted BAP award for {member_name}",
             applies_to="BAP",
         )
-        return close_modal_response(
-            "trigger-event", event_name="bapAwardListChanged,bapLotListChanged"
-        )
+        return close_modal_response("trigger-event", event_name="bapAwardListChanged,bapLotListChanged")
 
 
 class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
