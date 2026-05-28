@@ -143,6 +143,9 @@ from .forms import (
     ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
     ClubMembershipSettingsForm,
+    ClubMoneyBalanceForm,
+    ClubMoneyForm,
+    ClubTreasurerReportForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
     CreateImageForm,
@@ -187,6 +190,7 @@ from .models import (
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
+    ClubMoney,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -793,6 +797,10 @@ class ClubViewMixin:
     @property
     def can_manage_bap(self):
         return self.user_has_club_permission("permission_manage_bap")
+
+    @property
+    def can_manage_money(self):
+        return self.user_has_club_permission("permission_money")
 
     @property
     def can_access_admin(self):
@@ -13161,6 +13169,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     | Q(permission_view=True)
                     | Q(permission_add_edit=True)
                     | Q(permission_edit_club=True)
+                    | Q(permission_money=True)
                     | Q(permission_manage_auctions=True)
                     | Q(permission_export=True)
                     | Q(permission_manage_bap=True)
@@ -13419,7 +13428,17 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         self.get_club(kwargs.get("slug", ""))
         if request.user.is_authenticated and not request.user.is_superuser:
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
-            if not member or not member.has_any_permission:
+            if not member or not any(
+                [
+                    member.permission_admin,
+                    member.permission_view,
+                    member.permission_export,
+                    member.permission_add_edit,
+                    member.permission_edit_club,
+                    member.permission_manage_auctions,
+                    member.permission_manage_bap,
+                ]
+            ):
                 raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
@@ -14569,7 +14588,9 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
@@ -15477,6 +15498,186 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         context["club_auction_stats"] = self.get_auction_stats_chart_data()
         context["club_membership_growth"] = self.get_membership_growth_chart_data()
         return context
+
+
+class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    active_tab = "treasurer_report"
+    template_name = "auctions/club_treasurer_report.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.has_treasurer_permission():
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def has_treasurer_permission(self):
+        return self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+
+    def _default_date_values(self):
+        today = timezone.localdate()
+        return {"start_date": today.replace(day=1), "end_date": today}
+
+    def _get_filter_form(self):
+        initial = self._default_date_values()
+        form = ClubTreasurerReportForm(self.request.GET or None, initial=initial)
+        if form.is_valid():
+            data = form.cleaned_data
+        else:
+            data = initial
+        return form, data["start_date"] or initial["start_date"], data["end_date"] or initial["end_date"]
+
+    def _manual_category_choices(self):
+        excluded = {ClubMoney.CATEGORY_ADJUSTMENT}
+        return [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in excluded]
+
+    def _filtered_entries(self, start_date, end_date):
+        return ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by("date", "pk")
+
+    def _money_sum(self, queryset, **filters):
+        total = queryset.filter(**filters).aggregate(total=Sum("amount"))["total"]
+        return total or Decimal("0.00")
+
+    def _report_summary(self, entries, start_date, end_date):
+        revenue = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
+        expenses = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
+        auction_profit = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_PROFIT)
+        auction_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
+        return {
+            "gross": revenue - expenses,
+            "revenue": revenue,
+            "expenses": expenses,
+            "membership_renewals": ClubMember.objects.filter(
+                club=self.club,
+                is_deleted=False,
+                membership_last_paid__range=(start_date, end_date),
+            ).count(),
+            "auction_gross": auction_profit + auction_payouts,
+            "auction_payouts": auction_payouts,
+            "auction_profit": auction_profit,
+            "outstanding_invoices": Invoice.objects.filter(
+                auction__club=self.club,
+                auction__date_start__date__range=(start_date, end_date),
+                status__in=("DRAFT", "UNPAID"),
+            ).count(),
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        filter_form, start_date, end_date = self._get_filter_form()
+        entries = list(self._filtered_entries(start_date, end_date))
+        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        context.update(
+            {
+                "club": self.club,
+                "filter_form": filter_form,
+                "start_date": start_date,
+                "end_date": end_date,
+                "report_entries": entries,
+                "report_summary": self._report_summary(self._filtered_entries(start_date, end_date), start_date, end_date),
+                "club_money_form": ClubMoneyForm(
+                    initial={"date": timezone.localdate()},
+                    category_choices=self._manual_category_choices(),
+                ),
+                "club_money_balance_form": ClubMoneyBalanceForm(initial={"account_balance": current_balance}),
+                "current_balance": current_balance,
+                "treasurer_export_url": reverse("club_treasurer_report_export", kwargs={"slug": self.club.slug}),
+                "can_manage_money": self.has_treasurer_permission(),
+            }
+        )
+        return context
+
+
+class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        form = ClubTreasurerReportForm(request.GET or None)
+        if not form.is_valid():
+            return HttpResponseBadRequest("Invalid date range.")
+        start_date = form.cleaned_data["start_date"] or timezone.localdate().replace(day=1)
+        end_date = form.cleaned_data["end_date"] or timezone.localdate()
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-treasurer-report.csv"'
+        writer = csv.writer(response)
+        writer.writerow(["date", "amount", "description", "category"])
+        for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by("date", "pk"):
+            writer.writerow([entry.date.isoformat(), entry.amount, entry.description, entry.category])
+        return response
+
+
+class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        category_choices = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] != ClubMoney.CATEGORY_ADJUSTMENT]
+        form = ClubMoneyForm(request.POST, category_choices=category_choices)
+        if not form.is_valid():
+            return JsonResponse({"ok": False, "errors": form.errors}, status=400)
+        entry = form.save(commit=False)
+        entry.club = self.club
+        entry.created_by = request.user
+        entry.save()
+        return JsonResponse(
+            {
+                "ok": True,
+                "message": f"Saved {entry.get_category_display()} record on {timezone.localtime(entry.createdon).strftime('%Y-%m-%d %H:%M:%S')}.",
+                "current_balance": str(
+                    ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+                ),
+            }
+        )
+
+
+class ClubMoneyBalanceView(LoginRequiredMixin, ClubViewMixin, View):
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_money") or self.user_has_club_permission("permission_edit_club")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        form = ClubMoneyBalanceForm(request.POST)
+        if not form.is_valid():
+            return JsonResponse({"ok": False, "errors": form.errors}, status=400)
+        current_balance = ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        account_balance = form.cleaned_data["account_balance"]
+        adjustment = account_balance - current_balance
+        if adjustment:
+            ClubMoney.objects.create(
+                club=self.club,
+                created_by=request.user,
+                date=timezone.localdate(),
+                amount=adjustment,
+                description=f"Balance books adjustment to match account balance {account_balance}",
+                category=ClubMoney.CATEGORY_ADJUSTMENT,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "message": (
+                    "Balance books adjustment saved."
+                    if adjustment
+                    else "Books already matched the supplied account balance. No adjustment was created."
+                ),
+                "current_balance": str(
+                    ClubMoney.objects.filter(club=self.club).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+                ),
+            }
+        )
 
 
 class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):

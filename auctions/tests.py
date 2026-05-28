@@ -41,6 +41,7 @@ from .models import (
     ClubAPIKeyFieldMap,
     ClubHistory,
     ClubMember,
+    ClubMoney,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -14686,6 +14687,7 @@ class ClubModelTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -15093,6 +15095,9 @@ class ClubPermissionTests(TestCase):
         self.edit_club_user = User.objects.create_user(
             username="perm_edit_club", password="testpass", email="perm_edit_club@example.com"
         )
+        self.money_user = User.objects.create_user(
+            username="perm_money", password="testpass", email="perm_money@example.com"
+        )
         self.bap_user = User.objects.create_user(username="perm_bap", password="testpass", email="perm_bap@example.com")
         self.admin_user = User.objects.create_user(
             username="perm_admin", password="testpass", email="perm_admin@example.com"
@@ -15101,6 +15106,7 @@ class ClubPermissionTests(TestCase):
         ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
         ClubMember.objects.create(club=self.club, user=self.export_user, name="Export", permission_export=True)
         ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.money_user, name="Money", permission_money=True)
         ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
         ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
         self.target_member = ClubMember.objects.create(club=self.club, name="Target Member", email="target@example.com")
@@ -15203,6 +15209,11 @@ class ClubPermissionTests(TestCase):
     def test_non_member_blocked_from_membership_settings(self):
         self._login(self.non_member)
         response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_member_blocked_from_treasurer_report(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
     # --- permission_view ---
@@ -15349,6 +15360,23 @@ class ClubPermissionTests(TestCase):
         """permission_edit_club does not grant permission_admin (needed for permissions view)"""
         self._login(self.edit_club_user)
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
+        self.assertEqual(response.status_code, 403)
+
+    # --- permission_money ---
+
+    def test_money_user_can_access_membership_settings(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_money_user_can_access_treasurer_report(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_money_user_blocked_from_member_list(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
     # --- permission_manage_bap ---
@@ -17336,6 +17364,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export": False,
             "permission_add_edit": False,
             "permission_edit_club": False,
+            "permission_money": False,
             "permission_manage_auctions": False,
             "permission_manage_bap": False,
         }
@@ -17351,6 +17380,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -17364,6 +17394,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -17376,6 +17407,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]
@@ -17407,6 +17439,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -17959,11 +17992,12 @@ class ClubMembershipSettingsFormPaymentUserTests(TestCase):
 
         self.admin_user = _make_member("admin_u", permission_admin=True)
         self.edit_club_user = _make_member("edit_club_u", permission_edit_club=True)
+        self.money_user = _make_member("money_u", permission_money=True)
         self.manage_auctions_user = _make_member("manage_auctions_u", permission_manage_auctions=True)
         self.plain_member = _make_member("plain_u")
 
         # Give each user a Square account so they are payment-eligible
-        for user in [self.admin_user, self.edit_club_user, self.manage_auctions_user, self.plain_member]:
+        for user in [self.admin_user, self.edit_club_user, self.money_user, self.manage_auctions_user, self.plain_member]:
             SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
 
     def _get_payment_user_ids(self):
@@ -17976,12 +18010,145 @@ class ClubMembershipSettingsFormPaymentUserTests(TestCase):
     def test_edit_club_user_included(self):
         self.assertIn(self.edit_club_user.pk, self._get_payment_user_ids())
 
+    def test_money_user_included(self):
+        self.assertIn(self.money_user.pk, self._get_payment_user_ids())
+
     def test_manage_auctions_only_user_excluded(self):
         """A member with only permission_manage_auctions should not appear in the payment_user choices."""
         self.assertNotIn(self.manage_auctions_user.pk, self._get_payment_user_ids())
 
     def test_plain_member_excluded(self):
         self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())
+
+
+class ClubMoneyInvoiceHistoryTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Ledger Club", enable_membership=True, membership_annual_fee=Decimal("15.00"))
+        self.online_auction.club = self.club
+        self.online_auction.save(update_fields=["club"])
+        ClubMoney.objects.all().delete()
+
+    def test_marking_invoice_paid_creates_finance_entries(self):
+        self.invoice.create_club_payment_history(force_current_state=True)
+        self.invoice.status = "PAID"
+        self.invoice.save(update_fields=["status"])
+        categories = set(ClubMoney.objects.filter(invoice=self.invoice).values_list("category", flat=True))
+        self.assertIn(ClubMoney.CATEGORY_UNPAID_INVOICES, categories)
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_PROFIT, categories)
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT, categories)
+
+    def test_reopening_paid_invoice_creates_offsetting_entries(self):
+        self.invoice.create_club_payment_history(force_current_state=True)
+        self.invoice.status = "PAID"
+        self.invoice.save(update_fields=["status"])
+        self.invoice.status = "DRAFT"
+        self.invoice.save(update_fields=["status"])
+        profit_total = sum(
+            ClubMoney.objects.filter(invoice=self.invoice, category=ClubMoney.CATEGORY_AUCTION_PROFIT).values_list(
+                "amount", flat=True
+            ),
+            Decimal("0.00"),
+        )
+        self.assertEqual(profit_total, Decimal("0.00"))
+
+    def test_paid_invoice_logs_membership_and_adjustments(self):
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.invoiceB.create_club_payment_history(force_current_state=True)
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save(update_fields=["status"])
+        categories = set(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("category", flat=True))
+        self.assertIn(ClubMoney.CATEGORY_MEMBERSHIP, categories)
+        self.assertIn(ClubMoney.CATEGORY_DONATION, categories)
+        self.assertIn(ClubMoney.CATEGORY_REFUNDS, categories)
+
+    def test_setting_auction_club_backfills_existing_invoice_history(self):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=self.admin_in_person_tos)[0]
+        ClubMoney.objects.all().delete()
+        self.in_person_auction.club = self.club
+        self.in_person_auction.save(update_fields=["club"])
+        self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
+
+
+class ClubTreasurerReportViewTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="treasury_owner", password="testpass", email="owner@example.com")
+        self.money_user = User.objects.create_user(username="treasury_user", password="testpass", email="money@example.com")
+        self.club = Club.objects.create(name="Treasury Club", enable_membership=True)
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+        ClubMember.objects.create(
+            club=self.club, name="Renewed Member", membership_last_paid=datetime.date(2026, 5, 10), is_deleted=False
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 5),
+            amount=Decimal("12.00"),
+            description="In range",
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 4, 5),
+            amount=Decimal("8.00"),
+            description="Out of range",
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Treasury Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            club=self.club,
+        )
+        pickup = PickupLocation.objects.create(name="Treasury Pickup", auction=auction, pickup_time=timezone.now())
+        tos = AuctionTOS.objects.create(user=self.owner, auction=auction, pickup_location=pickup)
+        Invoice.objects.create(auctiontos_user=tos, status="DRAFT")
+        self.client.force_login(self.money_user)
+
+    def test_treasurer_report_page_loads(self):
+        response = self.client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Treasurer's Report")
+        self.assertContains(response, "In range")
+
+    def test_treasurer_report_export_respects_date_filters(self):
+        response = self.client.get(
+            reverse("club_treasurer_report_export", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn("In range", content)
+        self.assertNotIn("Out of range", content)
+
+    def test_treasurer_report_add_record_returns_json(self):
+        response = self.client.post(
+            reverse("club_money_add", kwargs={"slug": self.club.slug}),
+            {
+                "date": "2026-05-20",
+                "amount": "-4.00",
+                "description": "Room rental",
+                "category": ClubMoney.CATEGORY_MEETING_LOCATION_COST,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(ClubMoney.objects.filter(club=self.club, description="Room rental").exists())
+
+    def test_treasurer_report_balance_books_creates_adjustment(self):
+        response = self.client.post(
+            reverse("club_money_balance", kwargs={"slug": self.club.slug}),
+            {"account_balance": "25.00"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_ADJUSTMENT).exists())
 
 
 class DiscordJoinModalNameTests(TestCase):

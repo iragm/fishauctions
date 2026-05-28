@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Treasurer's Report &mdash; {{ club.name }}{% endblock %}
+
+{% block extra_js %}
+<script type="text/javascript">
+document.addEventListener("DOMContentLoaded", function() {
+    const startInput = document.getElementById("id_start_date");
+    const endInput = document.getElementById("id_end_date");
+    const exportLink = document.getElementById("club-money-export-link");
+    const reportForm = document.getElementById("treasurer-report-filter-form");
+    const reportButton = document.getElementById("treasurer-report-submit");
+    const addForm = document.getElementById("club-money-form");
+    const amountInput = document.getElementById("id_amount");
+    const amountBadge = document.getElementById("club-money-amount-badge");
+    const banner = document.getElementById("club-money-banner");
+    const balanceForm = document.getElementById("club-money-balance-form");
+    const currentBalance = document.getElementById("club-money-current-balance");
+    const balanceModalEl = document.getElementById("balanceBooksModal");
+
+    function showBanner(message, level) {
+        banner.className = "alert alert-" + level;
+        banner.textContent = message;
+        banner.classList.remove("d-none");
+    }
+
+    function updateExportLink() {
+        if (!exportLink || !startInput || !endInput) return;
+        const params = new URLSearchParams();
+        if (startInput.value) params.set("start_date", startInput.value);
+        if (endInput.value) params.set("end_date", endInput.value);
+        exportLink.href = "{{ treasurer_export_url }}" + (params.toString() ? "?" + params.toString() : "");
+    }
+
+    function updateAmountBadge() {
+        if (!amountInput || !amountBadge) return;
+        const value = parseFloat(amountInput.value || "0");
+        if (!amountInput.value) {
+            amountBadge.className = "badge bg-secondary d-none";
+            amountBadge.textContent = "";
+            return;
+        }
+        if (value < 0) {
+            amountBadge.className = "badge bg-danger";
+            amountBadge.textContent = "Expense";
+        } else if (value > 0) {
+            amountBadge.className = "badge bg-success";
+            amountBadge.textContent = "Revenue";
+        } else {
+            amountBadge.className = "badge bg-secondary";
+            amountBadge.textContent = "Neutral";
+        }
+    }
+
+    async function postForm(form, successCallback) {
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: new FormData(form),
+            headers: {"X-Requested-With": "XMLHttpRequest"}
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+            const errors = payload.errors ? Object.values(payload.errors).flat().join(" ") : "Unable to save.";
+            showBanner(errors, "danger");
+            return;
+        }
+        showBanner(payload.message, "success");
+        if (payload.current_balance && currentBalance) {
+            currentBalance.textContent = payload.current_balance;
+        }
+        successCallback(payload);
+    }
+
+    updateExportLink();
+    updateAmountBadge();
+
+    [startInput, endInput].forEach(function(input) {
+        if (!input) return;
+        input.addEventListener("change", updateExportLink);
+    });
+
+    if (amountInput) {
+        amountInput.addEventListener("blur", updateAmountBadge);
+        amountInput.addEventListener("input", updateAmountBadge);
+    }
+
+    if (reportForm && reportButton) {
+        reportForm.addEventListener("submit", function() {
+            reportButton.disabled = true;
+            reportButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Getting report';
+        });
+    }
+
+    if (addForm) {
+        addForm.addEventListener("submit", function(event) {
+            event.preventDefault();
+            postForm(addForm, function() {
+                addForm.reset();
+                if (amountBadge) {
+                    amountBadge.className = "badge bg-secondary d-none";
+                    amountBadge.textContent = "";
+                }
+                const dateInput = document.getElementById("id_date");
+                if (dateInput) {
+                    dateInput.value = "{{ club_money_form.initial.date|date:'Y-m-d' }}";
+                }
+            });
+        });
+    }
+
+    if (balanceForm) {
+        balanceForm.addEventListener("submit", function(event) {
+            event.preventDefault();
+            postForm(balanceForm, function(payload) {
+                balanceForm.reset();
+                const balanceInput = balanceForm.querySelector('input[name="account_balance"]');
+                if (balanceInput && payload.current_balance) {
+                    balanceInput.value = payload.current_balance;
+                }
+                if (balanceModalEl && window.bootstrap) {
+                    const modal = bootstrap.Modal.getOrCreateInstance(balanceModalEl);
+                    modal.hide();
+                }
+            });
+        });
+    }
+});
+</script>
+{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<div class="text-dark bg-warning p-3 rounded mb-3">
+  This site is not financial software, data shown here are for reference only. It's up to your to verify the accuracy of your club's records
+</div>
+
+<div id="club-money-banner" class="alert d-none"></div>
+
+<form id="treasurer-report-filter-form" method="get" class="row g-3 align-items-end mb-4">
+  <div class="col-md-4">
+    <label class="form-label" for="{{ filter_form.start_date.id_for_label }}">Start date</label>
+    {{ filter_form.start_date }}
+  </div>
+  <div class="col-md-4">
+    <label class="form-label" for="{{ filter_form.end_date.id_for_label }}">End date</label>
+    {{ filter_form.end_date }}
+  </div>
+  <div class="col-md-4">
+    <button id="treasurer-report-submit" type="submit" class="btn btn-primary">Get report</button>
+  </div>
+</form>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title">{{ start_date }} - {{ end_date }}</h5>
+    <div class="row">
+      <div class="col-md-6">
+        <p class="mb-1"><strong>Gross:</strong> {{ report_summary.gross }}</p>
+        <p class="mb-1"><strong>Expenses:</strong> {{ report_summary.expenses }}</p>
+        <p class="mb-1"><strong>Revenue:</strong> {{ report_summary.revenue }}</p>
+        <p class="mb-1"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }}</p>
+      </div>
+      <div class="col-md-6">
+        <p class="mb-1"><strong>Auction gross:</strong> {{ report_summary.auction_gross }}</p>
+        <p class="mb-1"><strong>Auction payouts:</strong> {{ report_summary.auction_payouts }}</p>
+        <p class="mb-1"><strong>Auction profit:</strong> {{ report_summary.auction_profit }}</p>
+        <p class="mb-1"><strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-start mb-3">
+  <a id="club-money-export-link" class="btn btn-outline-primary" href="{{ treasurer_export_url }}">Export CSV</a>
+  <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#club-money-add-record" aria-expanded="false" aria-controls="club-money-add-record">
+    Add record
+  </button>
+  <button class="btn btn-outline-warning" type="button" data-bs-toggle="modal" data-bs-target="#balanceBooksModal">
+    Balance books
+  </button>
+  <div class="ms-auto text-muted small pt-2">Current clubmoney total: <span id="club-money-current-balance">{{ current_balance }}</span></div>
+</div>
+
+<div class="collapse mb-4" id="club-money-add-record">
+  <div class="card card-body">
+    <form id="club-money-form" action="{% url 'club_money_add' club.slug %}" method="post" class="row g-3 align-items-end">
+      {% csrf_token %}
+      <div class="col-md-3">
+        <label class="form-label" for="{{ club_money_form.date.id_for_label }}">Date</label>
+        {{ club_money_form.date }}
+      </div>
+      <div class="col-md-2">
+        <label class="form-label" for="{{ club_money_form.amount.id_for_label }}">Amount</label>
+        {{ club_money_form.amount }}
+      </div>
+      <div class="col-md-2">
+        <span id="club-money-amount-badge" class="badge bg-secondary d-none"></span>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label" for="{{ club_money_form.description.id_for_label }}">Description</label>
+        {{ club_money_form.description }}
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="{{ club_money_form.category.id_for_label }}">Category</label>
+        {{ club_money_form.category }}
+      </div>
+      <div class="col-md-8">
+        <button type="submit" class="btn btn-success">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Amount</th>
+        <th>Description</th>
+        <th>Category</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in report_entries %}
+      <tr>
+        <td>{{ entry.date }}</td>
+        <td>{{ entry.amount }}</td>
+        <td>{{ entry.description }}</td>
+        <td>{{ entry.get_category_display }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="4" class="text-muted">No records in this date range.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="modal fade" id="balanceBooksModal" tabindex="-1" aria-labelledby="balanceBooksModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="balanceBooksModalLabel">Balance books</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-warning">
+          This should really only be done once.
+        </div>
+        <form id="club-money-balance-form" action="{% url 'club_money_balance' club.slug %}" method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ club_money_balance_form.account_balance.id_for_label }}">Account balance</label>
+            {{ club_money_balance_form.account_balance }}
+          </div>
+          <button type="submit" class="btn btn-warning">Save adjustment</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

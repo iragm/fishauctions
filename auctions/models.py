@@ -1018,7 +1018,11 @@ class ClubMember(ContactRecord):
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
     permission_edit_club = models.BooleanField(
         default=False,
-        help_text="Change club setup, Discord, API keys, payment settings, and membership settings.  Nearly as dangerous as admin.",
+        help_text="Change club setup, Discord, and API keys.  Nearly as dangerous as admin.",
+    )
+    permission_money = models.BooleanField(
+        default=False,
+        help_text="Manage membership/payment settings and view the treasurer's report.",
     )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
@@ -1055,6 +1059,7 @@ class ClubMember(ContactRecord):
                 self.permission_export,
                 self.permission_add_edit,
                 self.permission_edit_club,
+                self.permission_money,
                 self.permission_manage_auctions,
                 self.permission_manage_bap,
             ]
@@ -2007,6 +2012,9 @@ class Auction(models.Model):
         return date_field
 
     def save(self, *args, **kwargs):
+        previous_club_id = None
+        if self.pk:
+            previous_club_id = Auction.objects.filter(pk=self.pk).values_list("club_id", flat=True).first()
         self.date_start = self.fix_year(self.date_start)
         self.lot_submission_start_date = self.fix_year(self.lot_submission_start_date)
         self.lot_submission_end_date = self.fix_year(self.lot_submission_end_date)
@@ -2018,6 +2026,9 @@ class Auction(models.Model):
         #    self.date_start = self.date_start.replace(year=current_year)
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
+        if previous_club_id is None and self.club_id:
+            for invoice in Invoice.objects.filter(auction=self).select_related("auction", "auctiontos_user"):
+                invoice.create_club_payment_history(force_current_state=True)
 
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
@@ -7143,6 +7154,9 @@ class Invoice(models.Model):
         return Decimal(total)
 
     def save(self, *args, **kwargs):
+        previous_status = None
+        if self.pk:
+            previous_status = Invoice.objects.filter(pk=self.pk).values_list("status", flat=True).first()
         if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
@@ -7176,6 +7190,102 @@ class Invoice(models.Model):
                     InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
                 newer.delete()
                 self.recalculate()
+        if previous_status != self.status or previous_status is None:
+            self.create_club_payment_history(previous_status=previous_status)
+
+    def create_club_payment_history(self, previous_status=None, force_current_state=False, acting_user=None):
+        if not self.auction or not self.auction.club_id:
+            return []
+        club = self.auction.club
+        event_date = self.auction.date_start.date() if self.auction.date_start else timezone.localdate()
+        entries = []
+        money_field = Decimal("0.01")
+
+        def _quantize(value):
+            return Decimal(value or 0).quantize(money_field)
+
+        def _add_entry(amount, category, description):
+            amount = _quantize(amount)
+            if not amount:
+                return
+            entries.append(
+                ClubMoney(
+                    club=club,
+                    invoice=self,
+                    date=event_date,
+                    amount=amount,
+                    description=description[:500],
+                    category=category,
+                    created_by=acting_user,
+                )
+            )
+
+        def _invoice_label():
+            if self.auctiontos_user and self.auctiontos_user.name:
+                return self.auctiontos_user.name
+            return f"invoice #{self.pk}"
+
+        def _add_paid_entries(multiplier):
+            _add_entry(
+                -_quantize(self.total_sold) * multiplier,
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT,
+                f"Auction seller payout for {_invoice_label()} in {self.auction}",
+            )
+            _add_entry(
+                _quantize(self.total_sold_club_cut) * multiplier,
+                ClubMoney.CATEGORY_AUCTION_PROFIT,
+                f"Auction profit for {_invoice_label()} in {self.auction}",
+            )
+            _add_entry(
+                _quantize(self.membership_fee_amount) * multiplier,
+                ClubMoney.CATEGORY_MEMBERSHIP,
+                f"Membership renewal for {_invoice_label()} in {self.auction}",
+            )
+            for adjustment in self.adjustments.exclude(amount=0):
+                if adjustment.adjustment_type == "DISCOUNT":
+                    amount = -_quantize(adjustment.amount) * multiplier
+                    category = ClubMoney.CATEGORY_REFUNDS
+                else:
+                    amount = _quantize(adjustment.amount) * multiplier
+                    category = ClubMoney.CATEGORY_DONATION
+                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {self.auction}"
+                _add_entry(amount, category, description)
+
+        outstanding_amount = -_quantize(self.net_after_payments)
+        old_status = previous_status
+        new_status = self.status
+        if force_current_state:
+            old_status = None
+        elif old_status == new_status:
+            return []
+
+        old_outstanding = old_status in ("DRAFT", "UNPAID")
+        new_outstanding = new_status in ("DRAFT", "UNPAID")
+        if force_current_state:
+            if new_outstanding:
+                _add_entry(
+                    outstanding_amount,
+                    ClubMoney.CATEGORY_UNPAID_INVOICES,
+                    f"Outstanding invoice for {_invoice_label()} in {self.auction}",
+                )
+            if new_status == "PAID":
+                _add_paid_entries(Decimal(1))
+        else:
+            if old_outstanding != new_outstanding:
+                direction = Decimal(1) if new_outstanding else Decimal(-1)
+                _add_entry(
+                    outstanding_amount * direction,
+                    ClubMoney.CATEGORY_UNPAID_INVOICES,
+                    f"Outstanding invoice for {_invoice_label()} in {self.auction}",
+                )
+            if old_status == "PAID" and new_status != "PAID":
+                _add_paid_entries(Decimal(-1))
+            elif old_status != "PAID" and new_status == "PAID":
+                _add_paid_entries(Decimal(1))
+
+        if entries:
+            ClubMoney.objects.bulk_create(entries)
+        return entries
 
 
 class InvoiceAdjustment(models.Model):
@@ -7260,6 +7370,45 @@ class InvoicePayment(models.Model):
 
     # def __str__(self):
     #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
+
+
+class ClubMoney(models.Model):
+    CATEGORY_DONATION = "donation"
+    CATEGORY_SPEAKER_COSTS = "speaker_costs"
+    CATEGORY_MEETING_LOCATION_COST = "meeting_location_cost"
+    CATEGORY_MEMBERSHIP = "membership"
+    CATEGORY_AUCTION_PROFIT = "auction_profit"
+    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
+    CATEGORY_UNPAID_INVOICES = "unpaid_invoices"
+    CATEGORY_REFUNDS = "refunds"
+    CATEGORY_ADJUSTMENT = "adjustment"
+    CATEGORY_CHOICES = (
+        (CATEGORY_DONATION, "Donation"),
+        (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
+        (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
+        (CATEGORY_MEMBERSHIP, "Membership"),
+        (CATEGORY_AUCTION_PROFIT, "Auction profit"),
+        (CATEGORY_AUCTION_SELLER_PAYOUT, "Auction seller payout"),
+        (CATEGORY_UNPAID_INVOICES, "Unpaid invoices"),
+        (CATEGORY_REFUNDS, "Refunds"),
+        (CATEGORY_ADJUSTMENT, "Adjustment"),
+    )
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="money")
+    invoice = models.ForeignKey("Invoice", null=True, blank=True, on_delete=models.SET_NULL, related_name="club_money")
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    date = models.DateField(db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.CharField(max_length=500, blank=True, default="")
+    category = models.CharField(max_length=40, choices=CATEGORY_CHOICES)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-pk"]
+        verbose_name_plural = "Club money"
+
+    def __str__(self):
+        return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
 
 
 class Bid(models.Model):
@@ -7857,6 +8006,7 @@ class UserData(models.Model):
                     "permission_export",
                     "permission_add_edit",
                     "permission_edit_club",
+                    "permission_money",
                     "permission_manage_auctions",
                     "permission_manage_bap",
                 ]:

@@ -38,6 +38,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
+    ClubMoney,
     Invoice,
     InvoiceAdjustment,
     Lot,
@@ -3855,7 +3856,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         if club and club.pk:
             admin_user_ids = (
                 club.members.filter(is_deleted=False)
-                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_money=True))
                 .exclude(user__isnull=True)
                 .values_list("user_id", flat=True)
             )
@@ -4337,6 +4338,7 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         fields = [
             "permission_admin",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
             "permission_export",
@@ -4348,7 +4350,8 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         labels = {
             "permission_admin": "Club admin — can do everything, including assigning permissions to other members",
-            "permission_edit_club": "Edit club settings — club setup, Discord, API keys, payment settings, and membership settings",
+            "permission_edit_club": "Edit club settings — club setup, Discord, and API keys",
+            "permission_money": "Manage membership and payments — membership/payment settings and treasurer's report",
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
             "permission_export": "CSV import/export — can import and export member data as CSV",
@@ -4373,6 +4376,51 @@ class ClubMemberPermissionsForm(forms.ModelForm):
             ),
         )
 
+
+class ClubTreasurerReportForm(forms.Form):
+    start_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date"}),
+        required=False,
+    )
+    end_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date"}),
+        required=False,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        start_date = cleaned_data.get("start_date")
+        end_date = cleaned_data.get("end_date")
+        if start_date and end_date and start_date > end_date:
+            self.add_error("end_date", "End date must be on or after the start date.")
+        return cleaned_data
+
+
+class ClubMoneyForm(forms.ModelForm):
+    class Meta:
+        model = ClubMoney
+        fields = ["date", "amount", "description", "category"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+        }
+
+    def __init__(self, *args, category_choices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+        if category_choices is not None:
+            self.fields["category"].choices = category_choices
+
+
+class ClubMoneyBalanceForm(forms.Form):
+    account_balance = forms.DecimalField(max_digits=10, decimal_places=2, label="Account balance")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
 
 class ClubMemberMergeTargetForm(forms.Form):
     target = forms.CharField(

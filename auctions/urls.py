@@ -637,6 +637,26 @@ urlpatterns = [
     path("clubs/<slug:slug>/bap-admin/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     path("clubs/<slug:slug>/admin/stats/", views.ClubStatsView.as_view(), name="club_stats"),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/",
+        views.ClubTreasurerReportView.as_view(),
+        name="club_treasurer_report",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/export/",
+        views.ClubTreasurerReportExportView.as_view(),
+        name="club_treasurer_report_export",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/add/",
+        views.ClubMoneyCreateView.as_view(),
+        name="club_money_add",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/balance/",
+        views.ClubMoneyBalanceView.as_view(),
+        name="club_money_balance",
+    ),
     # API key management (login-required UI)
     path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
     path("clubs/<slug:slug>/api-keys/create/", views.ClubAPIKeyCreateView.as_view(), name="club_api_key_create"),
