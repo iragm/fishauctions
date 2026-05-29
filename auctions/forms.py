@@ -1928,7 +1928,6 @@ class AuctionEditForm(forms.ModelForm):
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
             "email_users_when_invoices_ready",
-            "add_people_from_auction_to_club",
             "add_membership_fee_to_invoices_for_expired_members",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
@@ -2022,27 +2021,34 @@ class AuctionEditForm(forms.ModelForm):
                 and settings.PAYPAL_SECRET
             )
 
-        if paypal_seller:
-            self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
-        elif uses_site_paypal:
-            self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
-        else:
-            # Hide the field if no PayPal route is configured.
+        if club:
+            # When auction is tied to a club, payments are controlled by club settings
             self.fields["enable_online_payments"].widget = forms.HiddenInput()
-
-        if square_seller:
-            self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
-        else:
-            # Square requires an actual linked seller record (no site fallback).
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
+        else:
+            if paypal_seller:
+                self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
+            elif uses_site_paypal:
+                self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
+            else:
+                # Hide the field if no PayPal route is configured.
+                self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
-        # These three fields are shown/hidden via JavaScript based on the club selection.
+            if square_seller:
+                self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+            else:
+                # Square requires an actual linked seller record (no site fallback).
+                self.fields["enable_square_payments"].widget = forms.HiddenInput()
+
+        # These fields are shown/hidden via JavaScript based on the club selection.
         # We always render real widgets so the JS can toggle them; server validation
         # already rejects the combination of no-club + enabled flag.
         if self.instance.pk and self.instance.manage_users_through_club:
-            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             # When club-managed, copy_users is irrelevant — the new auction gets members from the club
             self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
+        else:
+            # Membership fee should only be shown when manage_users_through_club is enabled
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
             has_activity = (
                 Lot.objects.filter(auction=self.instance, is_deleted=False).exists()
                 or Invoice.objects.filter(auction=self.instance).exists()
@@ -2270,10 +2276,6 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
-                    "add_people_from_auction_to_club",
-                    css_class="col-md-3",
-                ),
-                Div(
                     "add_membership_fee_to_invoices_for_expired_members",
                     css_class="col-md-3",
                 ),
@@ -2334,6 +2336,11 @@ class AuctionEditForm(forms.ModelForm):
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
         existing_instance = self.instance
 
+        # When a club is selected, payments are controlled by club settings, not auction settings
+        if cleaned_data.get("club"):
+            cleaned_data["enable_online_payments"] = False
+            cleaned_data["enable_square_payments"] = False
+
         if existing_instance and existing_instance.pk:
             if use_seller_dash_lot_numbering is not existing_instance.use_seller_dash_lot_numbering:
                 if existing_instance.admin_checklist_lots_added:
@@ -2373,8 +2380,6 @@ class AuctionEditForm(forms.ModelForm):
                 "add_membership_fee_to_invoices_for_expired_members",
                 "Associate this auction with a club before enabling membership fees.",
             )
-        if cleaned_data.get("add_people_from_auction_to_club") and not cleaned_data.get("club"):
-            self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
     def clean_manage_users_through_club(self):

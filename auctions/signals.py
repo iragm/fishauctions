@@ -464,16 +464,27 @@ def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwa
 
     user = User.objects.filter(email=email).first()
     if user:
-        user.userdata.unsubscribe_from_all
+        # Unsubscribe user from all emails without touching club members
+        userdata = user.userdata
+        userdata.email_me_about_new_auctions = False
+        userdata.email_me_about_new_local_lots = False
+        userdata.email_me_about_new_lots_ship_to_location = False
+        userdata.email_me_when_people_comment_on_my_lots = False
+        userdata.email_me_about_new_chat_replies = False
+        userdata.send_reminder_emails_about_joining_auctions = False
+        userdata.email_me_about_new_in_person_auctions = False
+        userdata.has_unsubscribed = True
+        userdata.last_activity = timezone.now()
+        userdata.save()
 
-    members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="do_not_contact")
+    members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="non_essential")
     for member in members:
-        member.contact_status = "do_not_contact"
+        member.contact_status = "non_essential"
         member.save(update_fields=["contact_status"])
         ClubHistory.objects.create(
             club=member.club,
             user=None,
-            action=f"{member} marked do not contact after SES complaint",
+            action=f"{member} marked non-essential emails only after SES complaint",
             applies_to="MEMBERS",
         )
 

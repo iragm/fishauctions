@@ -495,7 +495,7 @@ def _find_club_member(club, user, email):
 def _invoice_membership_candidate(invoice):
     if not invoice or not invoice.auction or not invoice.auction.club or not invoice.auctiontos_user:
         return None
-    if not (invoice.auction.add_people_from_auction_to_club or invoice.auction.manage_users_through_club):
+    if not invoice.auction.manage_users_through_club:
         return None
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
@@ -539,7 +539,7 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     auction = invoice.auction
     club = auction.club
-    if not (auction.add_people_from_auction_to_club or auction.manage_users_through_club):
+    if not auction.manage_users_through_club:
         return False
     if not auction.add_membership_fee_to_invoices_for_expired_members:
         return False
@@ -7419,7 +7419,6 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "enable_square_payments",
-                "add_people_from_auction_to_club",
                 "add_membership_fee_to_invoices_for_expired_members",
                 "alternative_split_label",
                 "google_drive_link",

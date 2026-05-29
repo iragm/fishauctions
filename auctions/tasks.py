@@ -482,6 +482,7 @@ def update_expired_membership_discord_roles(self):
 
     reminder_30_days_qs = ClubMember.objects.filter(
         is_deleted=False,
+        membership_last_paid__isnull=False,
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
         membership_expiration_reminder_30_days_due__lte=now,
@@ -499,6 +500,7 @@ def update_expired_membership_discord_roles(self):
 
     reminder_qs = ClubMember.objects.filter(
         is_deleted=False,
+        membership_last_paid__isnull=False,
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
         membership_expiration_reminder_due__lte=now,

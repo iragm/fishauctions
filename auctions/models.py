@@ -1244,8 +1244,11 @@ class ClubMember(ContactRecord):
         if point_roles:
             return max(point_roles, key=lambda pair: pair[1])[0]
 
-        # Paid membership role
-        paid_role = next((r for r in roles_qs if r.is_paid_role), None)
+        # Paid membership role (only if no point requirements)
+        paid_role = next(
+            (r for r in roles_qs if r.is_paid_role and r.bap_points_for_role == 0 and r.hap_points_for_role == 0),
+            None,
+        )
         if paid_role:
             return paid_role
 
@@ -1751,10 +1754,6 @@ class Auction(models.Model):
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
-    add_people_from_auction_to_club = models.BooleanField(
-        default=False,
-        help_text="Add auction participants to the associated club.  This is a one-way sync to the club and will only create new club members, not update existing ones.  To keep both auction and club records in sync, turn on Manage users through club instead -- there's a 99% chance that's what you want.",
-    )
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
         help_text="And create membership if they don't have one.  You can turn this off on each invoice.",

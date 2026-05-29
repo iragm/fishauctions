@@ -5673,6 +5673,7 @@ class ClubMembershipEmailTaskTests(TestCase):
             name="Email Member",
             email="member@example.com",
             membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+            membership_last_paid=timezone.now().date(),
         )
 
     @patch("auctions.tasks.mail.send")
