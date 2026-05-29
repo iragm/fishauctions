@@ -474,7 +474,7 @@ def update_expired_membership_discord_roles(self):
         if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
             send_club_member_email(
                 member,
-                subject=f"{member.club.name}",
+                subject=f"Welcome to the {member.club.name}!",
                 message_text="",
                 email_type="welcome",
             )
