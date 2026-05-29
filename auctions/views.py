@@ -14425,6 +14425,7 @@ class ClubMemberRenewView(APIView):
             "member": member,
             "new_expiration": self._new_expiration(member, today),
             "renew_url": reverse("club_member_renew", kwargs={"pk": pk}),
+            "send_renewal_confirmation": member.club.send_membership_renewal_confirmation,
         }
         return render(request, "auctions/club_member_renew_confirm.html", context)
 
