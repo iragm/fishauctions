@@ -4170,6 +4170,25 @@ class AuctionTOS(models.Model):
             },
         )
         result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
+        if self.auction.club:
+            club = self.auction.club
+            already_in_club = False
+            if self.email:
+                already_in_club = ClubMember.objects.filter(
+                    club=club, email__iexact=self.email, is_deleted=False
+                ).exists()
+            if not already_in_club and self.user_id:
+                already_in_club = ClubMember.objects.filter(club=club, user_id=self.user_id, is_deleted=False).exists()
+            club_name = html.escape(club.name)
+            if already_in_club:
+                result += f"<span class='dropdown-item text-muted'><i class='bi bi-person-check me-1'></i>Already in {club_name}</span>"
+            else:
+                add_to_club_url = reverse("add_single_auctiontos_to_club", kwargs={"pk": self.pk})
+                result += (
+                    f"<span class='dropdown-item'>"
+                    f"<a href='javascript:void(0)' hx-post='{add_to_club_url}' hx-swap='none'>"
+                    f"<i class='bi bi-person-fill-add me-1'></i>Add to {club_name}</a></span>"
+                )
         result += "</div>"
         return html.format_html(result)
 

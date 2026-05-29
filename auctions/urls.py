@@ -89,6 +89,11 @@ urlpatterns = [
         name="auction_check_in",
     ),
     path(
+        "api/auctiontos/<int:pk>/add-to-club/",
+        views.AddSingleAuctionTOSToClub.as_view(),
+        name="add_single_auctiontos_to_club",
+    ),
+    path(
         "api/userignorecategory/create/<int:pk>/",
         views.CreateUserIgnoreCategory.as_view(),
     ),

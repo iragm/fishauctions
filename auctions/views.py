@@ -2618,6 +2618,52 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
         return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
 
+class AddSingleAuctionTOSToClub(LoginRequiredMixin, View):
+    """Add a single AuctionTOS participant to the auction's associated club."""
+
+    def post(self, request, pk):
+        tos = get_object_or_404(AuctionTOS, pk=pk)
+        auction = tos.auction
+        club = auction.club
+        if not club:
+            return HttpResponse("No club associated with this auction.", status=400)
+
+        if (
+            not request.user.is_superuser
+            and not check_club_permission(request.user, club, "permission_add_edit")
+            and not check_club_permission(request.user, club, "permission_manage_auctions")
+        ):
+            raise PermissionDenied()
+
+        existing = None
+        if tos.email:
+            existing = ClubMember.objects.filter(club=club, email__iexact=tos.email, is_deleted=False).first()
+        if not existing and tos.user:
+            existing = ClubMember.objects.filter(club=club, user=tos.user, is_deleted=False).first()
+
+        if not existing:
+            ClubMember.objects.create(
+                club=club,
+                user=tos.user,
+                name=tos.name or "",
+                email=tos.email or "",
+                phone_number=tos.phone_number or "",
+                address=tos.address or "",
+                source=str(auction.title)[:200],
+                added_by=request.user,
+            )
+            messages.success(request, f"Added {tos.name} to {club.name}.")
+            auction.create_history(
+                applies_to="USERS",
+                action=f"Added {tos.name} to club '{club.name}'.",
+                user=request.user,
+            )
+
+        if request.headers.get("HX-Request"):
+            return HttpResponse("", headers={"HX-Refresh": "true"})
+        return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
+
+
 class ComposeEmailToUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
