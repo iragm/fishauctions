@@ -4170,7 +4170,7 @@ class AuctionTOS(models.Model):
             },
         )
         result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
-        if self.auction.club:
+        if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
             already_in_club = False
             if self.email:
