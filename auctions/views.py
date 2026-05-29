@@ -584,16 +584,20 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             club = locked.club or (locked.auction.club if locked.auction else None)
             if not club:
                 return
-            user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
-            email = _invoice_membership_lookup_email(locked)
-            if not user and not email:
-                # Nothing reliable to identify the buyer by; do not create a junk member.
-                logger.warning(
-                    "Skipping renewal on invoice %s: no linked user and no email available",
-                    locked.pk,
-                )
-                return
-            member = _find_club_member(club, user, email)
+            # For membership invoices, prefer the direct club_member reference
+            if locked.club_member:
+                member = locked.club_member
+            else:
+                user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
+                email = _invoice_membership_lookup_email(locked)
+                if not user and not email:
+                    # Nothing reliable to identify the buyer by; do not create a junk member.
+                    logger.warning(
+                        "Skipping renewal on invoice %s: no linked user and no email available",
+                        locked.pk,
+                    )
+                    return
+                member = _find_club_member(club, user, email)
             if not member:
                 if locked.auctiontos_user:
                     name = locked.auctiontos_user.name or (
@@ -13560,6 +13564,7 @@ def _get_or_create_membership_invoice(club, member):
     if invoice is None:
         invoice = Invoice.objects.create(
             club=club,
+            club_member=member,
             buyer=member.user or None,
             status="UNPAID",
             renewal_needed=True,

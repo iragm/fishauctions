@@ -6622,6 +6622,9 @@ class Invoice(models.Model):
     club = models.ForeignKey(
         "Club", blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
     )
+    club_member = models.ForeignKey(
+        "ClubMember", blank=True, null=True, on_delete=models.SET_NULL, related_name="invoices"
+    )
     buyer = models.ForeignKey(
         settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
     )
