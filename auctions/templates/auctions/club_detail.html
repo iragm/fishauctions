@@ -56,7 +56,7 @@
       {% endif %}
     </div>
   </div>
-{% else %}
+{% elif not club.allow_joining %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
 {% endif %}
 

@@ -14448,6 +14448,15 @@ class ClubMemberRenewView(APIView):
             action=f"Renewed membership for {member}",
             applies_to="MEMBERSHIP",
         )
+        if member.club.membership_annual_fee:
+            ClubMoney.objects.create(
+                club=member.club,
+                created_by=request.user,
+                date=today,
+                amount=member.club.membership_annual_fee,
+                description=f"Manual membership renewal for {member}",
+                category=ClubMoney.CATEGORY_MEMBERSHIP,
+            )
         try:
             maybe_send_membership_renewal_confirmation(member)
         except Exception:
@@ -14566,6 +14575,39 @@ class ClubBarcodeView(View):
         except Exception:
             raise Http404
         response = HttpResponse(svg, content_type="image/svg+xml")
+        # Barcodes are stable for a given value — let the CDN / browser cache them.
+        response["Cache-Control"] = "public, max-age=86400"
+        return response
+
+
+class ClubBarcodePNGView(View):
+    """Render a PNG barcode for an arbitrary value.
+
+    Public endpoint so the URL can be embedded in outgoing emails as an <img src>.
+    PNG format renders better in email clients like Gmail than SVG.
+    The view only renders the barcode bars — no membership lookup, no caller validation.
+    """
+
+    def get(self, request, slug, value):
+        import io as _io
+
+        try:
+            import barcode as _barcode
+            from barcode.writer import ImageWriter as _ImageWriter
+        except ImportError:
+            raise Http404
+        value = str(value or "")
+        if not value or not value.isdigit():
+            raise Http404
+        try:
+            cls = _barcode.get_barcode_class("code128")
+            buf = _io.BytesIO()
+            cls(value, writer=_ImageWriter()).write(buf, options={"write_text": False, "module_height": 12.0})
+            buf.seek(0)
+            png_data = buf.getvalue()
+        except Exception:
+            raise Http404
+        response = HttpResponse(png_data, content_type="image/png")
         # Barcodes are stable for a given value — let the CDN / browser cache them.
         response["Cache-Control"] = "public, max-age=86400"
         return response
@@ -15131,8 +15173,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     def get_context_data(self, **kwargs):
         from django.utils import timezone
 
-        from auctions.forms import DEFAULT_MEMBERSHIP_WELCOME_TEXT
-
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
@@ -15155,7 +15195,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_name"] = preview_name
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
-        context["default_welcome_text"] = DEFAULT_MEMBERSHIP_WELCOME_TEXT
         context["membership_numbers_enabled"] = self.club.membership_number_mode != "disabled"
 
         today = timezone.localdate()
@@ -15209,7 +15248,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             "preview_barcode_url": preview_barcode_url,
             "membership_numbers_enabled": context["membership_numbers_enabled"],
             "payments_enabled": self.club.membership_payment_emails_enabled,
-            "default_welcome_text": DEFAULT_MEMBERSHIP_WELCOME_TEXT,
             "next_auction_html": next_auction_html,
         }
         return context

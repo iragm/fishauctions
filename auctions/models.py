@@ -698,6 +698,29 @@ class Club(models.Model):
     send_welcome_email_to_new_members = models.BooleanField(default=False)
     membership_email_template = models.TextField(blank=True, default="")
     include_next_auction_in_emails = models.BooleanField(default=True)
+    welcome_opening = models.TextField(
+        blank=True, default="Thanks for joining!", verbose_name="Welcome email opening text"
+    )
+    welcome_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Welcome email closing text")
+    welcome_include_auction = models.BooleanField(
+        default=True, verbose_name="Also include information about the next auction"
+    )
+    renewal_opening = models.TextField(
+        blank=True, default="Your membership has been renewed!", verbose_name="Renewal email opening text"
+    )
+    renewal_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Renewal email closing text")
+    renewal_include_auction = models.BooleanField(
+        default=True, verbose_name="Also include information about the next auction"
+    )
+    expiring_soon_opening = models.TextField(
+        blank=True, default="Your membership expires soon", verbose_name="Expiring soon email opening text"
+    )
+    expiring_soon_closing = models.TextField(
+        blank=True, default="Best wishes,", verbose_name="Expiring soon email closing text"
+    )
+    expiring_soon_include_auction = models.BooleanField(
+        default=True, verbose_name="Also include information about the next auction"
+    )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
         max_length=100,
@@ -1343,6 +1366,30 @@ class ClubMember(ContactRecord):
             domain = "localhost"
         path = reverse(
             "club_barcode",
+            kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
+        )
+        return f"https://{domain}{path}"
+
+    @property
+    def barcode_image_link_png(self):
+        """Absolute URL to a PNG barcode for this member's membership number.
+
+        PNG format renders better in email clients like Gmail than SVG.
+        Returns ``""`` when the member has no number assigned, so callers can use
+        truthiness to decide whether to embed the image.
+        """
+        if not self.membership_number:
+            return ""
+        from django.contrib.sites.models import Site
+        from django.urls import reverse
+
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            domain = "localhost"
+        path = reverse(
+            "club_barcode_png",
             kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
         )
         return f"https://{domain}{path}"

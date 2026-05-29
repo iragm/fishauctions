@@ -5698,9 +5698,7 @@ class ClubMembershipEmailTaskTests(TestCase):
 
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
-        self.assertEqual(
-            mock_send.call_args.kwargs["subject"], f"Your membership with {self.club.name} expires in 30 days"
-        )
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires in 30 days")
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
@@ -5716,9 +5714,7 @@ class ClubMembershipEmailTaskTests(TestCase):
 
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_due)
-        self.assertEqual(
-            mock_send.call_args.kwargs["subject"], f"Your membership with {self.club.name} expires tomorrow"
-        )
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires tomorrow")
 
     @patch("auctions.tasks.mail.send")
     def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):

@@ -47,16 +47,13 @@ def _greeting_name(member):
     return name or "Member"
 
 
-DEFAULT_MEMBERSHIP_WELCOME_TEXT = "Welcome! We're glad to have you join us, and we'll see you at our next meeting!"
-
-
-def _next_auction_fragment(club, current_site):
+def _next_auction_fragment(club, current_site, include_auction=True):
     """Return (text, html) for the 'next promoted auction' line, or ('', '')."""
     from django.utils import timezone
 
     from auctions.models import Auction
 
-    if not club.include_next_auction_in_emails:
+    if not include_auction:
         return "", ""
     today = timezone.localdate()
     auction = (
@@ -93,9 +90,20 @@ def _next_auction_fragment(club, current_site):
 
 
 def _render_membership_email_html(
-    member, intro_text, message_text, membership_link, club_icon_url, barcode_url, next_auction_html
+    member,
+    intro_text,
+    message_text,
+    membership_link,
+    club_icon_url,
+    barcode_url,
+    next_auction_html,
+    opening_text="",
+    closing_text="",
 ):
     html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
+    if opening_text:
+        html_parts.append(escape(opening_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
     if intro_text:
         html_parts.append(escape(intro_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
@@ -108,6 +116,9 @@ def _render_membership_email_html(
         )
     if next_auction_html:
         html_parts.append(f"{next_auction_html}<br><br>")
+    if closing_text:
+        html_parts.append(escape(closing_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
     if club_icon_url:
         html_parts.append(
             f"<div><img src='{escape(club_icon_url)}' alt='{escape(member.club.name)}' "
@@ -119,20 +130,46 @@ def _render_membership_email_html(
     return "".join(html_parts)
 
 
-def send_club_member_email(member, subject, message_text):
+def send_club_member_email(member, subject, message_text, email_type="welcome"):
     if not member.email or member.contact_status == "do_not_contact":
         return False
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
-    intro_text = (member.club.membership_email_template or "").strip() or DEFAULT_MEMBERSHIP_WELCOME_TEXT
-    barcode_url = member.barcode_image_link if member.membership_number_visible else ""
-    next_text, next_html = _next_auction_fragment(member.club, current_site)
-    text_parts = [f"Dear {_greeting_name(member)},", "", intro_text, ""]
+    intro_text = ""
+    barcode_url = member.barcode_image_link_png if member.membership_number_visible else ""
+
+    opening_text = ""
+    closing_text = ""
+    include_auction = member.club.include_next_auction_in_emails
+
+    if email_type == "welcome":
+        opening_text = member.club.welcome_opening
+        closing_text = member.club.welcome_closing
+        include_auction = member.club.welcome_include_auction
+    elif email_type == "renewal":
+        opening_text = member.club.renewal_opening
+        closing_text = member.club.renewal_closing
+        include_auction = member.club.renewal_include_auction
+    elif email_type == "expiring_soon":
+        opening_text = member.club.expiring_soon_opening
+        closing_text = member.club.expiring_soon_closing
+        include_auction = member.club.expiring_soon_include_auction
+
+    next_text, next_html = "", ""
+    if include_auction:
+        next_text, next_html = _next_auction_fragment(member.club, current_site, include_auction=include_auction)
+
+    text_parts = [f"Dear {_greeting_name(member)},", ""]
+    if opening_text:
+        text_parts.extend([opening_text, ""])
+    text_parts.extend([intro_text, ""])
     text_parts.extend([message_text, "", f"View your membership here: {membership_link}"])
     if barcode_url:
         text_parts.extend(["", f"Membership barcode: {barcode_url}"])
     if next_text:
         text_parts.extend(["", next_text])
+    if closing_text:
+        text_parts.extend(["", closing_text])
     text_parts.extend(["", member.club.name])
     club_icon_url = ""
     if member.club.icon:
@@ -150,6 +187,8 @@ def send_club_member_email(member, subject, message_text):
             club_icon_url=club_icon_url,
             barcode_url=barcode_url,
             next_auction_html=next_html,
+            opening_text=opening_text,
+            closing_text=closing_text,
         ),
         headers={"Reply-to": _membership_email_reply_to(member.club)},
     )
@@ -159,10 +198,16 @@ def send_club_member_email(member, subject, message_text):
 def maybe_send_membership_renewal_confirmation(member):
     if not member.club.send_membership_renewal_confirmation:
         return False
+    expiration_text = ""
+    if member.membership_expiration_date:
+        date_str = member.membership_expiration_date.strftime("%B %-d, %Y")
+        expiration_text = f"  Your membership is paid through {date_str}."
+    message_text = f"Your {member.club.name} membership has been renewed.{expiration_text}"
     return send_club_member_email(
         member,
-        subject=f"Your membership with {member.club.name} has been renewed",
-        message_text=f"Your membership with {member.club.name} has been renewed.",
+        subject=f"Your {member.club.name} membership has been renewed",
+        message_text=message_text,
+        email_type="renewal",
     )
 
 
@@ -429,8 +474,9 @@ def update_expired_membership_discord_roles(self):
         if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
             send_club_member_email(
                 member,
-                subject=f"Welcome to the {member.club.name}!",
-                message_text=f"Welcome to {member.club.name}.",
+                subject=f"{member.club.name}",
+                message_text="",
+                email_type="welcome",
             )
         member.save(update_fields=update_fields)
 
@@ -444,8 +490,9 @@ def update_expired_membership_discord_roles(self):
         if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
             send_club_member_email(
                 member,
-                subject=f"Your membership with {member.club.name} expires in 30 days",
-                message_text=f"Your membership with {member.club.name} expires in 30 days.",
+                subject=f"Your {member.club.name} membership expires in 30 days",
+                message_text=f"Your {member.club.name} membership expires in 30 days.",
+                email_type="expiring_soon",
             )
         member.membership_expiration_reminder_30_days_due = None
         member.save(update_fields=["membership_expiration_reminder_30_days_due"])
@@ -460,8 +507,9 @@ def update_expired_membership_discord_roles(self):
         if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:
             send_club_member_email(
                 member,
-                subject=f"Your membership with {member.club.name} expires tomorrow",
-                message_text=f"Your membership with {member.club.name} expires tomorrow.",
+                subject=f"Your {member.club.name} membership expires tomorrow",
+                message_text=f"Your {member.club.name} membership expires tomorrow.",
+                email_type="expiring_soon",
             )
         member.membership_expiration_reminder_due = None
         member.save(update_fields=["membership_expiration_reminder_due"])

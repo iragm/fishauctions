@@ -3837,9 +3837,6 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         return super().clean()
 
 
-DEFAULT_MEMBERSHIP_WELCOME_TEXT = "Welcome! We're glad to have you join us, and we'll see you at our next meeting!"
-
-
 class ClubEmailSettingsForm(forms.ModelForm):
     class Meta:
         model = Club
@@ -3851,8 +3848,15 @@ class ClubEmailSettingsForm(forms.ModelForm):
             "send_membership_expiration_reminders_30_days",
             "send_membership_expiration_reminders",
             "send_membership_renewal_confirmation",
-            "membership_email_template",
-            "include_next_auction_in_emails",
+            "welcome_opening",
+            "welcome_closing",
+            "welcome_include_auction",
+            "renewal_opening",
+            "renewal_closing",
+            "renewal_include_auction",
+            "expiring_soon_opening",
+            "expiring_soon_closing",
+            "expiring_soon_include_auction",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -3885,10 +3889,10 @@ class ClubEmailSettingsForm(forms.ModelForm):
                     "contact_email",
                 )
             )
-        # The four toggles are rendered by crispy. The membership_email_template
-        # textarea and include_next_auction_in_emails checkbox are rendered
-        # manually in the template (inside the preview mockup) — they are
-        # excluded from the layout here but still in Meta.fields so they post.
+        # The four toggles are rendered by crispy. The email opening/closing fields
+        # and include_auction checkboxes are rendered manually in the template
+        # (inside the preview mockup) — they are excluded from the layout here
+        # but still in Meta.fields so they post.
         outgoing_fields = [
             "send_welcome_email_to_new_members",
             "send_membership_expiration_reminders_30_days",
@@ -3957,16 +3961,6 @@ class ClubEmailSettingsForm(forms.ModelForm):
                     f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
                 ),
             )
-        self.fields["membership_email_template"].widget = forms.Textarea(
-            attrs={"rows": 4, "placeholder": DEFAULT_MEMBERSHIP_WELCOME_TEXT, "class": "form-control"}
-        )
-        self.fields["membership_email_template"].label = "Welcome text"
-        self.fields["membership_email_template"].required = False
-        self.fields["include_next_auction_in_emails"].label = "Include details about the next auction"
-        self.fields["include_next_auction_in_emails"].help_text = (
-            "When checked, outgoing membership emails include the date / location of the next promoted auction "
-            "and a link to its rules."
-        )
         self.fields["send_welcome_email_to_new_members"].label = "Send welcome letter to new club members"
         self.fields[
             "send_membership_expiration_reminders_30_days"
@@ -3983,6 +3977,13 @@ class ClubEmailSettingsForm(forms.ModelForm):
         if not payments_enabled:
             self.fields["send_membership_expiration_reminders_30_days"].disabled = True
             self.fields["send_membership_expiration_reminders"].disabled = True
+            self.fields[
+                "send_membership_expiration_reminders_30_days"
+            ].help_text = "No connected payment account, expiration emails will not be sent"
+            self.fields[
+                "send_membership_expiration_reminders"
+            ].help_text = "No connected payment account, expiration emails will not be sent"
+            self.fields["expiring_soon_include_auction"].disabled = True
 
 
 class ClubBapSettingsForm(forms.ModelForm):

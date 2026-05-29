@@ -710,6 +710,11 @@ urlpatterns = [
         views.ClubBarcodeView.as_view(),
         name="club_barcode",
     ),
+    path(
+        "clubs/<slug:slug>/barcode-png/<int:value>/",
+        views.ClubBarcodePNGView.as_view(),
+        name="club_barcode_png",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
         "api/clubmember/<int:pk>/permanent-delete/",
