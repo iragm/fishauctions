@@ -5720,6 +5720,40 @@ class ClubMembershipEmailTaskTests(TestCase):
             mock_send.call_args.kwargs["subject"], f"Your membership with {self.club.name} expires tomorrow"
         )
 
+    @patch("auctions.tasks.mail.send")
+    def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):
+        from auctions.tasks import send_club_member_email
+
+        nameless = ClubMember.objects.create(
+            club=self.club,
+            name="",
+            email="nameless@example.com",
+        )
+        send_club_member_email(nameless, "Subject", "Body")
+        self.assertTrue(mock_send.called)
+        kwargs = mock_send.call_args.kwargs
+        self.assertIn("Dear Member,", kwargs["message"])
+        self.assertIn("Dear Member,", kwargs["html_message"])
+
+
+class ClubBarcodeViewTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(name="Barcode Club")
+
+    def test_barcode_view_returns_svg(self):
+        url = reverse("club_barcode", kwargs={"slug": self.club.slug, "value": 1234567890})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/svg+xml")
+        self.assertIn(b"<svg", response.content)
+
+    def test_member_barcode_image_link_property(self):
+        member = ClubMember.objects.create(club=self.club, name="Barcode Tester", email="b@example.com")
+        # membership_number is auto-generated as a 10-digit string
+        self.assertTrue(member.membership_number)
+        link = member.barcode_image_link
+        self.assertIn(f"/clubs/{self.club.slug}/barcode/{int(member.membership_number)}/", link)
+
 
 class QuickCheckoutHTMXTests(StandardTestCase):
     def test_quick_checkout_shows_obvious_unsold_lot_warning(self):
