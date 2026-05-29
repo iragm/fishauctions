@@ -555,7 +555,7 @@ def _should_mark_invoice_renewal_needed(invoice):
     expiration_date = member.membership_expiration_date
     if not expiration_date:
         return True
-    return expiration_date <= timezone.now().date() + timedelta(days=14)
+    return expiration_date <= timezone.now().date() + timedelta(days=30)
 
 
 def _ensure_invoice_renewal_state(invoice):
@@ -11109,7 +11109,7 @@ class UnsubscribeView(TemplateView):
         if not userData:
             raise Http404
         else:
-            userData.unsubscribe_from_all
+            userData.unsubscribe_from_all()
         context = super().get_context_data(**kwargs)
         return context
 
