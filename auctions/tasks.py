@@ -888,6 +888,52 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
             raise
 
 
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=3,
+)
+def geocode_club_member(self, pk):
+    """Geocode a ClubMember's address and store lat/lng.
+
+    Only runs when GOOGLE_MAPS_SERVER_API_KEY is configured. Skips members
+    with no address. Falls back to copying coordinates from the linked
+    user's UserData if the address is empty but the user has joined an
+    auction (manually_added=False).
+    """
+    from auctions.models import AuctionTOS, ClubMember, UserData
+
+    api_key = getattr(settings, "GOOGLE_MAPS_SERVER_API_KEY", "")
+    if not api_key:
+        return
+
+    member = ClubMember.objects.filter(pk=pk).first()
+    if not member:
+        return
+
+    if member.address:
+        response = requests.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": member.address, "key": api_key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("status") == "OK" and data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            ClubMember.objects.filter(pk=pk).update(lat=loc["lat"], lng=loc["lng"])
+    elif member.user_id and not (member.lat and member.lng):
+        # No address — copy coords from UserData if the user has voluntarily joined an auction
+        has_self_joined = AuctionTOS.objects.filter(user=member.user, manually_added=False).exists()
+        if has_self_joined:
+            ud = UserData.objects.filter(user=member.user).values("latitude", "longitude").first()
+            if ud and ud["latitude"] and ud["longitude"]:
+                ClubMember.objects.filter(pk=pk).update(lat=ud["latitude"], lng=ud["longitude"])
+
+
 @shared_task(bind=True, ignore_result=True)
 def recalculate_club_bap_points(self, club_pk):
     """Recalculate BAP/HAP/CAP point totals for all active members of a club."""

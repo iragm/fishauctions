@@ -642,6 +642,12 @@ urlpatterns = [
     path("clubs/<slug:slug>/bap-admin/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     path("clubs/<slug:slug>/admin/stats/", views.ClubStatsView.as_view(), name="club_stats"),
+    path("clubs/<slug:slug>/admin/map/", views.ClubMemberMapView.as_view(), name="club_member_map"),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/contact/<str:level>/",
+        views.SelfServeContactLinkView.as_view(),
+        name="club_member_contact_pref",
+    ),
     path(
         "clubs/<slug:slug>/admin/treasurer-report/",
         views.ClubTreasurerReportView.as_view(),

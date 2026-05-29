@@ -61,6 +61,7 @@
       {% if view.can_manage_bap %}
       <li><a class="dropdown-item {% if view.active_tab == 'bap_settings' %}active{% endif %}" href="{% url 'club_bap_settings' club.slug %}"><i class="bi bi-award"></i> BAP Settings</a></li>
       {% endif %}
+      <li><a class="dropdown-item {% if view.active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map"></i> Map</a></li>
       {% if view.can_access_admin %}
       <li><hr class="dropdown-divider"></li>
       <li><a class="dropdown-item {% if view.active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up"></i> Stats</a></li>

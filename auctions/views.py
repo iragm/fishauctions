@@ -650,6 +650,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             locked.save(update_fields=["renewal_processed"])
             # Keep the in-memory invoice in sync for the caller.
             invoice.renewal_processed = True
+            member.update_last_club_activity()
     except Exception:
         logger.exception("Failed to process membership renewal for invoice %s", invoice.pk)
         return
@@ -2094,6 +2095,12 @@ class InvoicePaid(APIView):
                 )
             except Exception:
                 logger.exception("invoice membership renewal failed for invoice %s", invoice.pk)
+            try:
+                buyer_tos = getattr(invoice, "auctiontos_user", None)
+                if buyer_tos and buyer_tos.clubmember_id:
+                    buyer_tos.clubmember.update_last_club_activity()
+            except Exception:
+                logger.exception("last_club_activity update failed for invoice %s buyer", invoice.pk)
         user = request.user if request.user.is_authenticated else None
         try:
             auction.create_history(
@@ -7914,6 +7921,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             userData.last_auction_used = auction
             userData.last_activity = timezone.now()
             userData.save()
+            if auction.is_club_managed and obj.clubmember_id:
+                obj.clubmember.update_last_club_activity()
             # Only create history if this is a new join
             if is_new_join:
                 auction.create_history(
@@ -13618,6 +13627,7 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         member = get_object_or_404(ClubMember, club=self.club, uuid=kwargs["uuid"], is_deleted=False)
         _process_pending_membership_renewal_for_member(self.club, member)
         member.refresh_from_db()
+        member.update_last_club_activity()
         from auctions.apple_wallet import is_configured as _apple_configured
 
         context["club"] = self.club
@@ -14442,6 +14452,7 @@ class ClubMemberRenewView(APIView):
                 "membership_expiration_reminder_due",
             ]
         )
+        member.update_last_club_activity()
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
@@ -14542,6 +14553,7 @@ class ClubMemberAppleWalletByUUIDView(View):
         member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
         if not member.membership_number_visible:
             raise Http404
+        member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
         response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
@@ -15222,16 +15234,14 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         if next_auction:
             from django.utils.html import escape as _escape
 
-            current_site = Site.objects.get_current()
-            rules_url = f"https://{current_site.domain}{next_auction.get_absolute_url()}"
             date_str = next_auction.date_start.strftime("%B %-d, %Y") if next_auction.date_start else ""
             parts = [f"Our next auction will be {_escape(next_auction.title)}"]
             if date_str:
                 parts.append(f"on {_escape(date_str)}")
             next_auction_html = " ".join(parts).rstrip() + "."
             if directions_link:
-                next_auction_html += f" <span class='text-info'>Get directions</span>."
-            next_auction_html += f" <span class='text-info'>Read the auction's rules</span>."
+                next_auction_html += " <span class='text-info'>Get directions</span>."
+            next_auction_html += " <span class='text-info'>Read the auction's rules</span>."
 
         club_icon_url = ""
         if self.club.icon:
@@ -15881,6 +15891,67 @@ class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": pk}))
 
 
+class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Map of club members who have geocoded coordinates."""
+
+    active_tab = "map"
+    template_name = "auctions/club_member_map.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        qs = (
+            ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
+            .exclude(address="")
+            .values("pk", "name", "email", "address", "lat", "lng")
+        )
+        import json as _json
+
+        context["club"] = self.club
+        context["members_json"] = mark_safe(_json.dumps(list(qs)))
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        return context
+
+
+class SelfServeContactLinkView(ClubViewMixin, View):
+    """Allow a club member to update their own communication preferences via a UUID link.
+
+    Accessible without authentication — the UUID in the URL acts as the token.
+    URL levels: none → do_not_contact, essential → non_essential, all → contact
+    """
+
+    allow_non_admins = True
+
+    _LEVEL_TO_STATUS = {
+        "none": "do_not_contact",
+        "essential": "non_essential",
+        "all": "contact",
+    }
+    _STATUS_LABELS = {
+        "do_not_contact": "no emails",
+        "non_essential": "essential emails only",
+        "contact": "all emails",
+    }
+
+    def get(self, request, slug, uuid, level):
+        if level not in self._LEVEL_TO_STATUS:
+            raise Http404
+        member = get_object_or_404(ClubMember, club=self.club, uuid=uuid, is_deleted=False)
+        new_status = self._LEVEL_TO_STATUS[level]
+        ClubMember.objects.filter(pk=member.pk).update(contact_status=new_status)
+        label = self._STATUS_LABELS[new_status]
+        return render(
+            request,
+            "auctions/self_serve_contact.html",
+            {"club": self.club, "member": member, "level": level, "label": label},
+        )
+
+
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     """History log for a club"""
 
@@ -16496,7 +16567,12 @@ class ClubAPIViewMixin:
             "can_read_club_member_list",
             "You do not have permission to view members of this club.",
         )
-        return ClubMember.objects.filter(club=club, is_deleted=False)
+        qs = ClubMember.objects.filter(club=club, is_deleted=False)
+        if club.latitude and club.longitude:
+            qs = qs.annotate(
+                distance_to=distance_to(club.latitude, club.longitude, lat_field_name="lat", lng_field_name="lng")
+            )
+        return qs
 
 
 class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):

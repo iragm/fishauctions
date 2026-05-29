@@ -15970,6 +15970,28 @@ class ClubAPITests(TestCase):
         data = response.json()
         self.assertGreaterEqual(len(data), 1)
 
+    def test_api_does_not_expose_lat_lng(self):
+        """lat/lng coordinates must never appear in the API response to protect member location privacy."""
+        from rest_framework.authtoken.models import Token  # noqa: PLC0415
+
+        token = Token.objects.create(user=self.owner)
+        ClubMember.objects.create(club=self.club, user=self.owner, permission_view=True)
+        member = ClubMember.objects.create(
+            club=self.club, name="Located Member", email="loc@example.com", lat=40.7128, lng=-74.0060
+        )
+        url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        for record in data:
+            self.assertNotIn("lat", record, "lat must not be exposed in the API for member privacy")
+            self.assertNotIn("lng", record, "lng must not be exposed in the API for member privacy")
+        # distance_to is allowed (rounded) but raw coordinates must be absent
+        detail_url = reverse("api_club_member_detail", kwargs={"slug": self.club.slug, "pk": member.pk})
+        detail = self.client.get(detail_url, HTTP_AUTHORIZATION=f"Token {token.key}").json()
+        self.assertNotIn("lat", detail)
+        self.assertNotIn("lng", detail)
+
 
 class ClubAPIKeyMemberPermissionTests(TestCase):
     """API key permission checks for club member API endpoints."""

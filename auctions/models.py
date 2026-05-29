@@ -1121,6 +1121,9 @@ class ClubMember(ContactRecord):
         default=True,
         help_text="When the club manages auction participants, controls whether this member can submit lots.",
     )
+    lat = models.FloatField(null=True, blank=True, help_text="Latitude geocoded from member's address")
+    lng = models.FloatField(null=True, blank=True, help_text="Longitude geocoded from member's address")
+    last_club_activity = models.DateTimeField(null=True, blank=True, help_text="Last recorded activity in this club")
 
     @property
     def has_any_permission(self):
@@ -1396,6 +1399,42 @@ class ClubMember(ContactRecord):
             kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
         )
         return f"https://{domain}{path}"
+
+    def _distance_to_club_miles(self):
+        """Return distance in miles from this member to the club location, or None."""
+        annotated = getattr(self, "distance_to", None)
+        if annotated is not None:
+            return float(annotated)
+        if not (self.lat and self.lng and self.club.latitude and self.club.longitude):
+            return None
+        import math
+
+        lat1 = math.radians(self.club.latitude)
+        lon1 = math.radians(self.club.longitude)
+        lat2 = math.radians(self.lat)
+        lon2 = math.radians(self.lng)
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        return 6371 * 0.6213712 * 2 * math.asin(math.sqrt(a))
+
+    @property
+    def less_than_10_miles(self):
+        d = self._distance_to_club_miles()
+        return d is not None and d < 10
+
+    @property
+    def less_than_30_miles(self):
+        d = self._distance_to_club_miles()
+        return d is not None and d < 30
+
+    @property
+    def more_than_30_miles(self):
+        d = self._distance_to_club_miles()
+        return d is not None and d >= 30
+
+    def update_last_club_activity(self):
+        ClubMember.objects.filter(pk=self.pk).update(last_club_activity=timezone.now())
 
     def calculate_membership_expiration_reminder_due(self, days_before=1):
         send_reminder = (

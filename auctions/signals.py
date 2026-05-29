@@ -227,6 +227,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "name",
                 "membership_number",
                 "membership_expiration_date",
+                "address",
             )
             .first()
             or {}
@@ -237,6 +238,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_name = prev.get("name") or ""
         instance._previous_membership_number = prev.get("membership_number")
         instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
+        instance._previous_address = prev.get("address") or ""
     else:
         instance._previous_bidder_number = None
         instance._previous_bidding_allowed = None
@@ -244,6 +246,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_name = ""
         instance._previous_membership_number = None
         instance._previous_membership_expiration_date = None
+        instance._previous_address = ""
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -349,6 +352,22 @@ def update_google_wallet_object_on_member_change(sender, instance, created, **kw
     from .tasks import update_google_wallet_object_for_member
 
     transaction.on_commit(lambda: update_google_wallet_object_for_member.delay(instance.pk))
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def geocode_club_member_on_address_change(sender, instance, created, **kwargs):
+    """Trigger geocoding when a ClubMember's address is new or has changed.
+
+    Also triggers for new members with no address so the task can attempt
+    the UserData coordinate fallback.
+    """
+    from .tasks import geocode_club_member
+
+    prev_address = getattr(instance, "_previous_address", "")
+    current_address = instance.address or ""
+    address_changed = created or (current_address != prev_address)
+    if address_changed:
+        transaction.on_commit(lambda: geocode_club_member.delay(instance.pk))
 
 
 @receiver(pre_save, sender="auctions.Lot")
