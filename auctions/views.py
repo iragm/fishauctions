@@ -15229,8 +15229,8 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
                 parts.append(f"on {_escape(date_str)}")
             next_auction_html = " ".join(parts).rstrip() + "."
             if directions_link:
-                next_auction_html += f" <a href='{_escape(directions_link)}'>Get directions</a>."
-            next_auction_html += f" <a href='{_escape(rules_url)}'>Read the auction's rules</a>."
+                next_auction_html += f" <span class='text-info'>Get directions</span>."
+            next_auction_html += f" <span class='text-info'>Read the auction's rules</span>."
 
         club_icon_url = ""
         if self.club.icon:
