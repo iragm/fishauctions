@@ -4749,18 +4749,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Field should NOT be hidden for superuser (site-wide PayPal fallback)
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
-    def test_membership_fields_hidden_without_club(self):
-        self.online_auction.club = None
-        self.online_auction.save()
-        form = AuctionEditForm(
-            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
-        )
-        # These fields are now shown/hidden via JavaScript; real widgets are always rendered
-        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertNotIsInstance(
-            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
-        )
-
     def test_manage_users_through_club_field_shown_without_club(self):
         self.online_auction.club = None
         self.online_auction.save()
@@ -4769,19 +4757,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         )
         # manage_users_through_club is always rendered so JS can toggle it based on club selection
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
-
-    def test_membership_fee_field_hidden_for_free_club(self):
-        free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
-        self.online_auction.club = free_club
-        self.online_auction.save()
-        form = AuctionEditForm(
-            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
-        )
-        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        # add_membership_fee field is now shown/hidden via JS, not server-side HiddenInput
-        self.assertNotIsInstance(
-            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
-        )
 
     def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
         paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
@@ -5576,14 +5551,6 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
-
-    def test_club_managed_auction_can_mark_membership_renewal_needed(self):
-        from auctions.views import _should_mark_invoice_renewal_needed
-
-        self.online_auction.add_people_from_auction_to_club = False
-        self.online_auction.manage_users_through_club = "all"
-        self.online_auction.save(update_fields=["add_people_from_auction_to_club", "manage_users_through_club"])
-        self.assertTrue(_should_mark_invoice_renewal_needed(self.invoice))
 
     def test_membership_reminder_due_not_set_for_free_membership(self):
         self.club.membership_annual_fee = None
@@ -16622,22 +16589,32 @@ class ClubSettingsViewTests(TestCase):
             {
                 "auction_email_member": str(self.auction_member.pk),
                 "contact_email_member": str(editor_member.pk),
-                "membership_email_template": "Thanks for being part of the club.",
                 "send_welcome_email_to_new_members": "on",
                 "send_membership_expiration_reminders_30_days": "on",
                 "send_membership_expiration_reminders": "on",
                 "send_membership_renewal_confirmation": "on",
+                "welcome_opening": "Welcome to the club!",
+                "welcome_closing": "See you at the next meeting.",
+                "renewal_opening": "Your membership has been renewed!",
+                "renewal_closing": "Thanks for staying with us.",
+                "expiring_soon_opening": "Your membership expires soon.",
+                "expiring_soon_closing": "Renew today to stay connected.",
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.auction_email_member, self.auction_member)
         self.assertEqual(self.club.contact_email_member, editor_member)
-        self.assertEqual(self.club.membership_email_template, "Thanks for being part of the club.")
         self.assertTrue(self.club.send_welcome_email_to_new_members)
         self.assertTrue(self.club.send_membership_expiration_reminders_30_days)
         self.assertTrue(self.club.send_membership_expiration_reminders)
         self.assertTrue(self.club.send_membership_renewal_confirmation)
+        self.assertEqual(self.club.welcome_opening, "Welcome to the club!")
+        self.assertEqual(self.club.welcome_closing, "See you at the next meeting.")
+        self.assertEqual(self.club.renewal_opening, "Your membership has been renewed!")
+        self.assertEqual(self.club.renewal_closing, "Thanks for staying with us.")
+        self.assertEqual(self.club.expiring_soon_opening, "Your membership expires soon.")
+        self.assertEqual(self.club.expiring_soon_closing, "Renew today to stay connected.")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
 
 

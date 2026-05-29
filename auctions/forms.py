@@ -2046,15 +2046,12 @@ class AuctionEditForm(forms.ModelForm):
         if self.instance.pk and self.instance.manage_users_through_club:
             # When club-managed, copy_users is irrelevant — the new auction gets members from the club
             self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
-        else:
-            # Membership fee should only be shown when manage_users_through_club is enabled
-            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
             has_activity = (
                 Lot.objects.filter(auction=self.instance, is_deleted=False).exists()
                 or Invoice.objects.filter(auction=self.instance).exists()
             )
             if has_activity:
-                # Auction has lots or invoices — club-managed mode is locked; club field also locked
+                # Lock club-managed mode once lots or invoices exist to prevent disabling it
                 self.fields["manage_users_through_club"].disabled = True
                 self.fields["manage_users_through_club"].help_text = "Cannot be changed once lots or invoices exist."
                 self.fields["club"].disabled = True
@@ -2066,6 +2063,10 @@ class AuctionEditForm(forms.ModelForm):
                 self.fields[
                     "manage_users_through_club"
                 ].help_text = "Changing this will delete all existing participant records for this auction."
+        else:
+            # Membership fee only applies when club-managed mode is enabled
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        # clean_manage_users_through_club rejects enabling on non-empty auctions
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
