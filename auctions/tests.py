@@ -14985,13 +14985,14 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
-    def test_club_edit_shows_membership_email_field_and_js_toggle(self):
+    def test_club_membership_settings_no_longer_shows_contact_email(self):
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Membership email address")
-        self.assertContains(response, "Replies to membership inquiries will be sent to this email")
+        # contact_email moved to the email settings page; membership settings only
+        # carries pure membership / payment configuration.
+        self.assertNotContains(response, "id_contact_email")
         self.assertNotContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
@@ -16506,7 +16507,6 @@ class ClubSettingsViewTests(TestCase):
         response = self.client.post(
             self.membership_url,
             {
-                "contact_email": "membership@example.com",
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
                 "membership_number_mode": "disabled",
@@ -16514,7 +16514,6 @@ class ClubSettingsViewTests(TestCase):
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
-        self.assertEqual(self.club.contact_email, "membership@example.com")
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertFalse(self.club.send_membership_expiration_reminders)

@@ -24,19 +24,121 @@
   <i class="bi bi-lightbulb-fill me-1"></i>
   If you already have a shared Gmail account you use for club communications, you should add it as a club member, grant that account auction and membership permissions, and then select that account for both options here.
 </div>
-{% else %}
-<div class="alert alert-info mb-3" role="alert">
-  <i class="bi bi-info-circle-fill me-1"></i>
-  Replies to outgoing membership emails will be sent to
-  {% if club.contact_email %}
-    <code>{{ club.contact_email }}</code>.
-  {% else %}
-    the site admin.
-  {% endif %}
-</div>
 {% endif %}
 
-{% crispy form %}
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  {% crispy form %}
+
+  <fieldset class="mb-3">
+    <legend class="h5 border-bottom pb-2">Outgoing email template</legend>
+    <p class="text-muted small">
+      This is how your emails will look. Edit the welcome text inline and toggle the next-auction snippet
+      with the checkbox below the preview.
+    </p>
+
+    <div class="email-preview-frame border rounded p-4" style="background:#fafafa;color:#222;">
+      <div class="mb-2"><strong>Subject:</strong> Welcome to the {{ club.name }}!</div>
+      <div class="mb-3"><strong>Subject:</strong> Your membership with the {{ club.name }} expires soon</div>
+      <hr class="my-2">
+
+      <div class="mb-3">Dear {{ preview_name }},</div>
+
+      <div class="mb-3">
+        {{ form.membership_email_template }}
+        {% if form.membership_email_template.errors %}
+          <div class="invalid-feedback d-block">{{ form.membership_email_template.errors|join:" " }}</div>
+        {% endif %}
+      </div>
+
+      <div class="mb-3">Your {{ club.name }} membership expires in 30 days / expires tomorrow.</div>
+
+      {% if preview_member_link %}
+      <div class="mb-3">
+        You can view
+        {% if preview_payload.payments_enabled %}and renew {% endif %}
+        your membership information <a href="{{ preview_member_link }}">here</a>.
+      </div>
+      {% else %}
+      <div class="mb-3 text-muted small fst-italic">
+        (Once you have a club membership on this site, a link to your membership page will appear here.)
+      </div>
+      {% endif %}
+
+      {% if preview_barcode_url and membership_numbers_enabled %}
+      <div class="mb-3">
+        <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
+      </div>
+      {% endif %}
+
+      <div id="outgoing-email-preview-next-auction" class="mb-3"></div>
+
+      <div class="mt-3 pt-3 border-top">
+        {% if club.icon %}
+          <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+        {% endif %}
+        <span>{{ club.name }}</span>
+      </div>
+    </div>
+
+    <div class="form-check mt-3">
+      {{ form.include_next_auction_in_emails }}
+      <label class="form-check-label" for="{{ form.include_next_auction_in_emails.id_for_label }}">
+        {{ form.include_next_auction_in_emails.label }}
+      </label>
+      {% if form.include_next_auction_in_emails.help_text %}
+        <div class="form-text">{{ form.include_next_auction_in_emails.help_text }}</div>
+      {% endif %}
+    </div>
+  </fieldset>
+
+  <button type="submit" class="btn btn-primary">Save email settings</button>
+</form>
+
+{{ preview_payload|json_script:"outgoing-email-preview-data" }}
 
 <div id="modals-here"></div>
+
+<script>
+(function () {
+  var raw = document.getElementById('outgoing-email-preview-data');
+  if (!raw) return;
+  var data = JSON.parse(raw.textContent || '{}');
+
+  // Bootstrap-style the inline textarea + checkbox so they fit the mockup.
+  var textarea = document.getElementById('id_membership_email_template');
+  if (textarea) {
+    textarea.classList.add('form-control');
+    if (!textarea.value) textarea.placeholder = data.default_welcome_text || '';
+  }
+  var checkbox = document.getElementById('id_include_next_auction_in_emails');
+  if (checkbox) {
+    checkbox.classList.add('form-check-input');
+  }
+
+  // Render the next-auction fragment server-side (HTML) and toggle visibility.
+  var nextAuctionEl = document.getElementById('outgoing-email-preview-next-auction');
+  function refreshNextAuction() {
+    if (!nextAuctionEl) return;
+    var include = checkbox ? checkbox.checked : true;
+    if (include && data.next_auction_html) {
+      nextAuctionEl.innerHTML = data.next_auction_html;
+      nextAuctionEl.style.display = '';
+    } else {
+      nextAuctionEl.innerHTML = '';
+      nextAuctionEl.style.display = 'none';
+    }
+  }
+  refreshNextAuction();
+  if (checkbox) {
+    checkbox.addEventListener('change', refreshNextAuction);
+  }
+})();
+</script>
+
+<style>
+  .email-preview-frame textarea { background: #ffffff; }
+  .email-preview-frame a { color: #0d6efd; }
+</style>
 {% endblock %}

@@ -2,22 +2,6 @@
 {% load crispy_forms_tags %}
 {% block title %}Membership Settings &mdash; {{ club.name }}{% endblock %}
 
-{% block extra_js %}
-<script type="text/javascript">
-$(document).ready(function() {
-    function toggleContactEmail() {
-        const remindersToggle = document.getElementById('id_send_membership_expiration_reminders');
-        const contactEmailField = document.getElementById('div_id_contact_email');
-        if (!remindersToggle || !contactEmailField) return;
-        contactEmailField.style.display = remindersToggle.checked ? '' : 'none';
-    }
-
-    toggleContactEmail();
-    $('#id_send_membership_expiration_reminders').on('change', toggleContactEmail);
-});
-</script>
-{% endblock %}
-
 {% block content %}
 {{ form.media }}
 {% include "club_ribbon.html" %}

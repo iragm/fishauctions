@@ -1,4 +1,4 @@
-{% load membership_tags qr_code %}
+{% load membership_tags %}
 
 <div class="text-center">
   <h3 class="mb-1">{{ member.display_name }}</h3>
@@ -7,10 +7,11 @@
   {% if member.membership_number_visible %}
     <div class="text-muted small mb-1">Membership number</div>
     <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
-    <div class="membership-barcode mb-3" style="max-width: 320px; margin-left: auto; margin-right: auto;">{% membership_barcode member.membership_number %}</div>
-    <div class="d-flex justify-content-center mb-3">
-      {% qr_from_text member.membership_number|stringformat:"s" size="s" %}
-    </div>
+    {% if member.barcode_image_link %}
+      <div class="membership-barcode mb-3" style="max-width: 320px; margin-left: auto; margin-right: auto;">
+        <img src="{{ member.barcode_image_link }}" alt="Membership barcode" style="width:100%;height:auto;">
+      </div>
+    {% endif %}
   {% endif %}
 
   {% if member.membership_expiration_date %}

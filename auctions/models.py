@@ -697,6 +697,7 @@ class Club(models.Model):
     send_membership_renewal_confirmation = models.BooleanField(default=False)
     send_welcome_email_to_new_members = models.BooleanField(default=False)
     membership_email_template = models.TextField(blank=True, default="")
+    include_next_auction_in_emails = models.BooleanField(default=True)
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
         max_length=100,
@@ -1320,6 +1321,29 @@ class ClubMember(ContactRecord):
         path = reverse(
             "club_member_by_number",
             kwargs={"slug": self.club.slug, "number": self.membership_number},
+        )
+        return f"https://{domain}{path}"
+
+    @property
+    def barcode_image_link(self):
+        """Absolute URL to an SVG barcode for this member's membership number.
+
+        Returns ``""`` when the member has no number assigned, so callers can use
+        truthiness to decide whether to embed the image.
+        """
+        if not self.membership_number:
+            return ""
+        from django.contrib.sites.models import Site
+        from django.urls import reverse
+
+        try:
+            current_site = Site.objects.get_current()
+            domain = current_site.domain
+        except Site.DoesNotExist:
+            domain = "localhost"
+        path = reverse(
+            "club_barcode",
+            kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
         )
         return f"https://{domain}{path}"
 
@@ -8850,9 +8874,7 @@ class SquareSeller(models.Model):
             if invoice.club:
                 club_path = None
                 if member_pk:
-                    member = ClubMember.objects.filter(
-                        pk=member_pk, club=invoice.club, is_deleted=False
-                    ).first()
+                    member = ClubMember.objects.filter(pk=member_pk, club=invoice.club, is_deleted=False).first()
                     if member and member.membership_number:
                         club_path = reverse(
                             "club_member_by_number",

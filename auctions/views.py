@@ -13574,9 +13574,7 @@ def _membership_renewal_state(club, member):
     is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
     expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
     can_pay = bool(
-        club.enable_club_page
-        and club.membership_annual_fee
-        and (club.can_accept_paypal or club.can_accept_square)
+        club.enable_club_page and club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square)
     )
     should_show_payment = can_pay and (is_expired or expiring_soon or not member.is_paid_member)
     return is_expired, expiring_soon, should_show_payment, can_pay
@@ -14537,6 +14535,37 @@ class ClubMemberAppleWalletByUUIDView(View):
         return response
 
 
+class ClubBarcodeView(View):
+    """Render an SVG barcode for an arbitrary value.
+
+    Public endpoint so the URL can be embedded in outgoing emails as an <img src>.
+    The view only renders the barcode bars — no membership lookup, no caller validation.
+    """
+
+    def get(self, request, slug, value):
+        import io as _io
+
+        try:
+            import barcode as _barcode
+            from barcode.writer import SVGWriter as _SVGWriter
+        except ImportError:
+            raise Http404
+        value = str(value or "")
+        if not value or not value.isdigit():
+            raise Http404
+        try:
+            cls = _barcode.get_barcode_class("code128")
+            buf = _io.BytesIO()
+            cls(value, writer=_SVGWriter()).write(buf, options={"write_text": False, "module_height": 12.0})
+            svg = buf.getvalue().decode("utf-8")
+        except Exception:
+            raise Http404
+        response = HttpResponse(svg, content_type="image/svg+xml")
+        # Barcodes are stable for a given value — let the CDN / browser cache them.
+        response["Cache-Control"] = "public, max-age=86400"
+        return response
+
+
 class ClubMemberDeleteView(APIView):
     """Soft-delete a club member."""
 
@@ -15095,6 +15124,10 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return kwargs
 
     def get_context_data(self, **kwargs):
+        from django.utils import timezone
+
+        from auctions.forms import DEFAULT_MEMBERSHIP_WELCOME_TEXT
+
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["email_domain"] = settings.EMAIL_ROUTING_DOMAIN
@@ -15102,6 +15135,78 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["show_email_routing"] = show_email_routing
         if not show_email_routing:
             context["email_fallback_member"] = self.club._first_email_member_by_priority(Q(permission_add_edit=True))
+        # Preview context
+        user = self.request.user
+        preview_member = self.club.members.filter(user=user, is_deleted=False).first()
+        if preview_member:
+            preview_name = (preview_member.name or "").strip() or "Member"
+            preview_member_link = preview_member.member_page_url
+            preview_barcode_url = preview_member.barcode_image_link if preview_member.membership_number_visible else ""
+        else:
+            full_name = user.get_full_name() if user.is_authenticated else ""
+            preview_name = full_name.strip() or "Member"
+            preview_member_link = ""
+            preview_barcode_url = ""
+        context["preview_name"] = preview_name
+        context["preview_member_link"] = preview_member_link
+        context["preview_barcode_url"] = preview_barcode_url
+        context["default_welcome_text"] = DEFAULT_MEMBERSHIP_WELCOME_TEXT
+        context["membership_numbers_enabled"] = self.club.membership_number_mode != "disabled"
+
+        today = timezone.localdate()
+        next_auction = (
+            Auction.objects.filter(
+                club=self.club,
+                promote_this_auction=True,
+                is_deleted=False,
+                date_start__date__gte=today,
+            )
+            .order_by("date_start")
+            .first()
+        )
+        context["next_auction"] = next_auction
+        directions_link = ""
+        if next_auction:
+            physical = list(next_auction.physical_location_qs)
+            if len(physical) == 1 and physical[0].directions_link:
+                directions_link = physical[0].directions_link
+        context["next_auction_directions_link"] = directions_link
+
+        # Build the next-auction HTML fragment exactly once on the server so the
+        # JS preview just toggles visibility (no client-side templating).
+        next_auction_html = ""
+        if next_auction:
+            from django.utils.html import escape as _escape
+
+            current_site = Site.objects.get_current()
+            rules_url = f"https://{current_site.domain}{next_auction.get_absolute_url()}"
+            date_str = next_auction.date_start.strftime("%B %-d, %Y") if next_auction.date_start else ""
+            parts = [f"Our next auction will be {_escape(next_auction.title)}"]
+            if date_str:
+                parts.append(f"on {_escape(date_str)}")
+            next_auction_html = " ".join(parts).rstrip() + "."
+            if directions_link:
+                next_auction_html += f" <a href='{_escape(directions_link)}'>Get directions</a>."
+            next_auction_html += f" <a href='{_escape(rules_url)}'>Read the auction's rules</a>."
+
+        club_icon_url = ""
+        if self.club.icon:
+            try:
+                club_icon_url = self.club.icon.url
+            except (ValueError, AttributeError):
+                club_icon_url = ""
+
+        context["preview_payload"] = {
+            "club_name": self.club.name,
+            "club_icon_url": club_icon_url,
+            "preview_name": preview_name,
+            "preview_member_link": preview_member_link,
+            "preview_barcode_url": preview_barcode_url,
+            "membership_numbers_enabled": context["membership_numbers_enabled"],
+            "payments_enabled": self.club.membership_payment_emails_enabled,
+            "default_welcome_text": DEFAULT_MEMBERSHIP_WELCOME_TEXT,
+            "next_auction_html": next_auction_html,
+        }
         return context
 
     def form_valid(self, form):

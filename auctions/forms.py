@@ -3809,7 +3809,6 @@ class ClubMembershipSettingsForm(forms.ModelForm):
     class Meta:
         model = Club
         fields = [
-            "contact_email",
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
@@ -3831,12 +3830,14 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "contact_email",
         )
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 
     def clean(self):
         return super().clean()
+
+
+DEFAULT_MEMBERSHIP_WELCOME_TEXT = "Welcome! We're glad to have you join us, and we'll see you at our next meeting!"
 
 
 class ClubEmailSettingsForm(forms.ModelForm):
@@ -3845,11 +3846,13 @@ class ClubEmailSettingsForm(forms.ModelForm):
         fields = [
             "auction_email_member",
             "contact_email_member",
-            "membership_email_template",
+            "contact_email",
             "send_welcome_email_to_new_members",
             "send_membership_expiration_reminders_30_days",
             "send_membership_expiration_reminders",
             "send_membership_renewal_confirmation",
+            "membership_email_template",
+            "include_next_auction_in_emails",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -3858,6 +3861,11 @@ class ClubEmailSettingsForm(forms.ModelForm):
         club = self.instance
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        # The template renders the <form> tag itself so it can wrap both the
+        # crispy fields and the email-preview mockup (which embeds the welcome
+        # text textarea inline).
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
         payments_enabled = bool(club and club.membership_payment_emails_enabled)
         layout_fields = []
         if show_email_routing:
@@ -3868,19 +3876,41 @@ class ClubEmailSettingsForm(forms.ModelForm):
                     "contact_email_member",
                 )
             )
-        layout_fields.append(
-            Fieldset(
-                "Outgoing emails",
-                "membership_email_template",
-                "send_welcome_email_to_new_members",
-                "send_membership_expiration_reminders_30_days",
-                "send_membership_expiration_reminders",
-                "send_membership_renewal_confirmation",
+        else:
+            # When SES routing is off there is no per-member routing; expose the
+            # plain reply-to address here instead of on the membership settings page.
+            layout_fields.append(
+                Fieldset(
+                    "Reply-to address",
+                    "contact_email",
+                )
             )
-        )
+        # The four toggles are rendered by crispy. The membership_email_template
+        # textarea and include_next_auction_in_emails checkbox are rendered
+        # manually in the template (inside the preview mockup) — they are
+        # excluded from the layout here but still in Meta.fields so they post.
+        outgoing_fields = [
+            "send_welcome_email_to_new_members",
+            "send_membership_expiration_reminders_30_days",
+            "send_membership_expiration_reminders",
+            "send_membership_renewal_confirmation",
+        ]
+        layout_fields.append(Fieldset("Outgoing emails", *outgoing_fields))
         self.helper.layout = Layout(*layout_fields)
-        self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
-        if club and club.pk:
+        if show_email_routing:
+            # The contact_email field is hidden when SES routing is enabled — it is
+            # not exposed in the layout and members route via contact_email_member.
+            self.fields.pop("contact_email", None)
+        else:
+            # Drop the dropdown routing fields entirely so they are not posted.
+            self.fields.pop("auction_email_member", None)
+            self.fields.pop("contact_email_member", None)
+            if "contact_email" in self.fields:
+                self.fields["contact_email"].label = "Membership email address"
+                self.fields[
+                    "contact_email"
+                ].help_text = "Replies to outgoing membership emails will be sent to this address."
+        if club and club.pk and show_email_routing:
             base_qs = (
                 club.members.filter(is_deleted=False)
                 .filter((Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email="")))
@@ -3908,29 +3938,35 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 return f" ({email})"
             return ""
 
-        self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
-            queryset=auction_qs,
-            required=False,
-            label="Auction replies",
-            help_text=(
-                f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
-            ),
+        if show_email_routing:
+            self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
+                queryset=auction_qs,
+                required=False,
+                label="Auction replies",
+                help_text=(
+                    f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
+                    f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
+                ),
+            )
+            self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
+                queryset=contact_qs,
+                required=False,
+                label="Contact replies",
+                help_text=(
+                    f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
+                    f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
+                ),
+            )
+        self.fields["membership_email_template"].widget = forms.Textarea(
+            attrs={"rows": 4, "placeholder": DEFAULT_MEMBERSHIP_WELCOME_TEXT, "class": "form-control"}
         )
-        self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
-            queryset=contact_qs,
-            required=False,
-            label="Contact replies",
-            help_text=(
-                f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
-            ),
+        self.fields["membership_email_template"].label = "Welcome text"
+        self.fields["membership_email_template"].required = False
+        self.fields["include_next_auction_in_emails"].label = "Include details about the next auction"
+        self.fields["include_next_auction_in_emails"].help_text = (
+            "When checked, outgoing membership emails include the date / location of the next promoted auction "
+            "and a link to its rules."
         )
-        self.fields["membership_email_template"].widget = forms.Textarea(attrs={"rows": 6})
-        self.fields["membership_email_template"].label = "Shared club member email intro"
-        self.fields[
-            "membership_email_template"
-        ].help_text = "Optional text inserted after the greeting in welcome, expiration, and renewal emails."
         self.fields["send_welcome_email_to_new_members"].label = "Send welcome letter to new club members"
         self.fields[
             "send_membership_expiration_reminders_30_days"

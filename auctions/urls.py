@@ -705,6 +705,11 @@ urlpatterns = [
         views.ClubMemberAppleWalletByUUIDView.as_view(),
         name="club_member_apple_wallet_by_uuid",
     ),
+    path(
+        "clubs/<slug:slug>/barcode/<int:value>/",
+        views.ClubBarcodeView.as_view(),
+        name="club_barcode",
+    ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
         "api/clubmember/<int:pk>/permanent-delete/",

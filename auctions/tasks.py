@@ -42,13 +42,72 @@ def _club_member_membership_link(member, current_site=None):
     return f"https://{current_site.domain}{member.member_page_url}"
 
 
-def _render_membership_email_html(member, intro_text, message_text, membership_link, club_icon_url):
-    html_parts = [f"Dear {escape(member.display_name)},<br><br>"]
+def _greeting_name(member):
+    name = (member.name or "").strip()
+    return name or "Member"
+
+
+DEFAULT_MEMBERSHIP_WELCOME_TEXT = "Welcome! We're glad to have you join us, and we'll see you at our next meeting!"
+
+
+def _next_auction_fragment(club, current_site):
+    """Return (text, html) for the 'next promoted auction' line, or ('', '')."""
+    from django.utils import timezone
+
+    from auctions.models import Auction
+
+    if not club.include_next_auction_in_emails:
+        return "", ""
+    today = timezone.localdate()
+    auction = (
+        Auction.objects.filter(
+            club=club,
+            promote_this_auction=True,
+            is_deleted=False,
+            date_start__date__gte=today,
+        )
+        .order_by("date_start")
+        .first()
+    )
+    if not auction:
+        return "", ""
+    date_str = auction.date_start.strftime("%B %-d, %Y") if auction.date_start else ""
+    rules_url = f"https://{current_site.domain}{auction.get_absolute_url()}"
+    text_parts = [f"Our next auction will be {auction.title}"]
+    if date_str:
+        text_parts.append(f"on {date_str}")
+    location_text = ""
+    location_html = ""
+    locations = list(auction.physical_location_qs)
+    if len(locations) == 1 and locations[0].directions_link:
+        location_text = f" Get directions: {locations[0].directions_link}"
+        location_html = f" <a href='{escape(locations[0].directions_link)}'>Get directions</a>."
+    text = " ".join(text_parts).rstrip() + "." + (location_text or "") + f" Read the rules here: {rules_url}"
+    html = (
+        " ".join(escape(p) for p in text_parts).rstrip()
+        + "."
+        + location_html
+        + f" <a href='{escape(rules_url)}'>Read the auction's rules</a>."
+    )
+    return text, html
+
+
+def _render_membership_email_html(
+    member, intro_text, message_text, membership_link, club_icon_url, barcode_url, next_auction_html
+):
+    html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
     if intro_text:
         html_parts.append(escape(intro_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
     html_parts.append(f"{escape(message_text)}<br><br>")
     html_parts.append(f"<a href='{escape(membership_link)}'>View your membership</a><br><br>")
+    if barcode_url:
+        html_parts.append(
+            f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
+            "style='max-width:320px;width:100%;height:auto;'></div><br>"
+        )
+    if next_auction_html:
+        html_parts.append(f"{next_auction_html}<br><br>")
     if club_icon_url:
         html_parts.append(
             f"<div><img src='{escape(club_icon_url)}' alt='{escape(member.club.name)}' "
@@ -65,11 +124,16 @@ def send_club_member_email(member, subject, message_text):
         return False
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
-    intro_text = (member.club.membership_email_template or "").strip()
-    text_parts = [f"Dear {member.display_name},", ""]
-    if intro_text:
-        text_parts.extend([intro_text, ""])
-    text_parts.extend([message_text, "", f"View your membership here: {membership_link}", "", member.club.name])
+    intro_text = (member.club.membership_email_template or "").strip() or DEFAULT_MEMBERSHIP_WELCOME_TEXT
+    barcode_url = member.barcode_image_link if member.membership_number_visible else ""
+    next_text, next_html = _next_auction_fragment(member.club, current_site)
+    text_parts = [f"Dear {_greeting_name(member)},", "", intro_text, ""]
+    text_parts.extend([message_text, "", f"View your membership here: {membership_link}"])
+    if barcode_url:
+        text_parts.extend(["", f"Membership barcode: {barcode_url}"])
+    if next_text:
+        text_parts.extend(["", next_text])
+    text_parts.extend(["", member.club.name])
     club_icon_url = ""
     if member.club.icon:
         club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
@@ -84,6 +148,8 @@ def send_club_member_email(member, subject, message_text):
             message_text=message_text,
             membership_link=membership_link,
             club_icon_url=club_icon_url,
+            barcode_url=barcode_url,
+            next_auction_html=next_html,
         ),
         headers={"Reply-to": _membership_email_reply_to(member.club)},
     )
