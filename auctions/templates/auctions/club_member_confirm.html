@@ -1,22 +1,13 @@
-<div data-htmx-modal-root>
-<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
-<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">{{ title }}</h5>
-      </div>
-      <div class="modal-body">
-        <p>{{ body }}</p>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
-        <button id="confirm-action-btn" type="button" class="btn btn-danger"
-          hx-post="{{ action_url }}"
-          hx-swap="none">{{ confirm_button_label|default:"Confirm" }}</button>
-      </div>
-    </div>
-  </div>
+{% extends "auctions/generic_admin_form.html" %}
+{% block modal_dialog_class %}modal-dialog modal-dialog-centered{% endblock %}
+{% block modal_title %}{{ title }}{% endblock %}
+{% block modal_body %}<p>{{ body }}</p>{% endblock %}
+{% block modal_footer %}
+<div class="modal-footer">
+  <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
+  <button id="confirm-action-btn" type="button" class="btn btn-danger"
+    hx-post="{{ action_url }}"
+    hx-target="#modals-here">{{ confirm_button_label|default:"Confirm" }}</button>
 </div>
-</div>
-<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
+{% endblock %}
+{% block form_scripts %}{% endblock %}

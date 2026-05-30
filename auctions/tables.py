@@ -563,8 +563,7 @@ class ClubMemberHTMxTable(tables.Table):
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
                 '<li><a class="dropdown-item" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                ' hx-get="{}" hx-target="#modals-here">'
                 '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
                 "<li><hr class='dropdown-divider'></li>",
                 perms_url,
@@ -582,8 +581,7 @@ class ClubMemberHTMxTable(tables.Table):
                     '<i class="bi bi-person-check me-1"></i>Reactivate</a></li>'
                     '<li><hr class="dropdown-divider"></li>'
                     '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-trash me-1"></i>Permanently delete</a></li>',
                     reactivate_url,
                     perm_delete_url,
@@ -611,15 +609,13 @@ class ClubMemberHTMxTable(tables.Table):
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
                     membership_number_item = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'
-                        ' hx-get="{}" hx-target="#modals-here"'
-                        ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                        ' hx-get="{}" hx-target="#modals-here">'
                         '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
                         membership_number_url,
                     )
                 edit_items = format_html(
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
                     '<li><a class="dropdown-item" href="{}">'
                     '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
@@ -629,8 +625,7 @@ class ClubMemberHTMxTable(tables.Table):
                     "{}"
                     '<li><hr class="dropdown-divider"></li>'
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-person-dash me-1"></i>Deactivate</a></li>',
                     renew_confirm_url,
                     set_expiry_url,

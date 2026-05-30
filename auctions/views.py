@@ -13784,7 +13784,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             link_href = f"?{urlencode(link_params)}"
             bits.append(
                 format_html(
-                    '<a href="{}" class="btn btn-sm btn-secondary me-2">'
+                    '<a href="{}" class="btn btn-sm btn-danger me-2">'
                     '<i class="bi bi-archive"></i> Show {} deactivated</a>',
                     link_href,
                     deactivated_count,
@@ -14692,7 +14692,7 @@ class ClubMemberDeleteView(APIView):
             action=f"Deactivated member {member}",
             applies_to="MEMBERS",
         )
-        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
+        return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
 
 class ClubMemberReactivateView(APIView):
@@ -14745,7 +14745,7 @@ class ClubMemberPermanentDeleteView(APIView):
             action=f"Permanently deleted member {member_name}",
             applies_to="MEMBERS",
         )
-        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
+        return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
 
 class ClubMemberConfirmView(APIView):
