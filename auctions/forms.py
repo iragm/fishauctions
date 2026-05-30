@@ -3724,7 +3724,6 @@ class ClubEditForm(forms.ModelForm):
             "enable_club_page",
             "allow_joining",
             "enable_breeder_award_program",
-            "enable_membership",
             "description",
             "location",
             "location_coordinates",
@@ -3744,7 +3743,6 @@ class ClubEditForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["enable_membership"].label = "Membership and payments"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         # Required so the icon ImageField actually uploads.
@@ -3756,10 +3754,9 @@ class ClubEditForm(forms.ModelForm):
             "facebook_page",
             "discord_invite_link",
             Div(
-                Div("enable_club_page", css_class="col-3"),
-                Div("allow_joining", css_class="col-3"),
-                Div("enable_breeder_award_program", css_class="col-3"),
-                Div("enable_membership", css_class="col-3"),
+                Div("enable_club_page", css_class="col-4"),
+                Div("allow_joining", css_class="col-4"),
+                Div("enable_breeder_award_program", css_class="col-4"),
                 css_class="row",
             ),
             "description",
