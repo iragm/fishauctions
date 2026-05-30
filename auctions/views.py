@@ -644,7 +644,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 amount_available_to_refund=Decimal("0.00"),
                 currency=locked.currency,
                 payment_method=payment_method,
-                memo=f"Renewal from invoice #{locked.pk}",
+                memo=f"Renewal via {payment_method} ({external_id})" if external_id else f"Renewal from invoice #{locked.pk}",
             )
             if club.membership_annual_fee:
                 ClubMoney.objects.create(
@@ -653,7 +653,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                     date=today,
                     amount=Decimal(club.membership_annual_fee),
                     invoice=locked,
-                    description=f"Membership renewal via {payment_method} (invoice #{locked.pk})",
+                    description=f"Membership renewal via {payment_method} ({external_id})"
+                    if external_id
+                    else f"Membership renewal via {payment_method} (invoice #{locked.pk})",
                     category=ClubMoney.CATEGORY_MEMBERSHIP,
                 )
             locked.renewal_processed = True
