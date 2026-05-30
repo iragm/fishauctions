@@ -17937,7 +17937,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.content.decode("utf-8")
         self.assertIn("closeModal", body)
-        self.assertIn("clubMemberListChanged", body)
+        self.assertIn("clubMemberListChanged", response.get("HX-Trigger", ""))
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(
