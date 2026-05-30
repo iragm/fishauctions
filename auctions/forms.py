@@ -4126,8 +4126,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "bidder_number",
             "bidding_allowed",
             "selling_allowed",
-            "discord_role_auto_managed",
-            "discord_role_override",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
@@ -4146,11 +4144,6 @@ class ClubMemberAdminForm(forms.ModelForm):
         self.helper.form_method = "post"
         self._club = club
         self._auctiontos = auctiontos
-
-        # Restrict discord_role_override queryset to roles the bot can actually assign
-        has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
-        if club:
-            self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
         # --- Auction-context extra fields ---
         # auctiontos is set when editing; auction is set when creating in check-in mode
@@ -4226,29 +4219,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 self.fields["selling_allowed"].initial = instance_obj.selling_allowed if instance_obj else True
                 self.fields["bidding_allowed"].initial = instance_obj.bidding_allowed if instance_obj else True
 
-        # Hide Discord role fields when the club has no Discord server, or in auction context.
-        # discord_role_auto_managed is a BooleanField — set required=False and a sensible initial
-        # so HiddenInput doesn't trigger a spurious required-field validation error.
-        discord_fields = []
-        if has_discord and not in_auction_context:
-            discord_fields = [
-                "discord_role_auto_managed",
-                Field(
-                    "discord_role_override",
-                    wrapper_class="discord-role-override-field",
-                ),
-            ]
-        else:
-            self.fields["discord_role_auto_managed"].widget = forms.HiddenInput()
-            self.fields["discord_role_auto_managed"].required = False
-            instance_obj = self.instance if self.instance and self.instance.pk else None
-            self.fields["discord_role_auto_managed"].initial = (
-                instance_obj.discord_role_auto_managed if instance_obj else True
-            )
-            self.fields["discord_role_override"].widget = forms.HiddenInput()
-            # discord_role_auto_managed must appear in the layout for crispy to render it as hidden
-            discord_fields = [Field("discord_role_auto_managed"), Field("discord_role_override")]
-
         # Layout:
         #   Row: bidder_number (left) | memo (right)
         #   name
@@ -4258,9 +4228,9 @@ class ClubMemberAdminForm(forms.ModelForm):
         #   Row: bidding_allowed | selling_allowed  (hidden when not applicable)
         #   is_club_member (alt fees, auction context only)
         #   pickup_location (multi-location auction only)
-        # In auction context contact_status and discord_role_auto_managed are hidden but still
-        # in the form — they MUST appear in the layout so crispy renders them as hidden inputs
-        # (crispy only auto-renders hidden fields that are somewhere in the layout).
+        # In auction context contact_status is hidden but still in the form — it MUST appear in the
+        # layout so crispy renders it as a hidden input (crispy only auto-renders hidden fields that
+        # are somewhere in the layout).
         if in_auction_context:
             contact_status_fields: list = [Field("contact_status")]
         else:
@@ -4311,7 +4281,6 @@ class ClubMemberAdminForm(forms.ModelForm):
         elif post_url:
             self.helper.layout = Layout(
                 *base_fields,
-                *discord_fields,
                 Div(
                     HTML(
                         '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
@@ -4323,18 +4292,8 @@ class ClubMemberAdminForm(forms.ModelForm):
                 ),
             )
         else:
-            self.helper.layout = Layout(
-                *base_fields,
-                *discord_fields,
-            )
+            self.helper.layout = Layout(*base_fields)
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
-
-    def clean_discord_role_override(self):
-        role = self.cleaned_data.get("discord_role_override")
-        if role and not role.bot_can_manage:
-            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
-            raise forms.ValidationError(msg)
-        return role
 
     def clean_bidder_number(self):
         bidder_number = (self.cleaned_data.get("bidder_number") or "").strip()
@@ -4350,6 +4309,117 @@ class ClubMemberAdminForm(forms.ModelForm):
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
         return bidder_number
+
+
+class ClubMemberDiscordForm(forms.ModelForm):
+    """Form for managing a club member's Discord integration settings."""
+
+    class Meta:
+        model = ClubMember
+        fields = ["discord_id", "discord_role_auto_managed", "discord_role_override"]
+        widgets = {
+            "discord_id": forms.TextInput(attrs={"placeholder": "Discord user ID (e.g. 123456789012345678)"}),
+        }
+        help_texts = dict.fromkeys(fields, "")
+
+    def __init__(self, *args, post_url=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+
+        instance = self.instance if self.instance and self.instance.pk else None
+
+        # Restrict override queryset to roles the bot can manage
+        if instance and instance.club:
+            self.fields["discord_role_override"].queryset = instance.club.discord_roles.filter(bot_can_manage=True)
+        else:
+            from .models import ClubDiscordRole
+
+            self.fields["discord_role_override"].queryset = ClubDiscordRole.objects.none()
+
+        self.fields["discord_role_auto_managed"].required = False
+
+        # Readonly info: current role and username
+        from django.utils.html import format_html
+
+        if instance:
+            current_role = instance.discord_role
+            role_label = current_role.role_name if current_role else "No current role"
+        else:
+            role_label = "No current role"
+
+        role_html = format_html(
+            '<div class="mb-3">'
+            '<label class="form-label">Current Discord role</label>'
+            '<p class="form-control-plaintext">{}</p>'
+            "</div>",
+            role_label,
+        )
+
+        username_html = ""
+        if instance and instance.discord_username:
+            username_html = format_html(
+                '<div class="mb-3">'
+                '<label class="form-label">Discord Username</label>'
+                '<p class="form-control-plaintext">{}</p>'
+                "</div>",
+                instance.discord_username,
+            )
+
+        # Discord ID: readonly when set (with Clear button), editable when blank
+        has_discord_id = bool(instance and instance.discord_id)
+        if has_discord_id:
+            discord_id_row = HTML(
+                format_html(
+                    '<div class="mb-3">'
+                    '<label class="form-label" for="id_discord_id">Discord ID</label>'
+                    '<div class="input-group">'
+                    '<input type="text" name="discord_id" id="id_discord_id" maxlength="100"'
+                    ' value="{}" readonly class="form-control" autocomplete="off">'
+                    '<button class="btn btn-outline-danger" type="button" id="clear-discord-id-btn">'
+                    "Clear</button>"
+                    "</div></div>",
+                    instance.discord_id,
+                )
+            )
+        else:
+            discord_id_row = Field("discord_id")
+
+        layout_fields = [
+            HTML(role_html),
+            HTML(username_html) if username_html else HTML(""),
+            discord_id_row,
+            "discord_role_auto_managed",
+            Field("discord_role_override", wrapper_class="discord-role-override-field"),
+        ]
+
+        if post_url:
+            self.helper.layout = Layout(
+                *layout_fields,
+                Div(
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    ),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
+                    ),
+                    css_class="modal-footer",
+                ),
+            )
+        else:
+            self.helper.layout = Layout(*layout_fields)
+            self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+    def clean_discord_id(self):
+        value = (self.cleaned_data.get("discord_id") or "").strip()
+        return value or None
+
+    def clean_discord_role_override(self):
+        role = self.cleaned_data.get("discord_role_override")
+        if role and not role.bot_can_manage:
+            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
+            raise forms.ValidationError(msg)
+        return role
 
 
 class ClubMemberPermissionsForm(forms.ModelForm):

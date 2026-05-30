@@ -554,7 +554,7 @@ class ClubMemberHTMxTable(tables.Table):
         return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
-        if not self.can_add_edit and not self.can_manage_permissions:
+        if not self.can_add_edit and not self.can_manage_permissions and not self.can_manage_discord:
             return ""
         name = record.display_name
 
@@ -645,6 +645,16 @@ class ClubMemberHTMxTable(tables.Table):
                 )
 
         django_admin_item = format_html("")
+        discord_item = format_html("")
+        if self.can_manage_discord and not record.is_deleted:
+            discord_url = reverse("clubmember_discord", kwargs={"pk": record.pk})
+            discord_item = format_html(
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-discord me-1"></i>Discord</a></li>',
+                discord_url,
+            )
+
         if self.request and getattr(self.request.user, "is_staff", False):
             admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
             django_admin_item = format_html(
@@ -658,10 +668,11 @@ class ClubMemberHTMxTable(tables.Table):
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
+            discord_item,
             edit_items,
             django_admin_item,
         )
@@ -685,6 +696,7 @@ class ClubMemberHTMxTable(tables.Table):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
+        self.can_manage_discord = kwargs.pop("can_manage_discord", False)
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
         can_manage_auctions = kwargs.pop("can_manage_auctions", False)

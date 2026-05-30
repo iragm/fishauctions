@@ -700,6 +700,7 @@ urlpatterns = [
     path(
         "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
     ),
+    path("api/clubmember/<int:pk>/discord/", views.ClubMemberDiscordAdminView.as_view(), name="clubmember_discord"),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path(
         "api/clubmember/<int:pk>/membership-number/",

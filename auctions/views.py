@@ -138,6 +138,7 @@ from .forms import (
     ClubEditForm,
     ClubEmailSettingsForm,
     ClubMemberAdminForm,
+    ClubMemberDiscordForm,
     ClubMemberMergeReviewForm,
     ClubMemberMergeTargetForm,
     ClubMemberPermissionsForm,
@@ -644,7 +645,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 amount_available_to_refund=Decimal("0.00"),
                 currency=locked.currency,
                 payment_method=payment_method,
-                memo=f"Renewal via {payment_method} ({external_id})" if external_id else f"Renewal from invoice #{locked.pk}",
+                memo=f"Renewal via {payment_method} ({external_id})"
+                if external_id
+                else f"Renewal from invoice #{locked.pk}",
             )
             if club.membership_annual_fee:
                 ClubMoney.objects.create(
@@ -13845,11 +13848,19 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
         kwargs["club_has_fee"] = bool(self.club.membership_annual_fee)
+        kwargs["can_manage_discord"] = bool(
+            self.club.discord_server_id
+            and (
+                self.user_has_club_permission("permission_admin")
+                or self.user_has_club_permission("permission_edit_club")
+            )
+        )
         # Column visibility uses direct field checks — permission_admin alone doesn't reveal all columns
         if self.request.user.is_superuser:
             kwargs["can_manage_bap"] = True
             kwargs["can_manage_membership"] = True
             kwargs["can_manage_auctions"] = True
+            kwargs["can_manage_discord"] = bool(self.club.discord_server_id)
         else:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
             kwargs["can_manage_bap"] = bool(member and member.permission_manage_bap)
@@ -14185,18 +14196,6 @@ function cmValidateField() {{
 }}
 
 $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
-
-(function() {{
-    var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
-    var overrideWrapper = document.querySelector('.discord-role-override-field');
-    if (autoCheckbox && overrideWrapper) {{
-        function updateDiscordRoleOverride() {{
-            overrideWrapper.style.display = autoCheckbox.checked ? 'none' : '';
-        }}
-        updateDiscordRoleOverride();
-        autoCheckbox.addEventListener('change', updateDiscordRoleOverride);
-    }}
-}})();
 </script>"""
 
     def _post_url(self, member, auctiontos=None):
@@ -14305,6 +14304,79 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
             "auctions/generic_admin_form.html",
             {"form": form, "modal_title": f"Permissions — {member.display_name}"},
         )
+
+
+class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
+    """HTMX modal for managing a club member's Discord integration settings.
+
+    Only accessible to users with permission_admin or permission_edit_club.
+    """
+
+    def _get_member(self, request, pk):
+        member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
+        if not (
+            check_club_permission(request.user, member.club, "permission_admin")
+            or check_club_permission(request.user, member.club, "permission_edit_club")
+        ):
+            raise PermissionDenied()
+        return member
+
+    _EXTRA_SCRIPT = mark_safe(
+        """<script>
+(function() {
+    var clearBtn = document.getElementById('clear-discord-id-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            var input = document.getElementById('id_discord_id');
+            if (input) {
+                input.removeAttribute('readonly');
+                input.value = '';
+                input.focus();
+            }
+            this.style.display = 'none';
+        });
+    }
+    var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
+    var overrideWrapper = document.querySelector('.discord-role-override-field');
+    if (autoCheckbox && overrideWrapper) {
+        function updateDiscordRoleOverride() {
+            overrideWrapper.style.display = autoCheckbox.checked ? 'none' : '';
+        }
+        updateDiscordRoleOverride();
+        autoCheckbox.addEventListener('change', updateDiscordRoleOverride);
+    }
+})();
+</script>"""
+    )
+
+    def _build_context(self, member, form):
+        return {
+            "modal_title": str(member),
+            "form": form,
+            "extra_script": self._EXTRA_SCRIPT,
+        }
+
+    def get(self, request, pk):
+        member = self._get_member(request, pk)
+        post_url = reverse("clubmember_discord", kwargs={"pk": pk})
+        form = ClubMemberDiscordForm(instance=member, post_url=post_url)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(member, form))
+
+    def post(self, request, pk):
+        member = self._get_member(request, pk)
+        post_url = reverse("clubmember_discord", kwargs={"pk": pk})
+        form = ClubMemberDiscordForm(request.POST, instance=member, post_url=post_url)
+        if form.is_valid():
+            saved = form.save()
+            ClubHistory.objects.create(
+                club=member.club,
+                user=request.user,
+                action=f"Updated Discord settings for {saved}",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"Discord settings for {saved} updated.")
+            return close_modal_response("reload-page")
+        return render(request, "auctions/generic_admin_form.html", self._build_context(member, form))
 
 
 class ClubMemberCreateView(APIView):

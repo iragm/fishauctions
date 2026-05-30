@@ -17729,6 +17729,118 @@ class ClubPermissionsDialogTests(TestCase):
         self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
 
 
+class ClubMemberDiscordAdminViewTests(TestCase):
+    """Tests for ClubMemberDiscordAdminView — permission gating and basic functionality."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Discord Test Club", discord_server_id="111222333")
+        self.admin_user = User.objects.create_user(
+            username="discord_admin", password="testpass", email="discord_admin@example.com"
+        )
+        self.edit_club_user = User.objects.create_user(
+            username="discord_editclub", password="testpass", email="discord_editclub@example.com"
+        )
+        self.add_edit_user = User.objects.create_user(
+            username="discord_addedit", password="testpass", email="discord_addedit@example.com"
+        )
+        self.view_user = User.objects.create_user(
+            username="discord_view", password="testpass", email="discord_view@example.com"
+        )
+        self.non_member = User.objects.create_user(
+            username="discord_nonmember", password="testpass", email="discord_nonmember@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
+        ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
+        ClubMember.objects.create(club=self.club, user=self.view_user, name="View", permission_view=True)
+        self.target_member = ClubMember.objects.create(
+            club=self.club, name="Target", email="target_discord@example.com"
+        )
+        self.url = reverse("clubmember_discord", kwargs={"pk": self.target_member.pk})
+
+    # --- Access control ---
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_non_member_gets_403(self):
+        self.client.login(username="discord_nonmember", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_gets_403(self):
+        self.client.login(username="discord_view", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_gets_403(self):
+        self.client.login(username="discord_addedit", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_permission_edit_club_can_access(self):
+        self.client.login(username="discord_editclub", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_permission_admin_can_access(self):
+        self.client.login(username="discord_admin", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_cross_club_user_gets_403(self):
+        other_club = Club.objects.create(name="Other Club")
+        other_admin = User.objects.create_user(
+            username="discord_other_admin", password="testpass", email="discord_other_admin@example.com"
+        )
+        ClubMember.objects.create(club=other_club, user=other_admin, name="OtherAdmin", permission_admin=True)
+        self.client.login(username="discord_other_admin", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    # --- POST saves discord_id ---
+
+    def test_admin_can_set_discord_id(self):
+        self.client.login(username="discord_admin", password="testpass")
+        response = self.client.post(
+            self.url,
+            {
+                "discord_id": "987654321098765432",
+                "discord_role_auto_managed": "on",
+            },
+        )
+        self.assertIn(response.status_code, [200, 302])
+        self.target_member.refresh_from_db()
+        self.assertEqual(self.target_member.discord_id, "987654321098765432")
+
+    def test_admin_can_clear_discord_id(self):
+        self.target_member.discord_id = "999888777666555444"
+        self.target_member.save()
+        self.client.login(username="discord_admin", password="testpass")
+        self.client.post(
+            self.url,
+            {
+                "discord_id": "",
+                "discord_role_auto_managed": "on",
+            },
+        )
+        self.target_member.refresh_from_db()
+        self.assertIsNone(self.target_member.discord_id)
+
+    def test_save_creates_club_history(self):
+        self.client.login(username="discord_admin", password="testpass")
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self.client.post(self.url, {"discord_id": "111222333444555666", "discord_role_auto_managed": "on"})
+        self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
+
+    def test_view_only_post_gets_403(self):
+        self.client.login(username="discord_view", password="testpass")
+        response = self.client.post(self.url, {"discord_id": "123"})
+        self.assertEqual(response.status_code, 403)
+
+
 class ClubMemberManagementViewTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(name="Managed Club", enable_membership=True)
