@@ -585,11 +585,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             if not club:
                 return
             # For membership invoices, prefer the direct club_member reference
+            user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
+            email = _invoice_membership_lookup_email(locked)
             if locked.club_member:
                 member = locked.club_member
             else:
-                user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
-                email = _invoice_membership_lookup_email(locked)
                 if not user and not email:
                     # Nothing reliable to identify the buyer by; do not create a junk member.
                     logger.warning(

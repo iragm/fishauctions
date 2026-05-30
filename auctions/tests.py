@@ -18170,6 +18170,29 @@ class ClubMembershipInvoiceTests(TestCase):
         _process_invoice_membership_renewal(invoice, payment_method="PayPal")
         self.assertIsNone(self.club_member.membership_last_paid)
 
+    def test_process_renewal_via_club_member_link_no_user(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        member_no_user = ClubMember.objects.create(
+            club=self.club,
+            user=None,
+            name="Bob Import",
+            email="bob@example.com",
+        )
+        invoice = Invoice.objects.create(
+            club=self.club,
+            club_member=member_no_user,
+            buyer=None,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        member_no_user.refresh_from_db()
+        self.assertIsNotNone(member_no_user.membership_last_paid)
+        self.assertIsNotNone(member_no_user.membership_expiration_date)
+        invoice.refresh_from_db()
+        self.assertTrue(invoice.renewal_processed)
+
     # -- ClubMembershipPaymentView ---------------------------------------------
 
     def test_payment_view_404_when_not_configured(self):
