@@ -14417,7 +14417,9 @@ class ClubMemberCreateView(APIView):
                     messages.warning(request, f"{existing_member} could not be added — no pickup location found.")
                 else:
                     messages.success(request, f"{existing_member} checked in to {auction}.")
-                ClubHistory.objects.create(club=club, user=request.user, action=action_detail, applies_to="MEMBERS")
+                AuctionHistory.objects.create(
+                    auction=auction, user=request.user, action=action_detail, applies_to="USERS"
+                )
                 return ClubMemberAdminView._redirect_to_club_admin(club)
             extra_script = ClubMemberAdminView._get_validation_script(
                 request,
@@ -14441,7 +14443,7 @@ class ClubMemberCreateView(APIView):
             member = form.save(commit=False)
             member.club = club
             member.added_by = request.user
-            member.source = "manually_added"
+            member.source = str(auction.title)[:200] if auction else "manually_added"
             member.save()
             ClubHistory.objects.create(
                 club=club,
@@ -14458,6 +14460,12 @@ class ClubMemberCreateView(APIView):
                     )
                 else:
                     messages.success(request, f"{member} added to {club.name} and checked in to {auction}.")
+                AuctionHistory.objects.create(
+                    auction=auction,
+                    user=request.user,
+                    action=f"Added new member {member} to club '{club.name}' via auction check-in",
+                    applies_to="USERS",
+                )
             else:
                 messages.success(request, f"{member} added to {club.name}.")
             return ClubMemberAdminView._redirect_to_club_admin(club)
