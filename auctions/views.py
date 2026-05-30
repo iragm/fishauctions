@@ -646,6 +646,16 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 payment_method=payment_method,
                 memo=f"Renewal from invoice #{locked.pk}",
             )
+            if club.membership_annual_fee:
+                ClubMoney.objects.create(
+                    club=club,
+                    created_by=acting_user,
+                    date=today,
+                    amount=Decimal(club.membership_annual_fee),
+                    invoice=locked,
+                    description=f"Membership renewal via {payment_method} (invoice #{locked.pk})",
+                    category=ClubMoney.CATEGORY_MEMBERSHIP,
+                )
             locked.renewal_processed = True
             locked.save(update_fields=["renewal_processed"])
             # Keep the in-memory invoice in sync for the caller.
@@ -2608,6 +2618,12 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 action=f"Added {added_count} auction participants to club '{club.name}' ({skipped_count} already members).",
                 user=request.user,
             )
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Added {added_count} participant{'s' if added_count != 1 else ''} from auction '{auction}' ({skipped_count} already members)",
+                applies_to="MEMBERS",
+            )
         else:
             messages.info(
                 request,
@@ -2657,6 +2673,12 @@ class AddSingleAuctionTOSToClub(LoginRequiredMixin, View):
                 applies_to="USERS",
                 action=f"Added {tos.name} to club '{club.name}'.",
                 user=request.user,
+            )
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Added {tos.name} from auction '{auction}'",
+                applies_to="MEMBERS",
             )
 
         if request.headers.get("HX-Request"):
@@ -13820,6 +13842,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
+        kwargs["club_has_fee"] = bool(self.club.membership_annual_fee)
         # Column visibility uses direct field checks — permission_admin alone doesn't reveal all columns
         if self.request.user.is_superuser:
             kwargs["can_manage_bap"] = True
@@ -14499,10 +14522,13 @@ class ClubMemberRenewView(APIView):
             ]
         )
         member.update_last_club_activity()
+        new_exp_str = (
+            member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+        )
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
-            action=f"Renewed membership for {member}",
+            action=f"Renewed membership for {member}; new expiration {new_exp_str}",
             applies_to="MEMBERSHIP",
         )
         if member.club.membership_annual_fee:

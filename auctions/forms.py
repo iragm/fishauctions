@@ -3824,7 +3824,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 "January 1st: all memberships expire on Jan 1 each year. "
                 "Rolling: memberships expire one year from the payment date."
             ),
-            "membership_annual_fee": "Leave blank if free.",
+            "membership_annual_fee": "Leave blank or set to 0 to disable membership fees. When 0, expiration tracking, payment buttons, and reminder emails are all disabled.",
         }
 
     def __init__(self, *args, **kwargs):

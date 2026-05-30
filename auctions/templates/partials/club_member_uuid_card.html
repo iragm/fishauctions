@@ -14,7 +14,7 @@
     {% endif %}
   {% endif %}
 
-  {% if member.membership_expiration_date %}
+  {% if member.club.membership_annual_fee and member.membership_expiration_date %}
     <p class="mb-3">Membership expires: <strong>{{ member.membership_expiration_date|date:"M j, Y" }}</strong></p>
   {% endif %}
 

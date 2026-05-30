@@ -49,7 +49,7 @@
     <div class="tab-content mb-3" id="emailTypeTabContent">
       <div class="tab-pane fade show active" id="welcome-tab-content" role="tabpanel">
         <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
-          <div class="mb-2"><strong>Subject:</strong> {{ club.name }}</div>
+          <div class="mb-2"><strong>Subject:</strong> Welcome to the {{ club.name }}!</div>
           <hr class="my-2">
 
           <div class="mb-3">Dear {{ preview_name }},</div>
@@ -104,7 +104,7 @@
 
       <div class="tab-pane fade" id="renewal-tab-content" role="tabpanel">
         <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
-          <div class="mb-2"><strong>Subject:</strong> {{ club.name }} &mdash; Membership Renewal Confirmation</div>
+          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership has been renewed</div>
           <hr class="my-2">
 
           <div class="mb-3">Dear {{ preview_name }},</div>
@@ -115,6 +115,8 @@
               <div class="invalid-feedback d-block">{{ form.renewal_opening.errors|join:" " }}</div>
             {% endif %}
           </div>
+
+          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
 
           {% if preview_member_link %}
           <div class="mb-3">
@@ -159,7 +161,7 @@
 
       <div class="tab-pane fade" id="expiring-tab-content" role="tabpanel">
         <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
-          <div class="mb-2"><strong>Subject:</strong> {{ club.name }} &mdash; Your membership expires soon</div>
+          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership expires in 30 days <span class="text-muted small">(or "…expires tomorrow" for the day-before reminder)</span></div>
           <hr class="my-2">
 
           <div class="mb-3">Dear {{ preview_name }},</div>
@@ -170,6 +172,8 @@
               <div class="invalid-feedback d-block">{{ form.expiring_soon_opening.errors|join:" " }}</div>
             {% endif %}
           </div>
+
+          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership expires in 30 days. <span class="text-muted">(Or "…expires tomorrow" for the day-before reminder.)</span></div>
 
           {% if preview_member_link %}
           <div class="mb-3">

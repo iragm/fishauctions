@@ -587,8 +587,6 @@ class ClubMemberHTMxTable(tables.Table):
                     perm_delete_url,
                 )
             else:
-                renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
-                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
                 confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
                 merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
                 email_item = format_html("")
@@ -613,12 +611,24 @@ class ClubMemberHTMxTable(tables.Table):
                         '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
                         membership_number_url,
                     )
+                # Renew and set-expiry are only meaningful when the club charges a membership fee.
+                renewal_items = format_html("")
+                if record.club.membership_annual_fee:
+                    renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+                    set_expiry_url = reverse(
+                        "club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk}
+                    )
+                    renewal_items = format_html(
+                        '<li><a class="dropdown-item" href="javascript:void(0)"'
+                        ' hx-get="{}" hx-target="#modals-here">'
+                        '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
+                        '<li><a class="dropdown-item" href="{}">'
+                        '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>',
+                        renew_confirm_url,
+                        set_expiry_url,
+                    )
                 edit_items = format_html(
-                    '<li><a class="dropdown-item" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here">'
-                    '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
-                    '<li><a class="dropdown-item" href="{}">'
-                    '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
+                    "{}"
                     '<li><a class="dropdown-item" href="{}">'
                     '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
                     "{}"
@@ -627,8 +637,7 @@ class ClubMemberHTMxTable(tables.Table):
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
                     ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-person-dash me-1"></i>Deactivate</a></li>',
-                    renew_confirm_url,
-                    set_expiry_url,
+                    renewal_items,
                     merge_url,
                     membership_number_item,
                     email_item,
@@ -679,10 +688,11 @@ class ClubMemberHTMxTable(tables.Table):
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
         can_manage_auctions = kwargs.pop("can_manage_auctions", False)
+        club_has_fee = kwargs.pop("club_has_fee", True)
         exclude = list(kwargs.pop("exclude", None) or [])
         if not can_manage_bap:
             exclude += ["bap_points", "hap_points"]
-        if not can_manage_membership:
+        if not can_manage_membership or not club_has_fee:
             exclude += ["membership_last_paid", "membership_expiration_date"]
         if not can_manage_auctions:
             exclude += ["bidder_number"]
