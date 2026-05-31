@@ -518,22 +518,38 @@ class ClubMemberHTMxTable(tables.Table):
                 break
         return result
 
-    def render_membership_expiration_date(self, value):
+    def render_membership_expiration_date(self, value, record):
         from django.utils import timezone
 
-        if not value:
-            return "—"
         today = timezone.now().date()
+        has_fee = bool(record.club.membership_annual_fee)
+
+        renew_btn = format_html("")
+        if has_fee and not record.is_deleted:
+            renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+            renew_btn = format_html(
+                " <a href='javascript:void(0)' hx-get='{}' hx-target='#modals-here'"
+                " class='btn btn-sm btn-primary py-0 px-1'>Renew</a>",
+                renew_url,
+            )
+
+        if not value:
+            return format_html("—{}", renew_btn) if has_fee and not record.is_deleted else format_html("—")
+
         formatted = value.strftime("%b %-d, %Y")
         days_expired = (today - value).days
         if days_expired > 0:
             return format_html(
-                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>",
+                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>{}",
                 formatted,
                 days_expired,
                 "s" if days_expired != 1 else "",
+                renew_btn,
             )
-        return formatted
+        days_until = (value - today).days
+        if days_until <= 30:
+            return format_html("{}{}", formatted, renew_btn)
+        return format_html("{}", formatted)
 
     def render_membership_last_paid(self, value):
         if not value:

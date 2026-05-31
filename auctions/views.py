@@ -15020,7 +15020,7 @@ class ClubMemberRenewView(APIView):
             maybe_send_membership_renewal_confirmation(member)
         except Exception:
             logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
-        return close_modal_response("trigger-event", event_name="clubMemberListChanged")
+        return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
 
 class ClubMembershipNumberView(APIView):
