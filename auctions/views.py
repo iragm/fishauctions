@@ -15307,17 +15307,22 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             "club": self.club,
             "member": member,
             "default_date": member.membership_expiration_date or timezone.now().date(),
+            "next_url": request.GET.get("next", ""),
         }
         return render(request, "auctions/club_member_renew_page.html", context)
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
+        next_url = request.POST.get("next", "")
         date_str = request.POST.get("membership_expiration_date", "")
         try:
             new_expiration = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
             messages.error(request, "Invalid date.")
-            return redirect(reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk}))
+            error_redirect = reverse("club_member_renew_page", kwargs={"slug": slug, "pk": pk})
+            if next_url:
+                error_redirect += "?" + urlencode({"next": next_url})
+            return redirect(error_redirect)
         member.membership_expiration_date = new_expiration
         member._preserve_membership_email_schedule = True
         member.save(
@@ -15343,6 +15348,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 category=ClubMoney.CATEGORY_MEMBERSHIP,
             )
         messages.success(request, f"Expiration date updated for {member}.")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+            return redirect(next_url)
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
 
@@ -15411,7 +15418,14 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             if getattr(target, field_name, None) in (None, "") and getattr(source, field_name, None) not in (None, "")
         }
 
-    def _build_review_context(self, request, source, target, review_form):
+    def _safe_next_url(self, request):
+        url = request.GET.get("next") or request.POST.get("next", "")
+        if url and url_has_allowed_host_and_scheme(url, allowed_hosts={request.get_host()}):
+            return url
+        return ""
+
+    def _build_review_context(self, request, source, target, review_form, next_url=""):
+        cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         return {
             "step": "review",
             "page_title": f"Merge member — {source}",
@@ -15422,6 +15436,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "source_label": str(source),
             "target_label": str(target),
             "review_form": review_form,
+            "next_url": next_url,
             "comparison_rows": [
                 {
                     "label": field.label,
@@ -15437,7 +15452,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
             ],
             "target_field_name": "target",
-            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "cancel_url": cancel_url,
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
             "save_button_label": f"Merge and deactivate {source}",
         }
@@ -15445,6 +15460,8 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
     def get(self, request, slug, pk):
         source = self._get_member(pk)
         selection_form = ClubMemberMergeTargetForm(self.club, source)
+        next_url = self._safe_next_url(request)
+        cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         context = {
             "step": "select",
             "page_title": f"Merge member — {source}",
@@ -15452,13 +15469,15 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "subheading": f"Club: {self.club.name}",
             "selection_form": selection_form,
             "source_label": str(source),
-            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "next_url": next_url,
+            "cancel_url": cancel_url,
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
         return render(request, "auctions/contact_merge.html", context)
 
     def post(self, request, slug, pk):
         source = self._get_member(pk)
+        next_url = self._safe_next_url(request)
         if request.POST.get("step") == "review":
             target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club)
             review_form = ClubMemberMergeReviewForm(request.POST, instance=target)
@@ -15505,9 +15524,11 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         applies_to="MEMBERS",
                     )
                 messages.success(request, f"Merged {source} into {target}.")
-                return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+                return redirect(next_url or reverse("club_admin", kwargs={"slug": self.club.slug}))
             return render(
-                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+                request,
+                "auctions/contact_merge.html",
+                self._build_review_context(request, source, target, review_form, next_url),
             )
         selection_form = ClubMemberMergeTargetForm(self.club, source, request.POST or None)
         if request.method == "POST" and selection_form.is_valid():
@@ -15517,8 +15538,11 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 initial=self._build_review_initial(source, target),
             )
             return render(
-                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+                request,
+                "auctions/contact_merge.html",
+                self._build_review_context(request, source, target, review_form, next_url),
             )
+        cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         context = {
             "step": "select",
             "page_title": f"Merge member — {source}",
@@ -15526,7 +15550,8 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "subheading": f"Club: {self.club.name}",
             "selection_form": selection_form,
             "source_label": str(source),
-            "cancel_url": reverse("club_admin", kwargs={"slug": self.club.slug}),
+            "next_url": next_url,
+            "cancel_url": cancel_url,
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
         return render(request, "auctions/contact_merge.html", context)

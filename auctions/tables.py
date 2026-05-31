@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import django_tables2 as tables
 from django.urls import reverse
 from django.utils.html import format_html
@@ -605,6 +607,8 @@ class ClubMemberHTMxTable(tables.Table):
             else:
                 confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
                 merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+                if self.request:
+                    merge_url += "?" + urlencode({"next": self.request.get_full_path()})
                 email_item = format_html("")
                 if record.email:
                     icon_class = "bi bi-envelope"
@@ -634,6 +638,8 @@ class ClubMemberHTMxTable(tables.Table):
                     set_expiry_url = reverse(
                         "club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk}
                     )
+                    if self.request:
+                        set_expiry_url += "?" + urlencode({"next": self.request.get_full_path()})
                     renewal_items = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'
                         ' hx-get="{}" hx-target="#modals-here">'
