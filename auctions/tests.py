@@ -19841,7 +19841,7 @@ class MailchimpHelperTests(TestCase):
         self.assertEqual(fields["LNAME"], "Q Public")
         self.assertEqual(fields["EXPIRES"], "2030-01-02")
         self.assertIn("/member/", fields["RENEW"])
-        self.assertTrue(fields["UNSUB"].endswith("/unsubscribe/"))
+        self.assertTrue(fields["CLUBUNSUB"].endswith("/unsubscribe/"))
         self.assertTrue(fields["RESUB"].endswith("/resubscribe/"))
         self.assertTrue(fields["NOCOMM"].endswith("/no-contact/"))
 
