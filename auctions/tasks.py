@@ -701,6 +701,16 @@ def update_auction_stats(self):
         except Exception as e:
             logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
             logger.exception(e)
+            try:
+                auction.create_history("STATS", f"Stats update failed: {e}")
+            except Exception:
+                logger.exception("Failed to record stats failure history for auction %s", auction.pk)
+            # Reschedule far enough out to skip this auction temporarily and unblock the queue
+            try:
+                auction.next_update_due = now + timedelta(days=1)
+                auction.save(update_fields=["next_update_due"])
+            except Exception:
+                logger.exception("Failed to reschedule stats update for auction %s", auction.pk)
     else:
         logger.info("No auctions need stats update at this time")
 

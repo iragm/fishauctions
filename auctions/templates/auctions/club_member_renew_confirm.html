@@ -14,7 +14,7 @@
         <p class="text-muted small mb-3">No payment on record.</p>
         {% endif %}
         <p class="mb-0">New expiration will be: <strong>{{ new_expiration|date:"M j, Y" }}</strong></p>
-        {% if send_renewal_confirmation %}
+        {% if send_renewal_confirmation and member.email %}
         <p class="text-muted small mt-2 mb-0"><i class="bi bi-envelope"></i> This will send a renewal confirmation email</p>
         {% endif %}
       </div>

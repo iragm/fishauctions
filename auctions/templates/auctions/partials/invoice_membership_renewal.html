@@ -9,7 +9,7 @@
       name="renewal_needed"
       value="1"
       {% if invoice.renewal_needed %}checked{% endif %}
-      {% if invoice.renewal_processed or not is_admin %}disabled{% endif %}
+      {% if invoice.renewal_processed or not is_admin or invoice.status != 'DRAFT' %}disabled{% endif %}
       {% if is_admin and not invoice.renewal_processed %}
       hx-post="{% url 'invoice_renewal_toggle' pk=invoice.pk %}"
       hx-target="#invoice-membership-renewal"
@@ -27,5 +27,22 @@
   <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
   {% endif %}
 </div>
+{% if is_admin and not invoice.renewal_processed %}
+<script>
+(function() {
+  var checkboxId = 'renewal_needed_checkbox_{{ invoice.pk }}';
+  var btnGroupId = 'invoice-buttons-{{ invoice.pk }}';
+  function updateCheckbox() {
+    var checkbox = document.getElementById(checkboxId);
+    var group = document.getElementById(btnGroupId);
+    if (!checkbox || !group) return;
+    var draftBtn = group.querySelector('[id$="_DRAFT"]');
+    checkbox.disabled = !(draftBtn && draftBtn.classList.contains('btn-info'));
+  }
+  updateCheckbox();
+  document.body.addEventListener('htmx:afterSwap', updateCheckbox);
+})();
+</script>
+{% endif %}
 {% endif %}
 {% endif %}

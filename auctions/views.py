@@ -588,16 +588,20 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             # For membership invoices, prefer the direct club_member reference
             user = locked.buyer or (locked.auctiontos_user.user if locked.auctiontos_user else None)
             email = _invoice_membership_lookup_email(locked)
+            tos_member = getattr(locked.auctiontos_user, "clubmember", None) if locked.auctiontos_user else None
             if locked.club_member:
                 member = locked.club_member
+            elif tos_member:
+                # AuctionTOS has a linked ClubMember even without user/email — use it.
+                member = tos_member
+            elif not user and not email:
+                # Nothing reliable to identify the buyer by; do not create a junk member.
+                logger.warning(
+                    "Skipping renewal on invoice %s: no linked user and no email available",
+                    locked.pk,
+                )
+                return
             else:
-                if not user and not email:
-                    # Nothing reliable to identify the buyer by; do not create a junk member.
-                    logger.warning(
-                        "Skipping renewal on invoice %s: no linked user and no email available",
-                        locked.pk,
-                    )
-                    return
                 member = _find_club_member(club, user, email)
             if not member:
                 if locked.auctiontos_user:
@@ -2078,12 +2082,19 @@ class InvoicePaid(APIView):
             invoice = get_object_or_404(Invoice, no_login_link=kwargs["uuid"])
             auction = invoice.auction
         else:
-            # PK-based access: requires an authenticated auction admin
+            # PK-based access: requires an authenticated admin
             if not request.user.is_authenticated:
                 raise NotAuthenticated()
             invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
             auction = invoice.auction
-            if not auction.permission_check(request.user):
+            if auction:
+                if not auction.permission_check(request.user):
+                    raise PermissionDenied()
+            elif invoice.club:
+                # Renewal-only invoice (no auction): check club permission
+                if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
+                    raise PermissionDenied()
+            else:
                 raise PermissionDenied()
         new_status = kwargs["status"]
         # Core: persist the new invoice status. Everything else is "extra"
@@ -2147,7 +2158,13 @@ class InvoiceRenewalNeededToggleView(APIView):
 
     def post(self, request, pk):
         invoice = get_object_or_404(Invoice, pk=pk)
-        if not invoice.auction or not invoice.auction.permission_check(request.user):
+        if invoice.auction:
+            if not invoice.auction.permission_check(request.user):
+                raise PermissionDenied()
+        elif invoice.club:
+            if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
+                raise PermissionDenied()
+        else:
             raise PermissionDenied()
         if invoice.renewal_processed:
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
@@ -14350,8 +14367,15 @@ class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
     )
 
     def _build_context(self, member, form):
+        subtitle_parts = []
+        if member.discord_username:
+            subtitle_parts.append(member.discord_username)
+        current_role = member.discord_role
+        subtitle_parts.append(current_role.role_name if current_role else "No current role")
+        subtitle = " · ".join(subtitle_parts)
+        title = mark_safe(f"{member} <small class='text-muted'>{subtitle}</small>")
         return {
-            "modal_title": str(member),
+            "modal_title": title,
             "form": form,
             "extra_script": self._EXTRA_SCRIPT,
         }

@@ -4339,34 +4339,9 @@ class ClubMemberDiscordForm(forms.ModelForm):
 
         self.fields["discord_role_auto_managed"].required = False
 
-        # Readonly info: current role and username
+        # Discord ID: readonly when set (with Clear button), editable when blank
         from django.utils.html import format_html
 
-        if instance:
-            current_role = instance.discord_role
-            role_label = current_role.role_name if current_role else "No current role"
-        else:
-            role_label = "No current role"
-
-        role_html = format_html(
-            '<div class="mb-3">'
-            '<label class="form-label">Current Discord role</label>'
-            '<p class="form-control-plaintext">{}</p>'
-            "</div>",
-            role_label,
-        )
-
-        username_html = ""
-        if instance and instance.discord_username:
-            username_html = format_html(
-                '<div class="mb-3">'
-                '<label class="form-label">Discord Username</label>'
-                '<p class="form-control-plaintext">{}</p>'
-                "</div>",
-                instance.discord_username,
-            )
-
-        # Discord ID: readonly when set (with Clear button), editable when blank
         has_discord_id = bool(instance and instance.discord_id)
         if has_discord_id:
             discord_id_row = HTML(
@@ -4386,8 +4361,6 @@ class ClubMemberDiscordForm(forms.ModelForm):
             discord_id_row = Field("discord_id")
 
         layout_fields = [
-            HTML(role_html),
-            HTML(username_html) if username_html else HTML(""),
             discord_id_row,
             "discord_role_auto_managed",
             Field("discord_role_override", wrapper_class="discord-role-override-field"),
@@ -4401,7 +4374,7 @@ class ClubMemberDiscordForm(forms.ModelForm):
                         '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                     ),
                     HTML(
-                        f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary ms-2">Save</button>'
                     ),
                     css_class="modal-footer",
                 ),
