@@ -19985,7 +19985,7 @@ class MailchimpWebhookTests(TestCase):
     def test_upemail_updates_local_email(self):
         self.client_http.post(
             self._url(),
-            {"type": "upemail", "data[email]": "hook@example.com", "data[new_email]": "new@example.com"},
+            {"type": "upemail", "data[old_email]": "hook@example.com", "data[new_email]": "new@example.com"},
         )
         self.member.refresh_from_db()
         self.assertEqual(self.member.email, "new@example.com")

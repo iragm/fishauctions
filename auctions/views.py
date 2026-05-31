@@ -10526,20 +10526,24 @@ class MailchimpWebhookView(View):
             return HttpResponseForbidden("invalid")
 
         event_type = request.POST.get("type")
-        email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
         members = ClubMember.objects.filter(club=club, is_deleted=False)
+
+        if event_type == "upemail":
+            # Mailchimp sends old_email/new_email for address changes.
+            old_email = request.POST.get("data[old_email]") or request.POST.get("data[email]")
+            new_email = request.POST.get("data[new_email]")
+            if old_email and new_email:
+                # Reflect the new address locally; explicitly NOT a site-wide account change.
+                members.filter(email__iexact=old_email).update(email=new_email)
+            return HttpResponse("ok")
+
+        email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
         if email:
             members = members.filter(email__iexact=email)
-
         if event_type == "unsubscribe":
             members.update(mailchimp_status="unsubscribed")
         elif event_type == "cleaned":
             members.update(mailchimp_status="cleaned")
-        elif event_type == "upemail":
-            new_email = request.POST.get("data[new_email]")
-            if email and new_email:
-                # Reflect the new address locally; explicitly NOT a site-wide account change.
-                members.update(email=new_email)
         # 'profile' events need no action under one-way sync.
         return HttpResponse("ok")
 
