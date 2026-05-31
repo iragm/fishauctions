@@ -4360,7 +4360,18 @@ class ClubMemberDiscordForm(forms.ModelForm):
         else:
             discord_id_row = Field("discord_id")
 
+        discord_config_url = (
+            reverse("club_discord_config", kwargs={"slug": instance.club.slug}) if instance and instance.club else "#"
+        )
+        help_text_html = HTML(
+            f'<div class="alert alert-warning py-2 small mb-3">'
+            f"You most likely do not need to change the settings here &mdash; users can connect their own Discord account using the join button. "
+            f'<a href="{discord_config_url}">Click here to configure your club\'s Discord.</a>'
+            f"</div>"
+        )
+
         layout_fields = [
+            help_text_html,
             discord_id_row,
             "discord_role_auto_managed",
             Field("discord_role_override", wrapper_class="discord-role-override-field"),
