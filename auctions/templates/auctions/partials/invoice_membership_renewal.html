@@ -1,6 +1,6 @@
 {% if invoice.auction and invoice.auction.club and invoice.auction.club.membership_annual_fee %}
 {% if invoice.auction.is_club_managed or invoice.auction.add_people_from_auction_to_club %}
-<div id="invoice-membership-renewal" class="alert alert-secondary py-2">
+<div id="invoice-membership-renewal" class="alert alert-secondary py-2{% if invoice.renewal_processed or invoice.status != 'DRAFT' %} opacity-50{% endif %}">
   <div class="form-check">
     <input
       class="form-check-input"
@@ -31,16 +31,22 @@
 <script>
 (function() {
   var checkboxId = 'renewal_needed_checkbox_{{ invoice.pk }}';
+  var divId = 'invoice-membership-renewal';
   var btnGroupId = 'invoice-buttons-{{ invoice.pk }}';
-  function updateCheckbox() {
+  function updateRenewalLock() {
     var checkbox = document.getElementById(checkboxId);
+    var div = document.getElementById(divId);
     var group = document.getElementById(btnGroupId);
     if (!checkbox || !group) return;
     var draftBtn = group.querySelector('[id$="_DRAFT"]');
-    checkbox.disabled = !(draftBtn && draftBtn.classList.contains('btn-info'));
+    var isOpen = !!(draftBtn && draftBtn.classList.contains('btn-info'));
+    checkbox.disabled = !isOpen;
+    if (div) {
+      div.classList.toggle('opacity-50', !isOpen);
+    }
   }
-  updateCheckbox();
-  document.body.addEventListener('htmx:afterSwap', updateCheckbox);
+  updateRenewalLock();
+  document.body.addEventListener('htmx:afterSwap', updateRenewalLock);
 })();
 </script>
 {% endif %}

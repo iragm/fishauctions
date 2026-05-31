@@ -7138,15 +7138,13 @@ class Invoice(models.Model):
             return "No bidder"
         user = self.auctiontos_user.user
         email = (self.auctiontos_user.email or "").strip()
-        if not user and not email:
-            return "No linked user or email"
         member = None
         if user:
             member = ClubMember.objects.filter(club=self.auction.club, user=user, is_deleted=False).first()
         if not member and email:
             member = ClubMember.objects.filter(club=self.auction.club, email__iexact=email, is_deleted=False).first()
         if not member:
-            return "Not a member"
+            return "No membership"
         if not member.membership_last_paid:
             return "Never paid"
         expiration_date = member.membership_expiration_date
@@ -7157,7 +7155,7 @@ class Invoice(models.Model):
             return f"Expired {abs(days_until_expiration)} day(s) ago"
         if days_until_expiration <= 14:
             return f"Expires in {days_until_expiration} day(s)"
-        return "Active"
+        return f"Active (expires in {days_until_expiration} day(s))"
 
     def recalculate(self):
         """Store the current net in the calculated_total field.

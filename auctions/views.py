@@ -562,6 +562,9 @@ def _should_mark_invoice_renewal_needed(invoice):
 def _ensure_invoice_renewal_state(invoice):
     if not invoice or invoice.renewal_processed:
         return
+    if not invoice.auction:
+        # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
+        return
     should_need = _should_mark_invoice_renewal_needed(invoice)
     if invoice.renewal_needed != should_need:
         invoice.renewal_needed = should_need
@@ -594,7 +597,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             elif tos_member:
                 # AuctionTOS has a linked ClubMember even without user/email — use it.
                 member = tos_member
-            elif not user and not email:
+            elif not user and not email and not locked.auctiontos_user:
                 # Nothing reliable to identify the buyer by; do not create a junk member.
                 logger.warning(
                     "Skipping renewal on invoice %s: no linked user and no email available",
@@ -2136,10 +2139,21 @@ class InvoicePaid(APIView):
             )
         except Exception:
             logger.exception("create_history failed for invoice %s", invoice.pk)
-        return HttpResponse(
-            render_to_string("invoice_buttons.html", {"invoice": invoice}),
-            status=200,
-        )
+        is_admin = "pk" in kwargs  # UUID-based access is member-facing, not admin
+        buttons_html = render_to_string("invoice_buttons.html", {"invoice": invoice})
+        renewal_ctx = {"invoice": invoice, "is_admin": is_admin}
+        renewal_html = render_to_string("auctions/partials/invoice_membership_renewal.html", renewal_ctx)
+        # Include the renewal section as an OOB swap so the locked/unlocked visual
+        # state and the "already processed" warning reflect the new invoice state
+        # immediately without requiring a page reload.
+        renewal_oob = ""
+        if 'id="invoice-membership-renewal"' in renewal_html:
+            renewal_oob = renewal_html.replace(
+                '<div id="invoice-membership-renewal"',
+                '<div hx-swap-oob="outerHTML" id="invoice-membership-renewal"',
+                1,
+            )
+        return HttpResponse(buttons_html + renewal_oob, status=200)
 
 
 class APIPostView(APIView):
@@ -7110,6 +7124,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         if self.auctiontos:
             try:
                 invoice = self.auctiontos.invoice
+                _ensure_invoice_renewal_state(invoice)
                 invoice_string = invoice.invoice_summary_short
                 context["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 context["unsold_lot_warning"] = invoice.unsold_lot_warning
@@ -7121,6 +7136,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             context["modal_title"] = "Add new user"
         if self.auctiontos:
             context["invoice"] = self.auctiontos.invoice
+            context["is_admin"] = True
         # for real time form validation
         extra_script = "<script>"
         if self.auctiontos:
@@ -8450,6 +8466,10 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         if self.auction and self.is_auction_admin:
             auth = True
             self.is_admin = True
+        elif not self.auction and invoice.club and request.user.is_authenticated:
+            if check_club_permission(request.user, invoice.club, "permission_add_edit"):
+                auth = True
+                self.is_admin = True
         if self.auction and self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
