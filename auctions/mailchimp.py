@@ -39,11 +39,17 @@ class MailchimpError(Exception):
     """Raised for unrecoverable Mailchimp problems the caller should surface/log."""
 
 
-def _api_client_error():
-    """Import ApiClientError lazily so the module imports even if the lib is absent (tests)."""
-    from mailchimp_marketing.api_client import ApiClientError
+def _readable_api_error(exc):
+    """Extract the human-readable 'detail' field from a Mailchimp 400/4xx JSON body, or
+    fall back to the raw text.  Used so the last_error column stays short and scannable."""
+    import json as _json
 
-    return ApiClientError
+    text = getattr(exc, "text", "") or str(exc)
+    try:
+        data = _json.loads(text)
+        return data.get("detail") or data.get("title") or text
+    except Exception:
+        return text
 
 
 def get_client(club):
@@ -276,6 +282,8 @@ def sync_member(member, force_status=False):
     Respects Mailchimp-side unsubscribes (won't resubscribe) unless force_status=True
     (used by the explicit resubscribe self-service action).
     """
+    from mailchimp_marketing.api_client import ApiClientError
+
     club = member.club
     if not club.mailchimp_connected:
         return False
@@ -284,7 +292,6 @@ def sync_member(member, force_status=False):
     if not client:
         return False
 
-    ApiClientError = _api_client_error()
     list_id = club.mailchimp_audience_id
     desired = _desired_status(member)
 
@@ -293,7 +300,7 @@ def sync_member(member, force_status=False):
 
     try:
         if desired == "archived":
-            _archive_member(client, member, list_id, ApiClientError)
+            _archive_member(client, member, list_id)
             _record_sync(member, status="archived", web_id="")
             return True
 
@@ -310,17 +317,28 @@ def sync_member(member, force_status=False):
             body["status"] = desired
 
         result = client.lists.set_list_member(list_id, subscriber_hash(member.email), body)
-        _sync_tags(client, member, list_id, ApiClientError)
+        _sync_tags(client, member, list_id)
         _record_sync(member, status=result.get("status", desired), web_id=str(result.get("web_id", "") or ""))
         _clear_error(club)
         return True
     except ApiClientError as e:
-        _record_error(club, getattr(e, "text", str(e)))
-        logger.exception("Mailchimp sync failed for member %s (club %s)", member.pk, club.pk)
+        detail = _readable_api_error(e)
+        status_code = getattr(e, "status_code", None)
+        if status_code == 400:
+            # Mailchimp rejected this specific address (fake/invalid email, bad merge field, etc.).
+            # Record it on the member row but don't propagate — other members in the batch should still sync.
+            logger.warning("Mailchimp rejected member %s (%s): %s", member.pk, member.email, detail)
+            _record_sync(member, status="cleaned", web_id=member.mailchimp_web_id or "")
+        else:
+            # 4xx auth or 5xx — record on the club so admins see it in the status panel.
+            _record_error(club, detail)
+            logger.error("Mailchimp sync failed for member %s (club %s): %s", member.pk, club.pk, detail)
         return False
 
 
-def _sync_tags(client, member, list_id, ApiClientError):
+def _sync_tags(client, member, list_id):
+    from mailchimp_marketing.api_client import ApiClientError
+
     tag_states = member.compute_mailchimp_tags()
     tags = [{"name": name, "status": "active" if active else "inactive"} for name, active in tag_states.items()]
     try:
@@ -329,8 +347,10 @@ def _sync_tags(client, member, list_id, ApiClientError):
         logger.exception("Failed to update Mailchimp tags for member %s", member.pk)
 
 
-def _archive_member(client, member, list_id, ApiClientError):
+def _archive_member(client, member, list_id):
     """Soft-delete (archive) the contact; ignore 404 if they were never synced."""
+    from mailchimp_marketing.api_client import ApiClientError
+
     try:
         client.lists.delete_list_member(list_id, subscriber_hash(member.email))
     except ApiClientError as e:
@@ -346,7 +366,8 @@ def change_member_email(member, old_email):
     client = get_client(club)
     if not client:
         return
-    ApiClientError = _api_client_error()
+    from mailchimp_marketing.api_client import ApiClientError
+
     try:
         client.lists.update_list_member(
             club.mailchimp_audience_id,
