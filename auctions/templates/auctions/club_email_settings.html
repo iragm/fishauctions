@@ -26,6 +26,17 @@
 </div>
 {% endif %}
 
+{% if club.mailchimp_audience_id %}
+<div class="alert alert-info mb-3" role="alert">
+  <i class="bi bi-envelope-paper me-1"></i>
+  <strong>Mailchimp is connected.</strong>
+  Consider turning off the outgoing emails below and sending them through Mailchimp instead &mdash;
+  for example, a <strong>Customer Journey</strong> triggered by the <code>new-member</code>,
+  <code>expiring-soon</code>, or <code>expired</code> tags gives you more control over timing and design.
+  <a href="{% url 'club_mailchimp_settings' club.slug %}">Mailchimp settings</a>
+</div>
+{% endif %}
+
 <form method="post" novalidate>
   {% csrf_token %}
 

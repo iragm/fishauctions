@@ -10501,6 +10501,19 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
                     messages.error(request, "Could not load your Mailchimp audiences. Try reconnecting.")
 
         synced = ClubMember.objects.filter(club=club, is_deleted=False)
+        not_synced_count = (
+            mc.in_scope_members(club).filter(mailchimp_last_synced__isnull=True).count()
+            if club.mailchimp_audience_id
+            else 0
+        )
+        has_emails_enabled = any(
+            [
+                club.send_welcome_email_to_new_members,
+                club.send_membership_expiration_reminders_30_days,
+                club.send_membership_expiration_reminders,
+                club.send_membership_renewal_confirmation,
+            ]
+        )
         context = {
             "club": club,
             "view": self,
@@ -10509,6 +10522,8 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
             "in_scope_count": mc.in_scope_members(club).count(),
             "subscribed_count": synced.filter(mailchimp_status="subscribed").count(),
             "unsubscribed_count": synced.filter(mailchimp_status__in=["unsubscribed", "cleaned"]).count(),
+            "not_synced_count": not_synced_count,
+            "has_emails_enabled": has_emails_enabled,
             "tags": ClubMember.MAILCHIMP_TAGS,
         }
         return render(request, "auctions/club_mailchimp_settings.html", context)

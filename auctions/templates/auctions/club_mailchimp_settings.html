@@ -71,7 +71,12 @@
         <dt class="col-sm-4">Audience</dt>
         <dd class="col-sm-8">{{ club.mailchimp_audience_name|default:club.mailchimp_audience_id }}</dd>
         <dt class="col-sm-4">Members in scope</dt>
-        <dd class="col-sm-8">{{ in_scope_count }}</dd>
+        <dd class="col-sm-8">
+          {{ in_scope_count }}
+          {% if not_synced_count %}
+            &mdash; <a href="{% url 'club_admin' club.slug %}?query=nonmailchimp">{{ not_synced_count }} not yet synced</a>
+          {% endif %}
+        </dd>
         <dt class="col-sm-4">Subscribed</dt>
         <dd class="col-sm-8">{{ subscribed_count }}</dd>
         <dt class="col-sm-4">Unsubscribed / cleaned</dt>
@@ -79,9 +84,24 @@
         <dt class="col-sm-4">Last sync</dt>
         <dd class="col-sm-8">{{ club.mailchimp_last_sync|default:"—" }}</dd>
       </dl>
+      <p class="text-muted small mt-3 mb-0">
+        <i class="bi bi-info-circle"></i>
+        Members are synced automatically whenever their record is saved, and again each night.
+        If you change a member&rsquo;s email address, their existing Mailchimp contact is updated to match.
+      </p>
       {% if club.mailchimp_last_error %}
         <div class="alert alert-danger mt-3 mb-0 small">
           <i class="bi bi-exclamation-triangle"></i> Last error: {{ club.mailchimp_last_error }}
+        </div>
+      {% endif %}
+      {% if has_emails_enabled %}
+        <div class="alert alert-info mt-3 mb-0 small">
+          <i class="bi bi-lightbulb"></i>
+          You have outgoing emails enabled. Now that Mailchimp is connected you may want to turn those off
+          and send membership emails (welcome, renewal, expiry reminders) through Mailchimp instead &mdash;
+          for example, using a <strong>Customer Journey</strong> triggered by the <code>new-member</code>
+          or <code>expiring-soon</code> tags.
+          <a href="{% url 'club_email_settings' club.slug %}">Manage email settings</a>
         </div>
       {% endif %}
     </div>
@@ -103,18 +123,24 @@
   </div>
 
   <div class="card mb-4">
-    <div class="card-header">Tags &amp; segments</div>
+    <div class="card-header">Tags &amp; merge fields</div>
     <div class="card-body">
-      <p class="text-muted small">
-        Each member is tagged automatically. We pre-create a matching segment for every tag, so
-        these are ready to target in your Mailchimp campaigns:
+      <p class="text-muted small mb-2">
+        Each member is tagged automatically based on their membership status, activity, and location.
+        Tags are added and removed on every sync, so they stay current:
       </p>
-      <div>
+      <div class="mb-3">
         {% for tag in tags %}
           <span class="badge bg-info text-dark me-1 mb-1">{{ tag }}</span>
         {% endfor %}
+        <span class="badge bg-secondary me-1 mb-1">+ category tags&hellip;</span>
       </div>
-      <p class="text-muted small mt-3 mb-0">
+      <p class="text-muted small mb-0">
+        Distance tags (<code>nearby</code>, <code>medium-distance</code>, <code>long-distance</code>)
+        are mutually exclusive &mdash; a member will only ever have one.
+      </p>
+      <hr class="my-3">
+      <p class="text-muted small mb-0">
         Merge fields available in campaigns: <code>*|FNAME|*</code>, <code>*|LNAME|*</code>,
         <code>*|MEMBERNO|*</code>, <code>*|EXPIRES|*</code>, <code>*|RENEW|*</code>,
         <code>*|BARCODE|*</code>, <code>*|PHONE|*</code>, <code>*|ADDRESS|*</code>,
