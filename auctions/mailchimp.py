@@ -31,7 +31,7 @@ MERGE_FIELDS = (
     ("BARCODE", "Membership barcode", "url"),
     ("PHONE", "Phone number", "text"),
     ("ADDRESS", "Address", "text"),
-    ("UNSUB", "Unsubscribe link", "url"),
+    ("CLUBUNSUB", "Unsubscribe link", "url"),
     ("RESUB", "Resubscribe link", "url"),
     ("NOCOMM", "Stop all contact link", "url"),
 )
@@ -168,8 +168,13 @@ def ensure_merge_fields(club):
                 club.mailchimp_audience_id,
                 {"tag": tag, "name": name, "type": field_type, "public": False, "required": False},
             )
-        except Exception:
-            logger.exception("Failed to create Mailchimp merge field %s for club %s", tag, club.pk)
+        except Exception as exc:
+            logger.error(
+                "Failed to create Mailchimp merge field %s for club %s: %s",
+                tag,
+                club.pk,
+                _readable_api_error(exc),
+            )
 
 
 def ensure_segments(club):
@@ -275,7 +280,7 @@ def member_merge_fields(member):
         "BARCODE": member.barcode_image_link_png,
         "PHONE": member.phone_as_string,
         "ADDRESS": member.address or "",
-        "UNSUB": _self_service_url(member, "club_member_unsubscribe"),
+        "CLUBUNSUB": _self_service_url(member, "club_member_unsubscribe"),
         "RESUB": _self_service_url(member, "club_member_resubscribe"),
         "NOCOMM": _self_service_url(member, "club_member_nocomm"),
     }
