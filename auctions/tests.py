@@ -19846,6 +19846,144 @@ class MailchimpHelperTests(TestCase):
         self.assertTrue(fields["NOCOMM"].endswith("/no-contact/"))
 
 
+class MailchimpCategoryTagTests(TestCase):
+    """Tests for _top_category_names() and category tag integration in _sync_tags / ensure_segments."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Cat Club")
+        self.user = User.objects.create_user(username="catuser", email="cat@example.com")
+        self.member = ClubMember.objects.create(
+            club=self.club, name="Cat User", email="cat@example.com", user=self.user
+        )
+        self.cat_a = Category.objects.create(name="Cichlids")
+        self.cat_b = Category.objects.create(name="Tetras")
+        self.cat_c = Category.objects.create(name="Corydoras")
+        self.cat_uncat = Category.objects.get_or_create(name="Uncategorized")[0]
+
+    # --- _top_category_names: UserInterestCategory path ---
+
+    def test_top_cats_uses_user_interest_when_present(self):
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=10)
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_b, interest=5)
+        names = mc._top_category_names(self.member)
+        self.assertEqual(names, {"Cichlids", "Tetras"})
+
+    def test_top_cats_excludes_uncategorized_from_interests(self):
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_uncat, interest=100)
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=5)
+        names = mc._top_category_names(self.member)
+        self.assertNotIn("Uncategorized", names)
+        self.assertIn("Cichlids", names)
+
+    def test_top_cats_capped_at_5_from_interests(self):
+        cats = [Category.objects.create(name=f"Fish-{i}") for i in range(8)]
+        for i, cat in enumerate(cats):
+            UserInterestCategory.objects.create(user=self.user, category=cat, interest=10 - i)
+        names = mc._top_category_names(self.member)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Fish-0", names)
+        self.assertNotIn("Fish-7", names)
+
+    # --- _top_category_names: lot-history fallback ---
+
+    def _make_lot_setup(self):
+        """Return (auction, location, seller_tos, winner_tos) for the club's auction."""
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Club auction",
+            club=self.club,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+        )
+        location = PickupLocation.objects.create(name="loc", auction=auction, pickup_time=the_future)
+        seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=auction, pickup_location=location, email="cat@example.com"
+        )
+        winner_tos = AuctionTOS.objects.create(auction=auction, pickup_location=location, email="buyer@example.com")
+        return auction, location, seller_tos, winner_tos
+
+    def test_top_cats_falls_back_to_lot_history_when_no_interests(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        Lot.objects.create(lot_name="L1", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        Lot.objects.create(lot_name="L2", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        Lot.objects.create(lot_name="L3", auctiontos_seller=seller_tos, species_category=self.cat_b, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertIn("Cichlids", names)
+        self.assertIn("Tetras", names)
+
+    def test_top_cats_counts_won_lots_in_fallback(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        # seller_tos already has email="cat@example.com"; reuse it as winner to avoid duplicate-merge
+        Lot.objects.create(lot_name="Won1", auctiontos_winner=seller_tos, species_category=self.cat_c, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertIn("Corydoras", names)
+
+    def test_top_cats_fallback_excludes_uncategorized(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        Lot.objects.create(
+            lot_name="U1", auctiontos_seller=seller_tos, species_category=self.cat_uncat, auction=auction
+        )
+        Lot.objects.create(lot_name="A1", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertNotIn("Uncategorized", names)
+
+    def test_top_cats_fallback_capped_at_5(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        cats = [Category.objects.create(name=f"Species-{i}") for i in range(7)]
+        for i, cat in enumerate(cats):
+            for _ in range(7 - i):
+                Lot.objects.create(
+                    lot_name=f"L-{cat.name}", auctiontos_seller=seller_tos, species_category=cat, auction=auction
+                )
+        names = mc._top_category_names(self.member)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Species-0", names)
+        self.assertNotIn("Species-6", names)
+
+    def test_top_cats_no_email_returns_empty(self):
+        member = ClubMember.objects.create(club=self.club, name="No Email")
+        self.assertEqual(mc._top_category_names(member), set())
+
+    # --- _sync_tags sends category tags ---
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_tags_includes_category_tags(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "subscribed"}
+        mock_get_client.return_value = client
+        self.club.mailchimp_access_token = "tok"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "listXYZ"
+        self.club.mailchimp_webhook_secret = "sec"
+        self.club.save()
+
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=10)
+        mc.sync_member(self.member)
+
+        _, _, payload = client.lists.update_list_member_tags.call_args.args
+        sent_tags = {t["name"]: t["status"] for t in payload["tags"]}
+        self.assertEqual(sent_tags.get("Cichlids"), "active")
+        self.assertEqual(sent_tags.get("Tetras"), "inactive")
+        self.assertNotIn("Uncategorized", sent_tags)
+
+    # --- ensure_segments creates category segments ---
+
+    def test_ensure_segments_includes_categories(self):
+        self.club.mailchimp_access_token = "tok"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "listXYZ"
+        self.club.save()
+        client = MagicMock()
+        client.lists.list_segments.return_value = {"segments": []}
+        with patch("auctions.mailchimp.get_client", return_value=client):
+            mc.ensure_segments(self.club)
+        created = {call.args[1]["name"] for call in client.lists.create_segment.call_args_list}
+        self.assertIn("Cichlids", created)
+        self.assertIn("Tetras", created)
+        self.assertNotIn("Uncategorized", created)
+
+
 class MailchimpSyncTests(TestCase):
     """sync_member / change_member_email against a mocked Mailchimp client."""
 

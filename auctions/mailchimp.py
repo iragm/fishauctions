@@ -178,7 +178,7 @@ def ensure_segments(club):
     Tags and static segments share Mailchimp's backend, so creating them up front means the
     segments appear immediately and get populated as members sync.
     """
-    from auctions.models import ClubMember
+    from auctions.models import Category, ClubMember
 
     client = get_client(club)
     if not client or not club.mailchimp_audience_id:
@@ -189,7 +189,10 @@ def ensure_segments(club):
         }
     except Exception:
         existing = set()
-    for tag in ClubMember.MAILCHIMP_TAGS:
+    all_tags = list(ClubMember.MAILCHIMP_TAGS) + list(
+        Category.objects.exclude(name="Uncategorized").values_list("name", flat=True)
+    )
+    for tag in all_tags:
         if tag in existing:
             continue
         try:
@@ -340,10 +343,65 @@ def sync_member(member, force_status=False):
         return False
 
 
+def _top_category_names(member):
+    """Return the set of up-to-5 category names most relevant to this member.
+
+    If the member has a linked user with UserInterestCategory records, those drive the
+    ranking.  Otherwise fall back to aggregating sold/won lots across all of this club's
+    auctions filtered by the member's email address (seller or winner both count equally).
+    """
+    from collections import Counter
+    from itertools import chain
+
+    from auctions.models import Lot, UserInterestCategory
+
+    if member.user_id:
+        top = (
+            UserInterestCategory.objects.filter(user_id=member.user_id)
+            .exclude(category__name="Uncategorized")
+            .select_related("category")
+            .order_by("-interest")[:5]
+        )
+        names = {uic.category.name for uic in top}
+        if names:
+            return names
+
+    if not member.email:
+        return set()
+
+    seller_cats = (
+        Lot.objects.filter(
+            auctiontos_seller__auction__club=member.club,
+            auctiontos_seller__email=member.email,
+            species_category__isnull=False,
+        )
+        .exclude(species_category__name="Uncategorized")
+        .values_list("species_category__name", flat=True)
+    )
+    winner_cats = (
+        Lot.objects.filter(
+            auctiontos_winner__auction__club=member.club,
+            auctiontos_winner__email=member.email,
+            species_category__isnull=False,
+        )
+        .exclude(species_category__name="Uncategorized")
+        .values_list("species_category__name", flat=True)
+    )
+    counter = Counter(chain(seller_cats, winner_cats))
+    return {name for name, _ in counter.most_common(5)}
+
+
 def _sync_tags(client, member, list_id):
     from mailchimp_marketing.api_client import ApiClientError
 
+    from auctions.models import Category
+
     tag_states = member.compute_mailchimp_tags()
+
+    top_cats = _top_category_names(member)
+    for cat_name in Category.objects.exclude(name="Uncategorized").values_list("name", flat=True):
+        tag_states[cat_name] = cat_name in top_cats
+
     tags = [{"name": name, "status": "active" if active else "inactive"} for name, active in tag_states.items()]
     try:
         client.lists.update_list_member_tags(list_id, subscriber_hash(member.email), {"tags": tags})
