@@ -656,7 +656,10 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            if club.membership_annual_fee:
+            if club.membership_annual_fee and not locked.auction:
+                # Club-only invoices: create ClubMoney here.
+                # Auction invoices: create_club_payment_history (via Invoice.save) handles it,
+                # including proper reversal when the invoice is un-paid.
                 ClubMoney.objects.create(
                     club=club,
                     created_by=acting_user,
@@ -2100,6 +2103,8 @@ class InvoicePaid(APIView):
             else:
                 raise PermissionDenied()
         new_status = kwargs["status"]
+        if new_status == "PAID" and not invoice.renewal_needed:
+            _ensure_invoice_renewal_state(invoice)
         # Core: persist the new invoice status. Everything else is "extra"
         # and must not be allowed to block the status change.
         invoice.status = new_status
@@ -4137,6 +4142,24 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         lot.date_end = timezone.now()
         lot.active = False
         lot.save()
+        if (
+            lot.auction
+            and lot.auction.use_check_in_mode
+            and lot.auctiontos_seller
+            and not lot.auctiontos_seller.checked_in
+        ):
+            seller = lot.auctiontos_seller
+            seller.checked_in = timezone.now()
+            update_fields = ["checked_in"]
+            if not seller.bidding_allowed:
+                seller.bidding_allowed = True
+                update_fields.append("bidding_allowed")
+            seller.save(update_fields=update_fields)
+            lot.auction.create_history(
+                applies_to="USERS",
+                action=f"Checked in {seller.name} (lot sold)",
+                user=self.request.user,
+            )
         try:
             lot.add_winner_message(self.request.user, winning_tos, winning_price)
         except Exception:
@@ -4216,6 +4239,18 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
+                if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
+                    winner.checked_in = timezone.now()
+                    update_fields = ["checked_in"]
+                    if not winner.bidding_allowed:
+                        winner.bidding_allowed = True
+                        update_fields.append("bidding_allowed")
+                    winner.save(update_fields=update_fields)
+                    lot.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Checked in {winner.name} (ignored errors, lot sold)",
+                        user=self.request.user,
+                    )
                 try:
                     lot.auction.create_history(
                         applies_to="LOTS",
@@ -8395,6 +8430,20 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
             messages.error(request, "You don't have permission to create invoices for this auction")
             return redirect(reverse("home"))
 
+        # Auto check-in if auction uses check-in mode
+        if auctiontos.auction.use_check_in_mode and not auctiontos.checked_in:
+            auctiontos.checked_in = timezone.now()
+            update_fields = ["checked_in"]
+            if not auctiontos.bidding_allowed:
+                auctiontos.bidding_allowed = True
+                update_fields.append("bidding_allowed")
+            auctiontos.save(update_fields=update_fields)
+            auctiontos.auction.create_history(
+                applies_to="USERS",
+                action=f"Checked in {auctiontos.name} (invoice created)",
+                user=request.user,
+            )
+
         # Check for existing invoices - get the oldest one (first created)
         existing_invoice = (
             Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).order_by("date").first()
@@ -9119,6 +9168,11 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
             # Core: change the status and save. Extras follow, each guarded.
+            if self.new_invoice_status == "PAID" and not invoice.renewal_needed:
+                try:
+                    _ensure_invoice_renewal_state(invoice)
+                except Exception:
+                    logger.exception("Failed to ensure renewal state for invoice %s in bulk", invoice.pk)
             try:
                 invoice.status = self.new_invoice_status
                 invoice.invoice_notification_due = run_at
@@ -9698,6 +9752,11 @@ class PayPalAPIMixin:
                 logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
         # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
         if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
+            if not invoice.renewal_needed:
+                try:
+                    _ensure_invoice_renewal_state(invoice)
+                except Exception:
+                    logger.exception("Failed to ensure renewal state for invoice %s before PayPal PAID", invoice.pk)
             invoice.status = "PAID"
             invoice.save()
             try:
@@ -13687,6 +13746,14 @@ class SquareWebhookView(SquareAPIMixin, View):
                             except Exception:
                                 logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
                         if invoice.net_after_payments >= 0:
+                            if not invoice.renewal_needed:
+                                try:
+                                    _ensure_invoice_renewal_state(invoice)
+                                except Exception:
+                                    logger.exception(
+                                        "Failed to ensure renewal state for invoice %s before Square PAID",
+                                        invoice.pk,
+                                    )
                             invoice.status = "PAID"
                             invoice.save()
                             try:

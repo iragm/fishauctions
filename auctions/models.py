@@ -6751,6 +6751,18 @@ class Lot(models.Model):
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
             invoice.recalculate()
+            if self.auction.use_check_in_mode and not self.auctiontos_seller.checked_in:
+                seller = self.auctiontos_seller
+                seller.checked_in = timezone.now()
+                update_fields = ["checked_in"]
+                if not seller.bidding_allowed:
+                    seller.bidding_allowed = True
+                    update_fields.append("bidding_allowed")
+                seller.save(update_fields=update_fields)
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Checked in {seller.name} (lot sold)",
+                )
 
     @property
     def category(self):
