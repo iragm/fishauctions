@@ -516,6 +516,19 @@ def update_expired_membership_discord_roles(self):
         member.membership_expiration_reminder_due = None
         member.save(update_fields=["membership_expiration_reminder_due"])
 
+    # Nightly Mailchimp catch-up: re-sync members of connected clubs so lifecycle tags
+    # (expiring-soon, expired, new-member -> long-term-member, probably-inactive) stay
+    # accurate even when no edit happened. backfill() enqueues one async task per member.
+    from auctions import mailchimp as mc
+    from auctions.models import Club
+
+    connected_clubs = (
+        Club.objects.filter(active=True).exclude(mailchimp_audience_id="").exclude(mailchimp_server_prefix="")
+    )
+    for club in connected_clubs:
+        if club.mailchimp_connected:
+            mc.backfill(club)
+
 
 @shared_task(bind=True, ignore_result=True)
 def auction_emails(self):
@@ -863,6 +876,50 @@ def update_google_wallet_object_for_member(self, member_pk):
     except requests.RequestException:
         logger.exception("Google Wallet object refresh failed for member=%s", member_pk)
         raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def sync_club_member_to_mailchimp(self, member_pk):
+    """Push one club member into their club's connected Mailchimp audience.
+
+    No-op when the club has no Mailchimp connection. Reused for member edits, auction joins,
+    paid invoices, the initial backfill, and the nightly catch-up. Deactivated/opted-out
+    members are archived by sync_member rather than skipped, so we don't filter is_deleted here.
+    """
+    from auctions import mailchimp as mc
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.mailchimp_connected:
+        return
+    mc.sync_member(member)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def sync_club_member_email_change(self, member_pk, old_email):
+    """Move a member's Mailchimp contact to a new email address, then refresh their data."""
+    from auctions import mailchimp as mc
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.mailchimp_connected:
+        return
+    mc.change_member_email(member, old_email)
+    mc.sync_member(member)
 
 
 @shared_task(

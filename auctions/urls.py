@@ -190,6 +190,13 @@ urlpatterns = [
     path("paypal/onboard/success/", views.PayPalCallbackView.as_view(), name="paypal_callback"),
     path("square/connect/", views.SquareConnectView.as_view(), name="square_connect"),
     path("square/onboard/success/", views.SquareCallbackView.as_view(), name="square_callback"),
+    path("mailchimp/connect/<slug:slug>/", views.MailchimpConnectView.as_view(), name="mailchimp_connect"),
+    path("mailchimp/callback/", views.MailchimpCallbackView.as_view(), name="mailchimp_callback"),
+    path(
+        "mailchimp/webhook/<slug:slug>/<str:secret>/",
+        views.MailchimpWebhookView.as_view(),
+        name="mailchimp_webhook",
+    ),
     path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
     path(
         "api/invoices/<uuid:uuid>/square/",
@@ -625,6 +632,33 @@ urlpatterns = [
         name="club_member_by_number",
     ),
     path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
+    path("clubs/<slug:slug>/mailchimp/", views.ClubMailchimpConfigView.as_view(), name="club_mailchimp_config"),
+    path(
+        "clubs/<slug:slug>/mailchimp/select-audience/",
+        views.MailchimpAudienceSelectView.as_view(),
+        name="mailchimp_select_audience",
+    ),
+    path("clubs/<slug:slug>/mailchimp/sync/", views.MailchimpSyncNowView.as_view(), name="mailchimp_sync_now"),
+    path(
+        "clubs/<slug:slug>/mailchimp/disconnect/",
+        views.MailchimpDisconnectView.as_view(),
+        name="mailchimp_disconnect",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/unsubscribe/",
+        views.ClubMemberSelfServiceView.as_view(action="unsubscribe"),
+        name="club_member_unsubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/resubscribe/",
+        views.ClubMemberSelfServiceView.as_view(action="resubscribe"),
+        name="club_member_resubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/no-contact/",
+        views.ClubMemberSelfServiceView.as_view(action="nocomm"),
+        name="club_member_nocomm",
+    ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(

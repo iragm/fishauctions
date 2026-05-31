@@ -655,6 +655,18 @@ class ClubMemberHTMxTable(tables.Table):
                 discord_url,
             )
 
+        mailchimp_item = format_html("")
+        if self.can_add_edit and record.mailchimp_web_id and record.club.mailchimp_server_prefix:
+            mailchimp_url = (
+                f"https://{record.club.mailchimp_server_prefix}.admin.mailchimp.com"
+                f"/lists/members/view?id={record.mailchimp_web_id}"
+            )
+            mailchimp_item = format_html(
+                '<li><a class="dropdown-item" href="{}" target="_blank" rel="noopener">'
+                '<i class="bi bi-envelope-paper me-1"></i>View in Mailchimp</a></li>',
+                mailchimp_url,
+            )
+
         if self.request and getattr(self.request.user, "is_staff", False):
             admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
             django_admin_item = format_html(
@@ -668,11 +680,12 @@ class ClubMemberHTMxTable(tables.Table):
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
             discord_item,
+            mailchimp_item,
             edit_items,
             django_admin_item,
         )

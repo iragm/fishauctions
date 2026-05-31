@@ -10250,6 +10250,337 @@ class SquareCallbackView(LoginRequiredMixin, View):
             return redirect(reverse("square_seller"))
 
 
+MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
+
+
+class MailchimpConnectView(LoginRequiredMixin, View):
+    """Start the Mailchimp OAuth flow for a club (requires permission_edit_club)."""
+
+    def get(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_edit_club"):
+            raise PermissionDenied()
+        config_url = reverse("club_mailchimp_config", kwargs={"slug": club.slug})
+        if not settings.MAILCHIMP_CLIENT_ID:
+            messages.error(request, "Mailchimp is not configured on this site. Contact your site administrator.")
+            return redirect(config_url)
+        # Stash the club so the callback (which has no slug) knows what we're connecting.
+        request.session[MAILCHIMP_OAUTH_CLUB_SESSION_KEY] = club.slug
+        params = {
+            "response_type": "code",
+            "client_id": settings.MAILCHIMP_CLIENT_ID,
+            "redirect_uri": request.build_absolute_uri(reverse("mailchimp_callback")),
+            # Reuse the per-user unsubscribe UUID as the anti-CSRF state, same as Square.
+            "state": request.user.userdata.unsubscribe_link,
+        }
+        return redirect("https://login.mailchimp.com/oauth2/authorize?" + urlencode(params))
+
+
+class MailchimpCallbackView(LoginRequiredMixin, View):
+    """Mailchimp redirects here after the user authorizes. Stores the token, then sends the
+    admin back to the config page to pick an audience."""
+
+    def get(self, request):
+        from auctions import mailchimp as mc
+
+        slug = request.session.get(MAILCHIMP_OAUTH_CLUB_SESSION_KEY)
+        club = Club.objects.filter(slug=slug).first() if slug else None
+        if not club or not check_club_permission(request.user, club, "permission_edit_club"):
+            messages.error(request, "Your Mailchimp connection session expired. Please try again.")
+            return redirect(reverse("home"))
+
+        config_url = reverse("club_mailchimp_config", kwargs={"slug": club.slug})
+        error = request.GET.get("error")
+        if error:
+            messages.error(request, f"Mailchimp authorization failed: {request.GET.get('error_description', error)}")
+            return redirect(config_url)
+
+        code = request.GET.get("code")
+        state = request.GET.get("state")
+        if not code or state != request.user.userdata.unsubscribe_link:
+            messages.error(request, "Invalid Mailchimp authorization response. Please try again.")
+            return redirect(config_url)
+
+        try:
+            token, dc = mc.exchange_oauth_code(code, request.build_absolute_uri(reverse("mailchimp_callback")))
+        except mc.MailchimpError:
+            logger.exception("Mailchimp token exchange failed for club %s", club.pk)
+            messages.error(request, "Could not connect to Mailchimp. Please try again.")
+            return redirect(config_url)
+
+        club.mailchimp_access_token = token
+        club.mailchimp_server_prefix = dc
+        club.mailchimp_connected_on = timezone.now()
+        club.mailchimp_connected_by = request.user
+        if not club.mailchimp_webhook_secret:
+            club.mailchimp_webhook_secret = secrets.token_urlsafe(32)
+        club.save(
+            update_fields=[
+                "mailchimp_access_token",
+                "mailchimp_server_prefix",
+                "mailchimp_connected_on",
+                "mailchimp_connected_by",
+                "mailchimp_webhook_secret",
+            ]
+        )
+        request.session.pop(MAILCHIMP_OAUTH_CLUB_SESSION_KEY, None)
+        messages.success(request, "Mailchimp connected! Now choose which audience to sync your members into.")
+        return redirect(config_url)
+
+
+class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Pick an existing audience or create '{club} Members', then provision + backfill."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import mailchimp as mc
+
+        club = self.club
+        config_url = reverse("club_mailchimp_config", kwargs={"slug": club.slug})
+        client = mc.get_client(club)
+        if not client:
+            messages.error(request, "Mailchimp is not connected. Please connect first.")
+            return redirect(config_url)
+
+        choice = request.POST.get("audience_id", "")
+        try:
+            if choice == "__new__":
+                from_email = club.contact_email or settings.DEFAULT_FROM_EMAIL
+                contact = {
+                    "company": club.name,
+                    "address1": club.location or "",
+                    "city": "",
+                    "state": "",
+                    "zip": "",
+                    "country": "US",
+                }
+                audience_id, audience_name = mc.create_audience(client, club, from_email, contact)
+            else:
+                audience_id = choice
+                audience_name = next((a["name"] for a in mc.list_audiences(client) if a["id"] == choice), "")
+        except Exception:
+            logger.exception("Mailchimp audience selection failed for club %s", club.pk)
+            messages.error(
+                request,
+                "Couldn't create a new Mailchimp audience (Mailchimp requires a mailing address). "
+                "Create an audience in Mailchimp, then come back and pick it from the list.",
+            )
+            return redirect(config_url)
+
+        if not audience_id:
+            messages.error(request, "Please choose an audience.")
+            return redirect(config_url)
+
+        club.mailchimp_audience_id = audience_id
+        club.mailchimp_audience_name = audience_name
+        club.save(update_fields=["mailchimp_audience_id", "mailchimp_audience_name"])
+
+        mc.ensure_merge_fields(club)
+        mc.ensure_segments(club)
+        mc.ensure_webhook(club)
+        count = mc.backfill(club)
+
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Connected Mailchimp audience '{audience_name}'",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, f"Syncing {count} member(s) into the '{audience_name}' Mailchimp audience.")
+        return redirect(config_url)
+
+
+class MailchimpSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
+    """Re-queue a sync for every in-scope member."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import mailchimp as mc
+
+        club = self.club
+        config_url = reverse("club_mailchimp_config", kwargs={"slug": club.slug})
+        if not club.mailchimp_connected:
+            messages.error(request, "Mailchimp is not connected.")
+            return redirect(config_url)
+        count = mc.backfill(club)
+        messages.success(request, f"Queued {count} member(s) for syncing to Mailchimp.")
+        return redirect(config_url)
+
+
+class MailchimpDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Forget the Mailchimp connection. Leaves the audience itself untouched in Mailchimp."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        club = self.club
+        club.mailchimp_access_token = None
+        club.mailchimp_server_prefix = ""
+        club.mailchimp_audience_id = ""
+        club.mailchimp_audience_name = ""
+        club.mailchimp_connected_on = None
+        club.mailchimp_connected_by = None
+        club.mailchimp_webhook_secret = ""
+        club.mailchimp_last_error = ""
+        club.save(
+            update_fields=[
+                "mailchimp_access_token",
+                "mailchimp_server_prefix",
+                "mailchimp_audience_id",
+                "mailchimp_audience_name",
+                "mailchimp_connected_on",
+                "mailchimp_connected_by",
+                "mailchimp_webhook_secret",
+                "mailchimp_last_error",
+            ]
+        )
+        ClubHistory.objects.create(club=club, user=request.user, action="Disconnected Mailchimp", applies_to="SETTINGS")
+        messages.success(request, "Mailchimp disconnected.")
+        return redirect(reverse("club_mailchimp_config", kwargs={"slug": club.slug}))
+
+
+class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """Full-page Mailchimp settings/status panel for a club."""
+
+    active_tab = "mailchimp"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug):
+        from auctions import mailchimp as mc
+        from auctions.models import ClubMember
+
+        club = self.club
+        audiences = []
+        # Connected (token) but no audience chosen yet -> offer the chooser.
+        if club.mailchimp_access_token and not club.mailchimp_audience_id:
+            client = mc.get_client(club)
+            if client:
+                try:
+                    audiences = mc.list_audiences(client)
+                except Exception:
+                    logger.exception("Could not list Mailchimp audiences for club %s", club.pk)
+                    messages.error(request, "Could not load your Mailchimp audiences. Try reconnecting.")
+
+        synced = ClubMember.objects.filter(club=club, is_deleted=False)
+        context = {
+            "club": club,
+            "view": self,
+            "mailchimp_configured": bool(settings.MAILCHIMP_CLIENT_ID),
+            "audiences": audiences,
+            "in_scope_count": mc.in_scope_members(club).count(),
+            "subscribed_count": synced.filter(mailchimp_status="subscribed").count(),
+            "unsubscribed_count": synced.filter(mailchimp_status__in=["unsubscribed", "cleaned"]).count(),
+            "tags": ClubMember.MAILCHIMP_TAGS,
+        }
+        return render(request, "auctions/club_mailchimp_settings.html", context)
+
+
+class MailchimpWebhookView(View):
+    """Receive Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
+
+    One-way sync means we only honor unsubscribe-style events here: we record the member's
+    Mailchimp status so we never re-subscribe them, but we never touch their site email prefs.
+    The shared secret lives in the URL path (Mailchimp does not sign webhooks).
+    """
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def _get_club(self, slug, secret):
+        club = Club.objects.filter(slug=slug).first()
+        if not club or not club.mailchimp_webhook_secret or club.mailchimp_webhook_secret != secret:
+            return None
+        return club
+
+    def get(self, request, slug, secret):
+        # Mailchimp GETs the URL once to verify it when the webhook is created.
+        if not self._get_club(slug, secret):
+            return HttpResponseForbidden("invalid")
+        return HttpResponse("ok")
+
+    def post(self, request, slug, secret):
+        from auctions.models import ClubMember
+
+        club = self._get_club(slug, secret)
+        if not club:
+            return HttpResponseForbidden("invalid")
+
+        event_type = request.POST.get("type")
+        email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
+        members = ClubMember.objects.filter(club=club, is_deleted=False)
+        if email:
+            members = members.filter(email__iexact=email)
+
+        if event_type == "unsubscribe":
+            members.update(mailchimp_status="unsubscribed")
+        elif event_type == "cleaned":
+            members.update(mailchimp_status="cleaned")
+        elif event_type == "upemail":
+            new_email = request.POST.get("data[new_email]")
+            if email and new_email:
+                # Reflect the new address locally; explicitly NOT a site-wide account change.
+                members.update(email=new_email)
+        # 'profile' events need no action under one-way sync.
+        return HttpResponse("ok")
+
+
+class ClubMemberSelfServiceView(View):
+    """Public, UUID-keyed self-service email-preference links embedded in Mailchimp merge fields.
+
+    These only change the member's *club* contact status; they never touch the user's site
+    account or other clubs. ``action`` is set per-URL.
+    """
+
+    action = None  # "unsubscribe" | "resubscribe" | "nocomm"
+
+    def get(self, request, slug, uuid):
+        from auctions.models import ClubMember
+        from auctions.tasks import sync_club_member_to_mailchimp
+
+        member = get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+        if self.action == "unsubscribe":
+            member.contact_status = "non_essential"
+            member.save(update_fields=["contact_status"])
+            heading, body = "Unsubscribed", f"You will no longer receive marketing emails from {member.club.name}."
+        elif self.action == "resubscribe":
+            member.contact_status = "contact"
+            # Clear the remembered Mailchimp opt-out so the next sync actually re-subscribes them.
+            member.mailchimp_status = ""
+            member.save(update_fields=["contact_status", "mailchimp_status"])
+            heading, body = "Resubscribed", f"You will once again receive emails from {member.club.name}."
+        else:  # nocomm
+            member.contact_status = "do_not_contact"
+            member.save(update_fields=["contact_status"])
+            heading, body = "Done", f"{member.club.name} will no longer contact you."
+
+        transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member.pk))
+        return render(
+            request,
+            "auctions/mailchimp_self_service.html",
+            {"club": member.club, "heading": heading, "body": body, "member": member},
+        )
+
+
 class CreateSquarePaymentLinkView(SquareAPIMixin, View):
     """Create a Square payment link for an invoice"""
 
@@ -16656,6 +16987,14 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
             "Contact Status",
             "Discord ID",
             "Memo",
+            "Membership Expires",
+            "Renewal Link",
+            "Barcode Link",
+            "Distance",
+            "Total Sold",
+            "Total Bought",
+            "Mailchimp Status",
+            "Tags",
         ]
         if include_membership_number:
             header.append("Membership Number")
@@ -16664,6 +17003,15 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         filterset = ClubMemberFilter(request.GET, queryset=base_qs)
         qs = filterset.qs
         for member in qs:
+            if member.less_than_10_miles:
+                distance = "nearby"
+            elif member.less_than_30_miles:
+                distance = "medium"
+            elif member.more_than_30_miles:
+                distance = "long"
+            else:
+                distance = ""
+            active_tags = ", ".join(name for name, active in member.compute_mailchimp_tags().items() if active)
             row = [
                 member.name,
                 member.email or "",
@@ -16677,6 +17025,14 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                 member.contact_status,
                 member.discord_id or "",
                 member.memo,
+                member.membership_expiration_date or "",
+                member.wallet_link,
+                member.barcode_image_link_png,
+                distance,
+                member.cached_total_sold if member.cached_total_sold is not None else "",
+                member.cached_total_bought if member.cached_total_bought is not None else "",
+                member.get_mailchimp_status_display(),
+                active_tags,
             ]
             if include_membership_number:
                 row.append(member.membership_number)

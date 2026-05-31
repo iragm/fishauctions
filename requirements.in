@@ -82,4 +82,5 @@ celery
 django-celery-beat
 redis
 squareup
+mailchimp-marketing
 djangorestframework

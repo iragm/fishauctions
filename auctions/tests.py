@@ -8,7 +8,7 @@ import io
 import json
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django import forms
 from django.contrib.auth.models import User
@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
+from . import mailchimp as mc
 from .email_routing import resolve_routed_recipient
 from .filters import LotAdminFilter
 from .forms import AuctionEditForm, ChangeUsernameForm, ClubEmailSettingsForm, ClubMembershipSettingsForm, CreateLotForm
@@ -19774,3 +19775,248 @@ class ManageUsersThroughClubTests(TestCase):
         )
         cm2.generate_bidder_number()
         self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)
+
+
+class MailchimpHelperTests(TestCase):
+    """Pure-logic tests for tag computation, merge fields, status mapping and hashing."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Test Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Jane Q Public", email="jane@example.com")
+
+    def test_subscriber_hash_lowercases_and_trims(self):
+        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())
+
+    def test_name_split(self):
+        self.assertEqual(self.member.first_name, "Jane")
+        self.assertEqual(self.member.last_name, "Q Public")
+        solo = ClubMember.objects.create(club=self.club, name="Cher", email="cher@example.com")
+        self.assertEqual(solo.first_name, "Cher")
+        self.assertEqual(solo.last_name, "")
+
+    def test_desired_status_mapping(self):
+        self.member.contact_status = "contact"
+        self.assertEqual(mc._desired_status(self.member), "subscribed")
+        self.member.contact_status = "non_essential"
+        self.assertEqual(mc._desired_status(self.member), "unsubscribed")
+        self.member.contact_status = "do_not_contact"
+        self.assertEqual(mc._desired_status(self.member), "archived")
+        self.member.contact_status = "contact"
+        self.member.email_address_status = "BAD"
+        self.assertEqual(mc._desired_status(self.member), "archived")
+
+    def test_lifecycle_tags(self):
+        today = timezone.now().date()
+        self.member.membership_expiration_date = today + datetime.timedelta(days=10)
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["expiring-soon"])
+        self.assertFalse(tags["expired"])
+        self.assertTrue(tags["new-member"])
+        self.assertFalse(tags["long-term-member"])
+
+        self.member.membership_expiration_date = today - datetime.timedelta(days=1)
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["expired"])
+        self.assertFalse(tags["expiring-soon"])
+
+    def test_value_and_connection_tags(self):
+        self.member.cached_total_sold = Decimal(1500)
+        self.member.cached_total_bought = Decimal(50)
+        self.member.discord_id = "discord-123"
+        self.member.permission_add_edit = True
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["power-seller"])
+        self.assertFalse(tags["power-buyer"])
+        self.assertTrue(tags["discord-connected"])
+        self.assertTrue(tags["admin"])
+
+    def test_compute_tags_covers_full_vocabulary(self):
+        tags = self.member.compute_mailchimp_tags()
+        self.assertEqual(set(tags.keys()), set(ClubMember.MAILCHIMP_TAGS))
+
+    def test_merge_fields_include_links_and_split_name(self):
+        self.member.membership_expiration_date = datetime.date(2030, 1, 2)
+        fields = mc.member_merge_fields(self.member)
+        self.assertEqual(fields["FNAME"], "Jane")
+        self.assertEqual(fields["LNAME"], "Q Public")
+        self.assertEqual(fields["EXPIRES"], "2030-01-02")
+        self.assertIn("/member/", fields["RENEW"])
+        self.assertTrue(fields["UNSUB"].endswith("/unsubscribe/"))
+        self.assertTrue(fields["RESUB"].endswith("/resubscribe/"))
+        self.assertTrue(fields["NOCOMM"].endswith("/no-contact/"))
+
+
+class MailchimpSyncTests(TestCase):
+    """sync_member / change_member_email against a mocked Mailchimp client."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Sync Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self._connect_club()
+
+    def _connect_club(self):
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.mailchimp_webhook_secret = "secret123"
+        self.club.save()
+
+    def test_no_op_when_not_connected(self):
+        self.club.mailchimp_audience_id = ""
+        self.club.save()
+        with patch("auctions.mailchimp.get_client") as gc:
+            self.assertFalse(mc.sync_member(self.member))
+            gc.assert_not_called()
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_member_upserts_and_tags(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 42, "status": "subscribed"}
+        mock_get_client.return_value = client
+
+        self.assertTrue(mc.sync_member(self.member))
+
+        client.lists.set_list_member.assert_called_once()
+        list_id, sub_hash, body = client.lists.set_list_member.call_args.args
+        self.assertEqual(list_id, "list123")
+        self.assertEqual(sub_hash, mc.subscriber_hash("joe@example.com"))
+        self.assertEqual(body["status"], "subscribed")
+        self.assertEqual(body["merge_fields"]["FNAME"], "Joe")
+        client.lists.update_list_member_tags.assert_called_once()
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "subscribed")
+        self.assertEqual(self.member.mailchimp_web_id, "42")
+        self.assertIsNotNone(self.member.mailchimp_last_synced)
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_respects_remote_unsubscribe(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "unsubscribed"}
+        mock_get_client.return_value = client
+
+        self.member.mailchimp_status = "unsubscribed"
+        self.member.save()
+        mc.sync_member(self.member)
+
+        body = client.lists.set_list_member.call_args.args[2]
+        # We must not force them back to subscribed.
+        self.assertNotIn("status", body)
+        self.assertEqual(body["status_if_new"], "subscribed")
+
+    @patch("auctions.mailchimp.get_client")
+    def test_do_not_contact_archives(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        self.member.contact_status = "do_not_contact"
+        self.member.save()
+
+        mc.sync_member(self.member)
+        client.lists.delete_list_member.assert_called_once()
+        client.lists.set_list_member.assert_not_called()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "archived")
+
+    @patch("auctions.mailchimp.get_client")
+    def test_change_member_email(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        mc.change_member_email(self.member, "old@example.com")
+        client.lists.update_list_member.assert_called_once_with(
+            "list123",
+            mc.subscriber_hash("old@example.com"),
+            {"email_address": "joe@example.com"},
+        )
+
+    def test_in_scope_members_excludes_deleted_and_emailless(self):
+        ClubMember.objects.create(club=self.club, name="No Email", email="")
+        deleted = ClubMember.objects.create(club=self.club, name="Gone", email="gone@example.com")
+        deleted.is_deleted = True
+        deleted.save()
+        emails = set(mc.in_scope_members(self.club).values_list("email", flat=True))
+        self.assertIn("joe@example.com", emails)
+        self.assertNotIn("", emails)
+        self.assertNotIn("gone@example.com", emails)
+
+
+class MailchimpWebhookTests(TestCase):
+    """Inbound webhook only records Mailchimp status; never touches the site account."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Hook Club")
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.mailchimp_webhook_secret = "secret123"
+        self.club.save()
+        self.user = User.objects.create_user(username="hookuser", password="pw", email="hook@example.com")
+        UserData.objects.get_or_create(user=self.user)
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.user, name="Hook Member", email="hook@example.com", mailchimp_status="subscribed"
+        )
+
+    def _url(self, secret="secret123"):
+        return reverse("mailchimp_webhook", kwargs={"slug": self.club.slug, "secret": secret})
+
+    def test_get_verification_ok(self):
+        self.assertEqual(self.client_http.get(self._url()).status_code, 200)
+
+    def test_bad_secret_forbidden(self):
+        self.assertEqual(self.client_http.get(self._url(secret="wrong")).status_code, 403)
+        resp = self.client_http.post(
+            self._url(secret="wrong"), {"type": "unsubscribe", "data[email]": "hook@example.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_unsubscribe_sets_status_without_touching_account(self):
+        resp = self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "hook@example.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "unsubscribed")
+        # The site-wide account preference must be untouched.
+        self.assertFalse(self.user.userdata.has_unsubscribed)
+
+    def test_cleaned_marks_member(self):
+        self.client_http.post(self._url(), {"type": "cleaned", "data[email]": "hook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "cleaned")
+
+    def test_upemail_updates_local_email(self):
+        self.client_http.post(
+            self._url(),
+            {"type": "upemail", "data[email]": "hook@example.com", "data[new_email]": "new@example.com"},
+        )
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, "new@example.com")
+
+
+class MailchimpSelfServiceTests(TestCase):
+    """The UUID merge-field links change only the club contact status."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Self Serve Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Sam", email="sam@example.com")
+
+    def test_unsubscribe_link(self):
+        url = reverse("club_member_unsubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "non_essential")
+
+    def test_resubscribe_clears_status(self):
+        self.member.contact_status = "non_essential"
+        self.member.mailchimp_status = "unsubscribed"
+        self.member.save()
+        url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "contact")
+        self.assertEqual(self.member.mailchimp_status, "")
+
+    def test_nocomm_link(self):
+        url = reverse("club_member_nocomm", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "do_not_contact")

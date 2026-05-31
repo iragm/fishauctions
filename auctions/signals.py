@@ -228,6 +228,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "membership_number",
                 "membership_expiration_date",
                 "address",
+                "email",
             )
             .first()
             or {}
@@ -239,6 +240,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_membership_number = prev.get("membership_number")
         instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
         instance._previous_address = prev.get("address") or ""
+        instance._previous_email = prev.get("email") or ""
     else:
         instance._previous_bidder_number = None
         instance._previous_bidding_allowed = None
@@ -247,6 +249,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_membership_number = None
         instance._previous_membership_expiration_date = None
         instance._previous_address = ""
+        instance._previous_email = ""
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -368,6 +371,102 @@ def geocode_club_member_on_address_change(sender, instance, created, **kwargs):
     address_changed = created or (current_address != prev_address)
     if address_changed:
         transaction.on_commit(lambda: geocode_club_member.delay(instance.pk))
+
+
+def _club_member_mailchimp_connected(member_id):
+    """Cheap check (plaintext columns only) that a member's club has Mailchimp connected."""
+    from .models import ClubMember
+
+    return (
+        ClubMember.objects.filter(pk=member_id)
+        .exclude(club__mailchimp_audience_id="")
+        .exclude(club__mailchimp_server_prefix="")
+        .exists()
+    )
+
+
+@receiver(post_save, sender="auctions.ClubMember")
+def sync_clubmember_to_mailchimp(sender, instance, created, **kwargs):
+    """Keep the member's Mailchimp contact in sync after any change.
+
+    Email changes go through a dedicated task so the existing contact is moved instead of
+    duplicated. No-op when the club has no Mailchimp connection.
+    """
+    club = instance.club
+    if not club or not club.mailchimp_connected:
+        return
+    from .tasks import sync_club_member_email_change, sync_club_member_to_mailchimp
+
+    pk = instance.pk
+    prev_email = getattr(instance, "_previous_email", "") or ""
+    current_email = instance.email or ""
+    if not created and prev_email and prev_email != current_email:
+        transaction.on_commit(lambda old=prev_email: sync_club_member_email_change.delay(pk, old))
+    else:
+        transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(pk))
+
+
+@receiver(post_save, sender="auctions.AuctionTOS")
+def sync_clubmember_to_mailchimp_on_auctiontos(sender, instance, **kwargs):
+    """Auction join / check-in changes the linked member's tags (e.g. auction-checkin)."""
+    member_id = instance.clubmember_id
+    if not member_id or not _club_member_mailchimp_connected(member_id):
+        return
+    from .tasks import sync_club_member_to_mailchimp
+
+    transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member_id))
+
+
+@receiver(pre_save, sender="auctions.Invoice")
+def stash_previous_invoice_status(sender, instance, **kwargs):
+    if instance.pk:
+        from .models import Invoice
+
+        instance._previous_status = Invoice.objects.filter(pk=instance.pk).values_list("status", flat=True).first()
+    else:
+        instance._previous_status = None
+
+
+@receiver(post_save, sender="auctions.Invoice")
+def sync_clubmember_to_mailchimp_on_invoice_paid(sender, instance, created, **kwargs):
+    """When an invoice becomes PAID, refresh the linked member (totals -> power-buyer/seller)."""
+    if instance.status != "PAID" or getattr(instance, "_previous_status", None) == "PAID":
+        return
+    tos = instance.auctiontos_user
+    member_id = getattr(tos, "clubmember_id", None) if tos else None
+    if not member_id or not _club_member_mailchimp_connected(member_id):
+        return
+    from .tasks import sync_club_member_to_mailchimp
+
+    transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member_id))
+
+
+@receiver(pre_save, sender=User)
+def stash_previous_user_email(sender, instance, **kwargs):
+    if instance.pk:
+        instance._previous_email = User.objects.filter(pk=instance.pk).values_list("email", flat=True).first() or ""
+    else:
+        instance._previous_email = ""
+
+
+@receiver(post_save, sender=User)
+def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
+    """Move a user's club memberships to their new account email.
+
+    Saving each member triggers the per-member Mailchimp email-change sync above. We never
+    touch other clubs' records or memberships whose email differs from the old account email.
+    """
+    if created:
+        return
+    old_email = getattr(instance, "_previous_email", "") or ""
+    new_email = instance.email or ""
+    if not old_email or old_email == new_email:
+        return
+    from .models import ClubMember
+
+    for member in ClubMember.objects.filter(user=instance, email__iexact=old_email, is_deleted=False):
+        member.email = new_email
+        member.save(update_fields=["email"])
 
 
 @receiver(pre_save, sender="auctions.Lot")

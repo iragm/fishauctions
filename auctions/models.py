@@ -793,11 +793,47 @@ class Club(models.Model):
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
+    # Mailchimp integration (one-way sync: this site -> the club's own Mailchimp account).
+    # Connected per-club via OAuth; see auctions/mailchimp.py and the Mailchimp*View classes.
+    mailchimp_access_token = EncryptedCharField(
+        max_length=500, blank=True, null=True, help_text="OAuth access token (does not expire)."
+    )
+    mailchimp_server_prefix = models.CharField(
+        max_length=10, blank=True, help_text="Mailchimp data-center prefix (e.g. us19) from the OAuth metadata."
+    )
+    mailchimp_audience_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="The Mailchimp audience (list) id members are synced into. Safe across renames in Mailchimp.",
+    )
+    mailchimp_audience_name = models.CharField(
+        max_length=255, blank=True, help_text="Display name of the connected audience at connection time."
+    )
+    mailchimp_connected_on = models.DateTimeField(null=True, blank=True)
+    mailchimp_connected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The club admin who connected Mailchimp.",
+    )
+    mailchimp_webhook_secret = models.CharField(
+        max_length=64, blank=True, help_text="Secret embedded in the Mailchimp webhook URL to verify callbacks."
+    )
+    mailchimp_last_sync = models.DateTimeField(null=True, blank=True)
+    mailchimp_last_error = models.TextField(blank=True)
+
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return str(self.name)
+
+    @property
+    def mailchimp_connected(self):
+        """True when this club has an active Mailchimp connection with an audience selected."""
+        return bool(self.mailchimp_access_token and self.mailchimp_audience_id and self.mailchimp_server_prefix)
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
@@ -1124,6 +1160,30 @@ class ClubMember(ContactRecord):
     lat = models.FloatField(null=True, blank=True, help_text="Latitude geocoded from member's address")
     lng = models.FloatField(null=True, blank=True, help_text="Longitude geocoded from member's address")
     last_club_activity = models.DateTimeField(null=True, blank=True, help_text="Last recorded activity in this club")
+    # Cached site-wide totals (UserData.total_sold / total_spent loop over every lot, so we
+    # denormalize them here for the power-seller/buyer Mailchimp tags and member-list filtering).
+    cached_total_sold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    cached_total_bought = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    MAILCHIMP_STATUS_CHOICES = (
+        ("", "Not synced"),
+        ("subscribed", "Subscribed"),
+        ("unsubscribed", "Unsubscribed"),
+        ("cleaned", "Cleaned (bounced)"),
+        ("pending", "Pending"),
+        ("archived", "Archived"),
+    )
+    mailchimp_status = models.CharField(
+        max_length=20,
+        choices=MAILCHIMP_STATUS_CHOICES,
+        default="",
+        blank=True,
+        db_index=True,
+        help_text="Last known Mailchimp subscription status; set by sync and by the unsubscribe webhook.",
+    )
+    mailchimp_web_id = models.CharField(
+        max_length=50, blank=True, help_text="Mailchimp internal web_id, used to build the 'View in Mailchimp' link."
+    )
+    mailchimp_last_synced = models.DateTimeField(null=True, blank=True)
 
     @property
     def has_any_permission(self):
@@ -1432,6 +1492,130 @@ class ClubMember(ContactRecord):
     def more_than_30_miles(self):
         d = self._distance_to_club_miles()
         return d is not None and d >= 30
+
+    # --- Mailchimp merge-field / tag helpers -------------------------------------------------
+    # Full tag vocabulary kept in one place so the sync (which removes inactive tags) and the
+    # connect-time segment creation share a single source of truth.
+    MAILCHIMP_TAGS = (
+        "expiring-soon",
+        "expired",
+        "long-term-member",
+        "new-member",
+        "admin",
+        "nearby",
+        "medium-distance",
+        "long-distance",
+        "power-seller",
+        "power-buyer",
+        "auction-checkin",
+        "discord-connected",
+        "probably-inactive",
+    )
+    POWER_USER_THRESHOLD = 1000
+
+    @property
+    def first_name(self):
+        """First token of the member's name (for the Mailchimp FNAME merge field)."""
+        return (self.name or "").strip().split(" ", 1)[0] if (self.name or "").strip() else ""
+
+    @property
+    def last_name(self):
+        """Everything after the first token of the member's name (Mailchimp LNAME)."""
+        parts = (self.name or "").strip().split(" ", 1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    @property
+    def is_expired(self):
+        if not self.membership_expiration_date:
+            return False
+        return self.membership_expiration_date < timezone.now().date()
+
+    @property
+    def is_expiring_soon(self):
+        """Membership expires within the next 30 days (and is not already expired)."""
+        if not self.membership_expiration_date:
+            return False
+        today = timezone.now().date()
+        return today <= self.membership_expiration_date <= today + datetime.timedelta(days=30)
+
+    @property
+    def is_long_term_member(self):
+        if not self.createdon:
+            return False
+        return self.createdon <= timezone.now() - datetime.timedelta(days=365 * 5)
+
+    @property
+    def is_new_member(self):
+        if not self.createdon:
+            return False
+        return self.createdon >= timezone.now() - datetime.timedelta(days=182)
+
+    @property
+    def is_probably_inactive(self):
+        """No recorded club activity in the last 6 months (ignores brand-new members)."""
+        cutoff = timezone.now() - datetime.timedelta(days=182)
+        if self.last_club_activity:
+            return self.last_club_activity < cutoff
+        # No activity ever recorded: only "inactive" once they've been around past the window.
+        return bool(self.createdon and self.createdon < cutoff)
+
+    @property
+    def has_auction_checkin(self):
+        return self.auction_tos_records.filter(checked_in__isnull=False).exists()
+
+    @property
+    def is_discord_connected(self):
+        return bool(self.discord_id)
+
+    @property
+    def is_power_seller(self):
+        return bool(self.cached_total_sold and self.cached_total_sold > self.POWER_USER_THRESHOLD)
+
+    @property
+    def is_power_buyer(self):
+        return bool(self.cached_total_bought and self.cached_total_bought > self.POWER_USER_THRESHOLD)
+
+    def refresh_cached_totals(self, save=True):
+        """Recompute the (DB-expensive) site-wide sold/bought totals from the linked user.
+
+        Returns True if either cached value changed. ``save=True`` persists just those two
+        columns. Members with no linked user keep their existing/None values.
+        """
+        if not self.user_id:
+            return False
+        userdata = getattr(self.user, "userdata", None)
+        if userdata is None:
+            return False
+        new_sold = Decimal(str(userdata.total_sold or 0))
+        new_bought = Decimal(str(userdata.total_spent or 0))
+        changed = new_sold != (self.cached_total_sold or 0) or new_bought != (self.cached_total_bought or 0)
+        self.cached_total_sold = new_sold
+        self.cached_total_bought = new_bought
+        if changed and save:
+            ClubMember.objects.filter(pk=self.pk).update(cached_total_sold=new_sold, cached_total_bought=new_bought)
+        return changed
+
+    def compute_mailchimp_tags(self):
+        """Return an ordered {tag_name: is_active} map across the full tag vocabulary.
+
+        The sync adds active tags and removes inactive ones, so every known tag must be
+        present in the result regardless of state.
+        """
+        return {
+            "expiring-soon": self.is_expiring_soon,
+            "expired": self.is_expired,
+            "long-term-member": self.is_long_term_member,
+            "new-member": self.is_new_member,
+            "admin": self.has_any_permission,
+            "nearby": self.less_than_10_miles,
+            "medium-distance": self.less_than_30_miles and not self.less_than_10_miles,
+            "long-distance": self.more_than_30_miles,
+            "power-seller": self.is_power_seller,
+            "power-buyer": self.is_power_buyer,
+            "auction-checkin": self.has_auction_checkin,
+            "discord-connected": self.is_discord_connected,
+            "probably-inactive": self.is_probably_inactive,
+        }
 
     def update_last_club_activity(self):
         ClubMember.objects.filter(pk=self.pk).update(last_club_activity=timezone.now())

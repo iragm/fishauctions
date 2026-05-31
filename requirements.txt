@@ -68,6 +68,7 @@ certifi==2026.5.20
     #   -r requirements.in
     #   httpcore
     #   httpx
+    #   mailchimp-marketing
     #   requests
 cffi==2.0.0
     # via
@@ -260,6 +261,8 @@ kombu==5.6.2
     # via celery
 linkify-it-py==2.1.0
     # via django-markdownfield
+mailchimp-marketing==3.0.80
+    # via -r requirements.in
 markdown==3.10.2
     # via -r requirements.in
 markdown-it-py==4.2.0
@@ -366,6 +369,7 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   celery
+    #   mailchimp-marketing
 python-dotenv==1.2.2
     # via
     #   pydantic-settings
@@ -390,6 +394,7 @@ requests==2.34.2
     # via
     #   -r requirements.in
     #   django-ses
+    #   mailchimp-marketing
     #   pywebpush
     #   requests-oauthlib
 requests-oauthlib==2.0.0
@@ -409,6 +414,7 @@ shortuuid==1.0.13
 six==1.17.0
     # via
     #   -r requirements.in
+    #   mailchimp-marketing
     #   python-dateutil
 soupsieve==2.8.4
     # via beautifulsoup4
@@ -469,6 +475,7 @@ urllib3==2.7.0
     # via
     #   -r requirements.in
     #   botocore
+    #   mailchimp-marketing
     #   requests
 user-agents==2.2.0
     # via -r requirements.in

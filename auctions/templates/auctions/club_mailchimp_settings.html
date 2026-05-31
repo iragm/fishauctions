@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Mailchimp &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+{% if not mailchimp_configured %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Mailchimp is not configured on this site. Contact your site administrator.
+  </div>
+{% elif not club.mailchimp_access_token %}
+  {# Not connected yet #}
+  <div class="card mb-4">
+    <div class="card-header">Connect Mailchimp</div>
+    <div class="card-body">
+      <p class="text-muted">
+        Connect your club's Mailchimp account to automatically keep an audience in sync with your
+        members. Member details, renewal links, barcodes, and lifecycle tags are pushed one way
+        (this site &rarr; Mailchimp) so you can build automations and targeted campaigns.
+      </p>
+      <a href="{% url 'mailchimp_connect' club.slug %}" class="btn btn-primary">
+        <i class="bi bi-envelope-paper"></i> Connect Mailchimp
+      </a>
+    </div>
+  </div>
+
+{% elif not club.mailchimp_audience_id %}
+  {# Connected, but no audience chosen #}
+  <div class="card mb-4">
+    <div class="card-header">Choose an audience</div>
+    <div class="card-body">
+      <p class="text-muted">
+        Pick the Mailchimp audience your {{ in_scope_count }} member(s) should sync into, or create a
+        new one named &ldquo;{{ club.name }} Members&rdquo;.
+      </p>
+      <form method="post" action="{% url 'mailchimp_select_audience' club.slug %}">
+        {% csrf_token %}
+        <div class="list-group mb-3">
+          {% for audience in audiences %}
+          <label class="list-group-item d-flex align-items-center">
+            <input class="form-check-input me-2" type="radio" name="audience_id" value="{{ audience.id }}"
+                   {% if forloop.first %}checked{% endif %}>
+            <span>{{ audience.name }} <span class="text-muted small">&mdash; {{ audience.member_count }} contact(s)</span></span>
+          </label>
+          {% endfor %}
+          <label class="list-group-item d-flex align-items-center">
+            <input class="form-check-input me-2" type="radio" name="audience_id" value="__new__"
+                   {% if not audiences %}checked{% endif %}>
+            <span>Create a new audience: &ldquo;{{ club.name }} Members&rdquo;</span>
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary">Use this audience</button>
+      </form>
+      <form method="post" action="{% url 'mailchimp_disconnect' club.slug %}" class="mt-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-link text-danger px-0">Cancel / disconnect</button>
+      </form>
+    </div>
+  </div>
+
+{% else %}
+  {# Fully connected #}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Mailchimp connection</span>
+      <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Connected</span>
+    </div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-4">Audience</dt>
+        <dd class="col-sm-8">{{ club.mailchimp_audience_name|default:club.mailchimp_audience_id }}</dd>
+        <dt class="col-sm-4">Members in scope</dt>
+        <dd class="col-sm-8">{{ in_scope_count }}</dd>
+        <dt class="col-sm-4">Subscribed</dt>
+        <dd class="col-sm-8">{{ subscribed_count }}</dd>
+        <dt class="col-sm-4">Unsubscribed / cleaned</dt>
+        <dd class="col-sm-8">{{ unsubscribed_count }}</dd>
+        <dt class="col-sm-4">Last sync</dt>
+        <dd class="col-sm-8">{{ club.mailchimp_last_sync|default:"—" }}</dd>
+      </dl>
+      {% if club.mailchimp_last_error %}
+        <div class="alert alert-danger mt-3 mb-0 small">
+          <i class="bi bi-exclamation-triangle"></i> Last error: {{ club.mailchimp_last_error }}
+        </div>
+      {% endif %}
+    </div>
+    <div class="card-footer">
+      <form method="post" action="{% url 'mailchimp_sync_now' club.slug %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm">
+          <i class="bi bi-arrow-clockwise"></i> Sync all now
+        </button>
+      </form>
+      <form method="post" action="{% url 'mailchimp_disconnect' club.slug %}" class="d-inline"
+            onsubmit="return confirm('Disconnect Mailchimp? Your audience stays in Mailchimp, but syncing will stop.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger btn-sm">
+          <i class="bi bi-x-circle"></i> Disconnect
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Tags &amp; segments</div>
+    <div class="card-body">
+      <p class="text-muted small">
+        Each member is tagged automatically. We pre-create a matching segment for every tag, so
+        these are ready to target in your Mailchimp campaigns:
+      </p>
+      <div>
+        {% for tag in tags %}
+          <span class="badge bg-info text-dark me-1 mb-1">{{ tag }}</span>
+        {% endfor %}
+      </div>
+      <p class="text-muted small mt-3 mb-0">
+        Merge fields available in campaigns: <code>*|FNAME|*</code>, <code>*|LNAME|*</code>,
+        <code>*|MEMBERNO|*</code>, <code>*|EXPIRES|*</code>, <code>*|RENEW|*</code>,
+        <code>*|BARCODE|*</code>, <code>*|UNSUB|*</code>, <code>*|RESUB|*</code>, <code>*|NOCOMM|*</code>.
+      </p>
+    </div>
+  </div>
+{% endif %}
+
+{% endblock %}
