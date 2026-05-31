@@ -87,7 +87,6 @@
       <p class="text-muted small mt-3 mb-0">
         <i class="bi bi-info-circle"></i>
         Members are synced automatically whenever their record is saved, and again each night.
-        If you change a member&rsquo;s email address, their existing Mailchimp contact is updated to match.
       </p>
       {% if club.mailchimp_last_error %}
         <div class="alert alert-danger mt-3 mb-0 small">
@@ -99,8 +98,8 @@
           <i class="bi bi-lightbulb"></i>
           You have outgoing emails enabled. Now that Mailchimp is connected you may want to turn those off
           and send membership emails (welcome, renewal, expiry reminders) through Mailchimp instead &mdash;
-          for example, using a <strong>Customer Journey</strong> triggered by the <code>new-member</code>
-          or <code>expiring-soon</code> tags.
+          for example, using a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>
+          or <span class="text-warning">expiring-soon</span> tags.
           <a href="{% url 'club_email_settings' club.slug %}">Manage email settings</a>
         </div>
       {% endif %}
@@ -127,25 +126,117 @@
     <div class="card-body">
       <p class="text-muted small mb-2">
         Each member is tagged automatically based on their membership status, activity, and location.
-        Tags are added and removed on every sync, so they stay current:
       </p>
-      <div class="mb-3">
-        {% for tag in tags %}
-          <span class="badge bg-info text-dark me-1 mb-1">{{ tag }}</span>
-        {% endfor %}
-        <span class="badge bg-secondary me-1 mb-1">+ category tags&hellip;</span>
-      </div>
-      <p class="text-muted small mb-0">
-        Distance tags (<code>nearby</code>, <code>medium-distance</code>, <code>long-distance</code>)
-        are mutually exclusive &mdash; a member will only ever have one.
-      </p>
+      <table class="table table-sm mb-3">
+        <tbody>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">expiring-soon</span></td>
+            <td class="text-muted small">Membership expires within 30 days</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">expired</span></td>
+            <td class="text-muted small">Membership has expired</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">new-member</span></td>
+            <td class="text-muted small">Joined within the last 6 months</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">long-term-member</span></td>
+            <td class="text-muted small">Member for 5 or more years</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">admin</span></td>
+            <td class="text-muted small">Has club admin access</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">nearby</span></td>
+            <td class="text-muted small">Within 10 miles of the club</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">medium-distance</span></td>
+            <td class="text-muted small">10–30 miles from the club</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">long-distance</span></td>
+            <td class="text-muted small">More than 30 miles away</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">power-seller</span></td>
+            <td class="text-muted small">Sold over $1,000 in lots</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">power-buyer</span></td>
+            <td class="text-muted small">Bought over $1,000 in lots</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">auction-checkin</span></td>
+            <td class="text-muted small">Has checked in to at least one auction</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">discord-connected</span></td>
+            <td class="text-muted small">Discord account linked</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">probably-inactive</span></td>
+            <td class="text-muted small">No club activity in the last 6 months</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-secondary">+ category tags</span></td>
+            <td class="text-muted small">Up to 5 categories that the member is most interested in, based on their buying and selling history</td>
+          </tr>
+        </tbody>
+      </table>
       <hr class="my-3">
-      <p class="text-muted small mb-0">
-        Merge fields available in campaigns: <code>*|FNAME|*</code>, <code>*|LNAME|*</code>,
-        <code>*|MEMBERNO|*</code>, <code>*|EXPIRES|*</code>, <code>*|RENEW|*</code>,
-        <code>*|BARCODE|*</code>, <code>*|PHONE|*</code>, <code>*|ADDRESS|*</code>,
-        <code>*|CLUBUNSUB|*</code>, <code>*|RESUB|*</code>, <code>*|NOCOMM|*</code>.
-      </p>
+      <p class="text-muted small mb-2">Merge fields available in campaigns:</p>
+      <table class="table table-sm mb-0">
+        <tbody>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|FNAME|*</span></td>
+            <td class="text-muted small">First name</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|LNAME|*</span></td>
+            <td class="text-muted small">Last name</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|MEMBERNO|*</span></td>
+            <td class="text-muted small">Membership number</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|EXPIRES|*</span></td>
+            <td class="text-muted small">Membership expiration date</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|RENEW|*</span></td>
+            <td class="text-muted small">Link to renew or manage membership</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|BARCODE|*</span></td>
+            <td class="text-muted small">Membership barcode image</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|PHONE|*</span></td>
+            <td class="text-muted small">Phone number</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|ADDRESS|*</span></td>
+            <td class="text-muted small">Mailing address</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|CLUBUNSUB|*</span></td>
+            <td class="text-muted small">Link to unsubscribe from club emails</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|RESUB|*</span></td>
+            <td class="text-muted small">Link to resubscribe</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|NOCOMM|*</span></td>
+            <td class="text-muted small">Link to stop all contact</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 {% endif %}

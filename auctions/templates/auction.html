@@ -163,7 +163,7 @@ function initMap() {
                         </div>
                         {% if auction_contact_email and request.user.is_authenticated %}
                         <div class="col-12 col-md-auto">
-                            <a href="mailto:{{ auction_contact_email }}" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
+                            <a href="mailto:{{ auction_contact_email }}" class="btn btn-secondary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
                         </div>
                         {% endif %}
                         {% if request.user.is_authenticated and user_has_lots %}

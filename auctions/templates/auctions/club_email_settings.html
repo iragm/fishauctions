@@ -14,9 +14,9 @@
 <div class="mb-3">
   <strong>Your club's forwarding addresses:</strong>
   <ul class="mb-0">
-    <li><code>info@{{ email_domain }}</code> &mdash; general site info, forwarded to the site admin</li>
-    <li><code>{{ club.slug }}-auctions@{{ email_domain }}</code> &mdash; auction-related replies</li>
-    <li><code>{{ club.slug }}-contact@{{ email_domain }}</code> &mdash; membership contact replies</li>
+    <li><span class="text-warning">info@{{ email_domain }}</span> &mdash; general site info, forwarded to the site admin</li>
+    <li><span class="text-warning">{{ club.slug }}-auctions@{{ email_domain }}</span> &mdash; auction-related replies</li>
+    <li><span class="text-warning">{{ club.slug }}-contact@{{ email_domain }}</span> &mdash; membership contact replies</li>
   </ul>
 </div>
 
@@ -31,8 +31,8 @@
   <i class="bi bi-envelope-paper me-1"></i>
   <strong>Mailchimp is connected.</strong>
   Consider turning off the outgoing emails below and sending them through Mailchimp instead &mdash;
-  for example, a <strong>Customer Journey</strong> triggered by the <code>new-member</code>,
-  <code>expiring-soon</code>, or <code>expired</code> tags gives you more control over timing and design.
+  for example, a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>,
+  <span class="text-warning">expiring-soon</span>, or <span class="text-warning">expired</span> tags gives you more control over timing and design.
   <a href="{% url 'club_mailchimp_config' club.slug %}">Mailchimp settings</a>
 </div>
 {% endif %}
