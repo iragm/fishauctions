@@ -7645,6 +7645,12 @@ class Invoice(models.Model):
                 description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {auction}"
                 _add_entry(amount, category, description)
 
+            _add_entry(
+                _quantize(self.membership_fee_amount) * multiplier,
+                ClubMoney.CATEGORY_MEMBERSHIP,
+                f"Membership fee for {_invoice_label()} in {auction}",
+            )
+
         outstanding_amount = -_quantize(self.net_after_payments)
         old_status = previous_status
         new_status = self.status
