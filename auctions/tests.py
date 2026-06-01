@@ -5620,6 +5620,143 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
+class ClubMoneyRenewalConsistencyTests(StandardTestCase):
+    """Guard the ClubMoney bookkeeping around membership renewals and invoices.
+
+    These cover paths that previously lacked assertions on the ClubMoney that gets
+    created, where the brittle behavior lives:
+    - a membership renewal must book exactly ONE membership ClubMoney entry, never two
+      (auction invoices book it via Invoice.create_club_payment_history; club-only
+      invoices book it via _process_invoice_membership_renewal -- never both).
+    - flipping an auction invoice PAID -> UNPAID -> PAID must not drift the club balance.
+    - the self-service renewal invoice lookup must be idempotent (no invoice proliferation).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Money Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            enable_club_page=True,
+        )
+        self.payment_user = User.objects.create_user(
+            username="money_payment_user", password="testpass", email="money_payment_user@example.com"
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_money")
+        self.online_auction.club = self.club
+        self.online_auction.manage_users_through_club = True
+        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+        self.online_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            user=self.online_tos.user,
+            name="Renew Me",
+            email=self.online_tos.email,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+        )
+        self.invoice.refresh_from_db()
+
+    def _membership_entries(self):
+        return ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_MEMBERSHIP)
+
+    def _balance(self):
+        from django.db.models import Sum
+
+        return ClubMoney.objects.filter(club=self.club).aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+
+    def _membership_total(self):
+        from django.db.models import Sum
+
+        return self._membership_entries().aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+
+    def test_auction_invoice_paid_books_single_membership_clubmoney(self):
+        """Marking an auction renewal invoice PAID books exactly one membership ClubMoney.
+
+        Regression test: a stray commit re-added the membership entry to
+        _add_paid_entries without restoring the guard in
+        _process_invoice_membership_renewal, so the fee was counted twice.
+        """
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+
+        entries = self._membership_entries()
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+    def test_auction_invoice_paid_unpaid_paid_is_balance_neutral(self):
+        """Toggling an auction renewal invoice PAID -> UNPAID -> PAID must not drift the balance."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        balance_after_first_paid = self._balance()
+
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/UNPAID")
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        balance_after_second_paid = self._balance()
+
+        self.assertEqual(balance_after_first_paid, balance_after_second_paid)
+        # The membership grant is permanent, so the net membership revenue is one fee.
+        self.assertEqual(self._membership_total(), Decimal("25.00"))
+
+    def test_club_only_membership_invoice_books_single_membership_clubmoney(self):
+        """A club-only (no auction) membership invoice books exactly one membership ClubMoney."""
+        admin_member = ClubMember.objects.create(
+            club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True
+        )
+        invoice = Invoice.objects.create(
+            club=self.club,
+            club_member=admin_member,
+            buyer=self.admin_user,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(f"/api/payinvoice/{invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+
+        entries = self._membership_entries().filter(invoice=invoice)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+    def test_get_or_create_membership_invoice_idempotent_for_email_only_member(self):
+        """Repeated lookups for an email-only member reuse one invoice (no proliferation)."""
+        from auctions.views import _get_or_create_membership_invoice
+
+        email_member = ClubMember.objects.create(
+            club=self.club,
+            user=None,
+            name="Email Only",
+            email="email_only_member@example.com",
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=400),
+        )
+        first = _get_or_create_membership_invoice(self.club, email_member)
+        second = _get_or_create_membership_invoice(self.club, email_member)
+        third = _get_or_create_membership_invoice(self.club, email_member)
+
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(first.pk, third.pk)
+        self.assertEqual(Invoice.objects.filter(club=self.club, auction=None, club_member=email_member).count(), 1)
+
+    def test_manual_renew_books_membership_clubmoney(self):
+        """The manual 'renew' admin action books a membership ClubMoney for paid clubs."""
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True)
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.member.pk}))
+        self.assertEqual(response.status_code, 200)
+        entries = self._membership_entries()
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+
 class ClubMembershipEmailTaskTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
@@ -15606,6 +15743,29 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.target_member.refresh_from_db()
         self.assertEqual(str(self.target_member.membership_expiration_date), "2026-01-15")
+
+    def test_renew_page_records_old_and_new_date_in_history(self):
+        """ClubMemberRenewPageView history entry shows both old and new expiration dates."""
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.target_member.membership_expiration_date = datetime.date(2025, 6, 1)
+        self.target_member.save(update_fields=["membership_expiration_date"])
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        self.client.post(url, {"membership_expiration_date": "2026-06-01"})
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").order_by("-pk").first()
+        self.assertIsNotNone(history)
+        self.assertIn("6/1/2025", history.action)
+        self.assertIn("6/1/2026", history.action)
+
+    def test_renew_page_does_not_create_clubmoney(self):
+        """ClubMemberRenewPageView is a record correction — it must not book a ClubMoney entry."""
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        self.client.post(url, {"membership_expiration_date": "2026-06-01"})
+        self.assertFalse(ClubMoney.objects.filter(club=self.club).exists())
 
     def test_renew_page_post_non_member_gets_403(self):
         """Non-member cannot POST to the renew page"""

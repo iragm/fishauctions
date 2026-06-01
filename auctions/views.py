@@ -656,7 +656,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            if club.membership_annual_fee:
+            if club.membership_annual_fee and not locked.auction:
+                # Club-only invoices: create the membership ClubMoney here.
+                # Auction invoices: create_club_payment_history (via Invoice.save) already books the
+                # membership fee through _add_paid_entries, including the proper reversal when the
+                # invoice is un-paid. Booking it here too would double-count membership revenue.
                 ClubMoney.objects.create(
                     club=club,
                     created_by=acting_user,
@@ -2135,14 +2139,17 @@ class InvoicePaid(APIView):
             except Exception:
                 logger.exception("last_club_activity update failed for invoice %s buyer", invoice.pk)
         user = request.user if request.user.is_authenticated else None
-        try:
-            auction.create_history(
-                applies_to="INVOICES",
-                action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
-                user=user,
-            )
-        except Exception:
-            logger.exception("create_history failed for invoice %s", invoice.pk)
+        # Club-only renewal invoices have no auction (and no auctiontos_user); skip the
+        # auction history entry rather than raising/logging an AttributeError every time.
+        if auction and invoice.auctiontos_user:
+            try:
+                auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
+                    user=user,
+                )
+            except Exception:
+                logger.exception("create_history failed for invoice %s", invoice.pk)
         is_admin = "pk" in kwargs  # UUID-based access is member-facing, not admin
         buttons_html = render_to_string("invoice_buttons.html", {"invoice": invoice})
         renewal_ctx = {"invoice": invoice, "is_admin": is_admin}
@@ -14104,8 +14111,18 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 
 def _get_or_create_membership_invoice(club, member):
     """Find or create an unpaid renewal invoice for this member's club."""
-    invoice = None
-    if member.email:
+    # Match on club_member first: that is what we set when creating the invoice below, so this
+    # is the only lookup guaranteed to find a previously created renewal invoice. Without it,
+    # members with an email but no linked user account never match the lookups below and a new
+    # UNPAID invoice is created on every page view.
+    invoice = Invoice.objects.filter(
+        club=club,
+        auction=None,
+        club_member=member,
+        renewal_processed=False,
+        status="UNPAID",
+    ).first()
+    if invoice is None and member.email:
         invoice = Invoice.objects.filter(
             club=club,
             auction=None,
@@ -15620,6 +15637,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             if next_url:
                 error_redirect += "?" + urlencode({"next": next_url})
             return redirect(error_redirect)
+        old_expiration = member.membership_expiration_date
         member.membership_expiration_date = new_expiration
         member._preserve_membership_email_schedule = True
         member.save(
@@ -15629,21 +15647,14 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 "membership_expiration_reminder_due",
             ]
         )
+        old_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
+        new_str = new_expiration.strftime("%-m/%-d/%Y")
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Set membership expiration for {member} to {new_expiration}",
+            action=f"Set membership expiration for {member}: {old_str} → {new_str}",
             applies_to="MEMBERSHIP",
         )
-        if self.club.membership_annual_fee:
-            ClubMoney.objects.create(
-                club=self.club,
-                created_by=request.user,
-                date=timezone.localdate(),
-                amount=self.club.membership_annual_fee,
-                description=f"Manual membership renewal for {member}",
-                category=ClubMoney.CATEGORY_MEMBERSHIP,
-            )
         messages.success(request, f"Expiration date updated for {member}.")
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
             return redirect(next_url)
