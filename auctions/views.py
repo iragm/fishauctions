@@ -656,10 +656,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            if club.membership_annual_fee and not locked.auction:
-                # Club-only invoices: create ClubMoney here.
-                # Auction invoices: create_club_payment_history (via Invoice.save) handles it,
-                # including proper reversal when the invoice is un-paid.
+            if club.membership_annual_fee:
                 ClubMoney.objects.create(
                     club=club,
                     created_by=acting_user,
@@ -2103,7 +2100,7 @@ class InvoicePaid(APIView):
             else:
                 raise PermissionDenied()
         new_status = kwargs["status"]
-        if new_status == "PAID" and not invoice.renewal_needed:
+        if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
         # Core: persist the new invoice status. Everything else is "extra"
         # and must not be allowed to block the status change.
@@ -9168,7 +9165,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
             # Core: change the status and save. Extras follow, each guarded.
-            if self.new_invoice_status == "PAID" and not invoice.renewal_needed:
+            if self.new_invoice_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
                 try:
                     _ensure_invoice_renewal_state(invoice)
                 except Exception:

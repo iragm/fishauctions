@@ -7634,11 +7634,7 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_AUCTION_PROFIT,
                 f"Auction profit for {_invoice_label()} in {auction}",
             )
-            _add_entry(
-                _quantize(self.membership_fee_amount) * multiplier,
-                ClubMoney.CATEGORY_MEMBERSHIP,
-                f"Membership renewal for {_invoice_label()} in {auction}",
-            )
+
             for adjustment in self.adjustments.exclude(amount=0):
                 if adjustment.adjustment_type == "DISCOUNT":
                     amount = -_quantize(adjustment.amount) * multiplier
