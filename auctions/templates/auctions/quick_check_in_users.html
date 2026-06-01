@@ -33,7 +33,40 @@
     let zxingReader = null;
     let isScanning = false;
     let pendingBidderNumber = "";
+    let pendingAdjustment = null;
     let lastProcessedValue = "";
+
+    function beep(type = "scan") {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playTone(freq, duration, startOffset = 0) {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          const t = audioCtx.currentTime + startOffset;
+          gain.gain.setValueAtTime(0.15, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+          osc.start(t);
+          osc.stop(t + duration);
+        }
+        if (type === "scan") {
+          playTone(1000, 0.12);
+          setTimeout(() => audioCtx.close(), 400);
+        } else if (type === "checkin") {
+          playTone(1200, 0.08, 0);
+          playTone(1200, 0.08, 0.15);
+          setTimeout(() => audioCtx.close(), 600);
+        } else if (type === "error") {
+          playTone(380, 0.45);
+          setTimeout(() => audioCtx.close(), 800);
+        }
+      } catch (e) {
+        // audio not available; ignore
+      }
+    }
 
     function setStatus(message, level = "secondary") {
       statusBox.className = `alert alert-${level} mt-3 mb-2`;
@@ -63,11 +96,27 @@
       return value.slice(5);
     }
 
+    function parseAdjustmentBarcode(value) {
+      // 010{amount}{label} = charge extra, 000{amount}{label} = discount
+      const m = value.match(/^(010|000)([\d.]+)([^0-9.].*)$/);
+      if (!m) return null;
+      return {
+        adjustmentType: m[1] === "010" ? "ADD" : "DISCOUNT",
+        amount: m[2],
+        label: m[3].trim(),
+      };
+    }
+
     async function postScan(barcode) {
       const formData = new FormData();
       formData.append("barcode", barcode);
       if (pendingBidderNumber) {
         formData.append("assign_bidder_number", pendingBidderNumber);
+      }
+      if (pendingAdjustment) {
+        formData.append("adjustment_type", pendingAdjustment.adjustmentType);
+        formData.append("adjustment_amount", pendingAdjustment.amount);
+        formData.append("adjustment_label", pendingAdjustment.label);
       }
       const response = await fetch(scanUrl, {
         method: "POST",
@@ -76,15 +125,19 @@
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
+        beep("error");
         setStatus(payload.message || "Scan failed.", "danger");
         addMessage(payload.message || "Scan failed.", "danger");
         return;
       }
+      beep("checkin");
       const suffix = pendingBidderNumber ? ` and assigned bidder number ${pendingBidderNumber}` : "";
+      const adjSuffix = payload.adjustment_desc ? ` | ${payload.adjustment_desc} applied` : "";
       const verb = payload.verb || "Checked in";
-      addMessage(`${verb} ${payload.name}${suffix}`);
+      addMessage(`${verb} ${payload.name}${suffix}${adjSuffix}`);
       setStatus(`${verb} ${payload.name}.`, "success");
       pendingBidderNumber = "";
+      pendingAdjustment = null;
     }
 
     async function handleCode(rawValue) {
@@ -94,9 +147,20 @@
       }
       const paddleBidderNumber = parsePaddleBarcode(value);
       if (paddleBidderNumber) {
+        beep("scan");
         pendingBidderNumber = paddleBidderNumber;
         setStatus(`Scan the user to assign bidder number ${pendingBidderNumber} to.`, "warning");
         addMessage(`Ready to assign bidder number ${pendingBidderNumber}.`, "warning");
+        return;
+      }
+      const adjustment = parseAdjustmentBarcode(value);
+      if (adjustment) {
+        beep("scan");
+        pendingAdjustment = adjustment;
+        const sign = adjustment.adjustmentType === "ADD" ? "+" : "-";
+        const desc = `${sign}$${adjustment.amount} ${adjustment.label}`;
+        setStatus(`Scan the member card to apply ${desc} to their invoice.`, "warning");
+        addMessage(`Ready to apply ${desc} to next scan.`, "warning");
         return;
       }
       await postScan(value);

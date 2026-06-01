@@ -1261,6 +1261,8 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
             return ClubMember.objects.none()
         qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("name")
+        if self.forwarded.get("require_membership_number"):
+            qs = qs.filter(membership_number__isnull=False)
         if self.q:
             qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
         return qs
@@ -3843,6 +3845,9 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
     def post(self, request, *args, **kwargs):
         barcode = (request.POST.get("barcode") or "").strip()
         assign_bidder_number = (request.POST.get("assign_bidder_number") or "").strip()
+        adjustment_type = (request.POST.get("adjustment_type") or "").strip()
+        adjustment_amount = (request.POST.get("adjustment_amount") or "").strip()
+        adjustment_label = (request.POST.get("adjustment_label") or "").strip()
         if not barcode:
             return JsonResponse({"ok": False, "message": "Scan a membership card barcode."}, status=400)
         if not barcode.isdigit():
@@ -3854,6 +3859,7 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
         ).first()
         if not member:
             return JsonResponse({"ok": False, "message": "No club member matches that barcode."}, status=404)
+        adjustment_desc = ""
         with transaction.atomic():
             tos = _upsert_clubmember_shadow_tos(
                 self.auction,
@@ -3871,15 +3877,36 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 # Propagate the assigned number back to the ClubMember so it sticks for next time.
                 # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
                 ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
+            if adjustment_type in ("ADD", "DISCOUNT") and adjustment_amount:
+                try:
+                    amount_val = round(float(adjustment_amount))
+                    if amount_val > 0:
+                        invoice = Invoice.objects.filter(auctiontos_user=tos).first()
+                        if invoice and invoice.status != "DRAFT":
+                            return JsonResponse(
+                                {"ok": False, "message": f"Invoice for {tos.name} is not open and cannot be adjusted."},
+                                status=400,
+                            )
+                        if not invoice:
+                            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+                        InvoiceAdjustment.objects.create(
+                            invoice=invoice,
+                            user=request.user,
+                            adjustment_type=adjustment_type,
+                            amount=amount_val,
+                            notes=adjustment_label[:150],
+                        )
+                        sign = "+" if adjustment_type == "ADD" else "-"
+                        adjustment_desc = f"{sign}${amount_val} {adjustment_label}".strip()
+                except (ValueError, TypeError):
+                    pass
         verb = "Checked in" if self.auction.use_check_in_mode else "Added"
-        self.auction.create_history(
-            applies_to="USERS",
-            action=(
-                f"{verb} {tos.name} via barcode"
-                + (f" and assigned bidder number {assign_bidder_number}" if assign_bidder_number else "")
-            ),
-            user=request.user,
-        )
+        history_action = f"{verb} {tos.name} via barcode"
+        if assign_bidder_number:
+            history_action += f" and assigned bidder number {assign_bidder_number}"
+        if adjustment_desc:
+            history_action += f" with invoice adjustment {adjustment_desc}"
+        self.auction.create_history(applies_to="USERS", action=history_action, user=request.user)
         return JsonResponse(
             {
                 "ok": True,
@@ -3887,6 +3914,7 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 "name": tos.name,
                 "bidder_number": tos.bidder_number,
                 "verb": verb,
+                "adjustment_desc": adjustment_desc,
             }
         )
 
@@ -15235,6 +15263,211 @@ class ClubBarcodePNGView(View):
         # Barcodes are stable for a given value — let the CDN / browser cache them.
         response["Cache-Control"] = "public, max-age=86400"
         return response
+
+
+class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Print barcode stickers: bidder paddles, invoice adjustments, and member cards."""
+
+    template_name = "auctions/club_barcode_labels.html"
+    active_tab = "barcode_labels"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.can_access_admin:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    @staticmethod
+    def _make_barcode_svg(value: str) -> str:
+        import base64 as _b64
+        import io as _io
+
+        try:
+            import barcode as _barcode
+            from barcode.writer import ImageWriter as _IW
+        except ImportError:
+            return ""
+        try:
+            buf = _io.BytesIO()
+            cls = _barcode.get_barcode_class("code128")
+            cls(str(value), writer=_IW()).write(
+                buf, options={"write_text": False, "module_height": 10.0, "quiet_zone": 2, "dpi": 300}
+            )
+            buf.seek(0)
+            data = _b64.b64encode(buf.getvalue()).decode("ascii")
+            return f'<img src="data:image/png;base64,{data}" style="width:100%;height:auto;display:block;">'
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _label_dim_context(prefs):
+        if prefs.preset == "sm":
+            d = {
+                "page_width": 8.5,
+                "page_height": 11,
+                "label_width": 2.55,
+                "label_height": 0.99,
+                "label_margin_right": 0.19,
+                "label_margin_bottom": 0.01,
+                "page_margin_top": 0.57,
+                "page_margin_bottom": 0.1,
+                "page_margin_left": 0.23,
+                "page_margin_right": 0,
+                "font_size": 10,
+                "unit": "in",
+            }
+        elif prefs.preset == "lg":
+            d = {
+                "page_width": 8.5,
+                "page_height": 11,
+                "label_width": 3.85,
+                "label_height": 1.2,
+                "label_margin_right": 0.25,
+                "label_margin_bottom": 0.13,
+                "page_margin_top": 0.88,
+                "page_margin_bottom": 0.6,
+                "page_margin_left": 0.3,
+                "page_margin_right": 0,
+                "font_size": 13,
+                "unit": "in",
+            }
+        elif prefs.preset == "thermal_sm":
+            d = {
+                "page_width": 3,
+                "page_height": 2,
+                "label_width": 2.78,
+                "label_height": 1.9,
+                "label_margin_right": 0,
+                "label_margin_bottom": 0,
+                "page_margin_top": 0.04,
+                "page_margin_bottom": 0.04,
+                "page_margin_left": 0.16,
+                "page_margin_right": 0.04,
+                "font_size": 13,
+                "unit": "in",
+            }
+        elif prefs.preset == "thermal_very_sm":
+            d = {
+                "page_width": 3.5,
+                "page_height": 1.125,
+                "label_width": 3.3,
+                "label_height": 1.025,
+                "label_margin_right": 0,
+                "label_margin_bottom": 0,
+                "page_margin_top": 0.04,
+                "page_margin_bottom": 0.04,
+                "page_margin_left": 0.16,
+                "page_margin_right": 0.04,
+                "font_size": 12,
+                "unit": "in",
+            }
+        else:
+            d = {
+                f.name: getattr(prefs, f.name)
+                for f in UserLabelPrefs._meta.get_fields()
+                if f.name not in ("id", "user", "preset", "empty_labels", "print_border") and hasattr(prefs, f.name)
+            }
+        unit_factor = 2.54 if d.get("unit") == "cm" else 1
+        for k in (
+            "label_width",
+            "label_height",
+            "label_margin_right",
+            "label_margin_bottom",
+            "page_margin_top",
+            "page_margin_bottom",
+            "page_margin_left",
+            "page_margin_right",
+            "page_width",
+            "page_height",
+        ):
+            if k in d:
+                d[k] = d[k] * unit_factor
+        return d
+
+    def _build_labels(self, params, members_qs):
+        label_types = params.getlist("label_type")
+        bidder_numbers = params.getlist("bidder_number")
+        amounts = params.getlist("amount")
+        label_texts = params.getlist("label_text")
+        member_ids = params.getlist("member_id")
+
+        labels = []
+        for i, label_type in enumerate(label_types):
+            if label_type == "bidder_paddle":
+                n = (bidder_numbers[i] if i < len(bidder_numbers) else "").strip()
+                if n:
+                    svg = ClubBarcodeLabelsView._make_barcode_svg(f"11111{n}")
+                    labels.append({"svg": svg, "text": f"Bidder #{n}"})
+
+            elif label_type in ("charge", "discount"):
+                amount_raw = (amounts[i] if i < len(amounts) else "").strip()
+                label_text = (label_texts[i] if i < len(label_texts) else "").strip()
+                try:
+                    amount = int(float(amount_raw))
+                except (ValueError, TypeError):
+                    amount = 0
+                if amount > 0 and label_text:
+                    prefix = "010" if label_type == "charge" else "000"
+                    svg = ClubBarcodeLabelsView._make_barcode_svg(f"{prefix}{amount}{label_text}")
+                    sign = "" if label_type == "charge" else "-"
+                    labels.append({"svg": svg, "text": f"{sign}${amount} {label_text}"})
+
+            elif label_type == "member_card":
+                member_id = (member_ids[i] if i < len(member_ids) else "").strip()
+                if member_id:
+                    try:
+                        member = members_qs.get(pk=int(member_id))
+                        if member.membership_number:
+                            svg = ClubBarcodeLabelsView._make_barcode_svg(str(member.membership_number))
+                            text = (member.name or member.email or str(member.membership_number)).strip()
+                            labels.append({"svg": svg, "text": text})
+                    except (ValueError, TypeError, ClubMember.DoesNotExist):
+                        pass
+
+        return labels
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.request.user)
+        context["preset_name"] = dict(UserLabelPrefs.PRESETS).get(prefs.preset, prefs.preset)
+        return context
+
+
+class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, WeasyTemplateResponseMixin):
+    """WeasyPrint PDF of barcode labels — exact same physical dimensions as lot labels."""
+
+    template_name = "auctions/club_barcode_labels_print.html"
+    pdf_attachment = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.can_access_admin:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_pdf_filename(self):
+        return f"{self.club.slug}-barcodes.pdf"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.request.user)
+        dims = ClubBarcodeLabelsView._label_dim_context(prefs)
+        context.update(dims)
+        context["print_border"] = prefs.print_border
+
+        members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
+        labels = ClubBarcodeLabelsView._build_labels(self, self.request.GET, members)
+        if not labels:
+            raise Http404
+        context["labels"] = labels
+
+        available_width = dims["page_width"] - dims["page_margin_left"] - dims["page_margin_right"]
+        available_height = dims["page_height"] - dims["page_margin_top"] - dims["page_margin_bottom"]
+        labels_per_row = int(available_width // (dims["label_width"] + dims["label_margin_right"])) or 1
+        labels_per_column = int(available_height // (dims["label_height"] + dims["label_margin_bottom"])) or 1
+        context["labels_per_page"] = labels_per_row * labels_per_column
+        return context
 
 
 class ClubMemberDeleteView(APIView):

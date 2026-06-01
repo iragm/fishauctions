@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+        }
+        @page {
+            size: {{ page_width }}in {{ page_height }}in;
+            padding: 0;
+            margin: {{ page_margin_top }}in {{ page_margin_right }}in {{ page_margin_bottom }}in {{ page_margin_left }}in;
+        }
+        .label-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: left;
+        }
+        .label {
+            width: {{ label_width }}in;
+            height: {{ label_height }}in;
+            margin: 0in {{ label_margin_right }}in {{ label_margin_bottom }}in 0in;
+            display: block;
+            {% if print_border %}outline: 1px solid black;{% endif %}
+            box-sizing: border-box;
+            overflow: hidden;
+            padding: 3px 4px 2px 4px;
+            page-break-inside: avoid;
+        }
+        .barcode-area {
+            width: 100%;
+            height: 75%;
+            overflow: hidden;
+        }
+        .barcode-area img {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .caption {
+            font-size: {{ font_size }}pt;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            width: 100%;
+            line-height: 1.2;
+        }
+    </style>
+    <title>Barcodes</title>
+</head>
+<body>
+    <div class="label-wrapper">
+    {% for label in labels %}
+        <div class="label">
+            <div class="barcode-area">{{ label.svg|safe }}</div>
+            <div class="caption">{{ label.text }}</div>
+        </div>
+        {% if forloop.counter|divisibleby:labels_per_page %}
+            </div>
+            <span style="page-break-after: always;"></span>
+            <div class="label-wrapper">
+        {% endif %}
+    {% endfor %}
+    </div>
+</body>
+</html>

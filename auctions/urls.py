@@ -752,6 +752,16 @@ urlpatterns = [
         name="club_member_apple_wallet_by_uuid",
     ),
     path(
+        "clubs/<slug:slug>/print-barcodes/",
+        views.ClubBarcodeLabelsView.as_view(),
+        name="club_barcode_labels",
+    ),
+    path(
+        "clubs/<slug:slug>/print-barcodes/pdf/",
+        views.ClubBarcodeLabelsViewPDF.as_view(),
+        name="club_barcode_labels_pdf",
+    ),
+    path(
         "clubs/<slug:slug>/barcode/<int:value>/",
         views.ClubBarcodeView.as_view(),
         name="club_barcode",

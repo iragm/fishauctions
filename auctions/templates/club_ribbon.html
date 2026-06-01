@@ -35,7 +35,7 @@
   {% endif %}
   {% if view.can_edit_settings or view.can_manage_bap or view.can_access_admin or view.can_manage_money %}
   <li class="nav-item dropdown">
-    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'mailchimp' or view.active_tab == 'api_keys' or view.active_tab == 'history' or view.active_tab == 'stats' or view.active_tab == 'treasurer_report' %}active{% endif %}"
+    <a class="nav-link dropdown-toggle {% if view.active_tab == 'edit' or view.active_tab == 'membership' or view.active_tab == 'email_settings' or view.active_tab == 'bap_settings' or view.active_tab == 'discord' or view.active_tab == 'mailchimp' or view.active_tab == 'api_keys' or view.active_tab == 'history' or view.active_tab == 'stats' or view.active_tab == 'treasurer_report' or view.active_tab == 'barcode_labels' %}active{% endif %}"
        href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-three-dots"></i><span class="d-none d-md-inline"> More</span>
     </a>
@@ -60,6 +60,7 @@
       {% endif %}
       <li><a class="dropdown-item {% if view.active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map"></i> Map</a></li>
       {% if view.can_access_admin %}
+      <li><a class="dropdown-item {% if view.active_tab == 'barcode_labels' %}active{% endif %}" href="{% url 'club_barcode_labels' club.slug %}"><i class="bi bi-upc-scan"></i> Print Barcodes</a></li>
       <li><hr class="dropdown-divider"></li>
       <li><a class="dropdown-item {% if view.active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up"></i> Stats</a></li>
       <li><a class="dropdown-item {% if view.active_tab == 'history' %}active{% endif %}" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>

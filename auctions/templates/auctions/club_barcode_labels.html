@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Print Barcodes — {{ club.name }}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2.min.css' %}">
+{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<h4 class="mt-3">Print Barcodes</h4>
+<p class="text-muted small mb-2">
+  Barcodes scanned in check-in mode: <strong>Bidder paddle</strong> sets the bidder number for the next scanned member.
+  <strong>Item for sale</strong> or <strong>Discount</strong> applies an invoice adjustment to the next scanned member.
+  <strong>User</strong> prints a member ID card.
+</p>
+
+<div class="alert alert-info py-2 small mb-3">
+  <i class="bi bi-info-circle"></i> Changes on this page will not be saved, so make sure the labels have all printed correctly before you leave.
+</div>
+
+<form method="get" action="{% url 'club_barcode_labels_pdf' club.slug %}" id="barcode-form" target="_blank">
+  <div id="rows-container"></div>
+  <div class="d-flex gap-2 mt-2">
+    <button type="button" id="add-row" class="btn btn-info btn-sm">+ Add row</button>
+    <button type="submit" class="btn btn-success btn-sm">
+      <i class="bi bi-file-pdf"></i> Download PDF
+    </button>
+  </div>
+</form>
+
+<p class="text-muted small mt-3" id="label-settings-link">
+  Label size: <strong>{{ preset_name }}</strong>.
+  <a href="{% url 'printing' %}?next={{ request.path }}">Change label settings</a>
+</p>
+
+<template id="row-template">
+  <div class="barcode-row d-flex flex-wrap gap-2 align-items-end mb-2">
+    <div>
+      <label class="form-label small mb-1">Label type</label>
+      <select name="label_type" class="form-select form-select-sm label-type-select" style="width:160px">
+        <option value="">— select —</option>
+        <option value="bidder_paddle">Bidder paddle</option>
+        <option value="charge">Item for sale</option>
+        <option value="discount">Discount</option>
+        <option value="member_card">User</option>
+      </select>
+    </div>
+    <div class="field-bidder-number d-none">
+      <label class="form-label small mb-1">Bidder number</label>
+      <input type="text" name="bidder_number" class="form-control form-control-sm" style="width:110px" placeholder="456">
+    </div>
+    <div class="field-amount d-none">
+      <label class="form-label small mb-1">Amount ($)</label>
+      <input type="number" name="amount" class="form-control form-control-sm" min="1" step="1" style="width:100px" placeholder="12">
+    </div>
+    <div class="field-label-text d-none">
+      <label class="form-label small mb-1">Label text</label>
+      <input type="text" name="label_text" class="form-control form-control-sm" maxlength="30" placeholder="e.g. Shirt">
+    </div>
+    <div class="field-member d-none">
+      <label class="form-label small mb-1">Member</label>
+      <select name="member_id" class="member-select" style="width:220px">
+        <option value=""></option>
+      </select>
+    </div>
+    <div class="align-self-end">
+      <button type="button" class="btn btn-outline-danger btn-sm remove-row">×</button>
+    </div>
+  </div>
+</template>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/vendor/select2.min.js' %}"></script>
+<script>
+const AUTOCOMPLETE_URL = "{% url 'club-member-autocomplete' %}";
+const CLUB_SLUG = "{{ club.slug }}";
+
+function initSelect2(row) {
+  $(row).find('.member-select').select2({
+    ajax: {
+      url: AUTOCOMPLETE_URL,
+      dataType: 'json',
+      delay: 200,
+      data: function(params) {
+        return {
+          q: params.term || '',
+          forward: JSON.stringify({club_slug: CLUB_SLUG, require_membership_number: true})
+        };
+      },
+      processResults: function(data) { return {results: data.results}; }
+    },
+    placeholder: '— search member —',
+    allowClear: true,
+    width: '220px'
+  });
+}
+
+function updateFields(row) {
+  const lt = $(row).find('.label-type-select').val();
+  $(row).find('.field-bidder-number').toggleClass('d-none', lt !== 'bidder_paddle');
+  $(row).find('.field-amount').toggleClass('d-none', lt !== 'charge' && lt !== 'discount');
+  $(row).find('.field-label-text').toggleClass('d-none', lt !== 'charge' && lt !== 'discount');
+  $(row).find('.field-member').toggleClass('d-none', lt !== 'member_card');
+}
+
+function bindRow(row) {
+  initSelect2(row);
+  $(row).find('.label-type-select').on('change', function() { updateFields(row); });
+  $(row).find('.remove-row').on('click', function() {
+    if (document.querySelectorAll('.barcode-row').length > 1) {
+      $(row).find('.member-select').select2('destroy');
+      row.remove();
+    }
+  });
+}
+
+function addRow() {
+  const tmpl = document.getElementById('row-template');
+  const clone = tmpl.content.cloneNode(true);
+  const row = clone.querySelector('.barcode-row');
+  document.getElementById('rows-container').appendChild(row);
+  bindRow(row);
+}
+
+addRow();
+document.getElementById('add-row').addEventListener('click', addRow);
+
+const labelSettingsLink = document.getElementById('label-settings-link');
+document.getElementById('rows-container').addEventListener('change', function() {
+  labelSettingsLink.classList.add('d-none');
+});
+document.getElementById('rows-container').addEventListener('input', function() {
+  labelSettingsLink.classList.add('d-none');
+});
+</script>
+{% endblock %}
