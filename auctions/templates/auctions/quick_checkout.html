@@ -35,6 +35,15 @@ $(document).ready(function() {
       clearTimeout(tosSearch);
       tosSearch = setTimeout(getTos, 300);
     });
+
+    // Re-fetch the checkout section (regenerating QR codes with the updated total)
+    // whenever the membership renewal checkbox is toggled.
+    document.body.addEventListener('renewalToggled', function() {
+      const value = ($tos.val() || '').trim();
+      if (value) {
+        htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent(value), { target: '#result' });
+      }
+    });
   })();
   var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
   const auctionWebSocket = new WebSocket(

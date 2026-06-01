@@ -2225,9 +2225,12 @@ class InvoiceRenewalNeededToggleView(APIView):
         # while the auctiontos/clubmember admin modal is open.
         modal_name = invoice.invoice_summary
         oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
-        return HttpResponse(
+        response = HttpResponse(
             body + oob_fee + oob_tax + oob_total + oob_summary_checkout + oob_summary_invoice + oob_modal_title
         )
+        # Signal the quick-checkout page to regenerate QR codes now that the total has changed.
+        response["HX-Trigger"] = "renewalToggled"
+        return response
 
 
 class UpdateLotPushNotificationsView(APIPostView):
@@ -13908,7 +13911,10 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
             if invoice:
                 # Generate PayPal QR code if available
                 if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
-                    context["paypal_qr_code_link"] = self.create_order(invoice)
+                    try:
+                        context["paypal_qr_code_link"] = self.create_order(invoice)
+                    except Exception:
+                        logger.warning("PayPal order creation failed for invoice %s", invoice.pk, exc_info=True)
                 # Generate Square QR code if available
                 if invoice.show_square_button and not invoice.reason_for_payment_not_available:
                     payment_url, error_message = self.create_payment_link(invoice)

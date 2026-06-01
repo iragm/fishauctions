@@ -6997,6 +6997,11 @@ class Invoice(models.Model):
             return self.show_paypal_button or self.show_square_button
         if not self.auction:
             return False
+        # Club-managed auctions: delegate to individual checks so club-level payment
+        # configuration (e.g. uses_site_paypal) is honoured without requiring the
+        # per-auction enable_online_payments flag.
+        if self.auction.club:
+            return self.show_paypal_button or self.show_square_button
 
         # Check if auction allows any payment method
         has_payment_method = False
@@ -7043,6 +7048,10 @@ class Invoice(models.Model):
             return True
         if not self.auction:
             return False
+        # For club-managed auctions using the site's PayPal account, the club-level
+        # configuration supersedes the per-auction enable_online_payments flag.
+        if self.auction.club and self.auction.club.uses_site_paypal:
+            return True
         if not self.auction.enable_online_payments:
             return False
         if not self.auction.created_by.userdata.is_trusted:
