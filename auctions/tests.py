@@ -18509,6 +18509,29 @@ class ClubMembershipInvoiceTests(TestCase):
             fetch_redirect_response=False,
         )
 
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y", SQUARE_APPLICATION_ID="sq", SQUARE_CLIENT_SECRET="sc")
+    def test_paypal_order_view_blocked_when_only_square_configured(self):
+        """show_payment_button=True (Square) but show_paypal_button=False should still block the PayPal endpoint."""
+        # Give the club a Square seller but no PayPal seller.
+        self.payment_user.userdata.square_enabled = True
+        self.payment_user.userdata.save()
+        SquareSeller.objects.create(user=self.payment_user, club=self.club, square_merchant_id="sq_merchant_only")
+        invoice = self._make_club_invoice()
+        # show_payment_button is True because Square is available.
+        self.assertTrue(invoice.show_payment_button)
+        # show_paypal_button must be False (no PayPal seller, not using site PayPal).
+        self.assertFalse(invoice.show_paypal_button)
+
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("create_paypal_order", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.post(url)
+        # Should redirect back to club payment page, not proceed to PayPal.
+        self.assertRedirects(
+            response,
+            reverse("club_membership_pay", kwargs={"slug": self.club.slug}),
+            fetch_redirect_response=False,
+        )
+
     def test_invoice_no_login_view_accessible_for_club_invoice(self):
         """Visiting a club invoice via no-login link should not crash (no auctiontos_user, no auction)."""
         invoice = self._make_club_invoice()

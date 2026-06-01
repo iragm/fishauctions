@@ -10103,7 +10103,7 @@ class CreatePayPalOrderView(PayPalAPIMixin, View):
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
         error = self.invoice.reason_for_payment_not_available
-        if not self.invoice.show_payment_button:
+        if not self.invoice.show_paypal_button:
             error = "PayPal payments are not available"
         if error:
             messages.error(request, error)
