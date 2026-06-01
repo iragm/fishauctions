@@ -5535,8 +5535,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         )
         PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_renewal")
         self.online_auction.club = self.club
-        self.online_auction.add_people_from_auction_to_club = True
-        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
         self.online_auction.save()
         self.member = ClubMember.objects.create(
             club=self.club,

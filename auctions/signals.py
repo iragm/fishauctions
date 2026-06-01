@@ -595,14 +595,14 @@ def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwa
         userdata.last_activity = timezone.now()
         userdata.save()
 
-    members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="non_essential")
+    members = ClubMember.objects.filter(email=email, is_deleted=False).exclude(contact_status="do_not_contact")
     for member in members:
-        member.contact_status = "non_essential"
+        member.contact_status = "do_not_contact"
         member.save(update_fields=["contact_status"])
         ClubHistory.objects.create(
             club=member.club,
             user=None,
-            action=f"{member} marked non-essential emails only after SES complaint",
+            action=f"{member} marked do not contact after SES complaint",
             applies_to="MEMBERS",
         )
 

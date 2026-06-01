@@ -1,5 +1,5 @@
 {% if invoice.auction and invoice.auction.club and invoice.auction.club.membership_annual_fee %}
-{% if invoice.auction.is_club_managed or invoice.auction.add_people_from_auction_to_club %}
+{% if invoice.auction.is_club_managed %}
 <div id="invoice-membership-renewal" class="alert alert-secondary py-2{% if invoice.renewal_processed or invoice.status != 'DRAFT' %} opacity-50{% endif %}">
   <div class="form-check">
     <input
