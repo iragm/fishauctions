@@ -3988,6 +3988,27 @@ class ClubEmailSettingsForm(forms.ModelForm):
             ].help_text = "No connected payment account, expiration emails will not be sent"
             self.fields["expiring_soon_include_auction"].disabled = True
 
+    _EMAIL_TEXT_FIELDS = [
+        "welcome_opening",
+        "welcome_closing",
+        "renewal_opening",
+        "renewal_closing",
+        "expiring_soon_opening",
+        "expiring_soon_closing",
+    ]
+    _HTML_TAG_RE = re.compile(r"<[^>]+>")
+    _URL_RE = re.compile(r"https?://", re.IGNORECASE)
+
+    def clean(self):
+        cleaned = super().clean()
+        for field_name in self._EMAIL_TEXT_FIELDS:
+            value = cleaned.get(field_name, "") or ""
+            if self._HTML_TAG_RE.search(value):
+                self.add_error(field_name, "HTML tags are not allowed in email text.")
+            elif self._URL_RE.search(value):
+                self.add_error(field_name, "Links (URLs) are not allowed in email text.")
+        return cleaned
+
 
 class ClubBapSettingsForm(forms.ModelForm):
     """Form for BAP admins to configure Breeder Award Program settings for a club."""

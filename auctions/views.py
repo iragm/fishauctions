@@ -10692,17 +10692,25 @@ class ClubMemberSelfServiceView(View):
             member.contact_status = "non_essential"
             member.save(update_fields=["contact_status"])
             heading, body = "Unsubscribed", f"You will no longer receive marketing emails from {member.club.name}."
+            history_action = f"{member} unsubscribed from marketing emails (self-service)"
         elif self.action == "resubscribe":
             member.contact_status = "contact"
             # Clear the remembered Mailchimp opt-out so the next sync actually re-subscribes them.
             member.mailchimp_status = ""
             member.save(update_fields=["contact_status", "mailchimp_status"])
             heading, body = "Resubscribed", f"You will once again receive emails from {member.club.name}."
+            history_action = f"{member} resubscribed to emails (self-service)"
         else:  # nocomm
             member.contact_status = "do_not_contact"
             member.save(update_fields=["contact_status"])
             heading, body = "Done", f"{member.club.name} will no longer contact you."
-
+            history_action = f"{member} opted out of all contact (self-service)"
+        ClubHistory.objects.create(
+            club=member.club,
+            user=None,
+            action=history_action,
+            applies_to="MEMBERS",
+        )
         transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member.pk))
         return render(
             request,
@@ -17145,6 +17153,12 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         entry.club = self.club
         entry.created_by = request.user
         entry.save()
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Added {entry.get_category_display()} record: {entry.description} ({entry.amount})",
+            applies_to="SETTINGS",
+        )
         seller = self.club.effective_paypal_seller or self.club.effective_square_seller
         currency = seller.user.userdata.currency if (seller and seller.user) else "USD"
         return JsonResponse(
@@ -17191,6 +17205,12 @@ class ClubMoneyBalanceView(LoginRequiredMixin, ClubViewMixin, View):
                 amount=adjustment,
                 description=f"Balance books adjustment to match account balance {account_balance}",
                 category=ClubMoney.CATEGORY_ADJUSTMENT,
+            )
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Balance adjustment of {adjustment} to match account balance {account_balance}",
+                applies_to="SETTINGS",
             )
         return JsonResponse(
             {
@@ -18491,6 +18511,12 @@ class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
             role.bap_points_for_role = bap
             role.hap_points_for_role = hap
             role.save(update_fields=["is_paid_role", "is_unpaid_role", "bap_points_for_role", "hap_points_for_role"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Updated Discord role '{role.role_name}' settings",
+            applies_to="SETTINGS",
+        )
         messages.success(request, f'Role "{role.role_name}" updated.')
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
 
@@ -18510,6 +18536,12 @@ class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):
         ClubDiscordRole.objects.filter(club=self.club, is_default=True).update(is_default=False)
         role.is_default = True
         role.save(update_fields=["is_default"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Set '{role.role_name}' as the default Discord role",
+            applies_to="SETTINGS",
+        )
         messages.success(request, f'"{role.role_name}" set as the default role.')
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
 

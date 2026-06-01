@@ -6,7 +6,6 @@ from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.db.models import Q
-from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
 
@@ -168,7 +167,7 @@ class Command(BaseCommand):
                 continue
 
             channel_id = club.auction_channel_id
-            auction_url = f"https://{domain}{reverse('auction_main', kwargs={'slug': auction.slug})}"
+            auction_url = f"https://{domain}/?{auction.slug}"
 
             if not auction.is_online:
                 self._notify_inperson(auction, channel_id, auction_url, now)
@@ -292,7 +291,7 @@ class Command(BaseCommand):
                 auction.save(update_fields=["discord_event_created"])
                 continue
 
-            auction_url = f"https://{domain}{reverse('auction_main', kwargs={'slug': auction.slug})}"
+            auction_url = f"https://{domain}/?{auction.slug}"
 
             if auction.is_online:
                 start_time = auction.date_start
