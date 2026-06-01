@@ -7083,6 +7083,12 @@ class Invoice(models.Model):
             return True
         if not self.auction:
             return False
+        # For club-managed auctions where the club has a linked Square seller, the
+        # club-level configuration supersedes the per-auction enable_square_payments flag.
+        if self.auction.club:
+            seller = self.auction.club.effective_square_seller
+            if seller and seller.square_merchant_id and seller.user.userdata.is_trusted:
+                return True
         if not self.auction.enable_square_payments:
             return False
         if not self.auction.created_by.userdata.is_trusted:
