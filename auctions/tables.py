@@ -5,7 +5,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionHistory, AuctionTOS, BapAward, ClubHistory, ClubMember, Lot
+from .models import Auction, AuctionHistory, AuctionTOS, BapAward, ClubBapCategoryOverride, ClubHistory, ClubMember, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -869,16 +869,24 @@ class ClubBapLotHTMxTable(tables.Table):
         url = record.get_absolute_url()
         category_name = record.species_category.name if record.species_category else "Uncategorized"
         category_url = reverse("club_bap_lot_category", kwargs={"pk": record.pk})
-        return format_html(
-            '<a href="{}">{}</a><div class="mt-1">'
+        badges = format_html(
             '<button type="button" class="badge bg-secondary border-0" '
-            'hx-get="{}" hx-target="#modals-here" hx-swap="innerHTML">{}</button>'
-            "</div>",
-            url,
-            value,
+            'hx-get="{}" hx-target="#modals-here" hx-swap="innerHTML">{}</button>',
             category_url,
             category_name,
         )
+        if (
+            self.club
+            and self.club.points_for_custom_checkbox > 0
+            and record.custom_checkbox
+            and record.auction
+            and record.auction.custom_checkbox_name
+        ):
+            badges = badges + format_html(
+                ' <span class="badge bg-info text-dark">{}</span>',
+                record.auction.custom_checkbox_name,
+            )
+        return format_html('<a href="{}">{}</a><div class="mt-1">{}</div>', url, value, badges)
 
     def render_seller_name(self, value, record):
         return value.name if value else "—"
@@ -900,11 +908,14 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
+        override = self._override_cache.get(record.species_category_id) if record.species_category_id else None
         default_points = (
-            self.club.points_per_lot
-            if self.club and self.club.points_per_lot > 0
-            else (record.species_category.bap_points if record.species_category else 5)
+            override.points
+            if override is not None
+            else ((self.club.points_per_lot or record.species_category.bap_points) if self.club else 0)
         )
+        if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
+            default_points += self.club.points_for_custom_checkbox
         return mark_safe(
             render_to_string(
                 "auctions/bap_lot_buttons.html",
@@ -920,3 +931,7 @@ class ClubBapLotHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)
         super().__init__(*args, **kwargs)
+        if self.club:
+            self._override_cache = {o.category_id: o for o in ClubBapCategoryOverride.objects.filter(club=self.club)}
+        else:
+            self._override_cache = {}

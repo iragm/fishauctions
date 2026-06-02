@@ -4,9 +4,12 @@
 
 {% block content %}
 {{ form.media }}
+{{ override_form.media }}
 {% include "club_ribbon.html" %}
 
 {% crispy form %}
+
+{% include "auctions/partials/bap_category_overrides.html" %}
 
 <div id="modals-here"></div>
 {% endblock %}

@@ -1,5 +1,6 @@
 import ast
 import base64
+import collections
 import csv
 import json
 import logging
@@ -134,6 +135,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubBapCategoryOverrideForm,
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
@@ -188,6 +190,7 @@ from .models import (
     Club,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
+    ClubBapCategoryOverride,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -1302,6 +1305,16 @@ class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QueryS
                 pass
         if self.q:
             qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
+        return qs
+
+
+class CategoryAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Autocomplete for all categories (used in BAP category override form)."""
+
+    def get_queryset(self):
+        qs = Category.objects.all().order_by("name")
+        if self.q:
+            qs = qs.filter(name__icontains=self.q)
         return qs
 
 
@@ -6131,7 +6144,16 @@ class ViewLot(DetailView):
             if viewer_has_bap and lot.sold:
                 club = lot.auction.club
                 context["bap_club"] = club
-                context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
+                _bap_override = (
+                    ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+                    if lot.species_category
+                    else None
+                )
+                context["bap_default_points"] = (
+                    _bap_override.points
+                    if _bap_override is not None
+                    else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
+                )
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
@@ -8613,7 +8635,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             self.request.user, club, "permission_manage_bap"
         )
         if context["viewer_has_bap"] and club:
-            context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
+            context["bap_default_points"] = club.points_per_lot
         return context
 
     def get_success_url(self):
@@ -11542,6 +11564,130 @@ class UserMap(TemplateView):
             qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
         context["users"] = qs
         # context["pageviews"] = view_qs
+        return context
+
+
+class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
+    """Navigation flow analysis for Command Palette design.
+
+    Shows per-auction: which page sections users visit most, and where they go next.
+    Scoped to logged-in users only. Sessions split on 30-minute idle gaps.
+    """
+
+    template_name = "dashboard_user_flow.html"
+
+    SESSION_GAP = timedelta(minutes=30)
+
+    # Ordered — first match wins
+    URL_SECTIONS = [
+        ("Bulk Add Lots", re.compile(r"^/auctions/[^/]+/(users/[^/]+/(bulk-add-auto)?$|lots/bulk-add(-auto)?/)")),
+        ("Auction Rules", re.compile(r"^/auctions/[^/]+/rules/")),
+        ("Auction Invoice (Mine)", re.compile(r"^/auctions/[^/]+/invoice/")),
+        ("Auction Invoices", re.compile(r"^/auctions/[^/]+/invoices/")),
+        ("Auction Stats", re.compile(r"^/auctions/[^/]+/stats/")),
+        ("Auction Edit", re.compile(r"^/auctions/[^/]+/edit/")),
+        ("Auction Browse", re.compile(r"^/auctions/[^/]+/?$")),
+        ("All Auctions", re.compile(r"^/auctions/?$")),
+        ("Lot Detail", re.compile(r"^/lots/\d+")),
+        ("Lot Detail", re.compile(r"^/auctions/[^/]+/lots/")),
+        ("Add Lot", re.compile(r"^/lots/new/")),
+        ("Edit Lot", re.compile(r"^/lots/edit/\d+")),
+        ("Invoice", re.compile(r"^/invoices/[^/]")),
+        ("User Profile", re.compile(r"^/users/")),
+        ("My Account", re.compile(r"^/account/")),
+        ("All Lots", re.compile(r"^/lots/?$")),
+        ("Homepage", re.compile(r"^/?$")),
+    ]
+
+    def classify_url(self, url):
+        if not url:
+            return "Other"
+        for label, pattern in self.URL_SECTIONS:
+            if pattern.match(url):
+                return label
+        return "Other"
+
+    def _process_session(self, session, transitions):
+        sections = []
+        for v in session:
+            section = self.classify_url(v["url"])
+            if not sections or sections[-1] != section:
+                sections.append(section)
+        for i in range(len(sections) - 1):
+            transitions[sections[i]][sections[i + 1]] += 1
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auctions"] = Auction.objects.order_by("-date_end")[:50]
+
+        auction_slug = self.request.GET.get("auction")
+        if not auction_slug:
+            return context
+        try:
+            auction = Auction.objects.get(slug=auction_slug)
+        except Auction.DoesNotExist:
+            return context
+        context["selected_auction"] = auction
+
+        views = (
+            PageView.objects.filter(Q(auction=auction) | Q(lot_number__auction=auction))
+            .filter(user__isnull=False)
+            .order_by("user_id", "date_start")
+            .values("user_id", "url", "date_start", "total_time")
+        )
+
+        section_stats = collections.defaultdict(lambda: {"views": 0, "users": set(), "total_time": 0})
+        transitions = collections.defaultdict(lambda: collections.defaultdict(int))
+
+        current_user = None
+        session = []
+        for v in views:
+            if v["user_id"] != current_user:
+                if session:
+                    self._process_session(session, transitions)
+                current_user = v["user_id"]
+                session = [v]
+            else:
+                if session and (v["date_start"] - session[-1]["date_start"]) > self.SESSION_GAP:
+                    self._process_session(session, transitions)
+                    session = [v]
+                else:
+                    session.append(v)
+            section = self.classify_url(v["url"])
+            section_stats[section]["views"] += 1
+            section_stats[section]["users"].add(v["user_id"])
+            section_stats[section]["total_time"] += v["total_time"] or 0
+        if session:
+            self._process_session(session, transitions)
+
+        frequency_table = sorted(
+            [
+                {
+                    "section": section,
+                    "views": stats["views"],
+                    "unique_users": len(stats["users"]),
+                    "avg_time": round(stats["total_time"] / stats["views"]) if stats["views"] else 0,
+                }
+                for section, stats in section_stats.items()
+            ],
+            key=lambda x: -x["views"],
+        )
+        context["frequency_table"] = frequency_table
+
+        transition_table = []
+        for from_section, nexts in transitions.items():
+            total = sum(nexts.values())
+            top_nexts = sorted(nexts.items(), key=lambda x: -x[1])[:5]
+            transition_table.append(
+                {
+                    "from": from_section,
+                    "total_transitions": total,
+                    "nexts": [{"section": s, "count": c, "pct": round(100 * c / total)} for s, c in top_nexts],
+                }
+            )
+        transition_table.sort(key=lambda x: -x["total_transitions"])
+        context["transition_table"] = transition_table
+
         return context
 
 
@@ -16195,6 +16341,10 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["next_url"] = self.request.GET.get("next", "")
+        context["bap_category_overrides"] = ClubBapCategoryOverride.objects.filter(club=self.club).select_related(
+            "category"
+        )
+        context["override_form"] = ClubBapCategoryOverrideForm()
         return context
 
     def form_valid(self, form):
@@ -16206,6 +16356,54 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             applies_to="BAP",
         )
         return result
+
+
+class ClubBapCategoryOverrideSaveView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create or update a per-category BAP point override for a club."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        form = ClubBapCategoryOverrideForm(request.POST)
+        if form.is_valid():
+            category = form.cleaned_data["category"]
+            points = form.cleaned_data["points"]
+            ClubBapCategoryOverride.objects.update_or_create(
+                club=self.club, category=category, defaults={"points": points}
+            )
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Set BAP point override for {category.name}: {points} pts",
+                applies_to="BAP",
+            )
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View):
+    """Delete a per-category BAP point override."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        override = ClubBapCategoryOverride.objects.filter(pk=pk, club=self.club).first()
+        if override:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Removed BAP point override for {override.category.name}",
+                applies_to="BAP",
+            )
+            override.delete()
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
 
 
 class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
@@ -16376,7 +16574,16 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        points = club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 0)
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+            if lot.species_category
+            else None
+        )
+        points = (
+            override.points
+            if override is not None
+            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
+        )
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -18311,11 +18518,18 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        default_points = (
-            club.points_per_lot
-            if club.points_per_lot > 0
-            else (lot.species_category.bap_points if lot.species_category else 5)
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+            if lot.species_category
+            else None
         )
+        default_points = (
+            override.points
+            if override is not None
+            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
+        )
+        if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
+            default_points += club.points_for_custom_checkbox
         return render(
             request,
             "auctions/bap_lot_buttons.html",

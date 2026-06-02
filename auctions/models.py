@@ -766,7 +766,7 @@ class Club(models.Model):
     )
     points_per_lot = models.IntegerField(
         default=0,
-        help_text="Fixed BAP points per eligible lot. Leave at 0 to use pre-assigned per-category points based on difficulty.",
+        help_text="Default BAP points. Override these with per-category points below",
     )
     separate_hap = models.BooleanField(
         default=False,
@@ -789,6 +789,14 @@ class Club(models.Model):
     min_quantity = models.IntegerField(
         default=5,
         help_text="Minimum quantity in a lot to be eligible for BAP points.",
+    )
+    points_for_custom_checkbox = models.IntegerField(
+        default=0,
+        help_text="Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable.",
+    )
+    only_donation_lots = models.BooleanField(
+        default=False,
+        help_text="Require all BAP lots to be a donation.",
     )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
@@ -1261,7 +1269,9 @@ class ClubMember(ContactRecord):
         5. Among BAP/HAP point-based roles, find the highest threshold ≤ this
            member's point total (using the greater of BAP/HAP).
         6. Paid membership role (if any).
-        7. None.
+        7. Unpaid membership role as a catch-all (covers paid members when no
+           base paid-member role is configured).
+        8. None.
         """
         if not self.discord_role_auto_managed:
             return self.discord_role_override
@@ -1315,7 +1325,10 @@ class ClubMember(ContactRecord):
         if paid_role:
             return paid_role
 
-        return None
+        # No paid or point-based role matched; fall back to the unpaid role so every
+        # member ends up with *some* role even when the club's role configuration is
+        # incomplete (e.g. BAP roles defined but no base paid-member role).
+        return next((r for r in roles_qs if r.is_unpaid_role), None)
 
     def maybe_assign_discord_role(self):
         """Compute the correct Discord role, remove any stale club roles, then assign the new one.
@@ -1656,6 +1669,13 @@ class ClubMember(ContactRecord):
         # existing row, repick before the INSERT happens so callers don't have to
         # catch IntegrityError. This is cheap (one indexed lookup) and only runs
         # when the value isn't already known to be unique.
+        _discord_watched = ("discord_id", "discord_role_override_id", "discord_role_auto_managed")
+        _is_new = not self.pk
+        if not _is_new:
+            _discord_old = ClubMember.objects.filter(pk=self.pk).values(*_discord_watched).first()
+            _discord_changed = _discord_old and any(getattr(self, f) != _discord_old[f] for f in _discord_watched)
+        else:
+            _discord_changed = False
         if self.membership_number and not self.pk:
             if ClubMember.objects.filter(membership_number=self.membership_number).exists():
                 self.membership_number = _pick_unique_membership_number()
@@ -1733,8 +1753,12 @@ class ClubMember(ContactRecord):
             # Clear any other members that point to this member as a duplicate
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
             super().save(*args, **kwargs)
+            if _discord_changed or (_is_new and self.discord_id):
+                self.maybe_assign_discord_role()
             return
         super().save(*args, **kwargs)
+        if _discord_changed or (_is_new and self.discord_id):
+            self.maybe_assign_discord_role()
         if self.name:
             duplicate = (
                 ClubMember.objects.filter(club=self.club, name__iexact=self.name, is_deleted=False)
@@ -5188,6 +5212,7 @@ class Lot(models.Model):
         ("not_active_member", "Not an active club member"),
         ("not_sold", "Not sold"),
         ("low_quantity", "Quantity below club minimum"),
+        ("not_donation", "Lot is not a donation"),
     )
     bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
     manually_approved = models.BooleanField(default=False)
@@ -5996,6 +6021,8 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
+        if club.only_donation_lots and not self.donation:
+            return "not_donation"
         category_name = self.species_category.name if self.species_category else None
         # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
         # When CAP is disabled they have no BAP track, so treat them as ineligible.
@@ -6084,10 +6111,14 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        if club.points_per_lot > 0:
-            points = club.points_per_lot
-        else:
-            points = self.species_category.bap_points if self.species_category else 5
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
+            if self.species_category
+            else None
+        )
+        points = override.points if override is not None else (club.points_per_lot or self.species_category.bap_points)
+        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
+            points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         if not seller_user:
             return
@@ -6910,6 +6941,21 @@ class BapAward(models.Model):
         return result
 
 
+class ClubBapCategoryOverride(models.Model):
+    """Per-club, per-category BAP point overrides. When present, these take precedence over Club.points_per_lot."""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_category_overrides")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="bap_overrides")
+    points = models.IntegerField(default=0)
+    created_on = models.DateField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("club", "category")
+
+    def __str__(self):
+        return f"{self.club} — {self.category}: {self.points} pts"
+
+
 class Invoice(models.Model):
     """
     The total amount you get paid or owe to the club for an auction
@@ -7326,8 +7372,7 @@ class Invoice(models.Model):
                     ),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
-            )
-            .annotate(
+            ).annotate(
                 tax=ExpressionWrapper(
                     Cast(F("final_price"), DecimalField(max_digits=12, decimal_places=2))
                     * Coalesce(

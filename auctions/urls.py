@@ -31,6 +31,11 @@ urlpatterns = [
         views.ClubMemberMergeAutocomplete.as_view(),
         name="club-member-merge-autocomplete",
     ),
+    path(
+        "api/category-autocomplete/",
+        views.CategoryAutocomplete.as_view(),
+        name="category-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
@@ -125,6 +130,7 @@ urlpatterns = [
         name="admin_traffic_time_of_day_json",
     ),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
+    path("admin-user-flow/", views.AdminUserFlow.as_view(), name="admin_user_flow"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
     path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
@@ -673,6 +679,16 @@ urlpatterns = [
     ),
     path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
+    path(
+        "clubs/<slug:slug>/bap-settings/category-overrides/save/",
+        views.ClubBapCategoryOverrideSaveView.as_view(),
+        name="club_bap_category_override_save",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-settings/category-overrides/<int:pk>/delete/",
+        views.ClubBapCategoryOverrideDeleteView.as_view(),
+        name="club_bap_category_override_delete",
+    ),
     path("clubs/<slug:slug>/bap-admin/", views.ClubBapView.as_view(), name="club_bap"),
     path("clubs/<slug:slug>/bap-admin/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
     path(
