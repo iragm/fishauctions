@@ -134,6 +134,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubBapCategoryOverrideForm,
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
@@ -188,6 +189,7 @@ from .models import (
     Club,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
+    ClubBapCategoryOverride,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -1302,6 +1304,16 @@ class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QueryS
                 pass
         if self.q:
             qs = qs.filter(Q(name__icontains=self.q) | Q(email__icontains=self.q))
+        return qs
+
+
+class CategoryAutocomplete(autocomplete.Select2QuerySetView):
+    """Autocomplete for all categories (used in BAP category override form)."""
+
+    def get_queryset(self):
+        qs = Category.objects.all().order_by("name")
+        if self.q:
+            qs = qs.filter(name__icontains=self.q)
         return qs
 
 
@@ -16195,6 +16207,10 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["next_url"] = self.request.GET.get("next", "")
+        context["bap_category_overrides"] = ClubBapCategoryOverride.objects.filter(club=self.club).select_related(
+            "category"
+        )
+        context["override_form"] = ClubBapCategoryOverrideForm()
         return context
 
     def form_valid(self, form):
@@ -16206,6 +16222,50 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             applies_to="BAP",
         )
         return result
+
+
+class ClubBapCategoryOverrideSaveView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create or update a per-category BAP point override for a club."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        form = ClubBapCategoryOverrideForm(request.POST)
+        if form.is_valid():
+            category = form.cleaned_data["category"]
+            points = form.cleaned_data["points"]
+            ClubBapCategoryOverride.objects.update_or_create(
+                club=self.club, category=category, defaults={"points": points}
+            )
+        overrides = ClubBapCategoryOverride.objects.filter(club=self.club).select_related("category")
+        return render(
+            request,
+            "auctions/partials/bap_category_overrides.html",
+            {"club": self.club, "bap_category_overrides": overrides, "override_form": ClubBapCategoryOverrideForm()},
+        )
+
+
+class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View):
+    """Delete a per-category BAP point override."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        ClubBapCategoryOverride.objects.filter(pk=pk, club=self.club).delete()
+        overrides = ClubBapCategoryOverride.objects.filter(club=self.club).select_related("category")
+        return render(
+            request,
+            "auctions/partials/bap_category_overrides.html",
+            {"club": self.club, "bap_category_overrides": overrides, "override_form": ClubBapCategoryOverrideForm()},
+        )
 
 
 class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
@@ -18311,11 +18371,21 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        default_points = (
-            club.points_per_lot
-            if club.points_per_lot > 0
-            else (lot.species_category.bap_points if lot.species_category else 5)
-        )
+        if club.points_per_lot > 0:
+            default_points = club.points_per_lot
+        else:
+            override = (
+                ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+                if lot.species_category
+                else None
+            )
+            default_points = (
+                override.points
+                if override is not None
+                else (lot.species_category.bap_points if lot.species_category else 5)
+            )
+        if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
+            default_points += club.points_for_custom_checkbox
         return render(
             request,
             "auctions/bap_lot_buttons.html",

@@ -1,0 +1,54 @@
+{% load crispy_forms_tags %}
+<div id="bap-category-overrides">
+  <h5 class="mt-4">Per-category point overrides</h5>
+  <p class="text-muted small">Override BAP points for specific categories. These take precedence over the category's default points when the club does not use a fixed points-per-lot value.</p>
+
+  {% if bap_category_overrides %}
+  <table class="table table-sm table-bordered mb-3" style="max-width:500px">
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Points</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for override in bap_category_overrides %}
+      <tr>
+        <td>{{ override.category.name }}</td>
+        <td>{{ override.points }}</td>
+        <td>
+          <button type="button"
+            hx-post="{% url 'club_bap_category_override_delete' slug=club.slug pk=override.pk %}"
+            hx-target="#bap-category-overrides"
+            hx-swap="outerHTML"
+            hx-confirm="Remove override for {{ override.category.name }}?"
+            class="btn btn-sm btn-outline-danger py-0 px-1">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted small">No overrides set.</p>
+  {% endif %}
+
+  <form hx-post="{% url 'club_bap_category_override_save' slug=club.slug %}"
+        hx-target="#bap-category-overrides"
+        hx-swap="outerHTML"
+        class="d-flex align-items-end gap-2 flex-wrap">
+    {% csrf_token %}
+    {{ override_form.media }}
+    <div>
+      <label class="form-label mb-1 small">Category</label>
+      {{ override_form.category }}
+    </div>
+    <div style="width:6rem">
+      <label class="form-label mb-1 small">Points</label>
+      {{ override_form.points }}
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary mb-0">Add / update</button>
+  </form>
+</div>

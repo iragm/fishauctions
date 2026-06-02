@@ -36,6 +36,7 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubBapCategoryOverride,
     ClubMember,
     ClubMoney,
     Invoice,
@@ -4018,9 +4019,11 @@ class ClubBapSettingsForm(forms.ModelForm):
         fields = [
             "auto_add_points",
             "points_per_lot",
+            "points_for_custom_checkbox",
             "min_quantity",
             "days_between_same_name_lots",
             "only_active_members_can_participate",
+            "only_donation_lots",
             "separate_hap",
             "separate_cap",
         ]
@@ -4034,14 +4037,30 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "Point rules",
                 "auto_add_points",
                 "points_per_lot",
+                "points_for_custom_checkbox",
                 "min_quantity",
                 "days_between_same_name_lots",
                 "only_active_members_can_participate",
+                "only_donation_lots",
                 "separate_hap",
                 "separate_cap",
             ),
         )
         self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
+
+
+class ClubBapCategoryOverrideForm(forms.ModelForm):
+    """Inline form for adding/updating a per-category BAP point override for a club."""
+
+    category = forms.ModelChoiceField(
+        queryset=Category.objects.all().order_by("name"),
+        widget=autocomplete.ModelSelect2(url="category-autocomplete"),
+        label="Category",
+    )
+
+    class Meta:
+        model = ClubBapCategoryOverride
+        fields = ["category", "points"]
 
 
 class BapAwardForm(forms.ModelForm):

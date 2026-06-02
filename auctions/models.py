@@ -790,6 +790,14 @@ class Club(models.Model):
         default=5,
         help_text="Minimum quantity in a lot to be eligible for BAP points.",
     )
+    points_for_custom_checkbox = models.IntegerField(
+        default=0,
+        help_text="Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable.",
+    )
+    only_donation_lots = models.BooleanField(
+        default=False,
+        help_text="Require all BAP lots to be a donation.",
+    )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
@@ -5205,6 +5213,7 @@ class Lot(models.Model):
         ("not_active_member", "Not an active club member"),
         ("not_sold", "Not sold"),
         ("low_quantity", "Quantity below club minimum"),
+        ("not_donation", "Lot is not a donation"),
     )
     bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
     manually_approved = models.BooleanField(default=False)
@@ -6013,6 +6022,8 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
+        if club.only_donation_lots and not self.donation:
+            return "not_donation"
         category_name = self.species_category.name if self.species_category else None
         # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
         # When CAP is disabled they have no BAP track, so treat them as ineligible.
@@ -6104,7 +6115,17 @@ class Lot(models.Model):
         if club.points_per_lot > 0:
             points = club.points_per_lot
         else:
-            points = self.species_category.bap_points if self.species_category else 5
+            override = (
+                ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
+                if self.species_category
+                else None
+            )
+            if override is not None:
+                points = override.points
+            else:
+                points = self.species_category.bap_points if self.species_category else 5
+        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
+            points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         if not seller_user:
             return
@@ -6925,6 +6946,21 @@ class BapAward(models.Model):
         result = super().delete(*args, **kwargs)
         BapAward.recalculate_member_points(member)
         return result
+
+
+class ClubBapCategoryOverride(models.Model):
+    """Per-club, per-category BAP point overrides. When present, these take precedence over Category.bap_points."""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_category_overrides")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="bap_overrides")
+    points = models.IntegerField(default=0)
+    created_on = models.DateField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("club", "category")
+
+    def __str__(self):
+        return f"{self.club} — {self.category}: {self.points} pts"
 
 
 class Invoice(models.Model):
