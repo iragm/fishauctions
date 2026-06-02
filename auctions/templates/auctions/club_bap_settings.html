@@ -4,6 +4,7 @@
 
 {% block content %}
 {{ form.media }}
+{{ override_form.media }}
 {% include "club_ribbon.html" %}
 
 {% crispy form %}
@@ -12,3 +13,4 @@
 
 <div id="modals-here"></div>
 {% endblock %}
+

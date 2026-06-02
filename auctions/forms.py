@@ -4061,6 +4061,9 @@ class ClubBapCategoryOverrideForm(forms.ModelForm):
     class Meta:
         model = ClubBapCategoryOverride
         fields = ["category", "points"]
+        widgets = {
+            "points": forms.NumberInput(attrs={"class": "form-control form-control-sm", "style": "width:6rem"}),
+        }
 
 
 class BapAwardForm(forms.ModelForm):

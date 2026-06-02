@@ -16241,12 +16241,13 @@ class ClubBapCategoryOverrideSaveView(LoginRequiredMixin, ClubViewMixin, View):
             ClubBapCategoryOverride.objects.update_or_create(
                 club=self.club, category=category, defaults={"points": points}
             )
-        overrides = ClubBapCategoryOverride.objects.filter(club=self.club).select_related("category")
-        return render(
-            request,
-            "auctions/partials/bap_category_overrides.html",
-            {"club": self.club, "bap_category_overrides": overrides, "override_form": ClubBapCategoryOverrideForm()},
-        )
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Set BAP point override for {category.name}: {points} pts",
+                applies_to="BAP",
+            )
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
 
 
 class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View):
@@ -16259,13 +16260,16 @@ class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View)
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, slug, pk):
-        ClubBapCategoryOverride.objects.filter(pk=pk, club=self.club).delete()
-        overrides = ClubBapCategoryOverride.objects.filter(club=self.club).select_related("category")
-        return render(
-            request,
-            "auctions/partials/bap_category_overrides.html",
-            {"club": self.club, "bap_category_overrides": overrides, "override_form": ClubBapCategoryOverrideForm()},
-        )
+        override = ClubBapCategoryOverride.objects.filter(pk=pk, club=self.club).first()
+        if override:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Removed BAP point override for {override.category.name}",
+                applies_to="BAP",
+            )
+            override.delete()
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
 
 
 class ClubBapView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
