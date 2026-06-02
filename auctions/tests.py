@@ -16590,12 +16590,13 @@ class ClubBapSettingsViewTests(TestCase):
         response = self.client.post(
             self.url,
             {
-                "enable_breeder_award_program": True,
                 "auto_add_points": True,
                 "points_per_lot": 0,
+                "points_for_custom_checkbox": 0,
                 "min_quantity": 3,
                 "days_between_same_name_lots": 0,
                 "only_active_members_can_participate": False,
+                "only_donation_lots": False,
                 "separate_hap": False,
                 "separate_cap": False,
             },
@@ -16609,12 +16610,13 @@ class ClubBapSettingsViewTests(TestCase):
         self.client.post(
             self.url,
             {
-                "enable_breeder_award_program": True,
                 "auto_add_points": True,
                 "points_per_lot": 0,
+                "points_for_custom_checkbox": 0,
                 "min_quantity": 5,
                 "days_between_same_name_lots": 0,
                 "only_active_members_can_participate": False,
+                "only_donation_lots": False,
                 "separate_hap": False,
                 "separate_cap": False,
             },
@@ -16632,6 +16634,62 @@ class ClubBapSettingsViewTests(TestCase):
         self.client.login(username="settings_user", password="testpass")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 403)
+
+    # --- category override save/delete ---
+
+    def test_bap_admin_can_save_category_override(self):
+        category = Category.objects.create(name="Cichlids", bap_points=5)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"category": category.pk, "points": 10})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(club=self.club, category=category, points=10).exists())
+
+    def test_plain_member_cannot_save_category_override(self):
+        category = Category.objects.create(name="Tetras", bap_points=5)
+        self.client.login(username="plain_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"category": category.pk, "points": 10})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClubBapCategoryOverride.objects.filter(club=self.club, category=category).exists())
+
+    def test_bap_admin_can_delete_category_override(self):
+        category = Category.objects.create(name="Barbs", bap_points=5)
+        override = ClubBapCategoryOverride.objects.create(club=self.club, category=category, points=8)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": override.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ClubBapCategoryOverride.objects.filter(pk=override.pk).exists())
+
+    def test_plain_member_cannot_delete_category_override(self):
+        category = Category.objects.create(name="Danios", bap_points=5)
+        override = ClubBapCategoryOverride.objects.create(club=self.club, category=category, points=8)
+        self.client.login(username="plain_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": override.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(pk=override.pk).exists())
+
+    def test_save_override_is_idempotent_upsert(self):
+        """Saving the same category twice updates points rather than creating a duplicate."""
+        category = Category.objects.create(name="Livebearers", bap_points=5)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        self.client.post(url, {"category": category.pk, "points": 10})
+        self.client.post(url, {"category": category.pk, "points": 15})
+        self.assertEqual(ClubBapCategoryOverride.objects.filter(club=self.club, category=category).count(), 1)
+        self.assertEqual(ClubBapCategoryOverride.objects.get(club=self.club, category=category).points, 15)
+
+    def test_delete_override_from_other_club_does_nothing(self):
+        """A BAP admin cannot delete an override belonging to a different club."""
+        other_club = Club.objects.create(name="Other Club")
+        category = Category.objects.create(name="Goldfish", bap_points=5)
+        other_override = ClubBapCategoryOverride.objects.create(club=other_club, category=category, points=3)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": other_override.pk})
+        self.client.post(url)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(pk=other_override.pk).exists())
 
 
 class ClubSettingsViewTests(TestCase):
@@ -17000,6 +17058,7 @@ class LotBapEligibilityTests(TestCase):
             enable_breeder_award_program=True,
             auto_add_points=True,
             min_quantity=1,
+            points_per_lot=5,
         )
         self.category = Category.objects.create(name="Livebearers", bap_points=5)
         self.auction = Auction.objects.create(
@@ -17160,6 +17219,164 @@ class LotBapEligibilityTests(TestCase):
         unsold.refresh_from_db()
         self.assertEqual(sold_ineligible.bap_auto_reason, "not_bred")
         self.assertEqual(unsold.bap_auto_reason, "")
+
+    def test_not_donation_when_only_donation_lots_required(self):
+        self.club.only_donation_lots = True
+        self.club.save()
+        lot = self._make_lot(donation=False)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_donation")
+
+    def test_donation_lot_passes_only_donation_check(self):
+        self.club.only_donation_lots = True
+        self.club.save()
+        lot = self._make_lot(donation=True)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_live_food_cultures_ineligible_when_cap_disabled(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = False
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "category_not_eligible")
+
+    def test_live_food_cultures_eligible_when_cap_enabled(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = True
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_hap_category_bypasses_min_quantity(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=5)
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat, quantity=1)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_snails_bypass_min_quantity(self):
+        snail_cat = Category.objects.create(name="Snails and other inverts", bap_points=5)
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(species_category=snail_cat, quantity=1)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_not_active_member_when_membership_expired(self):
+        self.club.only_active_members_can_participate = True
+        self.club.save()
+        self.member.membership_expiration_date = timezone.now().date() - datetime.timedelta(days=1)
+        self.member.save()
+        lot = self._make_lot()
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_active_member")
+
+    def test_active_member_passes_membership_check(self):
+        self.club.only_active_members_can_participate = True
+        self.club.save()
+        self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=30)
+        self.member.save()
+        lot = self._make_lot()
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_bap_placeholder_returns_hap_for_aquatic_plants(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=5)
+        self.club.separate_hap = True
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat)
+        self.assertEqual(lot.bap_placeholder, "HAP")
+
+    def test_bap_placeholder_returns_culture_for_live_food(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = True
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertEqual(lot.bap_placeholder, "Culture")
+
+    def test_bap_placeholder_returns_bap_by_default(self):
+        lot = self._make_lot()
+        self.assertEqual(lot.bap_placeholder, "BAP")
+
+    def test_auto_award_uses_category_override_points(self):
+        ClubBapCategoryOverride.objects.create(club=self.club, category=self.category, points=20)
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 20)
+
+    def test_auto_award_adds_bonus_points_when_custom_checkbox_set(self):
+        self.club.points_for_custom_checkbox = 3
+        self.club.save()
+        lot = self._make_lot(custom_checkbox=True)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points + 3)
+
+    def test_auto_award_no_bonus_when_custom_checkbox_not_set(self):
+        self.club.points_for_custom_checkbox = 3
+        self.club.save()
+        lot = self._make_lot(custom_checkbox=False)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+
+    def test_auto_award_skipped_when_award_already_exists(self):
+        lot = self._make_lot()
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), lot=lot, points=99)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 0)
+
+    def test_auto_award_no_award_created_when_manual_approval_required(self):
+        self.club.auto_add_points = False
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertFalse(BapAward.objects.filter(lot=lot).exists())
+        self.assertEqual(lot.bap_auto_reason, "")
+
+    def test_auto_award_routes_hap_points_for_plant_category(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=7)
+        self.club.separate_hap = True
+        self.club.points_per_lot = 7
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat)
+        lot.auto_award_bap_points()
+        award = BapAward.objects.get(lot=lot)
+        self.assertEqual(award.hap_points, 7)
+        self.assertEqual(award.points, 0)
+        self.assertEqual(award.cap_points, 0)
+
+
+class BapAwardRecalculateTests(TestCase):
+    """Tests for BapAward.recalculate_member_points and its save/delete hooks."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="recalc_user", password="testpass", email="recalc@example.com")
+        self.club = Club.objects.create(name="Recalc Club", enable_breeder_award_program=True)
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+
+    def test_save_updates_member_bap_points(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 10)
+
+    def test_delete_resets_member_bap_points(self):
+        award = BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        award.delete()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 0)
+
+    def test_ytd_points_counted_for_current_year_only(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=5)
+        BapAward.objects.create(club_member=self.member, date=datetime.date(2019, 1, 1), points=3)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 8)
+        self.assertEqual(self.member.bap_points_ytd, 5)
+
+    def test_hap_points_tracked_separately_from_bap(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=0, hap_points=4)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.hap_points, 4)
+        self.assertEqual(self.member.bap_points, 0)
 
 
 class BapBackfillMigrationTests(TestCase):
