@@ -651,9 +651,10 @@ def schedule_auction_stats_update(run_at=None):
         old_schedule_ids = [task.clocked_id for task in old_tasks if task.clocked_id]
         old_tasks.delete()
 
-        # Clean up orphaned ClockedSchedule objects from previous runs
+        # Clean up orphaned ClockedSchedule objects from previous runs,
+        # but never delete the schedule we just created/fetched.
         if old_schedule_ids:
-            ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
+            ClockedSchedule.objects.filter(id__in=old_schedule_ids).exclude(id=schedule.id).delete()
 
         # Create a fresh task that's guaranteed to be enabled
         # The transaction ensures this is atomic with schedule creation and cleanup above
