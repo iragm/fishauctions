@@ -6,6 +6,7 @@
 {{ form.media }}
 {% include "club_ribbon.html" %}
 
+{% if show_email_routing %}
 <p class="mb-2">
   We offer a free forwarding address for club communications &mdash; this allows your club email to stay constant even if you change the person in charge of communications.
 </p>
@@ -13,9 +14,9 @@
 <div class="mb-3">
   <strong>Your club's forwarding addresses:</strong>
   <ul class="mb-0">
-    <li><code>info@{{ email_domain }}</code> &mdash; general site info, forwarded to the site admin</li>
-    <li><code>{{ club.slug }}-auctions@{{ email_domain }}</code> &mdash; auction-related replies</li>
-    <li><code>{{ club.slug }}-contact@{{ email_domain }}</code> &mdash; membership contact replies</li>
+    <li><span class="text-warning">info@{{ email_domain }}</span> &mdash; general site info, forwarded to the site admin</li>
+    <li><span class="text-warning">{{ club.slug }}-auctions@{{ email_domain }}</span> &mdash; auction-related replies</li>
+    <li><span class="text-warning">{{ club.slug }}-contact@{{ email_domain }}</span> &mdash; membership contact replies</li>
   </ul>
 </div>
 
@@ -23,8 +24,277 @@
   <i class="bi bi-lightbulb-fill me-1"></i>
   If you already have a shared Gmail account you use for club communications, you should add it as a club member, grant that account auction and membership permissions, and then select that account for both options here.
 </div>
+{% endif %}
 
-{% crispy form %}
+{% if club.mailchimp_audience_id %}
+<div class="alert alert-info mb-3" role="alert">
+  <i class="bi bi-envelope-paper me-1"></i>
+  <strong>Mailchimp is connected.</strong>
+  Consider turning off the outgoing emails below and sending them through Mailchimp instead &mdash;
+  for example, a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>,
+  <span class="text-warning">expiring-soon</span>, or <span class="text-warning">expired</span> tags gives you more control over timing and design.
+  <a href="{% url 'club_mailchimp_config' club.slug %}">Mailchimp settings</a>
+</div>
+{% endif %}
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  {% crispy form %}
+
+  <fieldset class="mb-3">
+    <legend class="h5 border-bottom pb-2">Outgoing email template</legend>
+
+    <ul class="nav nav-tabs mb-3" id="emailTypeTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="welcome-tab" data-bs-toggle="tab" data-bs-target="#welcome-tab-content" type="button" role="tab">Welcome</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="renewal-tab" data-bs-toggle="tab" data-bs-target="#renewal-tab-content" type="button" role="tab">Renewal</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="expiring-tab" data-bs-toggle="tab" data-bs-target="#expiring-tab-content" type="button" role="tab">Expiring Soon</button>
+      </li>
+    </ul>
+
+    <div class="tab-content mb-3" id="emailTypeTabContent">
+      <div class="tab-pane fade show active" id="welcome-tab-content" role="tabpanel">
+        <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
+          <div class="mb-2"><strong>Subject:</strong> Welcome to the {{ club.name }}!</div>
+          <hr class="my-2">
+
+          <div class="mb-3">Dear {{ preview_name }},</div>
+
+          <div class="mb-3" data-field="welcome_opening">
+            {{ form.welcome_opening }}
+            {% if form.welcome_opening.errors %}
+              <div class="invalid-feedback d-block">{{ form.welcome_opening.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          {% if preview_member_link %}
+          <div class="mb-3">
+            <span class="text-info">View your membership</span>
+          </div>
+          {% else %}
+          <div class="mb-3 text-muted small fst-italic">
+            (Once you have a club membership on this site, a link to your membership page will appear here.)
+          </div>
+          {% endif %}
+
+          {% if preview_barcode_url and membership_numbers_enabled %}
+          <div class="mb-3">
+            <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
+          </div>
+          {% endif %}
+
+          <div id="outgoing-email-preview-welcome-next-auction" class="mb-3"></div>
+
+          <div class="mb-3" data-field="welcome_closing">
+            {{ form.welcome_closing }}
+            {% if form.welcome_closing.errors %}
+              <div class="invalid-feedback d-block">{{ form.welcome_closing.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mt-3 pt-3 border-top">
+            {% if club.icon %}
+              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+            {% endif %}
+            <span>{{ club.name }}</span>
+          </div>
+        </div>
+
+        <div class="form-check">
+          {{ form.welcome_include_auction }}
+          <label class="form-check-label" for="{{ form.welcome_include_auction.id_for_label }}">
+            {{ form.welcome_include_auction.label }}
+          </label>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="renewal-tab-content" role="tabpanel">
+        <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
+          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership has been renewed</div>
+          <hr class="my-2">
+
+          <div class="mb-3">Dear {{ preview_name }},</div>
+
+          <div class="mb-3" data-field="renewal_opening">
+            {{ form.renewal_opening }}
+            {% if form.renewal_opening.errors %}
+              <div class="invalid-feedback d-block">{{ form.renewal_opening.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
+
+          {% if preview_member_link %}
+          <div class="mb-3">
+            <span class="text-info">View your membership</span>
+          </div>
+          {% else %}
+          <div class="mb-3 text-muted small fst-italic">
+            (Once you have a club membership on this site, a link to your membership page will appear here.)
+          </div>
+          {% endif %}
+
+          {% if preview_barcode_url and membership_numbers_enabled %}
+          <div class="mb-3">
+            <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
+          </div>
+          {% endif %}
+
+          <div id="outgoing-email-preview-renewal-next-auction" class="mb-3"></div>
+
+          <div class="mb-3" data-field="renewal_closing">
+            {{ form.renewal_closing }}
+            {% if form.renewal_closing.errors %}
+              <div class="invalid-feedback d-block">{{ form.renewal_closing.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mt-3 pt-3 border-top">
+            {% if club.icon %}
+              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+            {% endif %}
+            <span>{{ club.name }}</span>
+          </div>
+        </div>
+
+        <div class="form-check">
+          {{ form.renewal_include_auction }}
+          <label class="form-check-label" for="{{ form.renewal_include_auction.id_for_label }}">
+            {{ form.renewal_include_auction.label }}
+          </label>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="expiring-tab-content" role="tabpanel">
+        <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
+          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership expires in 30 days <span class="text-muted small">(or "…expires tomorrow" for the day-before reminder)</span></div>
+          <hr class="my-2">
+
+          <div class="mb-3">Dear {{ preview_name }},</div>
+
+          <div class="mb-3" data-field="expiring_soon_opening">
+            {{ form.expiring_soon_opening }}
+            {% if form.expiring_soon_opening.errors %}
+              <div class="invalid-feedback d-block">{{ form.expiring_soon_opening.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership expires in 30 days. <span class="text-muted">(Or "…expires tomorrow" for the day-before reminder.)</span></div>
+
+          {% if preview_member_link %}
+          <div class="mb-3">
+            <span class="text-info">View your membership</span>
+          </div>
+          {% else %}
+          <div class="mb-3 text-muted small fst-italic">
+            (Once you have a club membership on this site, a link to your membership page will appear here.)
+          </div>
+          {% endif %}
+
+          {% if preview_barcode_url and membership_numbers_enabled %}
+          <div class="mb-3">
+            <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
+          </div>
+          {% endif %}
+
+          <div id="outgoing-email-preview-expiring-next-auction" class="mb-3"></div>
+
+          <div class="mb-3" data-field="expiring_soon_closing">
+            {{ form.expiring_soon_closing }}
+            {% if form.expiring_soon_closing.errors %}
+              <div class="invalid-feedback d-block">{{ form.expiring_soon_closing.errors|join:" " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mt-3 pt-3 border-top">
+            {% if club.icon %}
+              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+            {% endif %}
+            <span>{{ club.name }}</span>
+          </div>
+        </div>
+
+        <div class="form-check">
+          {{ form.expiring_soon_include_auction }}
+          <label class="form-check-label" for="{{ form.expiring_soon_include_auction.id_for_label }}">
+            {{ form.expiring_soon_include_auction.label }}
+          </label>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <button type="submit" class="btn btn-primary">Save email settings</button>
+</form>
+
+{{ preview_payload|json_script:"outgoing-email-preview-data" }}
 
 <div id="modals-here"></div>
+
+<script>
+(function () {
+  var raw = document.getElementById('outgoing-email-preview-data');
+  if (!raw) return;
+  var data = JSON.parse(raw.textContent || '{}');
+
+  // Bootstrap-style all textareas and checkboxes for email type configuration
+  var fieldIds = [
+    'id_welcome_opening', 'id_welcome_closing', 'id_welcome_include_auction',
+    'id_renewal_opening', 'id_renewal_closing', 'id_renewal_include_auction',
+    'id_expiring_soon_opening', 'id_expiring_soon_closing', 'id_expiring_soon_include_auction'
+  ];
+
+  fieldIds.forEach(function(fieldId) {
+    var field = document.getElementById(fieldId);
+    if (!field) return;
+    if (field.tagName === 'TEXTAREA') {
+      field.classList.add('form-control');
+    } else if (field.type === 'checkbox') {
+      field.classList.add('form-check-input');
+    }
+  });
+
+  // Handle next-auction visibility for each email type
+  function setupAuctionToggle(checkboxId, elementId) {
+    var checkbox = document.getElementById(checkboxId);
+    var nextAuctionEl = document.getElementById(elementId);
+    if (!checkbox || !nextAuctionEl) return;
+
+    function refreshNextAuction() {
+      if (checkbox.checked && data.next_auction_html) {
+        nextAuctionEl.innerHTML = data.next_auction_html;
+        nextAuctionEl.style.display = 'block';
+      } else {
+        nextAuctionEl.innerHTML = '';
+        nextAuctionEl.style.display = 'none';
+      }
+    }
+
+    // Initialize based on current checkbox state
+    refreshNextAuction();
+
+    // Update when checkbox changes
+    checkbox.addEventListener('change', refreshNextAuction);
+
+    // Also watch for tab switches to ensure display is correct
+    var tabButton = document.querySelector('[data-bs-target="#' + elementId.replace('outgoing-email-preview-', '').replace('-next-auction', '-content') + '-content"]');
+    if (tabButton) {
+      tabButton.addEventListener('shown.bs.tab', refreshNextAuction);
+    }
+  }
+
+  setupAuctionToggle('id_welcome_include_auction', 'outgoing-email-preview-welcome-next-auction');
+  setupAuctionToggle('id_renewal_include_auction', 'outgoing-email-preview-renewal-next-auction');
+  setupAuctionToggle('id_expiring_soon_include_auction', 'outgoing-email-preview-expiring-next-auction');
+})();
+</script>
+
+<style>
+  .email-preview-frame textarea { background: #ffffff; }
+</style>
 {% endblock %}

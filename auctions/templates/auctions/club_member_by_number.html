@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% load qr_code membership_tags %}
 {% block title %}Membership — {{ club.name }}{% endblock %}
 
 {% block content %}
@@ -11,10 +10,11 @@
     {% if member.membership_number_visible %}
       <div class="text-muted small mb-1">Membership number</div>
       <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
-      <div class="membership-barcode mb-3" style="max-width: 320px; margin-left: auto; margin-right: auto;">{% membership_barcode member.membership_number %}</div>
-      <div class="d-flex justify-content-center mb-3">
-        {% qr_from_text member.membership_number|stringformat:"s" size="s" %}
-      </div>
+      {% if member.barcode_image_link %}
+        <div class="membership-barcode mb-3" style="max-width: 320px; margin-left: auto; margin-right: auto;">
+          <img src="{{ member.barcode_image_link }}" alt="Membership barcode" style="width:100%;height:auto;">
+        </div>
+      {% endif %}
     {% endif %}
 
     {% if expiration %}
@@ -28,15 +28,13 @@
         </div>
       {% endif %}
     {% elif not is_paid_member %}
-      <div class="alert alert-warning">No paid membership on record.</div>
+      <div class="alert alert-warning text-dark">No paid membership on record.</div>
     {% endif %}
 
-    {% if payment_link and (is_expired or not is_paid_member or expiring_soon) %}
-      <div class="mt-3">
-        <a class="btn btn-success" href="{{ payment_link }}">
-          <i class="bi bi-credit-card"></i> Pay membership
-        </a>
-      </div>
+    {% if membership_invoice %}
+      {% include "partials/membership_payment_inline.html" %}
+    {% elif club.membership_annual_fee and is_paid_member and not is_expired and not expiring_soon %}
+      <p class="text-muted small mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
     {% endif %}
   </div>
 </div>

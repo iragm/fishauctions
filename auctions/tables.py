@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import django_tables2 as tables
 from django.urls import reverse
 from django.utils.html import format_html
@@ -518,22 +520,38 @@ class ClubMemberHTMxTable(tables.Table):
                 break
         return result
 
-    def render_membership_expiration_date(self, value):
+    def render_membership_expiration_date(self, value, record):
         from django.utils import timezone
 
-        if not value:
-            return "—"
         today = timezone.now().date()
+        has_fee = bool(record.club.membership_annual_fee)
+
+        renew_btn = format_html("")
+        if has_fee and not record.is_deleted:
+            renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+            renew_btn = format_html(
+                " <a href='javascript:void(0)' hx-get='{}' hx-target='#modals-here'"
+                " class='btn btn-sm btn-primary py-0 px-1'>Renew</a>",
+                renew_url,
+            )
+
+        if not value:
+            return format_html("—{}", renew_btn) if has_fee and not record.is_deleted else format_html("—")
+
         formatted = value.strftime("%b %-d, %Y")
         days_expired = (today - value).days
         if days_expired > 0:
             return format_html(
-                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>",
+                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>{}",
                 formatted,
                 days_expired,
                 "s" if days_expired != 1 else "",
+                renew_btn,
             )
-        return formatted
+        days_until = (value - today).days
+        if days_until <= 30:
+            return format_html("{}{}", formatted, renew_btn)
+        return format_html("{}", formatted)
 
     def render_membership_last_paid(self, value):
         if not value:
@@ -554,7 +572,7 @@ class ClubMemberHTMxTable(tables.Table):
         return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
-        if not self.can_add_edit and not self.can_manage_permissions:
+        if not self.can_add_edit and not self.can_manage_permissions and not self.can_manage_discord:
             return ""
         name = record.display_name
 
@@ -563,8 +581,7 @@ class ClubMemberHTMxTable(tables.Table):
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
                 '<li><a class="dropdown-item" href="javascript:void(0)"'
-                ' hx-get="{}" hx-target="#modals-here"'
-                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                ' hx-get="{}" hx-target="#modals-here">'
                 '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
                 "<li><hr class='dropdown-divider'></li>",
                 perms_url,
@@ -582,17 +599,16 @@ class ClubMemberHTMxTable(tables.Table):
                     '<i class="bi bi-person-check me-1"></i>Reactivate</a></li>'
                     '<li><hr class="dropdown-divider"></li>'
                     '<li><a class="dropdown-item text-danger" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-trash me-1"></i>Permanently delete</a></li>',
                     reactivate_url,
                     perm_delete_url,
                 )
             else:
-                renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
-                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
                 confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
                 merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+                if self.request:
+                    merge_url += "?" + urlencode({"next": self.request.get_full_path()})
                 email_item = format_html("")
                 if record.email:
                     icon_class = "bi bi-envelope"
@@ -611,29 +627,39 @@ class ClubMemberHTMxTable(tables.Table):
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
                     membership_number_item = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'
-                        ' hx-get="{}" hx-target="#modals-here"'
-                        ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                        ' hx-get="{}" hx-target="#modals-here">'
                         '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
                         membership_number_url,
                     )
+                # Renew and set-expiry are only meaningful when the club charges a membership fee.
+                renewal_items = format_html("")
+                if record.club.membership_annual_fee:
+                    renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+                    set_expiry_url = reverse(
+                        "club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk}
+                    )
+                    if self.request:
+                        set_expiry_url += "?" + urlencode({"next": self.request.get_full_path()})
+                    renewal_items = format_html(
+                        '<li><a class="dropdown-item" href="javascript:void(0)"'
+                        ' hx-get="{}" hx-target="#modals-here">'
+                        '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
+                        '<li><a class="dropdown-item" href="{}">'
+                        '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>',
+                        renew_confirm_url,
+                        set_expiry_url,
+                    )
                 edit_items = format_html(
-                    '<li><a class="dropdown-item" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                    '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
-                    '<li><a class="dropdown-item" href="{}">'
-                    '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>'
+                    "{}"
                     '<li><a class="dropdown-item" href="{}">'
                     '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
                     "{}"
                     "{}"
                     '<li><hr class="dropdown-divider"></li>'
                     '<li><a class="dropdown-item" href="javascript:void(0)"'
-                    ' hx-get="{}" hx-target="#modals-here"'
-                    ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                    ' hx-get="{}" hx-target="#modals-here">'
                     '<i class="bi bi-person-dash me-1"></i>Deactivate</a></li>',
-                    renew_confirm_url,
-                    set_expiry_url,
+                    renewal_items,
                     merge_url,
                     membership_number_item,
                     email_item,
@@ -641,6 +667,28 @@ class ClubMemberHTMxTable(tables.Table):
                 )
 
         django_admin_item = format_html("")
+        discord_item = format_html("")
+        if self.can_manage_discord and not record.is_deleted:
+            discord_url = reverse("clubmember_discord", kwargs={"pk": record.pk})
+            discord_item = format_html(
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-discord me-1"></i>Discord</a></li>',
+                discord_url,
+            )
+
+        mailchimp_item = format_html("")
+        if self.can_add_edit and record.mailchimp_web_id and record.club.mailchimp_server_prefix:
+            mailchimp_url = (
+                f"https://{record.club.mailchimp_server_prefix}.admin.mailchimp.com"
+                f"/lists/members/view?id={record.mailchimp_web_id}"
+            )
+            mailchimp_item = format_html(
+                '<li><a class="dropdown-item" href="{}" target="_blank" rel="noopener">'
+                '<i class="bi bi-envelope-paper me-1"></i>View in Mailchimp</a></li>',
+                mailchimp_url,
+            )
+
         if self.request and getattr(self.request.user, "is_staff", False):
             admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
             django_admin_item = format_html(
@@ -654,10 +702,12 @@ class ClubMemberHTMxTable(tables.Table):
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
+            discord_item,
+            mailchimp_item,
             edit_items,
             django_admin_item,
         )
@@ -681,13 +731,15 @@ class ClubMemberHTMxTable(tables.Table):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
+        self.can_manage_discord = kwargs.pop("can_manage_discord", False)
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
         can_manage_auctions = kwargs.pop("can_manage_auctions", False)
+        club_has_fee = kwargs.pop("club_has_fee", True)
         exclude = list(kwargs.pop("exclude", None) or [])
         if not can_manage_bap:
             exclude += ["bap_points", "hap_points"]
-        if not can_manage_membership:
+        if not can_manage_membership or not club_has_fee:
             exclude += ["membership_last_paid", "membership_expiration_date"]
         if not can_manage_auctions:
             exclude += ["bidder_number"]

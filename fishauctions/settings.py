@@ -499,6 +499,8 @@ LOCATION_FIELD = {
     },
 }
 
+GOOGLE_MAPS_SERVER_API_KEY = os.environ.get("GOOGLE_MAPS_SERVER_API_KEY", "")
+
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
@@ -781,6 +783,10 @@ if not _encryption_key:
     msg = f"FIELD_ENCRYPTION_KEY environment variable is required. Add this to your .env file: {env_line}"
     raise ImproperlyConfigured(msg)
 FIELD_ENCRYPTION_KEY = _encryption_key
+
+# Mailchimp OAuth integration settings (one global app; each club authorizes it)
+MAILCHIMP_CLIENT_ID = os.environ.get("MAILCHIMP_CLIENT_ID", "")
+MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")

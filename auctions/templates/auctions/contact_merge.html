@@ -16,6 +16,7 @@
     <form method="post" action="{{ action_url }}">
       {% csrf_token %}
       {% if action_mode %}<input type="hidden" name="action" value="{{ action_mode }}">{% endif %}
+      {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
 
       {% if step == "review" %}
         <input type="hidden" name="step" value="review">

@@ -1928,7 +1928,6 @@ class AuctionEditForm(forms.ModelForm):
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
             "email_users_when_invoices_ready",
-            "add_people_from_auction_to_club",
             "add_membership_fee_to_invoices_for_expired_members",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
@@ -2022,25 +2021,29 @@ class AuctionEditForm(forms.ModelForm):
                 and settings.PAYPAL_SECRET
             )
 
-        if paypal_seller:
-            self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
-        elif uses_site_paypal:
-            self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
-        else:
-            # Hide the field if no PayPal route is configured.
+        if club:
+            # When auction is tied to a club, payments are controlled by club settings
             self.fields["enable_online_payments"].widget = forms.HiddenInput()
-
-        if square_seller:
-            self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
-        else:
-            # Square requires an actual linked seller record (no site fallback).
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
+        else:
+            if paypal_seller:
+                self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
+            elif uses_site_paypal:
+                self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
+            else:
+                # Hide the field if no PayPal route is configured.
+                self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
-        # These three fields are shown/hidden via JavaScript based on the club selection.
+            if square_seller:
+                self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+            else:
+                # Square requires an actual linked seller record (no site fallback).
+                self.fields["enable_square_payments"].widget = forms.HiddenInput()
+
+        # These fields are shown/hidden via JavaScript based on the club selection.
         # We always render real widgets so the JS can toggle them; server validation
         # already rejects the combination of no-club + enabled flag.
         if self.instance.pk and self.instance.manage_users_through_club:
-            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
             # When club-managed, copy_users is irrelevant — the new auction gets members from the club
             self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
             has_activity = (
@@ -2048,7 +2051,7 @@ class AuctionEditForm(forms.ModelForm):
                 or Invoice.objects.filter(auction=self.instance).exists()
             )
             if has_activity:
-                # Auction has lots or invoices — club-managed mode is locked; club field also locked
+                # Lock club-managed mode once lots or invoices exist to prevent disabling it
                 self.fields["manage_users_through_club"].disabled = True
                 self.fields["manage_users_through_club"].help_text = "Cannot be changed once lots or invoices exist."
                 self.fields["club"].disabled = True
@@ -2060,6 +2063,10 @@ class AuctionEditForm(forms.ModelForm):
                 self.fields[
                     "manage_users_through_club"
                 ].help_text = "Changing this will delete all existing participant records for this auction."
+        else:
+            # Membership fee only applies when club-managed mode is enabled
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        # clean_manage_users_through_club rejects enabling on non-empty auctions
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -2270,10 +2277,6 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
-                    "add_people_from_auction_to_club",
-                    css_class="col-md-3",
-                ),
-                Div(
                     "add_membership_fee_to_invoices_for_expired_members",
                     css_class="col-md-3",
                 ),
@@ -2334,6 +2337,11 @@ class AuctionEditForm(forms.ModelForm):
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
         existing_instance = self.instance
 
+        # When a club is selected, payments are controlled by club settings, not auction settings
+        if cleaned_data.get("club"):
+            cleaned_data["enable_online_payments"] = False
+            cleaned_data["enable_square_payments"] = False
+
         if existing_instance and existing_instance.pk:
             if use_seller_dash_lot_numbering is not existing_instance.use_seller_dash_lot_numbering:
                 if existing_instance.admin_checklist_lots_added:
@@ -2373,8 +2381,6 @@ class AuctionEditForm(forms.ModelForm):
                 "add_membership_fee_to_invoices_for_expired_members",
                 "Associate this auction with a club before enabling membership fees.",
             )
-        if cleaned_data.get("add_people_from_auction_to_club") and not cleaned_data.get("club"):
-            self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
     def clean_manage_users_through_club(self):
@@ -3718,7 +3724,6 @@ class ClubEditForm(forms.ModelForm):
             "enable_club_page",
             "allow_joining",
             "enable_breeder_award_program",
-            "enable_membership",
             "description",
             "location",
             "location_coordinates",
@@ -3738,7 +3743,6 @@ class ClubEditForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["enable_membership"].label = "Membership and payments"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         # Required so the icon ImageField actually uploads.
@@ -3750,10 +3754,9 @@ class ClubEditForm(forms.ModelForm):
             "facebook_page",
             "discord_invite_link",
             Div(
-                Div("enable_club_page", css_class="col-3"),
-                Div("allow_joining", css_class="col-3"),
-                Div("enable_breeder_award_program", css_class="col-3"),
-                Div("enable_membership", css_class="col-3"),
+                Div("enable_club_page", css_class="col-4"),
+                Div("allow_joining", css_class="col-4"),
+                Div("enable_breeder_award_program", css_class="col-4"),
                 css_class="row",
             ),
             "description",
@@ -3809,18 +3812,16 @@ class ClubMembershipSettingsForm(forms.ModelForm):
     class Meta:
         model = Club
         fields = [
-            "contact_email",
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "send_membership_expiration_reminders",
         ]
         help_texts = {
             "membership_system": (
                 "January 1st: all memberships expire on Jan 1 each year. "
                 "Rolling: memberships expire one year from the payment date."
             ),
-            "membership_annual_fee": "Leave blank if free.",
+            "membership_annual_fee": "Leave blank or set to 0 to disable membership fees. When 0, expiration tracking, payment buttons, and reminder emails are all disabled.",
         }
 
     def __init__(self, *args, **kwargs):
@@ -3832,16 +3833,11 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "membership_number_mode",
-            "send_membership_expiration_reminders",
-            "contact_email",
         )
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 
     def clean(self):
-        cleaned_data = super().clean()
-        if cleaned_data.get("send_membership_expiration_reminders") and not cleaned_data.get("contact_email"):
-            self.add_error("contact_email", "A membership email address is required to send expiration reminders.")
-        return cleaned_data
+        return super().clean()
 
 
 class ClubEmailSettingsForm(forms.ModelForm):
@@ -3850,19 +3846,78 @@ class ClubEmailSettingsForm(forms.ModelForm):
         fields = [
             "auction_email_member",
             "contact_email_member",
+            "contact_email",
+            "send_welcome_email_to_new_members",
+            "send_membership_expiration_reminders_30_days",
+            "send_membership_expiration_reminders",
+            "send_membership_renewal_confirmation",
+            "welcome_opening",
+            "welcome_closing",
+            "welcome_include_auction",
+            "renewal_opening",
+            "renewal_closing",
+            "renewal_include_auction",
+            "expiring_soon_opening",
+            "expiring_soon_closing",
+            "expiring_soon_include_auction",
         ]
 
     def __init__(self, *args, **kwargs):
+        show_email_routing = kwargs.pop("show_email_routing", True)
         super().__init__(*args, **kwargs)
+        club = self.instance
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.layout = Layout(
-            "auction_email_member",
-            "contact_email_member",
-        )
-        self.helper.add_input(Submit("submit", "Save email settings", css_class="btn-primary"))
-        club = self.instance
-        if club and club.pk:
+        # The template renders the <form> tag itself so it can wrap both the
+        # crispy fields and the email-preview mockup (which embeds the welcome
+        # text textarea inline).
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        payments_enabled = bool(club and club.membership_payment_emails_enabled)
+        layout_fields = []
+        if show_email_routing:
+            layout_fields.append(
+                Fieldset(
+                    "Incoming email routing",
+                    "auction_email_member",
+                    "contact_email_member",
+                )
+            )
+        else:
+            # When SES routing is off there is no per-member routing; expose the
+            # plain reply-to address here instead of on the membership settings page.
+            layout_fields.append(
+                Fieldset(
+                    "Reply-to address",
+                    "contact_email",
+                )
+            )
+        # The four toggles are rendered by crispy. The email opening/closing fields
+        # and include_auction checkboxes are rendered manually in the template
+        # (inside the preview mockup) — they are excluded from the layout here
+        # but still in Meta.fields so they post.
+        outgoing_fields = [
+            "send_welcome_email_to_new_members",
+            "send_membership_expiration_reminders_30_days",
+            "send_membership_expiration_reminders",
+            "send_membership_renewal_confirmation",
+        ]
+        layout_fields.append(Fieldset("Outgoing emails", *outgoing_fields))
+        self.helper.layout = Layout(*layout_fields)
+        if show_email_routing:
+            # The contact_email field is hidden when SES routing is enabled — it is
+            # not exposed in the layout and members route via contact_email_member.
+            self.fields.pop("contact_email", None)
+        else:
+            # Drop the dropdown routing fields entirely so they are not posted.
+            self.fields.pop("auction_email_member", None)
+            self.fields.pop("contact_email_member", None)
+            if "contact_email" in self.fields:
+                self.fields["contact_email"].label = "Membership email address"
+                self.fields[
+                    "contact_email"
+                ].help_text = "Replies to outgoing membership emails will be sent to this address."
+        if club and club.pk and show_email_routing:
             base_qs = (
                 club.members.filter(is_deleted=False)
                 .filter((Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email="")))
@@ -3890,24 +3945,69 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 return f" ({email})"
             return ""
 
-        self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
-            queryset=auction_qs,
-            required=False,
-            label="Auction replies",
-            help_text=(
-                f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
-            ),
+        if show_email_routing:
+            self.fields["auction_email_member"] = _ClubEmailMemberChoiceField(
+                queryset=auction_qs,
+                required=False,
+                label="Auction replies",
+                help_text=(
+                    f"Replies sent to {club.auction_sender_email or 'club-slug-auctions@your-domain'} are routed to this member. "
+                    f"Leave blank to fall back to the first club admin or auction manager with an email address{_fallback_label(auction_fallback)}."
+                ),
+            )
+            self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
+                queryset=contact_qs,
+                required=False,
+                label="Contact replies",
+                help_text=(
+                    f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
+                    f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
+                ),
+            )
+        self.fields["send_welcome_email_to_new_members"].label = "Send welcome letter to new club members"
+        self.fields[
+            "send_membership_expiration_reminders_30_days"
+        ].label = "Send expiration reminder 30 days before membership expires"
+        self.fields[
+            "send_membership_expiration_reminders"
+        ].label = "Send expiration reminder the day before membership expires"
+        self.fields["send_membership_renewal_confirmation"].label = "Send membership renewal confirmation"
+        reminder_help = (
+            "Requires integrated membership payments so the email can link members back to their renewal page."
         )
-        self.fields["contact_email_member"] = _ClubEmailMemberChoiceField(
-            queryset=contact_qs,
-            required=False,
-            label="Contact replies",
-            help_text=(
-                f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
-                f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
-            ),
-        )
+        self.fields["send_membership_expiration_reminders_30_days"].help_text = reminder_help
+        self.fields["send_membership_expiration_reminders"].help_text = reminder_help
+        if not payments_enabled:
+            self.fields["send_membership_expiration_reminders_30_days"].disabled = True
+            self.fields["send_membership_expiration_reminders"].disabled = True
+            self.fields[
+                "send_membership_expiration_reminders_30_days"
+            ].help_text = "No connected payment account, expiration emails will not be sent"
+            self.fields[
+                "send_membership_expiration_reminders"
+            ].help_text = "No connected payment account, expiration emails will not be sent"
+            self.fields["expiring_soon_include_auction"].disabled = True
+
+    _EMAIL_TEXT_FIELDS = [
+        "welcome_opening",
+        "welcome_closing",
+        "renewal_opening",
+        "renewal_closing",
+        "expiring_soon_opening",
+        "expiring_soon_closing",
+    ]
+    _HTML_TAG_RE = re.compile(r"<[^>]+>")
+    _URL_RE = re.compile(r"https?://", re.IGNORECASE)
+
+    def clean(self):
+        cleaned = super().clean()
+        for field_name in self._EMAIL_TEXT_FIELDS:
+            value = cleaned.get(field_name, "") or ""
+            if self._HTML_TAG_RE.search(value):
+                self.add_error(field_name, "HTML tags are not allowed in email text.")
+            elif self._URL_RE.search(value):
+                self.add_error(field_name, "Links (URLs) are not allowed in email text.")
+        return cleaned
 
 
 class ClubBapSettingsForm(forms.ModelForm):
@@ -4043,11 +4143,10 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
+            "send_welcome_email",
             "bidder_number",
             "bidding_allowed",
             "selling_allowed",
-            "discord_role_auto_managed",
-            "discord_role_override",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
@@ -4066,11 +4165,6 @@ class ClubMemberAdminForm(forms.ModelForm):
         self.helper.form_method = "post"
         self._club = club
         self._auctiontos = auctiontos
-
-        # Restrict discord_role_override queryset to roles the bot can actually assign
-        has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
-        if club:
-            self.fields["discord_role_override"].queryset = club.discord_roles.filter(bot_can_manage=True)
 
         # --- Auction-context extra fields ---
         # auctiontos is set when editing; auction is set when creating in check-in mode
@@ -4113,6 +4207,19 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.fields["contact_status"].initial = (
                 self.instance.contact_status if self.instance and self.instance.pk else "contact"
             )
+        show_welcome_email = not (
+            self.instance and self.instance.pk and (self.instance.welcome_email_sent or self.instance.source == "csv")
+        )
+        if not show_welcome_email or in_auction_context:
+            self.fields["send_welcome_email"].widget = forms.HiddenInput()
+            self.fields["send_welcome_email"].required = False
+            instance_obj = self.instance if self.instance and self.instance.pk else None
+            self.fields["send_welcome_email"].initial = instance_obj.send_welcome_email if instance_obj else True
+        else:
+            self.fields["send_welcome_email"].label = "Send welcome letter"
+            self.fields["send_welcome_email"].required = False
+            if not (self.instance and self.instance.pk):
+                self.fields["send_welcome_email"].initial = True
 
         # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them.
         # BooleanField has required=True by default; set required=False so an absent/False value
@@ -4133,29 +4240,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 self.fields["selling_allowed"].initial = instance_obj.selling_allowed if instance_obj else True
                 self.fields["bidding_allowed"].initial = instance_obj.bidding_allowed if instance_obj else True
 
-        # Hide Discord role fields when the club has no Discord server, or in auction context.
-        # discord_role_auto_managed is a BooleanField — set required=False and a sensible initial
-        # so HiddenInput doesn't trigger a spurious required-field validation error.
-        discord_fields = []
-        if has_discord and not in_auction_context:
-            discord_fields = [
-                "discord_role_auto_managed",
-                Field(
-                    "discord_role_override",
-                    wrapper_class="discord-role-override-field",
-                ),
-            ]
-        else:
-            self.fields["discord_role_auto_managed"].widget = forms.HiddenInput()
-            self.fields["discord_role_auto_managed"].required = False
-            instance_obj = self.instance if self.instance and self.instance.pk else None
-            self.fields["discord_role_auto_managed"].initial = (
-                instance_obj.discord_role_auto_managed if instance_obj else True
-            )
-            self.fields["discord_role_override"].widget = forms.HiddenInput()
-            # discord_role_auto_managed must appear in the layout for crispy to render it as hidden
-            discord_fields = [Field("discord_role_auto_managed"), Field("discord_role_override")]
-
         # Layout:
         #   Row: bidder_number (left) | memo (right)
         #   name
@@ -4165,9 +4249,9 @@ class ClubMemberAdminForm(forms.ModelForm):
         #   Row: bidding_allowed | selling_allowed  (hidden when not applicable)
         #   is_club_member (alt fees, auction context only)
         #   pickup_location (multi-location auction only)
-        # In auction context contact_status and discord_role_auto_managed are hidden but still
-        # in the form — they MUST appear in the layout so crispy renders them as hidden inputs
-        # (crispy only auto-renders hidden fields that are somewhere in the layout).
+        # In auction context contact_status is hidden but still in the form — it MUST appear in the
+        # layout so crispy renders it as a hidden input (crispy only auto-renders hidden fields that
+        # are somewhere in the layout).
         if in_auction_context:
             contact_status_fields: list = [Field("contact_status")]
         else:
@@ -4195,6 +4279,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             ),
             "address",
             *contact_status_fields,
+            "send_welcome_email",
             bidding_selling_row,
             *alt_fees_field,
             *pickup_field,
@@ -4217,7 +4302,6 @@ class ClubMemberAdminForm(forms.ModelForm):
         elif post_url:
             self.helper.layout = Layout(
                 *base_fields,
-                *discord_fields,
                 Div(
                     HTML(
                         '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
@@ -4229,18 +4313,8 @@ class ClubMemberAdminForm(forms.ModelForm):
                 ),
             )
         else:
-            self.helper.layout = Layout(
-                *base_fields,
-                *discord_fields,
-            )
+            self.helper.layout = Layout(*base_fields)
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
-
-    def clean_discord_role_override(self):
-        role = self.cleaned_data.get("discord_role_override")
-        if role and not role.bot_can_manage:
-            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
-            raise forms.ValidationError(msg)
-        return role
 
     def clean_bidder_number(self):
         bidder_number = (self.cleaned_data.get("bidder_number") or "").strip()
@@ -4256,6 +4330,101 @@ class ClubMemberAdminForm(forms.ModelForm):
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
         return bidder_number
+
+
+class ClubMemberDiscordForm(forms.ModelForm):
+    """Form for managing a club member's Discord integration settings."""
+
+    class Meta:
+        model = ClubMember
+        fields = ["discord_id", "discord_role_auto_managed", "discord_role_override"]
+        widgets = {
+            "discord_id": forms.TextInput(attrs={"placeholder": "Discord user ID (e.g. 123456789012345678)"}),
+        }
+        help_texts = dict.fromkeys(fields, "")
+
+    def __init__(self, *args, post_url=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+
+        instance = self.instance if self.instance and self.instance.pk else None
+
+        # Restrict override queryset to roles the bot can manage
+        if instance and instance.club:
+            self.fields["discord_role_override"].queryset = instance.club.discord_roles.filter(bot_can_manage=True)
+        else:
+            from .models import ClubDiscordRole
+
+            self.fields["discord_role_override"].queryset = ClubDiscordRole.objects.none()
+
+        self.fields["discord_role_auto_managed"].required = False
+
+        # Discord ID: readonly when set (with Clear button), editable when blank
+        from django.utils.html import format_html
+
+        has_discord_id = bool(instance and instance.discord_id)
+        if has_discord_id:
+            discord_id_row = HTML(
+                format_html(
+                    '<div class="mb-3">'
+                    '<label class="form-label" for="id_discord_id">Discord ID</label>'
+                    '<div class="input-group">'
+                    '<input type="text" name="discord_id" id="id_discord_id" maxlength="100"'
+                    ' value="{}" readonly class="form-control" autocomplete="off">'
+                    '<button class="btn btn-outline-danger" type="button" id="clear-discord-id-btn">'
+                    "Clear</button>"
+                    "</div></div>",
+                    instance.discord_id,
+                )
+            )
+        else:
+            discord_id_row = Field("discord_id")
+
+        discord_config_url = (
+            reverse("club_discord_config", kwargs={"slug": instance.club.slug}) if instance and instance.club else "#"
+        )
+        help_text_html = HTML(
+            f'<div class="alert alert-warning py-2 small mb-3">'
+            f"You most likely do not need to change the settings here &mdash; users can connect their own Discord account using the join button. "
+            f'<a href="{discord_config_url}">Click here to configure your club\'s Discord.</a>'
+            f"</div>"
+        )
+
+        layout_fields = [
+            help_text_html,
+            discord_id_row,
+            "discord_role_auto_managed",
+            Field("discord_role_override", wrapper_class="discord-role-override-field"),
+        ]
+
+        if post_url:
+            self.helper.layout = Layout(
+                *layout_fields,
+                Div(
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    ),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary ms-2">Save</button>'
+                    ),
+                    css_class="modal-footer",
+                ),
+            )
+        else:
+            self.helper.layout = Layout(*layout_fields)
+            self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+    def clean_discord_id(self):
+        value = (self.cleaned_data.get("discord_id") or "").strip()
+        return value or None
+
+    def clean_discord_role_override(self):
+        role = self.cleaned_data.get("discord_role_override")
+        if role and not role.bot_can_manage:
+            msg = "The bot's role is not above this role in the Discord hierarchy — it cannot be assigned to members."
+            raise forms.ValidationError(msg)
+        return role
 
 
 class ClubMemberPermissionsForm(forms.ModelForm):

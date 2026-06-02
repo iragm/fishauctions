@@ -4,22 +4,24 @@
 <div data-htmx-modal-root>
   <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
   <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
-	<div class="modal-dialog modal-lg modal-dialog-centered">
+	<div class="{% block modal_dialog_class %}modal-dialog modal-lg modal-dialog-centered{% endblock %}">
 	  <div class="modal-content">
 		<div class="modal-header">
-		  <h5 class="modal-title" id="modal-invoice-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
+		  <h5 class="modal-title" id="modal-invoice-title">{% block modal_title %}{{ modal_title | safe }}{% endblock %}</h5> {{ top_buttons }}
 		</div>
 		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning text-dark'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip|safe }}</span>
             {% if invoice %}{% include "auctions/partials/invoice_membership_renewal.html" %}{% endif %}
-			<p>{% crispy form form.helper %}</p>
+			{% block modal_body %}<p>{% crispy form form.helper %}</p>{% endblock %}
 	  </div>
+	  {% block modal_footer %}{% endblock %}
 	</div>
   </div>
 </div>
 </div>
 <script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
+{% block form_scripts %}
 <script>
 (function tryInit(retries) {
     // Wait for select2.full.js (jQuery.fn.select2) and autocomplete_light.min.js (yl) to load.
@@ -62,3 +64,4 @@
 })(30);
 </script>
 {{ extra_script }}
+{% endblock %}

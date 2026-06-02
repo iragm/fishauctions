@@ -41,6 +41,14 @@ CLUB_MEMBER_API_KEY_MAPPING_FIELDS = (*CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_
 class ClubMemberSerializer(serializers.ModelSerializer):
     wallet_link = serializers.ReadOnlyField()
     simple_membership_link = serializers.ReadOnlyField()
+    # lat/lng are intentionally excluded from the API to protect member location privacy.
+    # Only the rounded distance to the club is exposed. Do not add lat/lng here.
+    distance_to = serializers.SerializerMethodField()
+
+    def get_distance_to(self, obj):
+        """Return distance from club to member in miles, rounded to 10 miles, or null."""
+        val = getattr(obj, "distance_to", None)
+        return int(val) if val is not None else None
 
     class Meta:
         model = ClubMember
@@ -64,6 +72,7 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "membership_number",
             "wallet_link",
             "simple_membership_link",
+            "distance_to",
         ]
         read_only_fields = ["id", "createdon", "club", "is_deleted", "membership_number"]
 

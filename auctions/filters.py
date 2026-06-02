@@ -1024,7 +1024,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated...",
+                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated, nonmailchimp...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1071,6 +1071,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         source_filter = None
         status_filter = None
         duplicate_filter = False
+        nonmailchimp_filter = False
         remaining = []
         for token in tokens:
             if token == "discord":
@@ -1089,6 +1090,8 @@ class ClubMemberFilter(django_filters.FilterSet):
                 source_filter = "manually_added"
             elif token == "duplicate":
                 duplicate_filter = True
+            elif token in ("nonmailchimp", "notsynced", "not_synced"):
+                nonmailchimp_filter = True
             elif token == "deactivated":
                 pass  # handled in filter_queryset
             else:
@@ -1098,6 +1101,8 @@ class ClubMemberFilter(django_filters.FilterSet):
             queryset = queryset.filter(source=source_filter)
         if duplicate_filter:
             queryset = queryset.filter(possible_duplicate__isnull=False)
+        if nonmailchimp_filter:
+            queryset = queryset.filter(mailchimp_last_synced__isnull=True)
         if status_filter:
             today = timezone.now().date()
             if status_filter == "current":

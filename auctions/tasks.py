@@ -5,11 +5,14 @@ This module contains all Celery tasks that were previously run as cron jobs.
 Each task wraps a management command to maintain backward compatibility.
 """
 
+import datetime
 import json
 import logging
+from html import escape
 
 import requests
 from celery import shared_task
+from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
@@ -25,6 +28,187 @@ AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off schedul
 BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 
 logger = logging.getLogger(__name__)
+
+
+def _membership_email_reply_to(club):
+    fallback_reply_to = settings.DEFAULT_FROM_EMAIL
+    if settings.ADMINS:
+        fallback_reply_to = settings.ADMINS[0][1]
+    return club.contact_email or fallback_reply_to
+
+
+def _club_member_membership_link(member, current_site=None):
+    current_site = current_site or Site.objects.get_current()
+    return f"https://{current_site.domain}{member.member_page_url}"
+
+
+def _greeting_name(member):
+    name = (member.name or "").strip()
+    return name or "Member"
+
+
+def _next_auction_fragment(club, current_site, include_auction=True):
+    """Return (text, html) for the 'next promoted auction' line, or ('', '')."""
+    from django.utils import timezone
+
+    from auctions.models import Auction
+
+    if not include_auction:
+        return "", ""
+    today = timezone.localdate()
+    auction = (
+        Auction.objects.filter(
+            club=club,
+            promote_this_auction=True,
+            is_deleted=False,
+            date_start__date__gte=today,
+        )
+        .order_by("date_start")
+        .first()
+    )
+    if not auction:
+        return "", ""
+    date_str = auction.date_start.strftime("%B %-d, %Y") if auction.date_start else ""
+    rules_url = f"https://{current_site.domain}{auction.get_absolute_url()}"
+    text_parts = [f"Our next auction will be {auction.title}"]
+    if date_str:
+        text_parts.append(f"on {date_str}")
+    location_text = ""
+    location_html = ""
+    locations = list(auction.physical_location_qs)
+    if len(locations) == 1 and locations[0].directions_link:
+        location_text = f" Get directions: {locations[0].directions_link}"
+        location_html = f" <a href='{escape(locations[0].directions_link)}'>Get directions</a>."
+    text = " ".join(text_parts).rstrip() + "." + (location_text or "") + f" Read the rules here: {rules_url}"
+    html = (
+        " ".join(escape(p) for p in text_parts).rstrip()
+        + "."
+        + location_html
+        + f" <a href='{escape(rules_url)}'>Read the auction's rules</a>."
+    )
+    return text, html
+
+
+def _render_membership_email_html(
+    member,
+    intro_text,
+    message_text,
+    membership_link,
+    club_icon_url,
+    barcode_url,
+    next_auction_html,
+    opening_text="",
+    closing_text="",
+):
+    html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
+    if opening_text:
+        html_parts.append(escape(opening_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
+    if intro_text:
+        html_parts.append(escape(intro_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
+    html_parts.append(f"{escape(message_text)}<br><br>")
+    html_parts.append(f"<a href='{escape(membership_link)}'>View your membership</a><br><br>")
+    if barcode_url:
+        html_parts.append(
+            f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
+            "style='max-width:320px;width:100%;height:auto;'></div><br>"
+        )
+    if next_auction_html:
+        html_parts.append(f"{next_auction_html}<br><br>")
+    if closing_text:
+        html_parts.append(escape(closing_text).replace("\n", "<br>"))
+        html_parts.append("<br><br>")
+    if club_icon_url:
+        html_parts.append(
+            f"<div><img src='{escape(club_icon_url)}' alt='{escape(member.club.name)}' "
+            "style='height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;'>"
+            f"{escape(member.club.name)}</div>"
+        )
+    else:
+        html_parts.append(escape(member.club.name))
+    return "".join(html_parts)
+
+
+def send_club_member_email(member, subject, message_text, email_type="welcome"):
+    if not member.email or member.contact_status == "do_not_contact":
+        return False
+    current_site = Site.objects.get_current()
+    membership_link = _club_member_membership_link(member, current_site=current_site)
+    intro_text = ""
+    barcode_url = member.barcode_image_link_png if member.membership_number_visible else ""
+
+    opening_text = ""
+    closing_text = ""
+    include_auction = member.club.include_next_auction_in_emails
+
+    if email_type == "welcome":
+        opening_text = member.club.welcome_opening
+        closing_text = member.club.welcome_closing
+        include_auction = member.club.welcome_include_auction
+    elif email_type == "renewal":
+        opening_text = member.club.renewal_opening
+        closing_text = member.club.renewal_closing
+        include_auction = member.club.renewal_include_auction
+    elif email_type == "expiring_soon":
+        opening_text = member.club.expiring_soon_opening
+        closing_text = member.club.expiring_soon_closing
+        include_auction = member.club.expiring_soon_include_auction
+
+    next_text, next_html = "", ""
+    if include_auction:
+        next_text, next_html = _next_auction_fragment(member.club, current_site, include_auction=include_auction)
+
+    text_parts = [f"Dear {_greeting_name(member)},", ""]
+    if opening_text:
+        text_parts.extend([opening_text, ""])
+    text_parts.extend([intro_text, ""])
+    text_parts.extend([message_text, "", f"View your membership here: {membership_link}"])
+    if barcode_url:
+        text_parts.extend(["", f"Membership barcode: {barcode_url}"])
+    if next_text:
+        text_parts.extend(["", next_text])
+    if closing_text:
+        text_parts.extend(["", closing_text])
+    text_parts.extend(["", member.club.name])
+    club_icon_url = ""
+    if member.club.icon:
+        club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
+    mail.send(
+        member.email,
+        sender=member.club.contact_sender_email,
+        subject=subject,
+        message="\n".join(text_parts),
+        html_message=_render_membership_email_html(
+            member,
+            intro_text=intro_text,
+            message_text=message_text,
+            membership_link=membership_link,
+            club_icon_url=club_icon_url,
+            barcode_url=barcode_url,
+            next_auction_html=next_html,
+            opening_text=opening_text,
+            closing_text=closing_text,
+        ),
+        headers={"Reply-to": _membership_email_reply_to(member.club)},
+    )
+    return True
+
+
+def maybe_send_membership_renewal_confirmation(member):
+    if not member.club.send_membership_renewal_confirmation:
+        return False
+    expiration_text = ""
+    if member.membership_expiration_date:
+        date_str = member.membership_expiration_date.strftime("%B %-d, %Y")
+        expiration_text = f"  Your membership is paid through {date_str}."
+    message_text = f"Your {member.club.name} membership has been renewed.{expiration_text}"
+    return send_club_member_email(
+        member,
+        subject=f"Your {member.club.name} membership has been renewed",
+        message_text=message_text,
+        email_type="renewal",
+    )
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -243,13 +427,9 @@ def update_expired_membership_discord_roles(self):
     Runs daily. Only members whose computed role differs from last_discord_role_assigned
     will trigger Discord API calls.
     """
-    from django.conf import settings
-    from django.contrib.sites.models import Site
-    from django.urls import reverse
     from django.utils import timezone
-    from post_office import mail
 
-    from auctions.models import ClubMember, Invoice
+    from auctions.models import ClubMember
 
     members = (
         ClubMember.objects.filter(
@@ -267,8 +447,6 @@ def update_expired_membership_discord_roles(self):
             member.maybe_assign_discord_role()
 
     # Zero out YTD BAP/HAP/CAP counters at the start of each new year
-    import datetime
-
     today = datetime.datetime.now(tz=datetime.timezone.utc).date()
     if today.month == 1 and today.day == 1:
         ClubMember.objects.filter(
@@ -276,67 +454,80 @@ def update_expired_membership_discord_roles(self):
             club__enable_breeder_award_program=True,
         ).update(bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0)
 
-    # Send membership expiration reminder emails
-    reminder_qs = (
-        ClubMember.objects.filter(
-            is_deleted=False,
-            club__send_membership_expiration_reminders=True,
-            club__membership_annual_fee__gt=0,
-            membership_expiration_date__isnull=False,
-            membership_expiration_reminder_due__lte=timezone.now(),
-            email__isnull=False,
-        )
-        .exclude(email="")
-        .exclude(contact_status="do_not_contact")
-        .select_related("club")
-    )
-    current_site = Site.objects.get_current()
-    for member in reminder_qs:
-        club = member.club
-        # Find or create an unpaid membership invoice for this member so the
-        # no-login link lets them pay without signing in.
-        invoice = Invoice.objects.filter(
-            club=club,
-            auction=None,
-            auctiontos_user__email__iexact=member.email,
-            renewal_processed=False,
-            status="UNPAID",
-        ).first()
-        if invoice is None and member.user:
-            invoice = Invoice.objects.filter(
-                club=club,
-                auction=None,
-                buyer=member.user,
-                renewal_processed=False,
-                status="UNPAID",
-            ).first()
-        if invoice is None:
-            invoice = Invoice.objects.create(
-                club=club,
-                buyer=member.user or None,
-                status="UNPAID",
-                renewal_needed=True,
+    now = timezone.now()
+    today = now.date()
+
+    welcome_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        welcome_email_sent=False,
+        createdon__lte=now - datetime.timedelta(hours=24),
+    ).select_related("club")
+    for member in welcome_qs:
+        update_fields = ["welcome_email_sent"]
+        member.welcome_email_sent = True
+        if member.source == "csv":
+            if member.send_welcome_email:
+                member.send_welcome_email = False
+                update_fields.append("send_welcome_email")
+            member.save(update_fields=update_fields)
+            continue
+        if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
+            send_club_member_email(
+                member,
+                subject=f"Welcome to the {member.club.name}!",
+                message_text="",
+                email_type="welcome",
             )
-        renew_url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
-        fallback_reply_to = settings.DEFAULT_FROM_EMAIL
-        if settings.ADMINS:
-            fallback_reply_to = settings.ADMINS[0][1]
-        mail.send(
-            member.email,
-            sender=club.contact_sender_email,
-            template="club_membership_expiring",
-            headers={"Reply-to": (club.contact_email or fallback_reply_to)},
-            context={
-                "name": member.display_name,
-                "club": club,
-                "domain": current_site.domain,
-                "navbar_brand": settings.NAVBAR_BRAND,
-                "renew_link": f"https://{current_site.domain}{renew_url}",
-                "member": member,
-            },
-        )
+        member.save(update_fields=update_fields)
+
+    reminder_30_days_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        membership_last_paid__isnull=False,
+        membership_expiration_date__isnull=False,
+        membership_expiration_date__gte=today,
+        membership_expiration_reminder_30_days_due__lte=now,
+    ).select_related("club")
+    for member in reminder_30_days_qs:
+        if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
+            send_club_member_email(
+                member,
+                subject=f"Your {member.club.name} membership expires in 30 days",
+                message_text=f"Your {member.club.name} membership expires in 30 days.",
+                email_type="expiring_soon",
+            )
+        member.membership_expiration_reminder_30_days_due = None
+        member.save(update_fields=["membership_expiration_reminder_30_days_due"])
+
+    reminder_qs = ClubMember.objects.filter(
+        is_deleted=False,
+        membership_last_paid__isnull=False,
+        membership_expiration_date__isnull=False,
+        membership_expiration_date__gte=today,
+        membership_expiration_reminder_due__lte=now,
+    ).select_related("club")
+    for member in reminder_qs:
+        if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:
+            send_club_member_email(
+                member,
+                subject=f"Your {member.club.name} membership expires tomorrow",
+                message_text=f"Your {member.club.name} membership expires tomorrow.",
+                email_type="expiring_soon",
+            )
         member.membership_expiration_reminder_due = None
         member.save(update_fields=["membership_expiration_reminder_due"])
+
+    # Nightly Mailchimp catch-up: re-sync members of connected clubs so lifecycle tags
+    # (expiring-soon, expired, new-member -> long-term-member, probably-inactive) stay
+    # accurate even when no edit happened. backfill() enqueues one async task per member.
+    from auctions import mailchimp as mc
+    from auctions.models import Club
+
+    connected_clubs = (
+        Club.objects.filter(active=True).exclude(mailchimp_audience_id="").exclude(mailchimp_server_prefix="")
+    )
+    for club in connected_clubs:
+        if club.mailchimp_connected:
+            mc.backfill(club)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -523,6 +714,16 @@ def update_auction_stats(self):
         except Exception as e:
             logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
             logger.exception(e)
+            try:
+                auction.create_history("STATS", f"Stats update failed: {e}")
+            except Exception:
+                logger.exception("Failed to record stats failure history for auction %s", auction.pk)
+            # Reschedule far enough out to skip this auction temporarily and unblock the queue
+            try:
+                auction.next_update_due = now + timedelta(days=1)
+                auction.save(update_fields=["next_update_due"])
+            except Exception:
+                logger.exception("Failed to reschedule stats update for auction %s", auction.pk)
     else:
         logger.info("No auctions need stats update at this time")
 
@@ -685,6 +886,50 @@ def update_google_wallet_object_for_member(self, member_pk):
     retry_backoff_max=600,
     max_retries=5,
 )
+def sync_club_member_to_mailchimp(self, member_pk):
+    """Push one club member into their club's connected Mailchimp audience.
+
+    No-op when the club has no Mailchimp connection. Reused for member edits, auction joins,
+    paid invoices, the initial backfill, and the nightly catch-up. Deactivated/opted-out
+    members are archived by sync_member rather than skipped, so we don't filter is_deleted here.
+    """
+    from auctions import mailchimp as mc
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.mailchimp_connected:
+        return
+    mc.sync_member(member)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def sync_club_member_email_change(self, member_pk, old_email):
+    """Move a member's Mailchimp contact to a new email address, then refresh their data."""
+    from auctions import mailchimp as mc
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.mailchimp_connected:
+        return
+    mc.change_member_email(member, old_email)
+    mc.sync_member(member)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
 def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     """Expire (state=EXPIRED) every active Wallet pass for a club's members.
 
@@ -708,6 +953,52 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
         except requests.RequestException:
             # Let Celery's autoretry handle transient failures on the outer task.
             raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=3,
+)
+def geocode_club_member(self, pk):
+    """Geocode a ClubMember's address and store lat/lng.
+
+    Only runs when GOOGLE_MAPS_SERVER_API_KEY is configured. Skips members
+    with no address. Falls back to copying coordinates from the linked
+    user's UserData if the address is empty but the user has joined an
+    auction (manually_added=False).
+    """
+    from auctions.models import AuctionTOS, ClubMember, UserData
+
+    api_key = getattr(settings, "GOOGLE_MAPS_SERVER_API_KEY", "")
+    if not api_key:
+        return
+
+    member = ClubMember.objects.filter(pk=pk).first()
+    if not member:
+        return
+
+    if member.address:
+        response = requests.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": member.address, "key": api_key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("status") == "OK" and data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            ClubMember.objects.filter(pk=pk).update(lat=loc["lat"], lng=loc["lng"])
+    elif member.user_id and not (member.lat and member.lng):
+        # No address — copy coords from UserData if the user has voluntarily joined an auction
+        has_self_joined = AuctionTOS.objects.filter(user=member.user, manually_added=False).exists()
+        if has_self_joined:
+            ud = UserData.objects.filter(user=member.user).values("latitude", "longitude").first()
+            if ud and ud["latitude"] and ud["longitude"]:
+                ClubMember.objects.filter(pk=pk).update(lat=ud["latitude"], lng=ud["longitude"])
 
 
 @shared_task(bind=True, ignore_result=True)

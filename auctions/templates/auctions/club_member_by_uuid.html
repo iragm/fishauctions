@@ -5,14 +5,12 @@
 <div class="card mx-auto" style="max-width: 600px;">
   <div class="card-body">
     {% include "partials/club_member_uuid_card.html" %}
+    {% if membership_invoice %}
+      {% include "partials/membership_payment_inline.html" %}
+    {% elif club.membership_annual_fee and is_paid_member and not is_expired and not expiring_soon %}
+      <p class="text-muted small text-center mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
+    {% endif %}
   </div>
-  {% if payment_link %}
-  <div class="border-top p-3 text-center">
-    <a class="btn btn-success" href="{{ payment_link }}">
-      <i class="bi bi-credit-card"></i> Pay membership
-    </a>
-  </div>
-  {% endif %}
   <div class="border-top d-flex flex-wrap justify-content-center gap-2 p-3">
     <a class="btn btn-link btn-sm" href="{% url 'club_detail' slug=club.slug %}">Club page</a>
   </div>

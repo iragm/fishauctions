@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Mailchimp &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+{% if not mailchimp_configured %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Mailchimp is not configured on this site. Contact your site administrator.
+  </div>
+{% elif not club.mailchimp_access_token %}
+  {# Not connected yet #}
+  <div class="card mb-4">
+    <div class="card-header">Connect Mailchimp</div>
+    <div class="card-body">
+      <p class="text-muted">
+        Connect your club's Mailchimp account to automatically keep an audience in sync with your
+        members. Member details, renewal links, barcodes, and lifecycle tags are pushed one way
+        (this site &rarr; Mailchimp) so you can build automations and targeted campaigns.
+      </p>
+      <a href="{% url 'mailchimp_connect' club.slug %}" class="btn btn-primary">
+        <i class="bi bi-envelope-paper"></i> Connect Mailchimp
+      </a>
+    </div>
+  </div>
+
+{% elif not club.mailchimp_audience_id %}
+  {# Connected, but no audience chosen #}
+  <div class="card mb-4">
+    <div class="card-header">Choose an audience</div>
+    <div class="card-body">
+      <p class="text-muted">
+        Pick the Mailchimp audience your {{ in_scope_count }} member(s) should sync into, or create a
+        new one named &ldquo;{{ club.name }} Members&rdquo;.
+      </p>
+      <form method="post" action="{% url 'mailchimp_select_audience' club.slug %}">
+        {% csrf_token %}
+        <div class="list-group mb-3">
+          {% for audience in audiences %}
+          <label class="list-group-item d-flex align-items-center">
+            <input class="form-check-input me-2" type="radio" name="audience_id" value="{{ audience.id }}"
+                   {% if forloop.first %}checked{% endif %}>
+            <span>{{ audience.name }} <span class="text-muted small">&mdash; {{ audience.member_count }} contact(s)</span></span>
+          </label>
+          {% endfor %}
+          <label class="list-group-item d-flex align-items-center">
+            <input class="form-check-input me-2" type="radio" name="audience_id" value="__new__"
+                   {% if not audiences %}checked{% endif %}>
+            <span>Create a new audience: &ldquo;{{ club.name }} Members&rdquo;</span>
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary">Use this audience</button>
+      </form>
+      <form method="post" action="{% url 'mailchimp_disconnect' club.slug %}" class="mt-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-link text-danger px-0">Cancel / disconnect</button>
+      </form>
+    </div>
+  </div>
+
+{% else %}
+  {# Fully connected #}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Mailchimp connection</span>
+      <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Connected</span>
+    </div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-4">Audience</dt>
+        <dd class="col-sm-8">{{ club.mailchimp_audience_name|default:club.mailchimp_audience_id }}</dd>
+        <dt class="col-sm-4">Members in scope</dt>
+        <dd class="col-sm-8">
+          {{ in_scope_count }}
+          {% if not_synced_count %}
+            &mdash; <a href="{% url 'club_admin' club.slug %}?query=nonmailchimp">{{ not_synced_count }} not yet synced</a>
+          {% endif %}
+        </dd>
+        <dt class="col-sm-4">Subscribed</dt>
+        <dd class="col-sm-8">{{ subscribed_count }}</dd>
+        <dt class="col-sm-4">Unsubscribed / cleaned</dt>
+        <dd class="col-sm-8">{{ unsubscribed_count }}</dd>
+        <dt class="col-sm-4">Last sync</dt>
+        <dd class="col-sm-8">{{ club.mailchimp_last_sync|default:"—" }}</dd>
+      </dl>
+      <p class="text-muted small mt-3 mb-0">
+        <i class="bi bi-info-circle"></i>
+        Members are synced automatically whenever their record is saved, and again each night.
+      </p>
+      {% if club.mailchimp_last_error %}
+        <div class="alert alert-danger mt-3 mb-0 small">
+          <i class="bi bi-exclamation-triangle"></i> Last error: {{ club.mailchimp_last_error }}
+        </div>
+      {% endif %}
+      {% if has_emails_enabled %}
+        <div class="alert alert-info mt-3 mb-0 small">
+          <i class="bi bi-lightbulb"></i>
+          You have outgoing emails enabled. Now that Mailchimp is connected you may want to turn those off
+          and send membership emails (welcome, renewal, expiry reminders) through Mailchimp instead &mdash;
+          for example, using a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>
+          or <span class="text-warning">expiring-soon</span> tags.
+          <a href="{% url 'club_email_settings' club.slug %}">Manage email settings</a>
+        </div>
+      {% endif %}
+    </div>
+    <div class="card-footer">
+      <form method="post" action="{% url 'mailchimp_sync_now' club.slug %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm">
+          <i class="bi bi-arrow-clockwise"></i> Sync all now
+        </button>
+      </form>
+      <form method="post" action="{% url 'mailchimp_disconnect' club.slug %}" class="d-inline"
+            onsubmit="return confirm('Disconnect Mailchimp? Your audience stays in Mailchimp, but syncing will stop.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger btn-sm">
+          <i class="bi bi-x-circle"></i> Disconnect
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Tags &amp; merge fields</div>
+    <div class="card-body">
+      <p class="text-muted small mb-2">
+        Each member is tagged automatically based on their membership status, activity, and location.
+      </p>
+      <table class="table table-sm mb-3">
+        <tbody>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">expiring-soon</span></td>
+            <td class="text-muted small">Membership expires within 30 days</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">expired</span></td>
+            <td class="text-muted small">Membership has expired</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">new-member</span></td>
+            <td class="text-muted small">Joined within the last 6 months</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">long-term-member</span></td>
+            <td class="text-muted small">Member for 5 or more years</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">admin</span></td>
+            <td class="text-muted small">Has club admin access</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">nearby</span></td>
+            <td class="text-muted small">Within 10 miles of the club</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">medium-distance</span></td>
+            <td class="text-muted small">10–30 miles from the club</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">long-distance</span></td>
+            <td class="text-muted small">More than 30 miles away</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">power-seller</span></td>
+            <td class="text-muted small">Sold over $1,000 in lots</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">power-buyer</span></td>
+            <td class="text-muted small">Bought over $1,000 in lots</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">auction-checkin</span></td>
+            <td class="text-muted small">Has checked in to at least one auction</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">discord-connected</span></td>
+            <td class="text-muted small">Discord account linked</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-info text-dark">probably-inactive</span></td>
+            <td class="text-muted small">No club activity in the last 6 months</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="badge bg-secondary">+ category tags</span></td>
+            <td class="text-muted small">Up to 5 categories that the member is most interested in, based on their buying and selling history</td>
+          </tr>
+        </tbody>
+      </table>
+      <hr class="my-3">
+      <p class="text-muted small mb-2">Merge fields available in campaigns:</p>
+      <table class="table table-sm mb-0">
+        <tbody>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|FNAME|*</span></td>
+            <td class="text-muted small">First name</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|LNAME|*</span></td>
+            <td class="text-muted small">Last name</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|MEMBERNO|*</span></td>
+            <td class="text-muted small">Membership number</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|EXPIRES|*</span></td>
+            <td class="text-muted small">Membership expiration date</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|RENEW|*</span></td>
+            <td class="text-muted small">Link to renew or manage membership</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|BARCODE|*</span></td>
+            <td class="text-muted small">Membership barcode image</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|PHONE|*</span></td>
+            <td class="text-muted small">Phone number</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|ADDRESS|*</span></td>
+            <td class="text-muted small">Mailing address</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|CLUBUNSUB|*</span></td>
+            <td class="text-muted small">Link to unsubscribe from club emails</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|RESUB|*</span></td>
+            <td class="text-muted small">Link to resubscribe</td>
+          </tr>
+          <tr>
+            <td class="text-nowrap"><span class="text-warning">*|NOCOMM|*</span></td>
+            <td class="text-muted small">Link to stop all contact</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+{% endblock %}
