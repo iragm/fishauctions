@@ -7326,7 +7326,7 @@ class Invoice(models.Model):
                     Cast(F("final_price"), DecimalField(max_digits=12, decimal_places=2))
                     * Coalesce(
                         Cast(F("auction__tax"), DecimalField(max_digits=5, decimal_places=2)),
-                        Value(Decimal("0")),
+                        Value(Decimal(0)),
                         output_field=DecimalField(max_digits=5, decimal_places=2),
                     )
                     / Value(Decimal("100.00")),
