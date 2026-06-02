@@ -40,6 +40,7 @@ from .models import (
     Club,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
+    ClubBapCategoryOverride,
     ClubHistory,
     ClubMember,
     ClubMoney,
