@@ -9529,7 +9529,7 @@ class PayPalAPIMixin:
                     "unit_amount": {"currency_code": currency, "value": f"{lot.winning_price:.2f}"},
                     "category": "PHYSICAL_GOODS",
                     "url": lot.full_lot_link,
-                    "tax": {"currency_code": currency, "value": f"{lot.tax:.2f}"},
+                    "tax": {"currency_code": currency, "value": f"{(lot.tax or Decimal('0.00')):.2f}"},
                 }
             )
 
@@ -18463,6 +18463,9 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
             messages.error(request, "Could not fetch roles from Discord. Check your bot token and server ID.")
         else:
             messages.success(request, f"Fetched {updated} role(s) from Discord.")
+            from .tasks import sync_discord_member_roles_for_club
+
+            sync_discord_member_roles_for_club.delay(club.pk)
         return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
 

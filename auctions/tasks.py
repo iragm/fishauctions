@@ -417,6 +417,27 @@ def cleanup_old_invoice_notification_tasks(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def sync_discord_member_roles_for_club(self, club_pk):
+    """Re-evaluate and push Discord roles for every member of a single club who has a discord_id.
+
+    Called after a role sync so that newly configured roles are immediately reflected.
+    """
+    from auctions.models import ClubMember
+
+    members = (
+        ClubMember.objects.filter(
+            club_id=club_pk,
+            discord_id__isnull=False,
+            is_deleted=False,
+        )
+        .select_related("club", "last_discord_role_assigned")
+        .prefetch_related("club__discord_roles")
+    )
+    for member in members:
+        member.maybe_assign_discord_role()
+
+
+@shared_task(bind=True, ignore_result=True)
 def update_expired_membership_discord_roles(self):
     """
     Re-evaluate and update Discord roles for all members whose auto-managed role
