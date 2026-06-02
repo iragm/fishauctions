@@ -7289,6 +7289,8 @@ class Invoice(models.Model):
     @property
     def sold_lots_queryset(self):
         """Simple qs containing all lots SOLD by this user in this auction"""
+        if not self.auctiontos_user:
+            return add_price_info(Lot.objects.none())
         return add_price_info(
             Lot.objects.filter(
                 auctiontos_seller=self.auctiontos_user,
@@ -7300,6 +7302,8 @@ class Invoice(models.Model):
     @property
     def bought_lots_queryset(self):
         """Simple qs containing all lots BOUGHT by this user in this auction"""
+        if not self.auctiontos_user:
+            return Lot.objects.none()
         return (
             Lot.objects.filter(
                 winning_price__isnull=False,
