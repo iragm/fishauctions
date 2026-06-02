@@ -130,6 +130,7 @@ urlpatterns = [
         name="admin_traffic_time_of_day_json",
     ),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
+    path("admin-user-flow/", views.AdminUserFlow.as_view(), name="admin_user_flow"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
     path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
