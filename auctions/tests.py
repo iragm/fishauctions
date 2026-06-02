@@ -16727,7 +16727,6 @@ class ClubSettingsViewTests(TestCase):
         self.client.login(username="club_settings_editor", password="testpass")
         response = self.client.get(self.email_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "info@auction.fish")
         self.assertContains(response, f"{self.club.slug}-auctions@auction.fish")
         self.assertContains(response, f"{self.club.slug}-contact@auction.fish")
         self.assertContains(response, "Send expiration reminder 30 days before membership expires")

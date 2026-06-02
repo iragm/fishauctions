@@ -1193,18 +1193,6 @@ class ClubMember(ContactRecord):
     )
     mailchimp_last_synced = models.DateTimeField(null=True, blank=True)
 
-    def save(self, *args, **kwargs):
-        watched = ("discord_id", "discord_role_override_id", "discord_role_auto_managed")
-        is_new = not self.pk
-        if not is_new:
-            old = ClubMember.objects.filter(pk=self.pk).values(*watched).first()
-            changed = old and any(getattr(self, f) != old[f] for f in watched)
-        else:
-            changed = False
-        super().save(*args, **kwargs)
-        if changed or (is_new and self.discord_id):
-            self.maybe_assign_discord_role()
-
     @property
     def has_any_permission(self):
         return any(
@@ -1681,6 +1669,13 @@ class ClubMember(ContactRecord):
         # existing row, repick before the INSERT happens so callers don't have to
         # catch IntegrityError. This is cheap (one indexed lookup) and only runs
         # when the value isn't already known to be unique.
+        _discord_watched = ("discord_id", "discord_role_override_id", "discord_role_auto_managed")
+        _is_new = not self.pk
+        if not _is_new:
+            _discord_old = ClubMember.objects.filter(pk=self.pk).values(*_discord_watched).first()
+            _discord_changed = _discord_old and any(getattr(self, f) != _discord_old[f] for f in _discord_watched)
+        else:
+            _discord_changed = False
         if self.membership_number and not self.pk:
             if ClubMember.objects.filter(membership_number=self.membership_number).exists():
                 self.membership_number = _pick_unique_membership_number()
@@ -1758,8 +1753,12 @@ class ClubMember(ContactRecord):
             # Clear any other members that point to this member as a duplicate
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
             super().save(*args, **kwargs)
+            if _discord_changed or (_is_new and self.discord_id):
+                self.maybe_assign_discord_role()
             return
         super().save(*args, **kwargs)
+        if _discord_changed or (_is_new and self.discord_id):
+            self.maybe_assign_discord_role()
         if self.name:
             duplicate = (
                 ClubMember.objects.filter(club=self.club, name__iexact=self.name, is_deleted=False)
