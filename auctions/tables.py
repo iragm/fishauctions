@@ -908,19 +908,12 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        if self.club and self.club.points_per_lot > 0:
-            default_points = self.club.points_per_lot
-        else:
-            override = (
-                ClubBapCategoryOverride.objects.filter(club=self.club, category=record.species_category).first()
-                if self.club and record.species_category
-                else None
-            )
-            default_points = (
-                override.points
-                if override is not None
-                else (record.species_category.bap_points if record.species_category else 5)
-            )
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=self.club, category=record.species_category).first()
+            if self.club and record.species_category
+            else None
+        )
+        default_points = override.points if override is not None else (self.club.points_per_lot if self.club else 0)
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
         return mark_safe(

@@ -6143,7 +6143,14 @@ class ViewLot(DetailView):
             if viewer_has_bap and lot.sold:
                 club = lot.auction.club
                 context["bap_club"] = club
-                context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
+                _bap_override = (
+                    ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+                    if lot.species_category
+                    else None
+                )
+                context["bap_default_points"] = (
+                    _bap_override.points if _bap_override is not None else club.points_per_lot
+                )
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
@@ -8625,7 +8632,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             self.request.user, club, "permission_manage_bap"
         )
         if context["viewer_has_bap"] and club:
-            context["bap_default_points"] = club.points_per_lot if club.points_per_lot > 0 else 5
+            context["bap_default_points"] = club.points_per_lot
         return context
 
     def get_success_url(self):
@@ -16440,7 +16447,12 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        points = club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 0)
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+            if lot.species_category
+            else None
+        )
+        points = override.points if override is not None else club.points_per_lot
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -18375,19 +18387,12 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        if club.points_per_lot > 0:
-            default_points = club.points_per_lot
-        else:
-            override = (
-                ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-                if lot.species_category
-                else None
-            )
-            default_points = (
-                override.points
-                if override is not None
-                else (lot.species_category.bap_points if lot.species_category else 5)
-            )
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
+            if lot.species_category
+            else None
+        )
+        default_points = override.points if override is not None else club.points_per_lot
         if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
             default_points += club.points_for_custom_checkbox
         return render(

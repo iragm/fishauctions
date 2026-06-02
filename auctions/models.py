@@ -766,7 +766,7 @@ class Club(models.Model):
     )
     points_per_lot = models.IntegerField(
         default=0,
-        help_text="Fixed BAP points per eligible lot. Leave at 0 to use pre-assigned per-category points based on difficulty.",
+        help_text="Default BAP points. Override these with per-category points below",
     )
     separate_hap = models.BooleanField(
         default=False,
@@ -6111,18 +6111,12 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        if club.points_per_lot > 0:
-            points = club.points_per_lot
-        else:
-            override = (
-                ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
-                if self.species_category
-                else None
-            )
-            if override is not None:
-                points = override.points
-            else:
-                points = self.species_category.bap_points if self.species_category else 5
+        override = (
+            ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
+            if self.species_category
+            else None
+        )
+        points = override.points if override is not None else club.points_per_lot
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
@@ -6948,7 +6942,7 @@ class BapAward(models.Model):
 
 
 class ClubBapCategoryOverride(models.Model):
-    """Per-club, per-category BAP point overrides. When present, these take precedence over Category.bap_points."""
+    """Per-club, per-category BAP point overrides. When present, these take precedence over Club.points_per_lot."""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_category_overrides")
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="bap_overrides")
