@@ -9529,7 +9529,7 @@ class PayPalAPIMixin:
                     "unit_amount": {"currency_code": currency, "value": f"{lot.winning_price:.2f}"},
                     "category": "PHYSICAL_GOODS",
                     "url": lot.full_lot_link,
-                    "tax": {"currency_code": currency, "value": f"{lot.tax:.2f}"},
+                    "tax": {"currency_code": currency, "value": f"{(lot.tax or Decimal('0.00')):.2f}"},
                 }
             )
 
