@@ -1261,7 +1261,9 @@ class ClubMember(ContactRecord):
         5. Among BAP/HAP point-based roles, find the highest threshold ≤ this
            member's point total (using the greater of BAP/HAP).
         6. Paid membership role (if any).
-        7. None.
+        7. Unpaid membership role as a catch-all (covers paid members when no
+           base paid-member role is configured).
+        8. None.
         """
         if not self.discord_role_auto_managed:
             return self.discord_role_override
@@ -1315,7 +1317,10 @@ class ClubMember(ContactRecord):
         if paid_role:
             return paid_role
 
-        return None
+        # No paid or point-based role matched; fall back to the unpaid role so every
+        # member ends up with *some* role even when the club's role configuration is
+        # incomplete (e.g. BAP roles defined but no base paid-member role).
+        return next((r for r in roles_qs if r.is_unpaid_role), None)
 
     def maybe_assign_discord_role(self):
         """Compute the correct Discord role, remove any stale club roles, then assign the new one.
@@ -7326,8 +7331,7 @@ class Invoice(models.Model):
                     ),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
-            )
-            .annotate(
+            ).annotate(
                 tax=ExpressionWrapper(
                     Cast(F("final_price"), DecimalField(max_digits=12, decimal_places=2))
                     * Coalesce(
