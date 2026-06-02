@@ -908,12 +908,10 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=self.club, category=record.species_category).first()
-            if self.club and record.species_category
-            else None
+        override = self._override_cache.get(record.species_category_id) if record.species_category_id else None
+        default_points = override.points if override is not None else (
+            (self.club.points_per_lot or record.species_category.bap_points) if self.club else 0
         )
-        default_points = override.points if override is not None else (self.club.points_per_lot if self.club else 0)
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
         return mark_safe(
@@ -931,3 +929,9 @@ class ClubBapLotHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)
         super().__init__(*args, **kwargs)
+        if self.club:
+            self._override_cache = {
+                o.category_id: o for o in ClubBapCategoryOverride.objects.filter(club=self.club)
+            }
+        else:
+            self._override_cache = {}

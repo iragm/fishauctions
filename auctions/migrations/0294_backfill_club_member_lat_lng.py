@@ -19,7 +19,12 @@ def enqueue_geocoding(apps, schema_editor):
     )
 
     for pk in pks:
-        geocode_club_member.delay(pk)
+        try:
+            geocode_club_member.delay(pk)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning("geocode_club_member.delay(%s) failed; skipping", pk)
 
 
 class Migration(migrations.Migration):

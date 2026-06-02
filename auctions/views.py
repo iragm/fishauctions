@@ -1308,7 +1308,7 @@ class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QueryS
         return qs
 
 
-class CategoryAutocomplete(autocomplete.Select2QuerySetView):
+class CategoryAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     """Autocomplete for all categories (used in BAP category override form)."""
 
     def get_queryset(self):
@@ -6150,7 +6150,7 @@ class ViewLot(DetailView):
                     else None
                 )
                 context["bap_default_points"] = (
-                    _bap_override.points if _bap_override is not None else club.points_per_lot
+                    _bap_override.points if _bap_override is not None else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
                 )
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
@@ -16577,7 +16577,7 @@ class BapAwardAdminView(APIView):
             if lot.species_category
             else None
         )
-        points = override.points if override is not None else club.points_per_lot
+        points = override.points if override is not None else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -18517,7 +18517,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
             if lot.species_category
             else None
         )
-        default_points = override.points if override is not None else club.points_per_lot
+        default_points = override.points if override is not None else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
         if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
             default_points += club.points_for_custom_checkbox
         return render(

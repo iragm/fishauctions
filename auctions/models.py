@@ -6116,7 +6116,7 @@ class Lot(models.Model):
             if self.species_category
             else None
         )
-        points = override.points if override is not None else club.points_per_lot
+        points = override.points if override is not None else (club.points_per_lot or self.species_category.bap_points)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
