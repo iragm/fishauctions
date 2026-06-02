@@ -1185,6 +1185,18 @@ class ClubMember(ContactRecord):
     )
     mailchimp_last_synced = models.DateTimeField(null=True, blank=True)
 
+    def save(self, *args, **kwargs):
+        watched = ("discord_id", "discord_role_override_id", "discord_role_auto_managed")
+        is_new = not self.pk
+        if not is_new:
+            old = ClubMember.objects.filter(pk=self.pk).values(*watched).first()
+            changed = old and any(getattr(self, f) != old[f] for f in watched)
+        else:
+            changed = False
+        super().save(*args, **kwargs)
+        if changed or (is_new and self.discord_id):
+            self.maybe_assign_discord_role()
+
     @property
     def has_any_permission(self):
         return any(
