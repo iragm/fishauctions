@@ -7302,15 +7302,17 @@ class Invoice(models.Model):
     @property
     def bought_lots_queryset(self):
         """Simple qs containing all lots BOUGHT by this user in this auction"""
-        if not self.auctiontos_user:
-            return Lot.objects.none()
-        return (
+        base = (
             Lot.objects.filter(
                 winning_price__isnull=False,
                 auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
-            )
-            .order_by("pk")
+            ).order_by("pk")
+            if self.auctiontos_user
+            else Lot.objects.none()
+        )
+        return (
+            base
             # Use Decimal math to avoid float rounding
             .annotate(
                 final_price=ExpressionWrapper(
