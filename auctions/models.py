@@ -832,6 +832,44 @@ class Club(models.Model):
     mailchimp_last_sync = models.DateTimeField(null=True, blank=True)
     mailchimp_last_error = models.TextField(blank=True)
 
+    # Brevo integration (one-way sync: this site -> the club's own Brevo account), built the
+    # same way as the Mailchimp integration above. Connected per-club with a Brevo API key the
+    # admin pastes in (Brevo OAuth is a private, org-scoped program we can't use); see
+    # auctions/brevo.py and the Brevo*View classes. The key is stored encrypted at rest.
+    brevo_api_key = EncryptedCharField(
+        max_length=500, blank=True, null=True, help_text="The club's Brevo API v3 key (stored encrypted)."
+    )
+    brevo_list_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="The Brevo contact list id members are synced into. Safe across renames in Brevo.",
+    )
+    brevo_list_name = models.CharField(
+        max_length=255, blank=True, help_text="Display name of the connected list at connection time."
+    )
+    brevo_folder_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Brevo folder that holds the club's list (Brevo requires lists to live in a folder).",
+    )
+    brevo_connected_on = models.DateTimeField(null=True, blank=True)
+    brevo_connected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The club admin who connected Brevo.",
+    )
+    brevo_webhook_secret = models.CharField(
+        max_length=64, blank=True, help_text="Secret embedded in the Brevo webhook URL to verify callbacks."
+    )
+    brevo_webhook_id = models.CharField(
+        max_length=50, blank=True, help_text="Brevo webhook id, stored so we don't register duplicates."
+    )
+    brevo_last_sync = models.DateTimeField(null=True, blank=True)
+    brevo_last_error = models.TextField(blank=True)
+
     class Meta:
         ordering = ["name"]
 
@@ -842,6 +880,11 @@ class Club(models.Model):
     def mailchimp_connected(self):
         """True when this club has an active Mailchimp connection with an audience selected."""
         return bool(self.mailchimp_access_token and self.mailchimp_audience_id and self.mailchimp_server_prefix)
+
+    @property
+    def brevo_connected(self):
+        """True when this club has an active Brevo connection (API key) with a list selected."""
+        return bool(self.brevo_api_key and self.brevo_list_id)
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
@@ -1192,6 +1235,26 @@ class ClubMember(ContactRecord):
         max_length=50, blank=True, help_text="Mailchimp internal web_id, used to build the 'View in Mailchimp' link."
     )
     mailchimp_last_synced = models.DateTimeField(null=True, blank=True)
+    # Brevo mirrors the Mailchimp status bookkeeping above (see auctions/brevo.py).
+    BREVO_STATUS_CHOICES = (
+        ("", "Not synced"),
+        ("subscribed", "Subscribed"),
+        ("unsubscribed", "Unsubscribed"),
+        ("cleaned", "Cleaned (bounced/spam)"),
+        ("archived", "Archived"),
+    )
+    brevo_status = models.CharField(
+        max_length=20,
+        choices=BREVO_STATUS_CHOICES,
+        default="",
+        blank=True,
+        db_index=True,
+        help_text="Last known Brevo subscription status; set by sync and by the unsubscribe webhook.",
+    )
+    brevo_contact_id = models.CharField(
+        max_length=50, blank=True, help_text="Brevo internal contact id, used to build the 'View in Brevo' link."
+    )
+    brevo_last_synced = models.DateTimeField(null=True, blank=True)
 
     @property
     def has_any_permission(self):

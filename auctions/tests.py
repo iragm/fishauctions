@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
+from . import brevo
 from . import mailchimp as mc
 from .email_routing import resolve_routed_recipient
 from .filters import LotAdminFilter
@@ -20557,3 +20558,227 @@ class MailchimpSelfServiceTests(TestCase):
         self.client_http.get(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "do_not_contact")
+
+
+class BrevoSyncTests(TestCase):
+    """sync_member / change_member_email against a mocked Brevo client (mirrors MailchimpSyncTests)."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Brevo Sync Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self._connect_club()
+
+    def _connect_club(self):
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.brevo_webhook_secret = "secret123"
+        self.club.save()
+
+    @staticmethod
+    def _resp(status_code=201, body=None):
+        resp = MagicMock(status_code=status_code, content=json.dumps(body or {}).encode())
+        resp.json.return_value = body or {}
+        return resp
+
+    def test_no_op_when_not_connected(self):
+        self.club.brevo_list_id = ""
+        self.club.save()
+        with patch("auctions.brevo.get_client") as gc:
+            self.assertFalse(brevo.sync_member(self.member))
+            gc.assert_not_called()
+
+    @patch("auctions.brevo.get_client")
+    def test_sync_member_upserts(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(201, {"id": 99})
+        mock_get_client.return_value = client
+
+        self.assertTrue(brevo.sync_member(self.member))
+
+        client.request.assert_called_once()
+        method, path = client.request.call_args.args
+        self.assertEqual((method, path), ("POST", "/contacts"))
+        body = client.request.call_args.kwargs["json_body"]
+        self.assertEqual(body["email"], "joe@example.com")
+        self.assertEqual(body["listIds"], [7])
+        self.assertFalse(body["emailBlacklisted"])
+        self.assertTrue(body["updateEnabled"])
+        self.assertEqual(body["attributes"]["FIRSTNAME"], "Joe")
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "subscribed")
+        self.assertEqual(self.member.brevo_contact_id, "99")
+        self.assertIsNotNone(self.member.brevo_last_synced)
+
+    @patch("auctions.brevo.get_client")
+    def test_sync_respects_remote_unsubscribe(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(201, {"id": 1})
+        mock_get_client.return_value = client
+
+        self.member.brevo_status = "unsubscribed"
+        self.member.save()
+        brevo.sync_member(self.member)
+
+        body = client.request.call_args.kwargs["json_body"]
+        # We must not resubscribe someone Brevo told us opted out.
+        self.assertTrue(body["emailBlacklisted"])
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "unsubscribed")
+
+    @patch("auctions.brevo.get_client")
+    def test_do_not_contact_deletes(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(204)
+        mock_get_client.return_value = client
+        self.member.contact_status = "do_not_contact"
+        self.member.save()
+
+        brevo.sync_member(self.member)
+        method, path = client.request.call_args.args
+        self.assertEqual(method, "DELETE")
+        self.assertTrue(path.startswith("/contacts/"))
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "archived")
+
+    @patch("auctions.brevo.get_client")
+    def test_change_member_email_deletes_old_contact(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(204)
+        mock_get_client.return_value = client
+        brevo.change_member_email(self.member, "old@example.com")
+        self.assertEqual(client.request.call_args.args, ("DELETE", "/contacts/old%40example.com"))
+
+
+class BrevoWebhookTests(TestCase):
+    """Inbound webhook only records Brevo status; never touches the site account."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Hook Club")
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.brevo_webhook_secret = "secret123"
+        self.club.save()
+        self.user = User.objects.create_user(username="brevohook", password="pw", email="bhook@example.com")
+        UserData.objects.get_or_create(user=self.user)
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.user, name="Hook Member", email="bhook@example.com", brevo_status="subscribed"
+        )
+
+    def _url(self, secret="secret123"):
+        return reverse("brevo_webhook", kwargs={"slug": self.club.slug, "secret": secret})
+
+    def _post(self, payload, secret="secret123"):
+        return self.client_http.post(self._url(secret), data=json.dumps(payload), content_type="application/json")
+
+    def test_get_verification_ok(self):
+        self.assertEqual(self.client_http.get(self._url()).status_code, 200)
+
+    def test_bad_secret_forbidden(self):
+        self.assertEqual(self.client_http.get(self._url(secret="wrong")).status_code, 403)
+        resp = self._post({"event": "unsubscribe", "email": "bhook@example.com"}, secret="wrong")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_unsubscribe_sets_status_without_touching_account(self):
+        resp = self._post({"event": "unsubscribe", "email": "bhook@example.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "unsubscribed")
+        # The site-wide account preference must be untouched.
+        self.assertFalse(self.user.userdata.has_unsubscribed)
+
+    def test_hard_bounce_marks_cleaned(self):
+        self._post({"event": "hard_bounce", "email": "bhook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "cleaned")
+
+    def test_spam_marks_cleaned(self):
+        self._post({"event": "spam", "email": "bhook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "cleaned")
+
+
+class BrevoSelfServiceTests(TestCase):
+    """The shared self-service links also clear the remembered Brevo opt-out on resubscribe."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Self Serve Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Sam", email="sam2@example.com")
+
+    def test_resubscribe_clears_brevo_status(self):
+        self.member.contact_status = "non_essential"
+        self.member.brevo_status = "unsubscribed"
+        self.member.save()
+        url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "contact")
+        self.assertEqual(self.member.brevo_status, "")
+
+
+class BrevoConnectViewTests(TestCase):
+    """Pasting an API key validates it against Brevo, then stores it encrypted at rest."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Connect Club")
+        self.admin = User.objects.create_superuser("brevoadmin", "ba@example.com", "pw")
+        UserData.objects.get_or_create(user=self.admin)
+        self.client_http.force_login(self.admin)
+
+    def _url(self):
+        return reverse("brevo_connect", kwargs={"slug": self.club.slug})
+
+    def test_valid_key_is_stored(self):
+        with patch("auctions.brevo.list_contact_lists", return_value=[]):
+            resp = self.client_http.post(self._url(), {"api_key": "xkeysib-good"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.brevo_api_key, "xkeysib-good")
+        self.assertTrue(self.club.brevo_webhook_secret)
+        self.assertIsNotNone(self.club.brevo_connected_on)
+
+    def test_invalid_key_is_rejected(self):
+        with patch("auctions.brevo.list_contact_lists", side_effect=brevo.BrevoApiError(401, "unauthorized")):
+            resp = self.client_http.post(self._url(), {"api_key": "bad"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+
+    def test_empty_key_rejected(self):
+        self.client_http.post(self._url(), {"api_key": ""})
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+
+    def test_ip_block_reports_ip_and_does_not_store_key(self):
+        from django.contrib.messages import get_messages
+
+        err = brevo.BrevoApiError(401, "API Key used from an IP address (203.0.113.9) that is not authorized")
+        with patch("auctions.brevo.list_contact_lists", side_effect=err):
+            resp = self.client_http.post(self._url(), {"api_key": "xkeysib-ip-blocked"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+        msgs = [m.message for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("203.0.113.9" in m for m in msgs))
+
+
+class BrevoErrorClassificationTests(TestCase):
+    """Telling Brevo's blocked-IP 401 apart from a bad-key 401 (both share code 'unauthorized')."""
+
+    def test_ip_block_returns_ip(self):
+        exc = brevo.BrevoApiError(401, "Using this API Key from an IP address (1.2.3.4) that is not authorized")
+        self.assertEqual(brevo.blocked_ip_from_error(exc), "1.2.3.4")
+
+    def test_ip_block_without_parseable_ip_returns_empty(self):
+        exc = brevo.BrevoApiError(401, "This IP address is not in your authorized IPs list")
+        self.assertEqual(brevo.blocked_ip_from_error(exc), "")
+
+    def test_bad_key_returns_none(self):
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(401, "Key not found")))
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(401, "unauthorized")))
+
+    def test_non_401_returns_none(self):
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(400, "bad request from 1.2.3.4")))

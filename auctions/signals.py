@@ -385,6 +385,13 @@ def _club_member_mailchimp_connected(member_id):
     )
 
 
+def _club_member_brevo_connected(member_id):
+    """Cheap check (plaintext columns only) that a member's club has Brevo connected."""
+    from .models import ClubMember
+
+    return ClubMember.objects.filter(pk=member_id).exclude(club__brevo_list_id="").exists()
+
+
 @receiver(post_save, sender="auctions.ClubMember")
 def sync_clubmember_to_mailchimp(sender, instance, created, **kwargs):
     """Keep the member's Mailchimp contact in sync after any change.
@@ -406,6 +413,23 @@ def sync_clubmember_to_mailchimp(sender, instance, created, **kwargs):
         transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(pk))
 
 
+@receiver(post_save, sender="auctions.ClubMember")
+def sync_clubmember_to_brevo(sender, instance, created, **kwargs):
+    """Brevo equivalent of sync_clubmember_to_mailchimp (one-way per-member sync on save)."""
+    club = instance.club
+    if not club or not club.brevo_connected:
+        return
+    from .tasks import sync_club_member_email_change_brevo, sync_club_member_to_brevo
+
+    pk = instance.pk
+    prev_email = getattr(instance, "_previous_email", "") or ""
+    current_email = instance.email or ""
+    if not created and prev_email and prev_email != current_email:
+        transaction.on_commit(lambda old=prev_email: sync_club_member_email_change_brevo.delay(pk, old))
+    else:
+        transaction.on_commit(lambda: sync_club_member_to_brevo.delay(pk))
+
+
 @receiver(post_save, sender="auctions.AuctionTOS")
 def sync_clubmember_to_mailchimp_on_auctiontos(sender, instance, **kwargs):
     """Auction join / check-in changes the linked member's tags (e.g. auction-checkin)."""
@@ -415,6 +439,17 @@ def sync_clubmember_to_mailchimp_on_auctiontos(sender, instance, **kwargs):
     from .tasks import sync_club_member_to_mailchimp
 
     transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member_id))
+
+
+@receiver(post_save, sender="auctions.AuctionTOS")
+def sync_clubmember_to_brevo_on_auctiontos(sender, instance, **kwargs):
+    """Brevo equivalent: auction join / check-in changes the linked member's tags."""
+    member_id = instance.clubmember_id
+    if not member_id or not _club_member_brevo_connected(member_id):
+        return
+    from .tasks import sync_club_member_to_brevo
+
+    transaction.on_commit(lambda: sync_club_member_to_brevo.delay(member_id))
 
 
 @receiver(pre_save, sender="auctions.Invoice")
@@ -434,11 +469,14 @@ def sync_clubmember_to_mailchimp_on_invoice_paid(sender, instance, created, **kw
         return
     tos = instance.auctiontos_user
     member_id = getattr(tos, "clubmember_id", None) if tos else None
-    if not member_id or not _club_member_mailchimp_connected(member_id):
-        return
-    from .tasks import sync_club_member_to_mailchimp
+    if member_id and _club_member_mailchimp_connected(member_id):
+        from .tasks import sync_club_member_to_mailchimp
 
-    transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member_id))
+        transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member_id))
+    if member_id and _club_member_brevo_connected(member_id):
+        from .tasks import sync_club_member_to_brevo
+
+        transaction.on_commit(lambda: sync_club_member_to_brevo.delay(member_id))
 
 
 @receiver(pre_save, sender=User)

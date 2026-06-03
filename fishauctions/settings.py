@@ -799,6 +799,8 @@ FIELD_ENCRYPTION_KEY = _encryption_key
 MAILCHIMP_CLIENT_ID = os.environ.get("MAILCHIMP_CLIENT_ID", "")
 MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 
+# Brevo integration: each club connects with its own API key (no site-level config needed).
+
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")

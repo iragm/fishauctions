@@ -10711,7 +10711,7 @@ class ClubMemberSelfServiceView(View):
 
     def get(self, request, slug, uuid):
         from auctions.models import ClubMember
-        from auctions.tasks import sync_club_member_to_mailchimp
+        from auctions.tasks import sync_club_member_to_brevo, sync_club_member_to_mailchimp
 
         member = get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
         if self.action == "unsubscribe":
@@ -10721,9 +10721,10 @@ class ClubMemberSelfServiceView(View):
             history_action = f"{member} unsubscribed from marketing emails (self-service)"
         elif self.action == "resubscribe":
             member.contact_status = "contact"
-            # Clear the remembered Mailchimp opt-out so the next sync actually re-subscribes them.
+            # Clear the remembered opt-out so the next sync actually re-subscribes them.
             member.mailchimp_status = ""
-            member.save(update_fields=["contact_status", "mailchimp_status"])
+            member.brevo_status = ""
+            member.save(update_fields=["contact_status", "mailchimp_status", "brevo_status"])
             heading, body = "Resubscribed", f"You will once again receive emails from {member.club.name}."
             history_action = f"{member} resubscribed to emails (self-service)"
         else:  # nocomm
@@ -10738,11 +10739,294 @@ class ClubMemberSelfServiceView(View):
             applies_to="MEMBERS",
         )
         transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member.pk))
+        transaction.on_commit(lambda: sync_club_member_to_brevo.delay(member.pk))
         return render(
             request,
             "auctions/mailchimp_self_service.html",
             {"club": member.club, "heading": heading, "body": body, "member": member},
         )
+
+
+# --- Brevo: built the same way as the Mailchimp views above (OAuth connect, list select,
+# sync/disconnect, status page, and an inbound unsubscribe webhook). See auctions/brevo.py. ---
+
+
+class BrevoConnectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Store the club's Brevo API key (validated against Brevo) — the API-key analog of an OAuth
+    connect, since Brevo's public OAuth program is private/org-scoped. The key is held encrypted."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import brevo
+
+        club = self.club
+        config_url = reverse("club_brevo_config", kwargs={"slug": club.slug})
+        api_key = (request.POST.get("api_key") or "").strip()
+        if not api_key:
+            messages.error(request, "Please paste your Brevo API key.")
+            return redirect(config_url)
+
+        # Validate the key with a lightweight authenticated call before saving it.
+        club.brevo_api_key = api_key
+        try:
+            brevo.list_contact_lists(brevo.get_client(club))
+        except brevo.BrevoApiError as e:
+            blocked_ip = brevo.blocked_ip_from_error(e)
+            if blocked_ip is not None:
+                # Valid-looking key, but Brevo is blocking this server's IP. Tell them what to allow.
+                where = blocked_ip or brevo.outbound_ip() or "this server's IP address"
+                logger.warning("Brevo blocked IP for club %s: %s", club.pk, e.detail)
+                messages.error(
+                    request,
+                    "Your key looks valid, but Brevo is blocking this server's IP address. In Brevo, go to "
+                    f"Settings → Security → Authorized IPs and add {where}, wait ~5 minutes, then try again.",
+                )
+            else:
+                logger.warning("Brevo API key validation failed for club %s", club.pk)
+                messages.error(request, "That Brevo API key didn't work. Double-check it and try again.")
+            return redirect(config_url)
+        except Exception:
+            logger.exception("Brevo connect failed for club %s", club.pk)
+            messages.error(request, "Couldn't reach Brevo right now. Please try again in a moment.")
+            return redirect(config_url)
+
+        club.brevo_connected_on = timezone.now()
+        club.brevo_connected_by = request.user
+        if not club.brevo_webhook_secret:
+            club.brevo_webhook_secret = secrets.token_urlsafe(32)
+        club.save(update_fields=["brevo_api_key", "brevo_connected_on", "brevo_connected_by", "brevo_webhook_secret"])
+        ClubHistory.objects.create(club=club, user=request.user, action="Connected Brevo", applies_to="SETTINGS")
+        messages.success(request, "Brevo connected! Now choose which list to sync your members into.")
+        return redirect(config_url)
+
+
+class BrevoListSelectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Pick an existing list or create '{club} Members', then provision + backfill."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import brevo
+
+        club = self.club
+        config_url = reverse("club_brevo_config", kwargs={"slug": club.slug})
+        client = brevo.get_client(club)
+        if not client:
+            messages.error(request, "Brevo is not connected. Please connect first.")
+            return redirect(config_url)
+
+        choice = request.POST.get("list_id", "")
+        try:
+            if choice == "__new__":
+                list_id, list_name = brevo.create_contact_list(client, club)
+            else:
+                list_id = choice
+                list_name = next(
+                    (lst["name"] for lst in brevo.list_contact_lists(client) if str(lst["id"]) == choice), ""
+                )
+        except (brevo.BrevoApiError, brevo.BrevoError):
+            logger.exception("Brevo list selection failed for club %s", club.pk)
+            messages.error(
+                request, "Couldn't set up your Brevo list. Please try again, or create a list in Brevo first."
+            )
+            return redirect(config_url)
+
+        if not list_id:
+            messages.error(request, "Please choose a list.")
+            return redirect(config_url)
+
+        club.brevo_list_id = str(list_id)
+        club.brevo_list_name = list_name
+        club.save(update_fields=["brevo_list_id", "brevo_list_name"])
+
+        brevo.ensure_attributes(club)
+        brevo.ensure_webhook(club)
+        count = brevo.backfill(club)
+
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Connected Brevo list '{list_name}'",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, f"Syncing {count} member(s) into the '{list_name}' Brevo list.")
+        return redirect(config_url)
+
+
+class BrevoSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
+    """Re-queue a sync for every in-scope member."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import brevo
+
+        club = self.club
+        config_url = reverse("club_brevo_config", kwargs={"slug": club.slug})
+        if not club.brevo_connected:
+            messages.error(request, "Brevo is not connected.")
+            return redirect(config_url)
+        count = brevo.backfill(club)
+        messages.success(request, f"Queued {count} member(s) for syncing to Brevo.")
+        return redirect(config_url)
+
+
+class BrevoDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Forget the Brevo connection. Leaves the list itself untouched in Brevo."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        club = self.club
+        club.brevo_api_key = None
+        club.brevo_list_id = ""
+        club.brevo_list_name = ""
+        club.brevo_folder_id = ""
+        club.brevo_connected_on = None
+        club.brevo_connected_by = None
+        club.brevo_webhook_secret = ""
+        club.brevo_webhook_id = ""
+        club.brevo_last_error = ""
+        club.save(
+            update_fields=[
+                "brevo_api_key",
+                "brevo_list_id",
+                "brevo_list_name",
+                "brevo_folder_id",
+                "brevo_connected_on",
+                "brevo_connected_by",
+                "brevo_webhook_secret",
+                "brevo_webhook_id",
+                "brevo_last_error",
+            ]
+        )
+        ClubHistory.objects.create(club=club, user=request.user, action="Disconnected Brevo", applies_to="SETTINGS")
+        messages.success(request, "Brevo disconnected.")
+        return redirect(reverse("club_brevo_config", kwargs={"slug": club.slug}))
+
+
+class ClubBrevoConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """Full-page Brevo settings/status panel for a club."""
+
+    active_tab = "brevo"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug):
+        from auctions import brevo
+        from auctions.models import ClubMember
+
+        club = self.club
+        lists = []
+        # Connected (API key) but no list chosen yet -> offer the chooser.
+        if club.brevo_api_key and not club.brevo_list_id:
+            client = brevo.get_client(club)
+            if client:
+                try:
+                    lists = brevo.list_contact_lists(client)
+                except (brevo.BrevoApiError, brevo.BrevoError):
+                    logger.exception("Could not list Brevo lists for club %s", club.pk)
+                    messages.error(request, "Could not load your Brevo lists. Try reconnecting.")
+
+        synced = ClubMember.objects.filter(club=club, is_deleted=False)
+        not_synced_count = (
+            brevo.in_scope_members(club).filter(brevo_last_synced__isnull=True).count() if club.brevo_list_id else 0
+        )
+        has_emails_enabled = any(
+            [
+                club.send_welcome_email_to_new_members,
+                club.send_membership_expiration_reminders_30_days,
+                club.send_membership_expiration_reminders,
+                club.send_membership_renewal_confirmation,
+            ]
+        )
+        context = {
+            "club": club,
+            "view": self,
+            "lists": lists,
+            # Only looked up while showing the connect form, so admins can pre-authorize the IP.
+            "server_ip": brevo.outbound_ip() if not club.brevo_api_key else "",
+            "in_scope_count": brevo.in_scope_members(club).count(),
+            "subscribed_count": synced.filter(brevo_status="subscribed").count(),
+            "unsubscribed_count": synced.filter(brevo_status__in=["unsubscribed", "cleaned"]).count(),
+            "not_synced_count": not_synced_count,
+            "has_emails_enabled": has_emails_enabled,
+            "tags": ClubMember.MAILCHIMP_TAGS,
+        }
+        return render(request, "auctions/club_brevo_settings.html", context)
+
+
+class BrevoWebhookView(View):
+    """Receive Brevo marketing unsubscribe/bounce/spam/delete callbacks.
+
+    One-way sync means we only honor opt-out-style events here: we record the member's Brevo
+    status so we never re-subscribe them, but we never touch their site email prefs. Brevo sends
+    a JSON body and does not sign it, so (like Mailchimp) the shared secret lives in the URL path.
+    """
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def _get_club(self, slug, secret):
+        club = Club.objects.filter(slug=slug).first()
+        if not club or not club.brevo_webhook_secret or club.brevo_webhook_secret != secret:
+            return None
+        return club
+
+    def get(self, request, slug, secret):
+        if not self._get_club(slug, secret):
+            return HttpResponseForbidden("invalid")
+        return HttpResponse("ok")
+
+    def post(self, request, slug, secret):
+        from auctions.models import ClubMember
+
+        club = self._get_club(slug, secret)
+        if not club:
+            return HttpResponseForbidden("invalid")
+
+        try:
+            payload = json.loads(request.body or b"{}")
+        except ValueError:
+            return HttpResponse("ok")
+
+        # Brevo's inbound event names use snake_case (unsubscribe / hard_bounce / contact_deleted),
+        # unlike the camelCase used when registering the webhook. Normalize before matching.
+        event = (payload.get("event") or "").lower().replace("_", "")
+        email = payload.get("email")
+        members = ClubMember.objects.filter(club=club, is_deleted=False)
+        if email:
+            members = members.filter(email__iexact=email)
+
+        if event in ("unsubscribe", "unsubscribed"):
+            members.update(brevo_status="unsubscribed")
+        elif event in ("hardbounce", "spam"):
+            members.update(brevo_status="cleaned")
+        elif event == "contactdeleted":
+            members.update(brevo_status="archived")
+        return HttpResponse("ok")
 
 
 class CreateSquarePaymentLinkView(SquareAPIMixin, View):

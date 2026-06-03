@@ -36,6 +36,18 @@
 </div>
 {% endif %}
 
+{% if club.brevo_list_id %}
+<div class="alert alert-info mb-3" role="alert">
+  <i class="bi bi-send me-1"></i>
+  <strong>Brevo is connected.</strong>
+  Consider turning off the outgoing emails below and sending them through Brevo instead &mdash;
+  for example, an <strong>Automation</strong> that filters on the <span class="text-warning">MEMBER_TAGS</span>
+  attribute (containing <span class="text-warning">new-member</span>, <span class="text-warning">expiring-soon</span>,
+  or <span class="text-warning">expired</span>) gives you more control over timing and design.
+  <a href="{% url 'club_brevo_config' club.slug %}">Brevo settings</a>
+</div>
+{% endif %}
+
 <form method="post" novalidate>
   {% csrf_token %}
 
