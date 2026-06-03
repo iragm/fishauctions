@@ -8922,7 +8922,6 @@ class UserData(models.Model):
                 subscription.save()
         super().save(*args, **kwargs)
 
-    @property
     def unsubscribe_from_all(self):
         self.email_me_about_new_auctions = False
         self.email_me_about_new_local_lots = False
