@@ -51,12 +51,21 @@ function initMap() {
     });
   }
 
-  // Member markers
+  // Member markers (green = active, red = expired)
   MEMBERS.forEach(function(m) {
+    var pinColor = m.is_expired ? "#dc3545" : "#198754";
     var marker = new google.maps.Marker({
       position: {lat: m.lat, lng: m.lng},
       map: map,
       title: m.name || m.email || "Member",
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: pinColor,
+        fillOpacity: 1,
+        strokeColor: "#fff",
+        strokeWeight: 2,
+      },
     });
     marker.addListener("click", function() {
       var url = CLUBMEMBER_ADMIN_BASE + m.pk + "/";

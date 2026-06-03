@@ -17007,10 +17007,21 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        from django.db.models import BooleanField, Case, Value, When
+        from django.utils import timezone
+
+        today = timezone.now().date()
         qs = (
             ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
             .exclude(address="")
-            .values("pk", "name", "email", "address", "lat", "lng")
+            .annotate(
+                is_expired=Case(
+                    When(membership_expiration_date__lt=today, then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                )
+            )
+            .values("pk", "name", "email", "address", "lat", "lng", "is_expired")
         )
         import json as _json
 
