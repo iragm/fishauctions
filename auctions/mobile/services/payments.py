@@ -165,25 +165,33 @@ class PaymentService:
         )
 
         if result.is_success():
+            from auctions.views import _ensure_invoice_renewal_state, _process_invoice_membership_renewal
+
             sq_payment = result.body["payment"]
+            payment_id = sq_payment.get("id", "")
             receipt_number = (sq_payment.get("receipt_number") or "")[:10]
             InvoicePayment.objects.create(
                 invoice=invoice,
                 payment_method="Square",
                 amount=amount_due,
+                amount_available_to_refund=amount_due,
                 currency=invoice.currency,
-                external_id=sq_payment.get("id", ""),
+                external_id=payment_id,
                 receipt_number=receipt_number or None,
             )
             invoice.status = "PAID"
             invoice.save(update_fields=["status"])
-            logger.info(
-                "Mobile Square payment confirmed for invoice %s: %s",
-                invoice_pk,
-                sq_payment.get("id"),
-            )
+            try:
+                _ensure_invoice_renewal_state(invoice)
+            except Exception:
+                logger.exception("Failed to ensure renewal state for invoice %s (mobile Square)", invoice_pk)
+            try:
+                _process_invoice_membership_renewal(invoice, payment_method="Square", external_id=payment_id)
+            except Exception:
+                logger.exception("Failed to process membership renewal for invoice %s (mobile Square)", invoice_pk)
+            logger.info("Mobile Square payment confirmed for invoice %s: %s", invoice_pk, payment_id)
             return {
-                "payment_id": sq_payment.get("id"),
+                "payment_id": payment_id,
                 "status": sq_payment.get("status"),
                 "receipt_number": receipt_number or None,
             }

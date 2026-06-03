@@ -219,6 +219,8 @@ class MobileUserMeView(APIView):
     """GET /api/mobile/auth/me/ — return the authenticated user's profile."""
 
     permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
 
     def get(self, request):
         serializer = MobileUserSerializer(request.user)
@@ -234,6 +236,8 @@ class MobileDeviceRegisterView(APIView):
     """POST /api/mobile/devices/register/ — register or update a device."""
 
     permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         serializer = MobileDeviceSerializer(data=request.data)
@@ -266,6 +270,8 @@ class MobileLotLabelView(APIView):
     """GET /api/mobile/labels/<pk>/ — return structured label data for a lot."""
 
     permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
 
     def get(self, request, pk):
         try:
@@ -288,6 +294,8 @@ class MobilePaymentCreateView(APIView):
     """POST /api/mobile/payments/create/ — validate invoice and return Square SDK params."""
 
     permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         serializer = MobilePaymentCreateSerializer(data=request.data)
@@ -311,6 +319,8 @@ class MobilePaymentConfirmView(APIView):
     """POST /api/mobile/payments/confirm/ — charge the nonce from the mobile SDK."""
 
     permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         serializer = MobilePaymentConfirmSerializer(data=request.data)

@@ -73,8 +73,10 @@
 <div id="map_visualization" class="mapping mt-2" style='width: 100%; height: 100%;'></div>
 </div>
 {% endblock %}
-{% block extra_js %}
+{% block extra_css %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+{% endblock %}
+{% block extra_js %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>

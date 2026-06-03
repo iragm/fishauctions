@@ -10844,6 +10844,10 @@ class BrevoListSelectView(LoginRequiredMixin, ClubViewMixin, View):
             messages.error(request, "Please choose a list.")
             return redirect(config_url)
 
+        if not list_name:
+            messages.error(request, "That list was not found in your Brevo account. Please choose a valid list.")
+            return redirect(config_url)
+
         club.brevo_list_id = str(list_id)
         club.brevo_list_name = list_name
         club.save(update_fields=["brevo_list_id", "brevo_list_name"])
@@ -11016,9 +11020,9 @@ class BrevoWebhookView(View):
         # unlike the camelCase used when registering the webhook. Normalize before matching.
         event = (payload.get("event") or "").lower().replace("_", "")
         email = payload.get("email")
-        members = ClubMember.objects.filter(club=club, is_deleted=False)
-        if email:
-            members = members.filter(email__iexact=email)
+        if not email:
+            return HttpResponse("ok")
+        members = ClubMember.objects.filter(club=club, is_deleted=False, email__iexact=email)
 
         if event in ("unsubscribe", "unsubscribed"):
             members.update(brevo_status="unsubscribed")

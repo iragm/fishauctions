@@ -551,7 +551,7 @@ def update_expired_membership_discord_roles(self):
         if club.mailchimp_connected:
             mc.backfill(club)
 
-    # Same nightly catch-up for Brevo (also keeps the ~30-day refresh token from expiring).
+    # Same nightly catch-up for Brevo.
     brevo_clubs = Club.objects.filter(active=True).exclude(brevo_list_id="")
     for club in brevo_clubs:
         if club.brevo_connected:
