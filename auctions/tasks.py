@@ -540,6 +540,7 @@ def update_expired_membership_discord_roles(self):
     # Nightly Mailchimp catch-up: re-sync members of connected clubs so lifecycle tags
     # (expiring-soon, expired, new-member -> long-term-member, probably-inactive) stay
     # accurate even when no edit happened. backfill() enqueues one async task per member.
+    from auctions import brevo
     from auctions import mailchimp as mc
     from auctions.models import Club
 
@@ -549,6 +550,12 @@ def update_expired_membership_discord_roles(self):
     for club in connected_clubs:
         if club.mailchimp_connected:
             mc.backfill(club)
+
+    # Same nightly catch-up for Brevo.
+    brevo_clubs = Club.objects.filter(active=True).exclude(brevo_list_id="")
+    for club in brevo_clubs:
+        if club.brevo_connected:
+            brevo.backfill(club)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -952,6 +959,50 @@ def sync_club_member_email_change(self, member_pk, old_email):
     retry_backoff_max=600,
     max_retries=5,
 )
+def sync_club_member_to_brevo(self, member_pk):
+    """Push one club member into their club's connected Brevo list.
+
+    The Brevo equivalent of sync_club_member_to_mailchimp: no-op when the club has no Brevo
+    connection. Reused for member edits, auction joins, paid invoices, the initial backfill, and
+    the nightly catch-up. Deactivated/opted-out members are archived by sync_member, not skipped.
+    """
+    from auctions import brevo
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.brevo_connected:
+        return
+    brevo.sync_member(member)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def sync_club_member_email_change_brevo(self, member_pk, old_email):
+    """Move a member's Brevo contact to a new email address, then refresh their data."""
+    from auctions import brevo
+    from auctions.models import ClubMember
+
+    member = ClubMember.objects.select_related("club", "user").filter(pk=member_pk).first()
+    if not member or not member.club.brevo_connected:
+        return
+    brevo.change_member_email(member, old_email)
+    brevo.sync_member(member)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
 def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     """Expire (state=EXPIRED) every active Wallet pass for a club's members.
 
@@ -1057,3 +1108,48 @@ def bootstrap_bap_recalculation_tasks(run_at):
             schedule_bap_recalculation(club.pk, run_at=run_at)
         else:
             schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)
+
+
+@shared_task(bind=True, ignore_result=True, time_limit=None, soft_time_limit=None)
+def compute_user_flow_all(self, sleep_seconds=2):
+    """Pre-compute user flow data for every auction and store results in the cache.
+
+    Processes one auction at a time, sleeping between each to stay low-CPU.
+    The final step aggregates all page views into a combined "all auctions" result.
+    Trigger via the admin user-flow page; results persist indefinitely in Redis.
+    """
+    import time
+
+    from django.core.cache import cache
+    from django.utils import timezone
+
+    from auctions.models import Auction
+    from auctions.views import AdminUserFlow
+
+    auctions = list(Auction.objects.filter(is_deleted=False).order_by("-date_end"))
+    logger.info("compute_user_flow_all: starting for %d auctions (sleep=%ss)", len(auctions), sleep_seconds)
+
+    for i, auction in enumerate(auctions, 1):
+        try:
+            freq, trans = AdminUserFlow._compute_flow(auction)
+            cache.set(
+                f"user_flow_{auction.pk}",
+                {"frequency_table": freq, "transition_table": trans, "computed_at": timezone.now().isoformat()},
+                timeout=None,
+            )
+            logger.info("compute_user_flow_all: %d/%d done — %s", i, len(auctions), auction.slug)
+        except Exception:
+            logger.exception("compute_user_flow_all: failed for auction pk=%s", auction.pk)
+        time.sleep(sleep_seconds)
+
+    # Combined view across all auctions
+    try:
+        freq, trans = AdminUserFlow._compute_flow(None)
+        now_iso = timezone.now().isoformat()
+        cache.set("user_flow_all", {"frequency_table": freq, "transition_table": trans}, timeout=None)
+        cache.set("user_flow_all_computed_at", now_iso, timeout=None)
+        logger.info("compute_user_flow_all: combined all-auctions result cached")
+    except Exception:
+        logger.exception("compute_user_flow_all: failed to compute combined result")
+
+    logger.info("compute_user_flow_all: complete")

@@ -689,6 +689,15 @@ class ClubMemberHTMxTable(tables.Table):
                 mailchimp_url,
             )
 
+        brevo_item = format_html("")
+        if self.can_add_edit and record.brevo_contact_id:
+            brevo_url = f"https://app.brevo.com/contact/index/{record.brevo_contact_id}"
+            brevo_item = format_html(
+                '<li><a class="dropdown-item" href="{}" target="_blank" rel="noopener">'
+                '<i class="bi bi-send me-1"></i>View in Brevo</a></li>',
+                brevo_url,
+            )
+
         if self.request and getattr(self.request.user, "is_staff", False):
             admin_url = f"/admin/auctions/clubmember/{record.pk}/change/"
             django_admin_item = format_html(
@@ -702,12 +711,13 @@ class ClubMemberHTMxTable(tables.Table):
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}{}{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
             discord_item,
             mailchimp_item,
+            brevo_item,
             edit_items,
             django_admin_item,
         )

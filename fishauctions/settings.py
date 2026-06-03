@@ -210,6 +210,7 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "rest_framework",
     "rest_framework.authtoken",
+    "rest_framework_simplejwt.token_blacklist",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -718,6 +719,17 @@ PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": "redis://:"
+        + os.environ.get("REDIS_PASSWORD", "unsecure")
+        + "@"
+        + os.environ.get("REDIS_HOST", "redis")
+        + ":6379/3",
+    }
+}
+
 # Celery Configuration
 # https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
 
@@ -788,6 +800,8 @@ FIELD_ENCRYPTION_KEY = _encryption_key
 MAILCHIMP_CLIENT_ID = os.environ.get("MAILCHIMP_CLIENT_ID", "")
 MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 
+# Brevo integration: each club connects with its own API key (no site-level config needed).
+
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -836,7 +850,24 @@ APPLE_WALLET_TEAM_IDENTIFIER = os.environ.get("APPLE_WALLET_TEAM_IDENTIFIER", ""
 APPLE_WALLET_ORGANIZATION_NAME = os.environ.get("APPLE_WALLET_ORGANIZATION_NAME", "")
 
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
-    }
+        "mobile_auth": "10/min",
+        "mobile_api": "200/hour",
+    },
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": datetime.timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": datetime.timedelta(days=30),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
 }

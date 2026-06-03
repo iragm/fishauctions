@@ -203,6 +203,11 @@ urlpatterns = [
         views.MailchimpWebhookView.as_view(),
         name="mailchimp_webhook",
     ),
+    path(
+        "brevo/webhook/<slug:slug>/<str:secret>/",
+        views.BrevoWebhookView.as_view(),
+        name="brevo_webhook",
+    ),
     path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
     path(
         "api/invoices/<uuid:uuid>/square/",
@@ -649,6 +654,19 @@ urlpatterns = [
         "clubs/<slug:slug>/mailchimp/disconnect/",
         views.MailchimpDisconnectView.as_view(),
         name="mailchimp_disconnect",
+    ),
+    path("clubs/<slug:slug>/brevo/", views.ClubBrevoConfigView.as_view(), name="club_brevo_config"),
+    path("clubs/<slug:slug>/brevo/connect/", views.BrevoConnectView.as_view(), name="brevo_connect"),
+    path(
+        "clubs/<slug:slug>/brevo/select-list/",
+        views.BrevoListSelectView.as_view(),
+        name="brevo_select_list",
+    ),
+    path("clubs/<slug:slug>/brevo/sync/", views.BrevoSyncNowView.as_view(), name="brevo_sync_now"),
+    path(
+        "clubs/<slug:slug>/brevo/disconnect/",
+        views.BrevoDisconnectView.as_view(),
+        name="brevo_disconnect",
     ),
     path(
         "clubs/<slug:slug>/member/<uuid:uuid>/unsubscribe/",

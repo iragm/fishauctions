@@ -3,6 +3,7 @@ from django.urls import include, path
 
 urlpatterns = [
     path("", include("auctions.urls")),
+    path("api/mobile/", include("auctions.mobile.urls")),
     path("summernote/", include("django_summernote.urls")),
     path("admin/", admin.site.urls),
     path("", include("allauth.urls")),
