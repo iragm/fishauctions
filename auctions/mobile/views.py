@@ -253,8 +253,12 @@ class MobileDeviceRegisterView(APIView):
                 platform=data.get("platform", ""),
                 app_version=data.get("app_version", ""),
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            logger.warning("Device registration/update validation failed.", exc_info=True)
+            return Response(
+                {"detail": "Invalid device registration data."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response_serializer = MobileDeviceSerializer(device)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
@@ -306,11 +310,14 @@ class MobilePaymentCreateView(APIView):
         try:
             result = PaymentService.create_mobile_payment(invoice_pk=invoice_pk, user=request.user)
         except LookupError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            logger.warning("Mobile payment create failed: invoice lookup error.", exc_info=exc)
+            return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
         except PermissionError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+            logger.warning("Mobile payment create failed: permission denied.", exc_info=exc)
+            return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
         except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.warning("Mobile payment create failed: invalid request data.", exc_info=exc)
+            return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result, status=status.HTTP_200_OK)
 
@@ -336,10 +343,13 @@ class MobilePaymentConfirmView(APIView):
                 user=request.user,
             )
         except LookupError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            logger.warning("Mobile payment confirm failed: invoice lookup error.", exc_info=exc)
+            return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
         except PermissionError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+            logger.warning("Mobile payment confirm failed: permission denied.", exc_info=exc)
+            return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
         except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.warning("Mobile payment confirm failed: invalid request data.", exc_info=exc)
+            return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result, status=status.HTTP_200_OK)
