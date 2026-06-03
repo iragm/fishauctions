@@ -314,7 +314,9 @@ class MobilePaymentCreateView(APIView):
             return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
         except PermissionError as exc:
             logger.warning("Mobile payment create failed: permission denied.", exc_info=exc)
-            return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
+            )
         except ValueError as exc:
             logger.warning("Mobile payment create failed: invalid request data.", exc_info=exc)
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
@@ -347,7 +349,9 @@ class MobilePaymentConfirmView(APIView):
             return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
         except PermissionError as exc:
             logger.warning("Mobile payment confirm failed: permission denied.", exc_info=exc)
-            return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
+            )
         except ValueError as exc:
             logger.warning("Mobile payment confirm failed: invalid request data.", exc_info=exc)
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
