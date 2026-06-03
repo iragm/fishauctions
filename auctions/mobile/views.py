@@ -249,8 +249,12 @@ class MobileDeviceRegisterView(APIView):
                 platform=data.get("platform", ""),
                 app_version=data.get("app_version", ""),
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            logger.warning("Device registration/update validation failed.", exc_info=True)
+            return Response(
+                {"detail": "Invalid device registration data."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response_serializer = MobileDeviceSerializer(device)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
