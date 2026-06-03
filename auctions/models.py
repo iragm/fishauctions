@@ -9732,3 +9732,28 @@ class ChatSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user} on lot {self.lot} Unsubscribed: ({self.unsubscribed})"
+
+
+class MobileDevice(models.Model):
+    """Registered mobile device for a user."""
+
+    PLATFORM_IOS = "ios"
+    PLATFORM_ANDROID = "android"
+    PLATFORM_CHOICES = [
+        (PLATFORM_IOS, "iOS"),
+        (PLATFORM_ANDROID, "Android"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mobile_devices")
+    device_uuid = models.UUIDField(unique=True, db_index=True)
+    device_name = models.CharField(max_length=200, blank=True)
+    platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES, blank=True)
+    app_version = models.CharField(max_length=50, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen"]
+
+    def __str__(self):
+        return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"

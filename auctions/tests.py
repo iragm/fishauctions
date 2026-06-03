@@ -19049,9 +19049,7 @@ class DiscordJoinButtonTests(TestCase):
     def setUp(self):
         from .views import DiscordInteractionsView
 
-        self.club = Club.objects.create(
-            name="Button Club", discord_server_id="777000222", enable_club_page=True
-        )
+        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222", enable_club_page=True)
         self.view = DiscordInteractionsView()
 
     def _interaction(self, discord_id="42", interaction_type=3, custom_id="join_button"):

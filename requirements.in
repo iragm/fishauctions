@@ -84,3 +84,4 @@ redis
 squareup
 mailchimp-marketing
 djangorestframework
+djangorestframework-simplejwt
