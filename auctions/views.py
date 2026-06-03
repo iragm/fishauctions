@@ -18451,6 +18451,8 @@ class DiscordInteractionsView(View):
     Supports:
       - Type 1 (PING)
       - Type 3 (component / button click) with custom_id=join_button
+        (behaves like the /membership command: join modal if not joined,
+        membership info + link if joined)
       - Type 5 (modal submit) with custom_id=join_modal
     """
 
@@ -18494,9 +18496,10 @@ class DiscordInteractionsView(View):
         if interaction_type == _DISCORD_TYPE_COMPONENT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_button":
-                if self._already_joined(data):
-                    return _discord_ephemeral("✅ You've already joined!")
-                return self._join_modal_response()
+                # The join button mirrors the /membership command: if the user
+                # hasn't joined, show the join modal; if they have, show their
+                # membership info and link.
+                return self._handle_membership_command(data)
             return _discord_ephemeral("Unsupported interaction")
 
         # Type 2 – Application command (slash command)

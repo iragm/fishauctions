@@ -19042,6 +19042,73 @@ class DiscordJoinModalNameTests(TestCase):
         self.assertEqual(m.name, "First")
 
 
+class DiscordJoinButtonTests(TestCase):
+    """The join button and the /membership command must behave identically:
+    not joined -> show the join modal; joined -> show membership info + link."""
+
+    def setUp(self):
+        from .views import DiscordInteractionsView
+
+        self.club = Club.objects.create(
+            name="Button Club", discord_server_id="777000222", enable_club_page=True
+        )
+        self.view = DiscordInteractionsView()
+
+    def _interaction(self, discord_id="42", interaction_type=3, custom_id="join_button"):
+        return {
+            "type": interaction_type,
+            "guild_id": self.club.discord_server_id,
+            "data": {"custom_id": custom_id, "name": "membership"},
+            "member": {"user": {"id": discord_id, "username": "buttonuser"}},
+        }
+
+    def _payload(self, response):
+        return json.loads(response.content)
+
+    def test_button_shows_join_modal_when_not_joined(self):
+        from .views import _DISCORD_TYPE_MODAL
+
+        response = self.view._handle_membership_command(self._interaction())
+        payload = self._payload(response)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_MODAL)
+        self.assertEqual(payload["data"]["custom_id"], "join_modal")
+
+    def test_button_shows_membership_info_when_joined(self):
+        from .views import _DISCORD_TYPE_CHANNEL_MESSAGE
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Joined User",
+            discord_id="42",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        response = self.view._handle_membership_command(self._interaction())
+        payload = self._payload(response)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_CHANNEL_MESSAGE)
+        content = payload["data"]["content"]
+        self.assertIn("Your membership", content)
+        self.assertIn(member.simple_membership_link, content)
+
+    @patch("auctions.views.verify_discord_signature", return_value=True)
+    @override_settings(DISCORD_PUBLIC_KEY="aa" * 32)
+    def test_post_routes_join_button_through_membership(self, mock_verify):
+        from .views import _DISCORD_TYPE_MODAL
+
+        ClubMember.objects.filter(club=self.club).delete()
+        body = json.dumps(self._interaction()).encode()
+        response = self.client.post(
+            reverse("discord_interactions"),
+            data=body,
+            content_type="application/json",
+            HTTP_X_SIGNATURE_ED25519="00",
+            HTTP_X_SIGNATURE_TIMESTAMP=str(int(timezone.now().timestamp())),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.content)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_MODAL)
+        self.assertEqual(payload["data"]["custom_id"], "join_modal")
+
+
 class ClubMemberNameModelTests(TestCase):
     """Tests for the renamed ``name`` field on ClubMember."""
 
