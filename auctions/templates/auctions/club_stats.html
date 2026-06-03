@@ -37,43 +37,49 @@
 {% block extra_js %}
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
-  function renderClubStatsChart(canvasId, chartData, yAxisLabel) {
-    var ctx = document.getElementById(canvasId).getContext('2d');
-    new Chart(ctx, {
-      type: 'line',
-      data: chartData,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        elements: {
-          line: {
-            tension: 0
+  var auctionStatsCtx = document.getElementById('club-auction-stats-chart').getContext('2d');
+  new Chart(auctionStatsCtx, {
+    type: 'line',
+    data: JSON.parse(document.getElementById('club-auction-stats-data').textContent),
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      elements: { line: { tension: 0 } },
+      scales: {
+        yAxes: [
+          {
+            id: 'y-left',
+            position: 'left',
+            ticks: { beginAtZero: true },
+            scaleLabel: { display: true, labelString: 'Count' }
+          },
+          {
+            id: 'y-right',
+            position: 'right',
+            ticks: { beginAtZero: true, callback: function(v) { return '$' + v; } },
+            scaleLabel: { display: true, labelString: 'Gross ($)' },
+            gridLines: { drawOnChartArea: false }
           }
-        },
-        scales: {
-          yAxes: [{
-            ticks: {
-              beginAtZero: true
-            },
-            scaleLabel: {
-              display: !!yAxisLabel,
-              labelString: yAxisLabel
-            }
-          }]
-        }
+        ]
       }
-    });
-  }
+    }
+  });
 
-  renderClubStatsChart(
-    'club-auction-stats-chart',
-    JSON.parse(document.getElementById('club-auction-stats-data').textContent),
-    'Count / gross'
-  );
-  renderClubStatsChart(
-    'club-membership-growth-chart',
-    JSON.parse(document.getElementById('club-membership-growth-data').textContent),
-    'Members'
-  );
+  var membershipCtx = document.getElementById('club-membership-growth-chart').getContext('2d');
+  new Chart(membershipCtx, {
+    type: 'line',
+    data: JSON.parse(document.getElementById('club-membership-growth-data').textContent),
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      elements: { line: { tension: 0 } },
+      scales: {
+        yAxes: [{
+          ticks: { beginAtZero: true },
+          scaleLabel: { display: true, labelString: 'Members' }
+        }]
+      }
+    }
+  });
 </script>
 {% endblock %}

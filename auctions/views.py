@@ -17112,6 +17112,12 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             value = timezone.localtime(value)
         return value.strftime("%b %-d, %Y")
 
+    def _format_auction_start_date(self, auction):
+        dt = auction.date_start
+        if timezone.is_aware(dt):
+            dt = timezone.localtime(dt)
+        return dt.date().strftime("%b %-d, %Y")
+
     def _paid_member_filter(self):
         today = timezone.now().date()
         if self.club.membership_system == "january_first":
@@ -17138,7 +17144,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             gross = auction_misc.get("gross")
             total_lots = auction_misc.get("total_lots")
             participants = auction_misc.get("checked_in") or auction_misc.get("participants")
-            labels.append(self._format_chart_date(auction.date_start))
+            labels.append(self._format_auction_start_date(auction))
             gross_values.append(round(float(gross), 2) if gross is not None else 0)
             lot_values.append(total_lots if total_lots is not None else 0)
             participant_values.append(participants if participants is not None else 0)
@@ -17151,6 +17157,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#4bc0c0",
                     "backgroundColor": "rgba(75, 192, 192, 0.2)",
                     "fill": False,
+                    "yAxisID": "y-right",
                 },
                 {
                     "label": "Lots",
@@ -17158,6 +17165,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#36a2eb",
                     "backgroundColor": "rgba(54, 162, 235, 0.2)",
                     "fill": False,
+                    "yAxisID": "y-left",
                 },
                 {
                     "label": "Checked in",
@@ -17165,6 +17173,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     "borderColor": "#ff9f40",
                     "backgroundColor": "rgba(255, 159, 64, 0.2)",
                     "fill": False,
+                    "yAxisID": "y-left",
                 },
             ],
         }
