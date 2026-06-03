@@ -11984,7 +11984,7 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
             require_https=request.is_secure(),
         ):
             return redirect(target)
-        return redirect(request.path)
+        return redirect("/")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
