@@ -1057,3 +1057,48 @@ def bootstrap_bap_recalculation_tasks(run_at):
             schedule_bap_recalculation(club.pk, run_at=run_at)
         else:
             schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)
+
+
+@shared_task(bind=True, ignore_result=True, time_limit=None, soft_time_limit=None)
+def compute_user_flow_all(self, sleep_seconds=2):
+    """Pre-compute user flow data for every auction and store results in the cache.
+
+    Processes one auction at a time, sleeping between each to stay low-CPU.
+    The final step aggregates all page views into a combined "all auctions" result.
+    Trigger via the admin user-flow page; results persist indefinitely in Redis.
+    """
+    import time
+
+    from django.core.cache import cache
+    from django.utils import timezone
+
+    from auctions.models import Auction
+    from auctions.views import AdminUserFlow
+
+    auctions = list(Auction.objects.filter(is_deleted=False).order_by("-date_end"))
+    logger.info("compute_user_flow_all: starting for %d auctions (sleep=%ss)", len(auctions), sleep_seconds)
+
+    for i, auction in enumerate(auctions, 1):
+        try:
+            freq, trans = AdminUserFlow._compute_flow(auction)
+            cache.set(
+                f"user_flow_{auction.pk}",
+                {"frequency_table": freq, "transition_table": trans, "computed_at": timezone.now().isoformat()},
+                timeout=None,
+            )
+            logger.info("compute_user_flow_all: %d/%d done — %s", i, len(auctions), auction.slug)
+        except Exception:
+            logger.exception("compute_user_flow_all: failed for auction pk=%s", auction.pk)
+        time.sleep(sleep_seconds)
+
+    # Combined view across all auctions
+    try:
+        freq, trans = AdminUserFlow._compute_flow(None)
+        now_iso = timezone.now().isoformat()
+        cache.set("user_flow_all", {"frequency_table": freq, "transition_table": trans}, timeout=None)
+        cache.set("user_flow_all_computed_at", now_iso, timeout=None)
+        logger.info("compute_user_flow_all: combined all-auctions result cached")
+    except Exception:
+        logger.exception("compute_user_flow_all: failed to compute combined result")
+
+    logger.info("compute_user_flow_all: complete")

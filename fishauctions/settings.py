@@ -718,6 +718,17 @@ PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": "redis://:"
+        + os.environ.get("REDIS_PASSWORD", "unsecure")
+        + "@"
+        + os.environ.get("REDIS_HOST", "redis")
+        + ":6379/3",
+    }
+}
+
 # Celery Configuration
 # https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
 

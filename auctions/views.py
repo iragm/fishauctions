@@ -32,6 +32,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.views import redirect_to_login
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -11599,66 +11600,67 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
         ("Homepage", re.compile(r"^/?$")),
     ]
 
-    def classify_url(self, url):
+    @classmethod
+    def classify_url(cls, url):
         if not url:
             return "Other"
-        for label, pattern in self.URL_SECTIONS:
+        for label, pattern in cls.URL_SECTIONS:
             if pattern.match(url):
                 return label
         return "Other"
 
-    def _process_session(self, session, transitions):
+    @classmethod
+    def _process_session(cls, session, transitions):
         sections = []
         for v in session:
-            section = self.classify_url(v["url"])
+            section = cls.classify_url(v["url"])
             if not sections or sections[-1] != section:
                 sections.append(section)
         for i in range(len(sections) - 1):
             transitions[sections[i]][sections[i + 1]] += 1
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auctions"] = Auction.objects.order_by("-date_end")[:50]
-
-        auction_slug = self.request.GET.get("auction")
-        if not auction_slug:
-            return context
-        try:
-            auction = Auction.objects.get(slug=auction_slug)
-        except Auction.DoesNotExist:
-            return context
-        context["selected_auction"] = auction
-
-        views = (
-            PageView.objects.filter(Q(auction=auction) | Q(lot_number__auction=auction))
-            .filter(user__isnull=False)
-            .order_by("user_id", "date_start")
-            .values("user_id", "url", "date_start", "total_time")
-        )
+    @classmethod
+    def _compute_flow(cls, auction):
+        """Compute (frequency_table, transition_table) for auction, or all auctions if None."""
+        if auction is None:
+            views_qs = (
+                PageView.objects.filter(user__isnull=False)
+                .order_by("user_id", "date_start")
+                .values("user_id", "url", "date_start", "total_time")
+            )
+        else:
+            auction_views = PageView.objects.filter(auction=auction, user__isnull=False).values(
+                "user_id", "url", "date_start", "total_time"
+            )
+            lot_views = PageView.objects.filter(lot_number__auction=auction, user__isnull=False).values(
+                "user_id", "url", "date_start", "total_time"
+            )
+            # UNION keeps both branches on their own index paths; OR forces a full scan
+            views_qs = auction_views.union(lot_views, all=True).order_by("user_id", "date_start")
 
         section_stats = collections.defaultdict(lambda: {"views": 0, "users": set(), "total_time": 0})
         transitions = collections.defaultdict(lambda: collections.defaultdict(int))
 
         current_user = None
         session = []
-        for v in views:
+        for v in views_qs:
             if v["user_id"] != current_user:
                 if session:
-                    self._process_session(session, transitions)
+                    cls._process_session(session, transitions)
                 current_user = v["user_id"]
                 session = [v]
             else:
-                if session and (v["date_start"] - session[-1]["date_start"]) > self.SESSION_GAP:
-                    self._process_session(session, transitions)
+                if session and (v["date_start"] - session[-1]["date_start"]) > cls.SESSION_GAP:
+                    cls._process_session(session, transitions)
                     session = [v]
                 else:
                     session.append(v)
-            section = self.classify_url(v["url"])
+            section = cls.classify_url(v["url"])
             section_stats[section]["views"] += 1
             section_stats[section]["users"].add(v["user_id"])
             section_stats[section]["total_time"] += v["total_time"] or 0
         if session:
-            self._process_session(session, transitions)
+            cls._process_session(session, transitions)
 
         frequency_table = sorted(
             [
@@ -11672,8 +11674,6 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
             ],
             key=lambda x: -x["views"],
         )
-        context["frequency_table"] = frequency_table
-
         transition_table = []
         for from_section, nexts in transitions.items():
             total = sum(nexts.values())
@@ -11686,8 +11686,52 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
                 }
             )
         transition_table.sort(key=lambda x: -x["total_transitions"])
-        context["transition_table"] = transition_table
+        return frequency_table, transition_table
 
+    def post(self, request, *args, **kwargs):
+        from auctions.tasks import compute_user_flow_all
+
+        compute_user_flow_all.delay()
+        messages.success(request, "User flow computation started in the background. Refresh after a few minutes.")
+        return redirect(request.get_full_path())
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auctions"] = Auction.objects.order_by("-date_end")[:50]
+        context["all_flow_cached_at"] = cache.get("user_flow_all_computed_at")
+
+        auction_slug = self.request.GET.get("auction")
+        if not auction_slug:
+            return context
+
+        if auction_slug == "__all__":
+            cached = cache.get("user_flow_all")
+            if cached:
+                context["is_all_auctions"] = True
+                context["flow_cached_at"] = cache.get("user_flow_all_computed_at")
+                context["frequency_table"] = cached["frequency_table"]
+                context["transition_table"] = cached["transition_table"]
+            else:
+                context["is_all_auctions"] = True
+                context["flow_not_cached"] = True
+            return context
+
+        try:
+            auction = Auction.objects.get(slug=auction_slug)
+        except Auction.DoesNotExist:
+            return context
+        context["selected_auction"] = auction
+
+        cached = cache.get(f"user_flow_{auction.pk}")
+        if cached:
+            context["flow_cached_at"] = cached.get("computed_at")
+            context["frequency_table"] = cached["frequency_table"]
+            context["transition_table"] = cached["transition_table"]
+            return context
+
+        frequency_table, transition_table = self._compute_flow(auction)
+        context["frequency_table"] = frequency_table
+        context["transition_table"] = transition_table
         return context
 
 
