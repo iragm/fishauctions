@@ -11977,7 +11977,14 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
 
         compute_user_flow_all.delay()
         messages.success(request, "User flow computation started in the background. Refresh after a few minutes.")
-        return redirect(request.get_full_path())
+        target = request.get_full_path()
+        if url_has_allowed_host_and_scheme(
+            target,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            return redirect(target)
+        return redirect(request.path)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
