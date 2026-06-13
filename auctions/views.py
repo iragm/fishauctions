@@ -16827,7 +16827,6 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
                 active=False,
                 auctiontos_winner__isnull=False,
                 winning_price__isnull=False,
-                i_bred_this_fish=True,
             )
             .filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")

@@ -1256,7 +1256,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
             tokens = shlex.split(value or "")
         except ValueError:
             tokens = (value or "").split()
-        status_keywords = {"pending", "approved", "rejected"}
+        status_keywords = {"pending", "approved", "rejected", "non_bap"}
         status = None
         search_tokens = []
         user_filters = []
@@ -1286,14 +1286,19 @@ class ClubBapLotFilter(django_filters.FilterSet):
         search = " ".join(search_tokens)
 
         if status == "pending":
-            # Not yet reviewed: no BapAward and not manually dismissed
-            queryset = queryset.filter(bap_award__isnull=True, manually_approved=False)
+            # Not yet reviewed: breeder checkbox checked, no BapAward, not manually dismissed
+            queryset = queryset.filter(i_bred_this_fish=True, bap_award__isnull=True, manually_approved=False)
         elif status == "approved":
             queryset = queryset.filter(bap_award__isnull=False)
         elif status == "rejected":
             # Manually dismissed with no BapAward
             queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
-        # no status keyword = show all sold lots (no extra filter)
+        elif status == "non_bap":
+            # Breeder checkbox NOT checked — seller may have forgotten; can be manually approved
+            queryset = queryset.filter(i_bred_this_fish=False, bap_award__isnull=True, manually_approved=False)
+        else:
+            # no status keyword = show all BAP-eligible lots (exclude non-BAP unless explicitly requested)
+            queryset = queryset.filter(i_bred_this_fish=True)
 
         for user_filter in user_filters:
             name_parts = user_filter.split()
