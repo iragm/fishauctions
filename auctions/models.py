@@ -807,6 +807,14 @@ class Club(models.Model):
         ),
         verbose_name="Only sold lots",
     )
+    no_min_bids = models.BooleanField(
+        default=False,
+        help_text=(
+            "Lots with a minimum bid set are disqualified. "
+            "You can still set an auction-wide minimum bid, but any lots that set their own will not be awarded points."
+        ),
+        verbose_name="No minimum bids",
+    )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
@@ -5285,6 +5293,7 @@ class Lot(models.Model):
         ("not_sold", "Not sold"),
         ("low_quantity", "Quantity below club minimum"),
         ("not_donation", "Lot is not a donation"),
+        ("has_min_bid", "Lot has a minimum bid set"),
     )
     bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
     manually_approved = models.BooleanField(default=False)
@@ -6095,6 +6104,8 @@ class Lot(models.Model):
             return "not_bred"
         if club.only_donation_lots and not self.donation:
             return "not_donation"
+        if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
+            return "has_min_bid"
         category_name = self.species_category.name if self.species_category else None
         # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
         # When CAP is disabled they have no BAP track, so treat them as ineligible.

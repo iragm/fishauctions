@@ -4025,6 +4025,7 @@ class ClubBapSettingsForm(forms.ModelForm):
             "only_active_members_can_participate",
             "only_donation_lots",
             "only_sold_lots",
+            "no_min_bids",
             "separate_hap",
             "separate_cap",
         ]
@@ -4044,6 +4045,7 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "only_active_members_can_participate",
                 "only_donation_lots",
                 "only_sold_lots",
+                "no_min_bids",
                 "separate_hap",
                 "separate_cap",
             ),

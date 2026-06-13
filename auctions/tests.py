@@ -17170,8 +17170,14 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_sold_lot_no_bap_reason_not_sold(self):
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)
         self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_sold_lot_no_bap_reason_unsold_eligible_when_only_sold_lots_off(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertIsNone(lot.sold_lot_no_bap_reason)
 
     def test_auto_award_bap_points_awards_category_points(self):
         lot = self._make_lot()
