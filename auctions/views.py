@@ -15023,7 +15023,7 @@ class ClubMemberAdminView(APIView):
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
         # Header: "{name} - {member_number}" when the club uses membership numbers
         title = str(member)
-        if member.club.membership_number_mode != "off" and member.membership_number:
+        if member.club.show_member_barcode and member.membership_number:
             title = f"{member} — #{member.membership_number}"
         ctx = {
             "club": member.club,
@@ -15652,7 +15652,7 @@ class ClubMembershipNumberView(APIView):
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        if member.club.membership_number_mode == "disabled":
+        if not member.club.show_member_barcode:
             # Feature is off for this club — admin endpoint should not be reachable.
             raise Http404
         return member
@@ -15693,7 +15693,7 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         if not request.user.is_authenticated or member.user_id != request.user.id:
             raise PermissionDenied()
         # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
@@ -15715,7 +15715,7 @@ class ClubMemberAppleWalletByUUIDView(View):
         if not is_configured():
             raise Http404
         member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
@@ -16239,6 +16239,30 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             return url
         return ""
 
+    @staticmethod
+    def _format_membership_date(value):
+        if not value:
+            return "—"
+        return value.strftime("%b %-d, %Y")
+
+    def _membership_info_rows(self, source, target):
+        rows = []
+        for attr, label in [
+            ("membership_expiration_date", "Expires"),
+            ("membership_last_paid", "Last paid"),
+        ]:
+            src_val = getattr(source, attr, None)
+            tgt_val = getattr(target, attr, None)
+            if src_val or tgt_val:
+                rows.append(
+                    {
+                        "label": label,
+                        "source_value": self._format_membership_date(src_val),
+                        "target_value": self._format_membership_date(tgt_val),
+                    }
+                )
+        return rows
+
     def _build_review_context(self, request, source, target, review_form, next_url=""):
         cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         return {
@@ -16252,14 +16276,17 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "target_label": str(target),
             "review_form": review_form,
             "next_url": next_url,
-            "comparison_rows": [
-                {
-                    "label": field.label,
-                    "source_value": self._format_merge_value(getattr(source, name, None)),
-                    "target_value": self._format_merge_value(getattr(target, name, None)),
-                }
-                for name, field in review_form.fields.items()
-            ],
+            "comparison_rows": (
+                self._membership_info_rows(source, target)
+                + [
+                    {
+                        "label": field.label,
+                        "source_value": self._format_merge_value(getattr(source, name, None)),
+                        "target_value": self._format_merge_value(getattr(target, name, None)),
+                    }
+                    for name, field in review_form.fields.items()
+                ]
+            ),
             "summary_lines": [
                 f"{source} will be deactivated.",
                 f"{target} will be kept.",
@@ -16590,7 +16617,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         if preview_member:
             preview_name = (preview_member.name or "").strip() or "Member"
             preview_member_link = preview_member.member_page_url
-            preview_barcode_url = preview_member.barcode_image_link if preview_member.membership_number_visible else ""
+            preview_barcode_url = preview_member.barcode_image_link if preview_member.club.show_member_barcode else ""
         else:
             full_name = user.get_full_name() if user.is_authenticated else ""
             preview_name = full_name.strip() or "Member"
@@ -16599,7 +16626,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_name"] = preview_name
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
-        context["membership_numbers_enabled"] = self.club.membership_number_mode != "disabled"
+        context["membership_numbers_enabled"] = self.club.show_member_barcode
 
         today = timezone.localdate()
         next_auction = (
@@ -17361,12 +17388,15 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.utils import timezone
 
         today = timezone.now().date()
+        expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
+        if self.club.membership_annual_fee:
+            expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))
         qs = (
             ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
             .exclude(address="")
             .annotate(
                 is_expired=Case(
-                    When(membership_expiration_date__lt=today, then=Value(True)),
+                    *expired_whens,
                     default=Value(False),
                     output_field=BooleanField(),
                 )
@@ -17948,7 +17978,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         writer = csv.writer(response)
         # Omit the Membership Number column entirely when the club has the
         # feature disabled — user asked for "no UI" referencing those numbers.
-        include_membership_number = self.club.membership_number_mode != "disabled"
+        include_membership_number = self.club.show_member_barcode
         header = [
             "Name",
             "Email",
@@ -18801,7 +18831,8 @@ class DiscordInteractionsView(View):
 
         expiry = member.membership_expiration_date
         if not expiry:
-            lines.append("Status: No paid membership on record")
+            if club.membership_annual_fee:
+                lines.append("Status: ❌ Expired — please renew your membership")
         else:
             today = timezone.now().date()
             expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())

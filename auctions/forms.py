@@ -3815,7 +3815,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         fields = [
             "membership_system",
             "membership_annual_fee",
-            "membership_number_mode",
+            "show_member_barcode",
         ]
         help_texts = {
             "membership_system": (
@@ -3833,7 +3833,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.layout = Layout(
             "membership_system",
             "membership_annual_fee",
-            "membership_number_mode",
+            "show_member_barcode",
         )
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 

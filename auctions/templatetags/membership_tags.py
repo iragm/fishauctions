@@ -60,7 +60,7 @@ def google_wallet_save_url(member):
     # Respect the club's per-mode visibility — when membership numbers are off
     # entirely, or restricted to paid members and this member isn't paid, no
     # Google Wallet URL should be exposed.
-    if not member.membership_number_visible:
+    if not member.club.show_member_barcode:
         return ""
     from auctions.google_wallet import _object_visuals, is_configured
 

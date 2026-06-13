@@ -16749,7 +16749,7 @@ class ClubSettingsViewTests(TestCase):
             {
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
-                "membership_number_mode": "disabled",
+                # show_member_barcode omitted → False (unchecked checkbox)
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -19470,7 +19470,7 @@ class AppleWalletPassTests(TestCase):
 
 
 class MembershipNumberModeTests(TestCase):
-    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+    """Visibility gating + revocation triggers for Club.show_member_barcode."""
 
     def setUp(self):
         import datetime as _dt
@@ -19495,34 +19495,25 @@ class MembershipNumberModeTests(TestCase):
         self.assertTrue(self.paid.is_paid_member)
         self.assertFalse(self.unpaid.is_paid_member)
 
-    def test_visibility_all_members(self):
-        self.club.membership_number_mode = "all_members"
+    def test_visibility_enabled(self):
+        self.club.show_member_barcode = True
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertTrue(self.unpaid.membership_number_visible)
-
-    def test_visibility_paid_only(self):
-        self.club.membership_number_mode = "paid_only"
-        self.club.save()
-        self.paid.refresh_from_db()
-        self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertTrue(self.paid.club.show_member_barcode)
+        self.assertTrue(self.unpaid.club.show_member_barcode)
 
     def test_visibility_disabled(self):
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertFalse(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertFalse(self.paid.club.show_member_barcode)
+        self.assertFalse(self.unpaid.club.show_member_barcode)
 
-    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_pkpass_404_when_barcode_disabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
-        # Unpaid user logged in as themselves → 404 (number isn't visible).
         unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
         self.unpaid.user = unpaid_user
         self.unpaid.save()
@@ -19538,48 +19529,39 @@ class MembershipNumberModeTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
 
-    def test_google_wallet_url_empty_when_number_hidden(self):
+    def test_google_wallet_url_empty_when_barcode_disabled(self):
         from .templatetags.membership_tags import google_wallet_save_url
 
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
-        # Should bail out before ever touching settings/JWT.
         self.assertEqual(google_wallet_save_url(self.paid), "")
 
     def test_admin_membership_number_view_404_when_disabled(self):
         from .models import ClubMember
 
-        # Give the user admin permissions on the club so the perm check passes.
         admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
         ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.client.force_login(admin)
         url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
-    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+    def test_signal_revokes_all_passes_when_barcode_disabled(self):
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "disabled"
+                self.club.show_member_barcode = False
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
-        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "paid_only"
-                self.club.save()
-            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
-
-    def test_signal_no_revoke_when_loosening_to_all_members(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_signal_no_revoke_when_barcode_enabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "all_members"
+                self.club.show_member_barcode = True
                 self.club.save()
             delay.assert_not_called()
 

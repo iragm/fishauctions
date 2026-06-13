@@ -538,7 +538,7 @@ class ClubMemberHTMxTable(tables.Table):
 
         if not value:
             if has_fee and not record.is_deleted:
-                badge = format_html(" <span class='badge bg-danger ms-1'>Never paid</span>")
+                badge = format_html(" <span class='badge bg-danger ms-1'>Expired</span>")
                 return format_html("—{}{}", badge, renew_btn)
             return format_html("—")
 
@@ -627,7 +627,7 @@ class ClubMemberHTMxTable(tables.Table):
                     )
                 # Member-number action is hidden entirely when the club has the feature disabled.
                 membership_number_item = format_html("")
-                if record.club.membership_number_mode != "disabled":
+                if record.club.show_member_barcode:
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
                     membership_number_item = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'

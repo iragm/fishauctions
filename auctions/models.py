@@ -649,19 +649,12 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    MEMBERSHIP_NUMBER_MODE_CHOICES = (
-        ("disabled", "No member numbers"),
-        ("paid_only", "Paid members only"),
-        ("all_members", "All members"),
-    )
-    membership_number_mode = models.CharField(
-        max_length=20,
-        choices=MEMBERSHIP_NUMBER_MODE_CHOICES,
-        default="all_members",
-        verbose_name="Member number",
+    show_member_barcode = models.BooleanField(
+        default=True,
+        verbose_name="Show member barcodes",
         help_text=(
-            "10 digit automatically generated number that can be scanned with a "
-            "barcode reader, QR code, and added to Google Wallet."
+            "When checked, members receive a 10-digit barcode that can be scanned "
+            "at auctions, added to Google/Apple Wallet, and included in emails."
         ),
     )
     use_site_paypal_account = models.BooleanField(
@@ -1304,22 +1297,6 @@ class ClubMember(ContactRecord):
         return ""
 
     @property
-    def membership_number_visible(self) -> bool:
-        """True when this member's number/QR/barcode should be shown / wallet-saveable.
-
-        Honors the club's `membership_number_mode`:
-          - disabled    → never
-          - paid_only   → only when is_paid_member
-          - all_members → always
-        """
-        mode = self.club.membership_number_mode
-        if mode == "disabled":
-            return False
-        if mode == "paid_only":
-            return self.is_paid_member
-        return True
-
-    @property
     def is_paid_member(self) -> bool:
         """True when the member's dues are current.
 
@@ -1619,9 +1596,9 @@ class ClubMember(ContactRecord):
 
     @property
     def is_expired(self):
-        if not self.membership_expiration_date:
-            return False
-        return self.membership_expiration_date < timezone.now().date()
+        if self.membership_expiration_date:
+            return self.membership_expiration_date < timezone.now().date()
+        return bool(self.club.membership_annual_fee) and not self.is_paid_member
 
     @property
     def is_expiring_soon(self):
@@ -7305,7 +7282,7 @@ class Invoice(models.Model):
         if not member:
             return "No membership"
         if not member.membership_last_paid:
-            return "Never paid"
+            return "Expired"
         expiration_date = member.membership_expiration_date
         if not expiration_date:
             return "Unknown"
