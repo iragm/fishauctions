@@ -536,7 +536,10 @@ class ClubMemberHTMxTable(tables.Table):
             )
 
         if not value:
-            return format_html("—{}", renew_btn) if has_fee and not record.is_deleted else format_html("—")
+            if has_fee and not record.is_deleted:
+                badge = format_html(" <span class='badge bg-warning text-dark ms-1'>Never paid</span>")
+                return format_html("—{}{}", badge, renew_btn)
+            return format_html("—")
 
         formatted = value.strftime("%b %-d, %Y")
         days_expired = (today - value).days

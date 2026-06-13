@@ -7065,6 +7065,7 @@ class Invoice(models.Model):
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
     renewal_needed = models.BooleanField(default=False)
+    renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
     @property

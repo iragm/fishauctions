@@ -13,7 +13,7 @@ from datetime import timezone as date_tz
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from random import choice, randint, sample, uniform
+from random import randint, sample, uniform
 from time import time
 from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
@@ -505,7 +505,8 @@ def _invoice_membership_candidate(invoice):
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
     if not user and not email:
-        return None
+        # Fall back to the ClubMember directly linked on the TOS (no email/user needed).
+        return getattr(invoice.auctiontos_user, "clubmember", None)
     return _find_club_member(invoice.auction.club, user, email)
 
 
@@ -550,10 +551,12 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     if not club.membership_annual_fee:
         return False
-    # Without a usable email we cannot reliably look up or create a ClubMember;
+    # Without a usable email or user we cannot reliably look up or create a ClubMember;
     # don't auto-add the fee in that case (an admin can still toggle it on manually).
+    # Exception: if the TOS already has a directly linked ClubMember, proceed.
     if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
-        return False
+        if not (invoice.auctiontos_user and invoice.auctiontos_user.clubmember_id):
+            return False
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
@@ -568,6 +571,9 @@ def _ensure_invoice_renewal_state(invoice):
         return
     if not invoice.auction:
         # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
+        return
+    # An admin has explicitly set the checkbox — respect that choice.
+    if invoice.renewal_manually_set:
         return
     should_need = _should_mark_invoice_renewal_needed(invoice)
     if invoice.renewal_needed != should_need:
@@ -2209,7 +2215,8 @@ class InvoiceRenewalNeededToggleView(APIView):
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
         renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
         invoice.renewal_needed = renewal_needed
-        invoice.save(update_fields=["renewal_needed"])
+        invoice.renewal_manually_set = True
+        invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
@@ -3824,7 +3831,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not candidate_ids:
             messages.warning(request, "No checked-in users are left for door prizes.")
             return redirect(redirect_url)
-        winner = AuctionTOS.objects.get(pk=choice(candidate_ids))
+        winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
         winner.door_prize_called = timezone.now()
         winner.save(update_fields=["door_prize_called"])
         self.auction.create_history(
@@ -6812,7 +6819,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 "Looks like {user} couldn't handle the heat and pulled their bid!",
                 "{user} just remembered they haven't paid rent this month and removed their bid!",
             ]
-            history_message = choice(own_bid_removal_messages).format(user=self.request.user)
+            history_message = secrets.choice(own_bid_removal_messages).format(user=self.request.user)
         else:
             history_message = f"{self.request.user} has removed {bid.user}'s bid"
         if lot.ended:
@@ -16322,6 +16329,10 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source_name = str(source)
+                    # Re-point all related records from source to target before deactivating.
+                    AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
+                    BapAward.objects.filter(club_member=source).update(club_member=target)
+                    InvoicePayment.objects.filter(club_member=source).update(club_member=target)
                     source.is_deleted = True
                     source.save(update_fields=["is_deleted"])
                     ClubHistory.objects.create(
