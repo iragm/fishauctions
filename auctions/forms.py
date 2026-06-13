@@ -4024,6 +4024,7 @@ class ClubBapSettingsForm(forms.ModelForm):
             "days_between_same_name_lots",
             "only_active_members_can_participate",
             "only_donation_lots",
+            "only_sold_lots",
             "separate_hap",
             "separate_cap",
         ]
@@ -4042,6 +4043,7 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "days_between_same_name_lots",
                 "only_active_members_can_participate",
                 "only_donation_lots",
+                "only_sold_lots",
                 "separate_hap",
                 "separate_cap",
             ),

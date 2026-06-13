@@ -798,6 +798,15 @@ class Club(models.Model):
         default=False,
         help_text="Require all BAP lots to be a donation.",
     )
+    only_sold_lots = models.BooleanField(
+        default=False,
+        help_text=(
+            "Require lots to be sold for points to be awarded. "
+            "Uncheck to give points for submitted and unsold lots. "
+            "If automatically award points is on, they will only be automatically awarded to sold lots."
+        ),
+        verbose_name="Only sold lots",
+    )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
@@ -6147,7 +6156,9 @@ class Lot(models.Model):
     def sold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
         if not self.sold:
-            return "not_sold"
+            club = self.auction.club if self.auction else None
+            if not club or club.only_sold_lots:
+                return "not_sold"
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):

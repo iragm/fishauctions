@@ -6142,7 +6142,8 @@ class ViewLot(DetailView):
             if viewer_is_seller or viewer_has_bap:
                 context["show_bap_badge"] = True
                 if lot.ended and not lot.sold:
-                    reason = "not_sold"
+                    club = lot.auction.club if lot.auction else None
+                    reason = "not_sold" if (not club or club.only_sold_lots) else lot.unsold_lot_no_bap_reason
                 else:
                     reason = lot.unsold_lot_no_bap_reason
                 context["bap_eligible_reason"] = reason
@@ -16820,15 +16821,15 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             | Q(user=OuterRef("user"))
             | Q(email__iexact=OuterRef("auctiontos_seller__email"))
         )
+        qs = Lot.objects.filter(
+            auction__club=self.club,
+            is_deleted=False,
+            active=False,
+        )
+        if self.club.only_sold_lots:
+            qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return (
-            Lot.objects.filter(
-                auction__club=self.club,
-                is_deleted=False,
-                active=False,
-                auctiontos_winner__isnull=False,
-                winning_price__isnull=False,
-            )
-            .filter(Exists(matching_member))
+            qs.filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
             .prefetch_related("bap_award")
             .order_by("-date_end")
