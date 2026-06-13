@@ -353,6 +353,7 @@ class ClubAdmin(admin.ModelAdmin):
     list_filter = (
         "active",
         "use_site_paypal_account",
+        "allow_non_oauth_paypal",
         ("date_contacted", admin.EmptyFieldListFilter),
         ("date_contacted_for_in_person_auctions", admin.EmptyFieldListFilter),
         ("contact_email", admin.EmptyFieldListFilter),

@@ -695,6 +695,11 @@ urlpatterns = [
         views.ClubLinkPaymentAccountView.as_view(),
         name="club_link_payment_account",
     ),
+    path(
+        "clubs/<slug:slug>/paypal-credentials/",
+        views.ClubPayPalCredentialsView.as_view(),
+        name="club_paypal_credentials",
+    ),
     path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
     path(

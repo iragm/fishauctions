@@ -666,6 +666,34 @@ class Club(models.Model):
             "Only useful for site admins; Square has no platform-account equivalent."
         ),
     )
+    allow_non_oauth_paypal = models.BooleanField(
+        default=False,
+        verbose_name="Allow non-OAuth PayPal (admin only)",
+        help_text=(
+            "When checked, this club skips PayPal OAuth and instead enters its own PayPal REST API "
+            "client ID and secret on the membership settings page. Those credentials are used for the "
+            "club's auctions and membership payments exactly the way the site's PAYPAL_CLIENT_ID / "
+            "PAYPAL_SECRET are: payments go straight to that PayPal account with no platform fee. "
+            "Set this here in the Django admin only."
+        ),
+    )
+    paypal_client_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="PayPal client ID",
+        help_text="REST API client ID from this club's own PayPal app. Only used when non-OAuth PayPal is allowed.",
+    )
+    paypal_secret = EncryptedCharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="PayPal secret",
+        help_text=(
+            "REST API secret from this club's own PayPal app (stored encrypted). "
+            "Only used when non-OAuth PayPal is allowed."
+        ),
+    )
     auction_email_member = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -995,9 +1023,26 @@ class Club(models.Model):
         )
 
     @property
+    def uses_own_paypal_credentials(self):
+        """True when this club pays through its own PayPal app credentials (non-OAuth mode)."""
+        return bool(self.allow_non_oauth_paypal and self.paypal_client_id and self.paypal_secret)
+
+    @property
+    def paypal_credentials(self):
+        """``(client_id, secret)`` for this club's own PayPal app, or ``None``.
+
+        Set only in non-OAuth mode with both values present. Callers use these in place
+        of the site's ``PAYPAL_CLIENT_ID`` / ``PAYPAL_SECRET``, so payments go directly to
+        the club's PayPal account just as the site keys send payments to the site account.
+        """
+        if self.uses_own_paypal_credentials:
+            return self.paypal_client_id, self.paypal_secret
+        return None
+
+    @property
     def can_accept_paypal(self):
-        """True when this club has any PayPal route configured (linked seller OR site account)."""
-        if self.uses_site_paypal:
+        """True when this club has any PayPal route configured (linked seller, site account, or own credentials)."""
+        if self.uses_site_paypal or self.uses_own_paypal_credentials:
             return True
         seller = self.effective_paypal_seller
         return bool(seller and seller.paypal_merchant_id)
@@ -2354,10 +2399,14 @@ class Auction(models.Model):
         """
         Return the merchant ID for PayPal payments.
 
-        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``.
+        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``,
+          or ``None`` when the club uses its own (non-OAuth) credentials (payment goes
+          straight to that account, so there's no payee override).
         - Non-club auctions: creator's PayPalSeller, or ``"admin"`` when creator is a superuser.
         """
         if self.club:
+            if self.club.uses_own_paypal_credentials:
+                return None
             if self.club.uses_site_paypal:
                 return "admin"
             seller = self.club.effective_paypal_seller
@@ -2962,6 +3011,19 @@ class Auction(models.Model):
         if self.online_bidding == "disable":
             return False
         return True
+
+    @property
+    def paypal_payments_enabled(self):
+        """True when buyers can pay this auction's invoices directly via PayPal.
+
+        Used to hide the manual PayPal bulk-invoice CSV export -- sending those invoices would
+        double-request payment from buyers who can already pay online. Covers the per-auction
+        flag plus club auctions that route through the club's site or own (non-OAuth) PayPal
+        credentials, where the club config supersedes the per-auction flag.
+        """
+        if self.club and (self.club.uses_site_paypal or self.club.uses_own_paypal_credentials):
+            return True
+        return bool(self.enable_online_payments)
 
     @property
     def tos_qs(self):
@@ -7087,10 +7149,22 @@ class Invoice(models.Model):
         return get_currency_symbol(self.currency)
 
     @property
+    def paypal_credentials(self):
+        """Club-supplied PayPal app credentials governing this invoice, or ``None``.
+
+        When the invoice's club (membership) or its auction's club is in non-OAuth
+        PayPal mode, returns that club's ``(client_id, secret)``; otherwise ``None`` so
+        callers fall back to the site's platform PayPal app.
+        """
+        club = self.club or (self.auction.club if self.auction else None)
+        return club.paypal_credentials if club else None
+
+    @property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
-        # Check PayPal
-        paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
+        # even when the site has no platform PayPal keys.
+        paypal_configured = bool((settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) or self.paypal_credentials)
         # Square now requires OAuth - just check if OAuth is configured
         square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
             settings, "SQUARE_CLIENT_SECRET", None
@@ -7140,14 +7214,15 @@ class Invoice(models.Model):
     @property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
-        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
+        # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
+        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) and not self.paypal_credentials:
             return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
         if self.club:
-            if self.club.uses_site_paypal:
+            if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
                 return True
             seller = self.club.effective_paypal_seller
             if not seller or not seller.paypal_merchant_id:
@@ -7157,9 +7232,10 @@ class Invoice(models.Model):
             return True
         if not self.auction:
             return False
-        # For club-managed auctions using the site's PayPal account, the club-level
-        # configuration supersedes the per-auction enable_online_payments flag.
-        if self.auction.club and self.auction.club.uses_site_paypal:
+        # For club-managed auctions using the site's PayPal account or the club's own
+        # credentials, the club-level configuration supersedes the per-auction
+        # enable_online_payments flag.
+        if self.auction.club and (self.auction.club.uses_site_paypal or self.auction.club.uses_own_paypal_credentials):
             return True
         if not self.auction.enable_online_payments:
             return False

@@ -149,6 +149,7 @@ from .forms import (
     ClubMembershipSettingsForm,
     ClubMoneyBalanceForm,
     ClubMoneyForm,
+    ClubPayPalCredentialsForm,
     ClubTreasurerReportForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -9471,10 +9472,23 @@ class PayPalAPIMixin:
       - PAYPAL_WEBHOOK_ID: Registered webhook ID (for webhook verification)
     """
 
+    def _paypal_auth(self):
+        """Return ``(client_id, secret)`` for the current PayPal request.
+
+        A club in non-OAuth mode supplies its own app credentials via
+        ``self.club_paypal_credentials`` (set by callers from the invoice); every other
+        caller falls back to the site's platform app from settings.
+        """
+        creds = getattr(self, "club_paypal_credentials", None)
+        if creds and creds[0] and creds[1]:
+            return creds[0], creds[1]
+        return settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET
+
     def _get_access_token(self):
+        client_id, secret = self._paypal_auth()
         token_resp = requests.post(
             f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
-            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET),
+            auth=(client_id, secret),
             headers={"Accept": "application/json", "Accept-Language": "en_US"},
             data={"grant_type": "client_credentials"},
             timeout=10,
@@ -9488,7 +9502,10 @@ class PayPalAPIMixin:
             "Authorization": f"Bearer {token or self._get_access_token()}",
             "Content-Type": "application/json",
         }
-        if include_bn_code and getattr(settings, "PAYPAL_BN_CODE", None):
+        # The BN code is our platform partner-attribution id; it's meaningless (and
+        # potentially rejected) when calling with a club's own standalone app credentials.
+        using_club_creds = bool(getattr(self, "club_paypal_credentials", None))
+        if include_bn_code and not using_club_creds and getattr(settings, "PAYPAL_BN_CODE", None):
             headers["PayPal-Partner-Attribution-Id"] = settings.PAYPAL_BN_CODE
         if merchant_id:
             headers["PayPal-Auth-Assertion"] = self._build_auth_assertion(merchant_id)
@@ -9498,7 +9515,7 @@ class PayPalAPIMixin:
         """Build unsigned PayPal-Auth-Assertion JWT for acting on behalf of a merchant."""
         header = {"alg": "none"}
         payload = {
-            "iss": settings.PAYPAL_CLIENT_ID,
+            "iss": self._paypal_auth()[0],
             "payer_id": merchant_payer_id,  # obtained from partner referral flow
         }
 
@@ -9549,6 +9566,9 @@ class PayPalAPIMixin:
     def create_order(self, invoice, member_pk=""):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
+        # A club using its own (non-OAuth) PayPal app pays through its own credentials,
+        # exactly as the site keys are used for the platform account. None => site app.
+        self.club_paypal_credentials = invoice.paypal_credentials
         currency = invoice.currency
 
         items = []
@@ -9619,7 +9639,11 @@ class PayPalAPIMixin:
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
         if invoice.club:
-            if invoice.club.uses_site_paypal:
+            if invoice.club.uses_own_paypal_credentials:
+                # The club's own app receives the payment directly -- no payee override and
+                # no platform fee, exactly as the site keys behave for the site account.
+                paypal_merchant_id = None
+            elif invoice.club.uses_site_paypal:
                 paypal_merchant_id = "admin"
             else:
                 club_seller = invoice.club.effective_paypal_seller
@@ -9661,8 +9685,15 @@ class PayPalAPIMixin:
             # },
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
+                # Include the invoice uuid so PayPalSuccessView can resolve the club's own
+                # credentials (if any) before capturing -- the capture must use the same app
+                # that created the order.
                 "return_url": self.request.build_absolute_uri(
-                    reverse("paypal_success") + (f"?member_pk={member_pk}" if member_pk else "")
+                    reverse("paypal_success")
+                    + "?"
+                    + urlencode(
+                        {"invoice": str(invoice.no_login_link), **({"member_pk": member_pk} if member_pk else {})}
+                    )
                 ),
                 "cancel_url": self.request.build_absolute_uri(
                     reverse("club_detail", kwargs={"slug": invoice.club.slug})
@@ -9869,6 +9900,15 @@ class PayPalAPIMixin:
     def refund_invoice(self, invoice, amount):
         """Refund the given amount on this invoice via PayPal.
         Returns error or none on success"""
+        # Clubs using their own (non-OAuth) credentials have no webhook wired up, so an
+        # automated refund here would never be recorded as a negative InvoicePayment
+        # (handle_refund only runs from the PayPal webhook). Force these to be done manually
+        # in the club's own PayPal account so our records never silently drift.
+        if invoice.paypal_credentials:
+            return (
+                "Automatic refunds aren't available for this club's PayPal account. "
+                "Please issue the refund manually in PayPal."
+            )
         if not self.can_refund_invoice(invoice, amount):
             return "Unable to automatically refund payment"
         payment = (
@@ -10163,6 +10203,15 @@ class PayPalSuccessView(PayPalAPIMixin, View):
 
     def get(self, request, *args, **kwargs):
         order_id = request.GET.get("token")
+        # Resolve the club's own (non-OAuth) credentials before capturing -- only the app
+        # that created the order can capture it. The invoice uuid is carried in the return URL
+        # set by create_order(); the captured order's reference_id remains authoritative for
+        # which invoice is actually credited.
+        invoice_uuid = request.GET.get("invoice")
+        if invoice_uuid:
+            invoice_for_creds = Invoice.objects.filter(no_login_link=invoice_uuid).first()
+            if invoice_for_creds:
+                self.club_paypal_credentials = invoice_for_creds.paypal_credentials
         error, invoice = self.handle_order(order_id)
         if error:
             messages.error(request, error)
@@ -14402,8 +14451,16 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                 context["invoice"] = invoice
                 _ensure_invoice_renewal_state(invoice)
             if invoice:
-                # Generate PayPal QR code if available
-                if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
+                # Generate PayPal QR code if available.
+                # The in-person QR flow relies on PayPal webhooks (CHECKOUT.ORDER.APPROVED /
+                # CHECKOUT.CAPTURE.COMPLETED) to update the cashier screen once the payer approves
+                # on their phone. Clubs using their own (non-OAuth) credentials have no webhook
+                # wired up, so skip the QR for them -- they can still take Square/cash here.
+                if (
+                    invoice.show_paypal_button
+                    and not invoice.reason_for_payment_not_available
+                    and not invoice.paypal_credentials
+                ):
                     try:
                         context["paypal_qr_code_link"] = self.create_order(invoice)
                     except Exception:
@@ -16490,6 +16547,10 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["square_configured"] = bool(
             getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
         )
+        # Non-OAuth PayPal (admin-only opt-in): the club enters its own REST credentials here
+        # instead of connecting via OAuth.
+        if club.allow_non_oauth_paypal:
+            context["paypal_credentials_form"] = ClubPayPalCredentialsForm(instance=club)
         return context
 
     def form_valid(self, form):
@@ -16573,6 +16634,46 @@ class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
         )
         messages.success(request, f"{provider_label} account linked to {self.club.name}.")
         return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only endpoint to save a club's own (non-OAuth) PayPal REST credentials.
+
+    Shown on the membership settings page only when the club has ``allow_non_oauth_paypal``
+    set (an admin-only flag). Editable by the same people who manage the club's money/settings.
+    """
+
+    http_method_names = ["post"]
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        # Credentials can only be entered when an admin has opted this club into non-OAuth PayPal.
+        if not self.club.allow_non_oauth_paypal:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        settings_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        form = ClubPayPalCredentialsForm(request.POST, instance=self.club)
+        if not form.is_valid():
+            for errors in form.errors.values():
+                for error in errors:
+                    messages.error(request, error)
+            return redirect(settings_url)
+        had_credentials = self.club.uses_own_paypal_credentials
+        form.save()
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action="Updated PayPal credentials" if had_credentials else "Added PayPal credentials",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, "PayPal credentials saved.")
+        return redirect(settings_url)
 
 
 class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):

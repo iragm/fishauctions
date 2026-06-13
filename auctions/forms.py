@@ -3841,6 +3841,44 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         return super().clean()
 
 
+class ClubPayPalCredentialsForm(forms.ModelForm):
+    """Lets a club using non-OAuth PayPal enter its own REST API credentials.
+
+    Only used when ``Club.allow_non_oauth_paypal`` is set (an admin-only flag); the
+    membership settings template renders this in place of the PayPal OAuth UI. The secret
+    is write-only -- it is never rendered back, and leaving it blank keeps the saved value.
+    """
+
+    paypal_secret = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        label="PayPal secret",
+        help_text="Leave blank to keep the saved secret. Stored encrypted.",
+    )
+
+    class Meta:
+        model = Club
+        fields = ["paypal_client_id", "paypal_secret"]
+        help_texts = {
+            "paypal_client_id": "REST API client ID from your club's own PayPal app.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        # The template renders the <form> tag itself so it can point at the dedicated endpoint.
+        self.helper.form_tag = False
+        self.helper.layout = Layout("paypal_client_id", "paypal_secret")
+        self.helper.add_input(Submit("submit", "Save PayPal credentials", css_class="btn-primary"))
+
+    def clean_paypal_secret(self):
+        # Blank means "keep what's stored" so the saved secret is never echoed back to the page.
+        secret = self.cleaned_data.get("paypal_secret")
+        if not secret:
+            return self.instance.paypal_secret
+        return secret
+
+
 class ClubEmailSettingsForm(forms.ModelForm):
     class Meta:
         model = Club
