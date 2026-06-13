@@ -649,19 +649,12 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    MEMBERSHIP_NUMBER_MODE_CHOICES = (
-        ("disabled", "No member numbers"),
-        ("paid_only", "Paid members only"),
-        ("all_members", "All members"),
-    )
-    membership_number_mode = models.CharField(
-        max_length=20,
-        choices=MEMBERSHIP_NUMBER_MODE_CHOICES,
-        default="all_members",
-        verbose_name="Member number",
+    show_member_barcode = models.BooleanField(
+        default=True,
+        verbose_name="Show member barcodes",
         help_text=(
-            "10 digit automatically generated number that can be scanned with a "
-            "barcode reader, QR code, and added to Google Wallet."
+            "When checked, members receive a 10-digit barcode that can be scanned "
+            "at auctions, added to Google/Apple Wallet, and included in emails."
         ),
     )
     use_site_paypal_account = models.BooleanField(
@@ -671,6 +664,34 @@ class Club(models.Model):
             "When checked, PayPal payments for this club use the site's own merchant account "
             "(PAYPAL_CLIENT_ID / PAYPAL_SECRET from settings) instead of any linked PayPalSeller. "
             "Only useful for site admins; Square has no platform-account equivalent."
+        ),
+    )
+    allow_non_oauth_paypal = models.BooleanField(
+        default=False,
+        verbose_name="Allow non-OAuth PayPal (admin only)",
+        help_text=(
+            "When checked, this club skips PayPal OAuth and instead enters its own PayPal REST API "
+            "client ID and secret on the membership settings page. Those credentials are used for the "
+            "club's auctions and membership payments exactly the way the site's PAYPAL_CLIENT_ID / "
+            "PAYPAL_SECRET are: payments go straight to that PayPal account with no platform fee. "
+            "Set this here in the Django admin only."
+        ),
+    )
+    paypal_client_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="PayPal client ID",
+        help_text="REST API client ID from this club's own PayPal app. Only used when non-OAuth PayPal is allowed.",
+    )
+    paypal_secret = EncryptedCharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="PayPal secret",
+        help_text=(
+            "REST API secret from this club's own PayPal app (stored encrypted). "
+            "Only used when non-OAuth PayPal is allowed."
         ),
     )
     auction_email_member = models.ForeignKey(
@@ -797,6 +818,23 @@ class Club(models.Model):
     only_donation_lots = models.BooleanField(
         default=False,
         help_text="Require all BAP lots to be a donation.",
+    )
+    only_sold_lots = models.BooleanField(
+        default=False,
+        help_text=(
+            "Require lots to be sold for points to be awarded. "
+            "Uncheck to give points for submitted and unsold lots. "
+            "If automatically award points is on, they will only be automatically awarded to sold lots."
+        ),
+        verbose_name="Only sold lots",
+    )
+    no_min_bids = models.BooleanField(
+        default=False,
+        help_text=(
+            "Lots with a minimum bid set are disqualified. "
+            "You can still set an auction-wide minimum bid, but any lots that set their own will not be awarded points."
+        ),
+        verbose_name="No minimum bids",
     )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
@@ -985,9 +1023,26 @@ class Club(models.Model):
         )
 
     @property
+    def uses_own_paypal_credentials(self):
+        """True when this club pays through its own PayPal app credentials (non-OAuth mode)."""
+        return bool(self.allow_non_oauth_paypal and self.paypal_client_id and self.paypal_secret)
+
+    @property
+    def paypal_credentials(self):
+        """``(client_id, secret)`` for this club's own PayPal app, or ``None``.
+
+        Set only in non-OAuth mode with both values present. Callers use these in place
+        of the site's ``PAYPAL_CLIENT_ID`` / ``PAYPAL_SECRET``, so payments go directly to
+        the club's PayPal account just as the site keys send payments to the site account.
+        """
+        if self.uses_own_paypal_credentials:
+            return self.paypal_client_id, self.paypal_secret
+        return None
+
+    @property
     def can_accept_paypal(self):
-        """True when this club has any PayPal route configured (linked seller OR site account)."""
-        if self.uses_site_paypal:
+        """True when this club has any PayPal route configured (linked seller, site account, or own credentials)."""
+        if self.uses_site_paypal or self.uses_own_paypal_credentials:
             return True
         seller = self.effective_paypal_seller
         return bool(seller and seller.paypal_merchant_id)
@@ -1285,22 +1340,6 @@ class ClubMember(ContactRecord):
         if self.user and self.user.email:
             return self.user.email
         return ""
-
-    @property
-    def membership_number_visible(self) -> bool:
-        """True when this member's number/QR/barcode should be shown / wallet-saveable.
-
-        Honors the club's `membership_number_mode`:
-          - disabled    → never
-          - paid_only   → only when is_paid_member
-          - all_members → always
-        """
-        mode = self.club.membership_number_mode
-        if mode == "disabled":
-            return False
-        if mode == "paid_only":
-            return self.is_paid_member
-        return True
 
     @property
     def is_paid_member(self) -> bool:
@@ -1602,9 +1641,9 @@ class ClubMember(ContactRecord):
 
     @property
     def is_expired(self):
-        if not self.membership_expiration_date:
-            return False
-        return self.membership_expiration_date < timezone.now().date()
+        if self.membership_expiration_date:
+            return self.membership_expiration_date < timezone.now().date()
+        return bool(self.club.membership_annual_fee) and not self.is_paid_member
 
     @property
     def is_expiring_soon(self):
@@ -2360,10 +2399,14 @@ class Auction(models.Model):
         """
         Return the merchant ID for PayPal payments.
 
-        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``.
+        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``,
+          or ``None`` when the club uses its own (non-OAuth) credentials (payment goes
+          straight to that account, so there's no payee override).
         - Non-club auctions: creator's PayPalSeller, or ``"admin"`` when creator is a superuser.
         """
         if self.club:
+            if self.club.uses_own_paypal_credentials:
+                return None
             if self.club.uses_site_paypal:
                 return "admin"
             seller = self.club.effective_paypal_seller
@@ -2968,6 +3011,19 @@ class Auction(models.Model):
         if self.online_bidding == "disable":
             return False
         return True
+
+    @property
+    def paypal_payments_enabled(self):
+        """True when buyers can pay this auction's invoices directly via PayPal.
+
+        Used to hide the manual PayPal bulk-invoice CSV export -- sending those invoices would
+        double-request payment from buyers who can already pay online. Covers the per-auction
+        flag plus club auctions that route through the club's site or own (non-OAuth) PayPal
+        credentials, where the club config supersedes the per-auction flag.
+        """
+        if self.club and (self.club.uses_site_paypal or self.club.uses_own_paypal_credentials):
+            return True
+        return bool(self.enable_online_payments)
 
     @property
     def tos_qs(self):
@@ -5276,6 +5332,7 @@ class Lot(models.Model):
         ("not_sold", "Not sold"),
         ("low_quantity", "Quantity below club minimum"),
         ("not_donation", "Lot is not a donation"),
+        ("has_min_bid", "Lot has a minimum bid set"),
     )
     bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
     manually_approved = models.BooleanField(default=False)
@@ -6086,6 +6143,8 @@ class Lot(models.Model):
             return "not_bred"
         if club.only_donation_lots and not self.donation:
             return "not_donation"
+        if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
+            return "has_min_bid"
         category_name = self.species_category.name if self.species_category else None
         # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
         # When CAP is disabled they have no BAP track, so treat them as ineligible.
@@ -6147,7 +6206,9 @@ class Lot(models.Model):
     def sold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
         if not self.sold:
-            return "not_sold"
+            club = self.auction.club if self.auction else None
+            if not club or club.only_sold_lots:
+                return "not_sold"
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):
@@ -7065,6 +7126,7 @@ class Invoice(models.Model):
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
     renewal_needed = models.BooleanField(default=False)
+    renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
     @property
@@ -7087,10 +7149,22 @@ class Invoice(models.Model):
         return get_currency_symbol(self.currency)
 
     @property
+    def paypal_credentials(self):
+        """Club-supplied PayPal app credentials governing this invoice, or ``None``.
+
+        When the invoice's club (membership) or its auction's club is in non-OAuth
+        PayPal mode, returns that club's ``(client_id, secret)``; otherwise ``None`` so
+        callers fall back to the site's platform PayPal app.
+        """
+        club = self.club or (self.auction.club if self.auction else None)
+        return club.paypal_credentials if club else None
+
+    @property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
-        # Check PayPal
-        paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
+        # even when the site has no platform PayPal keys.
+        paypal_configured = bool((settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) or self.paypal_credentials)
         # Square now requires OAuth - just check if OAuth is configured
         square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
             settings, "SQUARE_CLIENT_SECRET", None
@@ -7140,14 +7214,15 @@ class Invoice(models.Model):
     @property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
-        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
+        # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
+        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) and not self.paypal_credentials:
             return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
         if self.club:
-            if self.club.uses_site_paypal:
+            if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
                 return True
             seller = self.club.effective_paypal_seller
             if not seller or not seller.paypal_merchant_id:
@@ -7157,9 +7232,10 @@ class Invoice(models.Model):
             return True
         if not self.auction:
             return False
-        # For club-managed auctions using the site's PayPal account, the club-level
-        # configuration supersedes the per-auction enable_online_payments flag.
-        if self.auction.club and self.auction.club.uses_site_paypal:
+        # For club-managed auctions using the site's PayPal account or the club's own
+        # credentials, the club-level configuration supersedes the per-auction
+        # enable_online_payments flag.
+        if self.auction.club and (self.auction.club.uses_site_paypal or self.auction.club.uses_own_paypal_credentials):
             return True
         if not self.auction.enable_online_payments:
             return False
@@ -7282,7 +7358,7 @@ class Invoice(models.Model):
         if not member:
             return "No membership"
         if not member.membership_last_paid:
-            return "Never paid"
+            return "Expired"
         expiration_date = member.membership_expiration_date
         if not expiration_date:
             return "Unknown"

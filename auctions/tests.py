@@ -16749,7 +16749,7 @@ class ClubSettingsViewTests(TestCase):
             {
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
-                "membership_number_mode": "disabled",
+                # show_member_barcode omitted → False (unchecked checkbox)
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -17170,8 +17170,14 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_sold_lot_no_bap_reason_not_sold(self):
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)
         self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_sold_lot_no_bap_reason_unsold_eligible_when_only_sold_lots_off(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertIsNone(lot.sold_lot_no_bap_reason)
 
     def test_auto_award_bap_points_awards_category_points(self):
         lot = self._make_lot()
@@ -18864,6 +18870,245 @@ class PaymentSellerClubLinkTests(TestCase):
         self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
 
 
+class NonOAuthPayPalTests(TestCase):
+    """Club-supplied (non-OAuth) PayPal credentials.
+
+    When an admin sets ``Club.allow_non_oauth_paypal``, the club enters its own PayPal REST
+    API client ID/secret and they're used exactly like the site's PAYPAL_CLIENT_ID/SECRET:
+    payments go straight to that PayPal account with no payee override or platform fee.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.member_user = User.objects.create_user(username="nonoauth_member", password="pw", email="m@example.com")
+        self.money_user = User.objects.create_user(username="nonoauth_money", password="pw", email="money@example.com")
+        self.club = Club.objects.create(
+            name="BYO PayPal Club",
+            enable_club_page=True,
+            enable_membership=True,
+            membership_annual_fee=Decimal("30.00"),
+            membership_system="rolling",
+        )
+        ClubMember.objects.create(club=self.club, user=self.member_user, name="M", email="m@example.com")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+
+    def _enable_credentials(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "club-client-id"
+        self.club.paypal_secret = "club-secret"
+        self.club.save()
+
+    def _make_club_invoice(self):
+        return Invoice.objects.create(club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True)
+
+    # -- model properties ------------------------------------------------------
+
+    def test_uses_own_credentials_requires_flag_and_both_values(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)  # flag still off
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertEqual(self.club.paypal_credentials, ("c", "s"))
+
+    def test_uses_own_credentials_false_when_value_missing(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = ""
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)
+        self.assertIsNone(self.club.paypal_credentials)
+
+    def test_can_accept_paypal_via_own_credentials(self):
+        self.assertFalse(self.club.can_accept_paypal)
+        self._enable_credentials()
+        self.assertTrue(self.club.can_accept_paypal)
+
+    # -- invoice credential resolution + buttons -------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_membership_invoice_button_without_site_keys(self):
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertTrue(invoice.show_payment_button)
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_no_button_when_flag_off(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"  # flag still off => credentials not active
+        self.club.save()
+        invoice = self._make_club_invoice()
+        self.assertIsNone(invoice.paypal_credentials)
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_auction_invoice_resolves_club_credentials_with_no_payee(self):
+        self._enable_credentials()
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        invoice = Invoice(auction=auction)
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        # No linked seller and not the site account => no payee merchant id, so the money
+        # goes straight to the club's own PayPal account (same as the site keys do).
+        self.assertIsNone(auction.paypal_information)
+
+    # -- mixin auth resolution -------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_paypal_auth_prefers_club_credentials(self):
+        from auctions.views import PayPalAPIMixin
+
+        mixin = PayPalAPIMixin()
+        self.assertEqual(mixin._paypal_auth(), ("site-id", "site-secret"))
+        mixin.club_paypal_credentials = ("club-client-id", "club-secret")
+        self.assertEqual(mixin._paypal_auth(), ("club-client-id", "club-secret"))
+
+    # -- credentials view ------------------------------------------------------
+
+    def test_credentials_view_requires_flag(self):
+        self.client.login(username="nonoauth_money", password="pw")  # has permission_money
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_requires_permission(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_member", password="pw")  # no money permission
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_saves(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "abc", "paypal_secret": "shh"})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "abc")
+        self.assertEqual(self.club.paypal_secret, "shh")
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+    def test_credentials_view_blank_secret_keeps_existing(self):
+        self._enable_credentials()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "new-client", "paypal_secret": ""})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "new-client")
+        self.assertEqual(self.club.paypal_secret, "club-secret")  # secret unchanged
+
+    # -- settings page UI ------------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_hides_oauth_shows_credentials_form(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertNotIn("Connect a PayPal account for this club", content)
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_shows_oauth_when_flag_off(self):
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertIn("Connect a PayPal account for this club", content)
+
+    # -- refunds (forced manual for non-OAuth clubs) ---------------------------
+
+    def test_refund_invoice_refuses_for_non_oauth_club(self):
+        from auctions.views import PayPalAPIMixin
+
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        mixin = PayPalAPIMixin()
+        # Returns a manual-refund message and never touches the PayPal API (no webhook
+        # means an automated refund would go unrecorded).
+        result = mixin.refund_invoice(invoice, Decimal("5.00"))
+        self.assertIn("manually", result.lower())
+
+    # -- in-person quick checkout (PayPal QR disabled for non-OAuth) -----------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_quick_checkout_suppresses_paypal_qr_for_non_oauth_club(self):
+        self._enable_credentials()
+        admin = User.objects.create_user(username="nonoauth_admin", password="pw", email="a@example.com")
+        ClubMember.objects.create(club=self.club, user=admin, permission_admin=True)
+        auction = Auction.objects.create(
+            created_by=admin,
+            club=self.club,
+            title="In-person BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        seller_tos = AuctionTOS.objects.create(
+            user=admin, auction=auction, pickup_location=location, bidder_number="100", is_admin=True
+        )
+        buyer_tos = AuctionTOS.objects.create(
+            user=self.member_user, auction=auction, pickup_location=location, bidder_number="777"
+        )
+        Lot.objects.create(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            auctiontos_winner=buyer_tos,
+            winning_price=10,
+            quantity=1,
+            active=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer_tos)
+        # The button itself is available and the club's own credentials resolve -- so the QR is
+        # suppressed by the non-OAuth gate, not because PayPal is unavailable.
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertIsNotNone(invoice.paypal_credentials)
+
+        self.client.force_login(admin)
+        url = reverse("auction_quick_checkout_htmx", kwargs={"slug": auction.slug, "filter": "777"})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn("Scan this code to pay with PayPal", content)
+
+    # -- PayPal bulk-invoice CSV export disabled when PayPal payments are live --
+
+    def test_paypal_payments_enabled_for_non_oauth_club_auction(self):
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="CSV Gate Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            enable_online_payments=False,  # club config supersedes this for club auctions
+        )
+        # Off by default => the per-auction flag (False) decides, so the CSV export stays available.
+        self.assertFalse(auction.paypal_payments_enabled)
+        # Turning on non-OAuth PayPal means buyers can pay directly => hide the manual CSV export.
+        self._enable_credentials()
+        auction.refresh_from_db()
+        self.assertTrue(auction.paypal_payments_enabled)
+
+
 class ClubMoneyInvoiceHistoryTests(StandardTestCase):
     def setUp(self):
         super().setUp()
@@ -19464,7 +19709,7 @@ class AppleWalletPassTests(TestCase):
 
 
 class MembershipNumberModeTests(TestCase):
-    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+    """Visibility gating + revocation triggers for Club.show_member_barcode."""
 
     def setUp(self):
         import datetime as _dt
@@ -19489,34 +19734,25 @@ class MembershipNumberModeTests(TestCase):
         self.assertTrue(self.paid.is_paid_member)
         self.assertFalse(self.unpaid.is_paid_member)
 
-    def test_visibility_all_members(self):
-        self.club.membership_number_mode = "all_members"
+    def test_visibility_enabled(self):
+        self.club.show_member_barcode = True
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertTrue(self.unpaid.membership_number_visible)
-
-    def test_visibility_paid_only(self):
-        self.club.membership_number_mode = "paid_only"
-        self.club.save()
-        self.paid.refresh_from_db()
-        self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertTrue(self.paid.club.show_member_barcode)
+        self.assertTrue(self.unpaid.club.show_member_barcode)
 
     def test_visibility_disabled(self):
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertFalse(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertFalse(self.paid.club.show_member_barcode)
+        self.assertFalse(self.unpaid.club.show_member_barcode)
 
-    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_pkpass_404_when_barcode_disabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
-        # Unpaid user logged in as themselves → 404 (number isn't visible).
         unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
         self.unpaid.user = unpaid_user
         self.unpaid.save()
@@ -19532,48 +19768,39 @@ class MembershipNumberModeTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
 
-    def test_google_wallet_url_empty_when_number_hidden(self):
+    def test_google_wallet_url_empty_when_barcode_disabled(self):
         from .templatetags.membership_tags import google_wallet_save_url
 
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
-        # Should bail out before ever touching settings/JWT.
         self.assertEqual(google_wallet_save_url(self.paid), "")
 
     def test_admin_membership_number_view_404_when_disabled(self):
         from .models import ClubMember
 
-        # Give the user admin permissions on the club so the perm check passes.
         admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
         ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.client.force_login(admin)
         url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
-    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+    def test_signal_revokes_all_passes_when_barcode_disabled(self):
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "disabled"
+                self.club.show_member_barcode = False
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
-        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "paid_only"
-                self.club.save()
-            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
-
-    def test_signal_no_revoke_when_loosening_to_all_members(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_signal_no_revoke_when_barcode_enabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "all_members"
+                self.club.show_member_barcode = True
                 self.club.save()
             delay.assert_not_called()
 

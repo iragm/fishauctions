@@ -462,6 +462,7 @@ class ClubMemberHTMxTable(tables.Table):
         accessor="membership_expiration_date",
         verbose_name="Expires",
         orderable=True,
+        empty_values=(),
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     createdon = tables.DateColumn(
@@ -536,7 +537,10 @@ class ClubMemberHTMxTable(tables.Table):
             )
 
         if not value:
-            return format_html("—{}", renew_btn) if has_fee and not record.is_deleted else format_html("—")
+            if has_fee and not record.is_deleted:
+                badge = format_html(" <span class='badge bg-danger ms-1'>Expired</span>")
+                return format_html("—{}{}", badge, renew_btn)
+            return format_html("—")
 
         formatted = value.strftime("%b %-d, %Y")
         days_expired = (today - value).days
@@ -623,7 +627,7 @@ class ClubMemberHTMxTable(tables.Table):
                     )
                 # Member-number action is hidden entirely when the club has the feature disabled.
                 membership_number_item = format_html("")
-                if record.club.membership_number_mode != "disabled":
+                if record.club.show_member_barcode:
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
                     membership_number_item = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'

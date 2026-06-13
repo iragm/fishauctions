@@ -13,7 +13,7 @@ from datetime import timezone as date_tz
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from random import choice, randint, sample, uniform
+from random import randint, sample, uniform
 from time import time
 from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
@@ -149,6 +149,7 @@ from .forms import (
     ClubMembershipSettingsForm,
     ClubMoneyBalanceForm,
     ClubMoneyForm,
+    ClubPayPalCredentialsForm,
     ClubTreasurerReportForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -505,7 +506,8 @@ def _invoice_membership_candidate(invoice):
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
     if not user and not email:
-        return None
+        # Fall back to the ClubMember directly linked on the TOS (no email/user needed).
+        return getattr(invoice.auctiontos_user, "clubmember", None)
     return _find_club_member(invoice.auction.club, user, email)
 
 
@@ -550,10 +552,12 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     if not club.membership_annual_fee:
         return False
-    # Without a usable email we cannot reliably look up or create a ClubMember;
+    # Without a usable email or user we cannot reliably look up or create a ClubMember;
     # don't auto-add the fee in that case (an admin can still toggle it on manually).
+    # Exception: if the TOS already has a directly linked ClubMember, proceed.
     if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
-        return False
+        if not (invoice.auctiontos_user and invoice.auctiontos_user.clubmember_id):
+            return False
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
@@ -568,6 +572,9 @@ def _ensure_invoice_renewal_state(invoice):
         return
     if not invoice.auction:
         # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
+        return
+    # An admin has explicitly set the checkbox — respect that choice.
+    if invoice.renewal_manually_set:
         return
     should_need = _should_mark_invoice_renewal_needed(invoice)
     if invoice.renewal_needed != should_need:
@@ -2209,7 +2216,8 @@ class InvoiceRenewalNeededToggleView(APIView):
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
         renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
         invoice.renewal_needed = renewal_needed
-        invoice.save(update_fields=["renewal_needed"])
+        invoice.renewal_manually_set = True
+        invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
@@ -3824,7 +3832,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not candidate_ids:
             messages.warning(request, "No checked-in users are left for door prizes.")
             return redirect(redirect_url)
-        winner = AuctionTOS.objects.get(pk=choice(candidate_ids))
+        winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
         winner.door_prize_called = timezone.now()
         winner.save(update_fields=["door_prize_called"])
         self.auction.create_history(
@@ -6135,7 +6143,8 @@ class ViewLot(DetailView):
             if viewer_is_seller or viewer_has_bap:
                 context["show_bap_badge"] = True
                 if lot.ended and not lot.sold:
-                    reason = "not_sold"
+                    club = lot.auction.club if lot.auction else None
+                    reason = "not_sold" if (not club or club.only_sold_lots) else lot.unsold_lot_no_bap_reason
                 else:
                     reason = lot.unsold_lot_no_bap_reason
                 context["bap_eligible_reason"] = reason
@@ -6812,7 +6821,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 "Looks like {user} couldn't handle the heat and pulled their bid!",
                 "{user} just remembered they haven't paid rent this month and removed their bid!",
             ]
-            history_message = choice(own_bid_removal_messages).format(user=self.request.user)
+            history_message = secrets.choice(own_bid_removal_messages).format(user=self.request.user)
         else:
             history_message = f"{self.request.user} has removed {bid.user}'s bid"
         if lot.ended:
@@ -9463,10 +9472,23 @@ class PayPalAPIMixin:
       - PAYPAL_WEBHOOK_ID: Registered webhook ID (for webhook verification)
     """
 
+    def _paypal_auth(self):
+        """Return ``(client_id, secret)`` for the current PayPal request.
+
+        A club in non-OAuth mode supplies its own app credentials via
+        ``self.club_paypal_credentials`` (set by callers from the invoice); every other
+        caller falls back to the site's platform app from settings.
+        """
+        creds = getattr(self, "club_paypal_credentials", None)
+        if creds and creds[0] and creds[1]:
+            return creds[0], creds[1]
+        return settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET
+
     def _get_access_token(self):
+        client_id, secret = self._paypal_auth()
         token_resp = requests.post(
             f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
-            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET),
+            auth=(client_id, secret),
             headers={"Accept": "application/json", "Accept-Language": "en_US"},
             data={"grant_type": "client_credentials"},
             timeout=10,
@@ -9480,7 +9502,10 @@ class PayPalAPIMixin:
             "Authorization": f"Bearer {token or self._get_access_token()}",
             "Content-Type": "application/json",
         }
-        if include_bn_code and getattr(settings, "PAYPAL_BN_CODE", None):
+        # The BN code is our platform partner-attribution id; it's meaningless (and
+        # potentially rejected) when calling with a club's own standalone app credentials.
+        using_club_creds = bool(getattr(self, "club_paypal_credentials", None))
+        if include_bn_code and not using_club_creds and getattr(settings, "PAYPAL_BN_CODE", None):
             headers["PayPal-Partner-Attribution-Id"] = settings.PAYPAL_BN_CODE
         if merchant_id:
             headers["PayPal-Auth-Assertion"] = self._build_auth_assertion(merchant_id)
@@ -9490,7 +9515,7 @@ class PayPalAPIMixin:
         """Build unsigned PayPal-Auth-Assertion JWT for acting on behalf of a merchant."""
         header = {"alg": "none"}
         payload = {
-            "iss": settings.PAYPAL_CLIENT_ID,
+            "iss": self._paypal_auth()[0],
             "payer_id": merchant_payer_id,  # obtained from partner referral flow
         }
 
@@ -9541,6 +9566,9 @@ class PayPalAPIMixin:
     def create_order(self, invoice, member_pk=""):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
+        # A club using its own (non-OAuth) PayPal app pays through its own credentials,
+        # exactly as the site keys are used for the platform account. None => site app.
+        self.club_paypal_credentials = invoice.paypal_credentials
         currency = invoice.currency
 
         items = []
@@ -9611,7 +9639,11 @@ class PayPalAPIMixin:
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
         if invoice.club:
-            if invoice.club.uses_site_paypal:
+            if invoice.club.uses_own_paypal_credentials:
+                # The club's own app receives the payment directly -- no payee override and
+                # no platform fee, exactly as the site keys behave for the site account.
+                paypal_merchant_id = None
+            elif invoice.club.uses_site_paypal:
                 paypal_merchant_id = "admin"
             else:
                 club_seller = invoice.club.effective_paypal_seller
@@ -9653,8 +9685,15 @@ class PayPalAPIMixin:
             # },
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
+                # Include the invoice uuid so PayPalSuccessView can resolve the club's own
+                # credentials (if any) before capturing -- the capture must use the same app
+                # that created the order.
                 "return_url": self.request.build_absolute_uri(
-                    reverse("paypal_success") + (f"?member_pk={member_pk}" if member_pk else "")
+                    reverse("paypal_success")
+                    + "?"
+                    + urlencode(
+                        {"invoice": str(invoice.no_login_link), **({"member_pk": member_pk} if member_pk else {})}
+                    )
                 ),
                 "cancel_url": self.request.build_absolute_uri(
                     reverse("club_detail", kwargs={"slug": invoice.club.slug})
@@ -9861,6 +9900,15 @@ class PayPalAPIMixin:
     def refund_invoice(self, invoice, amount):
         """Refund the given amount on this invoice via PayPal.
         Returns error or none on success"""
+        # Clubs using their own (non-OAuth) credentials have no webhook wired up, so an
+        # automated refund here would never be recorded as a negative InvoicePayment
+        # (handle_refund only runs from the PayPal webhook). Force these to be done manually
+        # in the club's own PayPal account so our records never silently drift.
+        if invoice.paypal_credentials:
+            return (
+                "Automatic refunds aren't available for this club's PayPal account. "
+                "Please issue the refund manually in PayPal."
+            )
         if not self.can_refund_invoice(invoice, amount):
             return "Unable to automatically refund payment"
         payment = (
@@ -10155,6 +10203,15 @@ class PayPalSuccessView(PayPalAPIMixin, View):
 
     def get(self, request, *args, **kwargs):
         order_id = request.GET.get("token")
+        # Resolve the club's own (non-OAuth) credentials before capturing -- only the app
+        # that created the order can capture it. The invoice uuid is carried in the return URL
+        # set by create_order(); the captured order's reference_id remains authoritative for
+        # which invoice is actually credited.
+        invoice_uuid = request.GET.get("invoice")
+        if invoice_uuid:
+            invoice_for_creds = Invoice.objects.filter(no_login_link=invoice_uuid).first()
+            if invoice_for_creds:
+                self.club_paypal_credentials = invoice_for_creds.paypal_credentials
         error, invoice = self.handle_order(order_id)
         if error:
             messages.error(request, error)
@@ -14394,8 +14451,16 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                 context["invoice"] = invoice
                 _ensure_invoice_renewal_state(invoice)
             if invoice:
-                # Generate PayPal QR code if available
-                if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
+                # Generate PayPal QR code if available.
+                # The in-person QR flow relies on PayPal webhooks (CHECKOUT.ORDER.APPROVED /
+                # CHECKOUT.CAPTURE.COMPLETED) to update the cashier screen once the payer approves
+                # on their phone. Clubs using their own (non-OAuth) credentials have no webhook
+                # wired up, so skip the QR for them -- they can still take Square/cash here.
+                if (
+                    invoice.show_paypal_button
+                    and not invoice.reason_for_payment_not_available
+                    and not invoice.paypal_credentials
+                ):
                     try:
                         context["paypal_qr_code_link"] = self.create_order(invoice)
                     except Exception:
@@ -15015,7 +15080,7 @@ class ClubMemberAdminView(APIView):
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
         # Header: "{name} - {member_number}" when the club uses membership numbers
         title = str(member)
-        if member.club.membership_number_mode != "off" and member.membership_number:
+        if member.club.show_member_barcode and member.membership_number:
             title = f"{member} — #{member.membership_number}"
         ctx = {
             "club": member.club,
@@ -15644,7 +15709,7 @@ class ClubMembershipNumberView(APIView):
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        if member.club.membership_number_mode == "disabled":
+        if not member.club.show_member_barcode:
             # Feature is off for this club — admin endpoint should not be reachable.
             raise Http404
         return member
@@ -15685,7 +15750,7 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         if not request.user.is_authenticated or member.user_id != request.user.id:
             raise PermissionDenied()
         # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
@@ -15707,7 +15772,7 @@ class ClubMemberAppleWalletByUUIDView(View):
         if not is_configured():
             raise Http404
         member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
@@ -16231,6 +16296,30 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             return url
         return ""
 
+    @staticmethod
+    def _format_membership_date(value):
+        if not value:
+            return "—"
+        return value.strftime("%b %-d, %Y")
+
+    def _membership_info_rows(self, source, target):
+        rows = []
+        for attr, label in [
+            ("membership_expiration_date", "Expires"),
+            ("membership_last_paid", "Last paid"),
+        ]:
+            src_val = getattr(source, attr, None)
+            tgt_val = getattr(target, attr, None)
+            if src_val or tgt_val:
+                rows.append(
+                    {
+                        "label": label,
+                        "source_value": self._format_membership_date(src_val),
+                        "target_value": self._format_membership_date(tgt_val),
+                    }
+                )
+        return rows
+
     def _build_review_context(self, request, source, target, review_form, next_url=""):
         cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         return {
@@ -16244,14 +16333,17 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "target_label": str(target),
             "review_form": review_form,
             "next_url": next_url,
-            "comparison_rows": [
-                {
-                    "label": field.label,
-                    "source_value": self._format_merge_value(getattr(source, name, None)),
-                    "target_value": self._format_merge_value(getattr(target, name, None)),
-                }
-                for name, field in review_form.fields.items()
-            ],
+            "comparison_rows": (
+                self._membership_info_rows(source, target)
+                + [
+                    {
+                        "label": field.label,
+                        "source_value": self._format_merge_value(getattr(source, name, None)),
+                        "target_value": self._format_merge_value(getattr(target, name, None)),
+                    }
+                    for name, field in review_form.fields.items()
+                ]
+            ),
             "summary_lines": [
                 f"{source} will be deactivated.",
                 f"{target} will be kept.",
@@ -16322,6 +16414,10 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source_name = str(source)
+                    # Re-point all related records from source to target before deactivating.
+                    AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
+                    BapAward.objects.filter(club_member=source).update(club_member=target)
+                    InvoicePayment.objects.filter(club_member=source).update(club_member=target)
                     source.is_deleted = True
                     source.save(update_fields=["is_deleted"])
                     ClubHistory.objects.create(
@@ -16451,6 +16547,10 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["square_configured"] = bool(
             getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
         )
+        # Non-OAuth PayPal (admin-only opt-in): the club enters its own REST credentials here
+        # instead of connecting via OAuth.
+        if club.allow_non_oauth_paypal:
+            context["paypal_credentials_form"] = ClubPayPalCredentialsForm(instance=club)
         return context
 
     def form_valid(self, form):
@@ -16536,6 +16636,46 @@ class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
 
 
+class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only endpoint to save a club's own (non-OAuth) PayPal REST credentials.
+
+    Shown on the membership settings page only when the club has ``allow_non_oauth_paypal``
+    set (an admin-only flag). Editable by the same people who manage the club's money/settings.
+    """
+
+    http_method_names = ["post"]
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        # Credentials can only be entered when an admin has opted this club into non-OAuth PayPal.
+        if not self.club.allow_non_oauth_paypal:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        settings_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        form = ClubPayPalCredentialsForm(request.POST, instance=self.club)
+        if not form.is_valid():
+            for errors in form.errors.values():
+                for error in errors:
+                    messages.error(request, error)
+            return redirect(settings_url)
+        had_credentials = self.club.uses_own_paypal_credentials
+        form.save()
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action="Updated PayPal credentials" if had_credentials else "Added PayPal credentials",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, "PayPal credentials saved.")
+        return redirect(settings_url)
+
+
 class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     active_tab = "email_settings"
     template_name = "auctions/club_email_settings.html"
@@ -16578,7 +16718,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         if preview_member:
             preview_name = (preview_member.name or "").strip() or "Member"
             preview_member_link = preview_member.member_page_url
-            preview_barcode_url = preview_member.barcode_image_link if preview_member.membership_number_visible else ""
+            preview_barcode_url = preview_member.barcode_image_link if preview_member.club.show_member_barcode else ""
         else:
             full_name = user.get_full_name() if user.is_authenticated else ""
             preview_name = full_name.strip() or "Member"
@@ -16587,7 +16727,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_name"] = preview_name
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
-        context["membership_numbers_enabled"] = self.club.membership_number_mode != "disabled"
+        context["membership_numbers_enabled"] = self.club.show_member_barcode
 
         today = timezone.localdate()
         next_auction = (
@@ -16809,16 +16949,15 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             | Q(user=OuterRef("user"))
             | Q(email__iexact=OuterRef("auctiontos_seller__email"))
         )
+        qs = Lot.objects.filter(
+            auction__club=self.club,
+            is_deleted=False,
+            active=False,
+        )
+        if self.club.only_sold_lots:
+            qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return (
-            Lot.objects.filter(
-                auction__club=self.club,
-                is_deleted=False,
-                active=False,
-                auctiontos_winner__isnull=False,
-                winning_price__isnull=False,
-                i_bred_this_fish=True,
-            )
-            .filter(Exists(matching_member))
+            qs.filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
             .prefetch_related("bap_award")
             .order_by("-date_end")
@@ -17350,12 +17489,15 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.utils import timezone
 
         today = timezone.now().date()
+        expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
+        if self.club.membership_annual_fee:
+            expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))
         qs = (
             ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
             .exclude(address="")
             .annotate(
                 is_expired=Case(
-                    When(membership_expiration_date__lt=today, then=Value(True)),
+                    *expired_whens,
                     default=Value(False),
                     output_field=BooleanField(),
                 )
@@ -17937,7 +18079,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         writer = csv.writer(response)
         # Omit the Membership Number column entirely when the club has the
         # feature disabled — user asked for "no UI" referencing those numbers.
-        include_membership_number = self.club.membership_number_mode != "disabled"
+        include_membership_number = self.club.show_member_barcode
         header = [
             "Name",
             "Email",
@@ -18790,7 +18932,8 @@ class DiscordInteractionsView(View):
 
         expiry = member.membership_expiration_date
         if not expiry:
-            lines.append("Status: No paid membership on record")
+            if club.membership_annual_fee:
+                lines.append("Status: ❌ Expired — please renew your membership")
         else:
             today = timezone.now().date()
             expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())

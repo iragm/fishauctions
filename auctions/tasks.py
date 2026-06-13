@@ -136,7 +136,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
     intro_text = ""
-    barcode_url = member.barcode_image_link_png if member.membership_number_visible else ""
+    barcode_url = member.barcode_image_link_png if member.club.show_member_barcode else ""
 
     opening_text = ""
     closing_text = ""
