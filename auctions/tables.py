@@ -462,6 +462,7 @@ class ClubMemberHTMxTable(tables.Table):
         accessor="membership_expiration_date",
         verbose_name="Expires",
         orderable=True,
+        empty_values=(),
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     createdon = tables.DateColumn(
@@ -537,7 +538,7 @@ class ClubMemberHTMxTable(tables.Table):
 
         if not value:
             if has_fee and not record.is_deleted:
-                badge = format_html(" <span class='badge bg-warning text-dark ms-1'>Never paid</span>")
+                badge = format_html(" <span class='badge bg-danger ms-1'>Never paid</span>")
                 return format_html("—{}{}", badge, renew_btn)
             return format_html("—")
 
