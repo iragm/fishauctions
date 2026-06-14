@@ -1,11 +1,9 @@
-import logging
 from urllib.parse import urlencode
 
 from django import template
 from django.urls import reverse
 
 register = template.Library()
-logger = logging.getLogger(__name__)
 
 
 @register.inclusion_tag("club_sidebar.html", takes_context=True)
