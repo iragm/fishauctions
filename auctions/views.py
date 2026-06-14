@@ -7956,12 +7956,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                             member.phone_number = getattr(creator.userdata, "phone_number", None) or None
                         if not member.address:
                             member.address = getattr(creator.userdata, "address", None) or ""
+                        # Count the creator's clubless auctions before saving: granting
+                        # permission_admin fires the on_club_member_saved signal, which associates
+                        # those auctions with the club and books their club ledger. Capturing the
+                        # count first keeps the success message accurate.
+                        assigned_count = Auction.objects.filter(
+                            created_by=creator, club__isnull=True, is_deleted=False
+                        ).count()
                         member.permission_admin = True
                         member.save()
-                        # Assign all auctions created by this user that lack a club to creator_club.
-                        unassigned = Auction.objects.filter(created_by=creator, club__isnull=True)
-                        assigned_count = unassigned.count()
-                        unassigned.update(club=creator_club)
                         ClubHistory.objects.create(
                             club=creator_club,
                             user=request.user,

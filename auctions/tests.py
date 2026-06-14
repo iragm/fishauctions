@@ -19330,6 +19330,96 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(summary["seller_payouts"], Decimal("80.00"))
         self.assertEqual(summary["auction_commission"], Decimal("20.00"))
 
+    def test_legacy_category_rows_are_not_perpetuated(self):
+        # A database carried over from the old ledger may hold rows in retired categories.
+        # Reconciling an invoice must not write new rows in those dead categories.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        ClubMoney.objects.create(
+            club=self.club,
+            invoice=buyer_invoice,
+            date=datetime.date(2026, 3, 15),
+            amount=Decimal("20.00"),
+            category="auction_profit",  # retired category
+        )
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # The seeded legacy row is left as-is (count stays 1) and current categories are booked.
+        self.assertEqual(ClubMoney.objects.filter(invoice=buyer_invoice, category="auction_profit").count(), 1)
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+
+class MakeClubAdminAssignsAuctionsTests(TestCase):
+    """The superuser "make {creator} admin of {club}" button assigns the creator's clubless
+    auctions to their club and books the club ledger for them, but never reassigns auctions
+    that already belong to a club."""
+
+    def setUp(self):
+        self.creator = User.objects.create_superuser("mca_creator", "mca@example.com", "pw")
+        self.club = Club.objects.create(name="MCA Club")
+        self.creator.userdata.club = self.club
+        self.creator.userdata.save()
+        self.other_club = Club.objects.create(name="MCA Other Club")
+
+    def _auction(self, club=None, title="MCA Auction"):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title=title,
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=club,
+            winning_bid_percent_to_club=20,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+        )
+        PickupLocation.objects.create(name="MCA Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _make_club_admin(self, auction):
+        client = Client()
+        client.force_login(self.creator)
+        return client.get(reverse("auction_main", kwargs={"slug": auction.slug}) + "?make_club_admin=true")
+
+    def test_assigns_clubless_auction_and_books_ledger(self):
+        auction = self._auction(club=None)
+        pickup = PickupLocation.objects.filter(auction=auction).first()
+        seller = AuctionTOS.objects.create(name="Seller", auction=auction, pickup_location=pickup)
+        buyer = AuctionTOS.objects.create(name="Buyer", auction=auction, pickup_location=pickup)
+        Lot.objects.create(
+            lot_name="L",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(100),
+            active=False,
+            quantity=1,
+        )
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # No club yet, so nothing is in the ledger.
+        self.assertFalse(ClubMoney.objects.filter(invoice=buyer_invoice).exists())
+
+        response = self._make_club_admin(auction)
+        self.assertEqual(response.status_code, 200)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.club)
+        # The bulk assignment bypassed Auction.save(), but the ledger is still booked.
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+    def test_does_not_reassign_auction_already_in_a_club(self):
+        auction = self._auction(club=self.other_club)
+        self._make_club_admin(auction)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.other_club)
+
 
 class BapTop10ChartTests(TestCase):
     """Cumulative points-over-time chart for the top 10 club members.

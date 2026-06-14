@@ -2541,13 +2541,23 @@ class Auction(models.Model):
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
-            invoices = (
-                Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
-                .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
-                .distinct()
-            )
-            for invoice in invoices:
-                invoice.sync_club_money()
+            self.backfill_club_money()
+
+    def backfill_club_money(self):
+        """Reconcile the club ledger for every invoice tied to this auction.
+
+        Called when a club is first attached to an auction so existing PAID invoices get
+        their cash-basis ledger entries. ``save`` calls this automatically, but a bulk
+        ``Auction.objects.update(club=...)`` bypasses ``save``, so those call sites must
+        invoke it themselves. Idempotent — ``Invoice.sync_club_money`` books only deltas.
+        """
+        invoices = (
+            Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
+            .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
+            .distinct()
+        )
+        for invoice in invoices:
+            invoice.sync_club_money()
 
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
@@ -7918,9 +7928,15 @@ class Invoice(models.Model):
         for row in ClubMoney.objects.filter(invoice=self).values("category").annotate(total=Sum("amount")):
             booked[row["category"]] = row["total"] or Decimal("0.00")
 
+        # Only ever reconcile the current categories. A database carried over from the old
+        # ledger can hold rows in retired categories (e.g. ``auction_profit``,
+        # ``unpaid_invoices``); reversing those here would just write *more* rows in those dead
+        # categories. We leave them alone — migration 0305 rebuilds legacy ledger data — and
+        # never emit an unknown category string.
+        known_categories = {choice[0] for choice in ClubMoney.CATEGORY_CHOICES}
         default_description = f"Ledger correction for {who} in {auction}"
         entries = []
-        for category in set(desired) | set(booked):
+        for category in (set(desired) | set(booked)) & known_categories:
             delta = _q(desired.get(category, Decimal("0.00"))) - _q(booked.get(category, Decimal("0.00")))
             if not delta:
                 continue

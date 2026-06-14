@@ -35,7 +35,7 @@ def _associate_auctions_for_member(member):
     from .models import Auction, AuctionHistory
 
     club = member.club
-    auctions_to_update = Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False)
+    auctions_to_update = list(Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False))
     for auction in auctions_to_update:
         Auction.objects.filter(pk=auction.pk).update(club=club)
         AuctionHistory.objects.create(
@@ -44,6 +44,9 @@ def _associate_auctions_for_member(member):
             action=f"Automatically associated with club '{club}' because {member.display_name} was granted a club permission.",
             applies_to="RULES",
         )
+        # The bulk update above bypasses Auction.save(), so book the club ledger for this
+        # auction's already-settled invoices the same way save() would on a fresh assignment.
+        auction.backfill_club_money()
 
 
 @receiver(pre_save, sender="auctions.Auction")
