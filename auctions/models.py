@@ -7871,7 +7871,7 @@ class Invoice(models.Model):
             _add_entry(
                 _quantize(self.total_sold_club_cut) * multiplier,
                 ClubMoney.CATEGORY_AUCTION_PROFIT,
-                f"Auction profit for {_invoice_label()} in {auction}",
+                f"Auction profit from lots sold by {_invoice_label()} in {auction}",
             )
 
             for adjustment in self.adjustments.exclude(amount=0):

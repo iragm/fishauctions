@@ -841,6 +841,93 @@ def _last_n_month_starts(count):
     return list(reversed(months))
 
 
+def _ytd_month_starts():
+    """Months from Jan 1 of the current year through the current month."""
+    today = timezone.now().date()
+    months = []
+    month = today.replace(month=1, day=1)
+    current = today.replace(day=1)
+    while month <= current:
+        months.append(month)
+        if month.month == 12:
+            month = month.replace(year=month.year + 1, month=1)
+        else:
+            month = month.replace(month=month.month + 1)
+    return months
+
+
+def _club_top10_chart_data(club, rank_field, award_field, current_member, months, is_ytd=False):
+    """Cumulative points-over-time chart for the top 10 members.
+
+    Color scheme: green = current_member, red = first place (when not current), blue = everyone else.
+    Returns a Chart.js-compatible dict or None if no members have points.
+    """
+    top10 = list(
+        ClubMember.objects.filter(club=club, is_deleted=False, **{f"{rank_field}__gt": 0}).order_by(f"-{rank_field}")[
+            :10
+        ]
+    )
+    if not top10:
+        return None
+
+    start_month = months[0]
+    member_ids = [m.pk for m in top10]
+
+    monthly_awards = (
+        BapAward.objects.filter(club_member_id__in=member_ids, date__gte=start_month)
+        .annotate(month=TruncMonth("date"))
+        .values("club_member_id", "month")
+        .annotate(total=Sum(award_field))
+        .order_by("club_member_id", "month")
+    )
+    member_monthly = collections.defaultdict(dict)
+    for item in monthly_awards:
+        month_key = (item["month"] if isinstance(item["month"], date_type) else item["month"].date()).replace(day=1)
+        member_monthly[item["club_member_id"]][month_key] = item["total"] or 0
+
+    if is_ytd:
+        initial_totals = {}
+    else:
+        initial_qs = (
+            BapAward.objects.filter(club_member_id__in=member_ids, date__lt=start_month)
+            .values("club_member_id")
+            .annotate(total=Sum(award_field))
+        )
+        initial_totals = {item["club_member_id"]: item["total"] or 0 for item in initial_qs}
+
+    first_place = top10[0]
+    datasets = []
+    for m in top10:
+        is_current = m == current_member
+        is_first = m == first_place
+        if is_current:
+            color, width = "#198754", 2.5
+        elif is_first:
+            color, width = "#dc3545", 1.5
+        else:
+            color, width = "#0d6efd", 1.0
+
+        running = initial_totals.get(m.pk, 0)
+        data = []
+        for month in months:
+            running += member_monthly[m.pk].get(month, 0)
+            data.append(running)
+
+        datasets.append(
+            {
+                "label": str(m),
+                "borderColor": color,
+                "backgroundColor": "transparent",
+                "fill": False,
+                "data": data,
+                "borderWidth": width,
+                "pointRadius": 0,
+            }
+        )
+
+    return {"labels": [m.strftime("%b %Y") for m in months], "datasets": datasets}
+
+
 def _club_points_chart_data(club, member):
     if not member:
         return None
@@ -14607,6 +14694,26 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:25]
                 context["my_points_chart_data"] = _club_points_chart_data(club, member)
                 available_tabs.add("my-points")
+            alltime_months = _last_n_month_starts(60)
+            ytd_months = _ytd_month_starts()
+            context["bap_top10_chart"] = _club_top10_chart_data(club, "bap_points", "points", member, alltime_months)
+            context["bap_top10_chart_ytd"] = _club_top10_chart_data(
+                club, "bap_points_ytd", "points", member, ytd_months, is_ytd=True
+            )
+            if club.separate_hap:
+                context["hap_top10_chart"] = _club_top10_chart_data(
+                    club, "hap_points", "hap_points", member, alltime_months
+                )
+                context["hap_top10_chart_ytd"] = _club_top10_chart_data(
+                    club, "hap_points_ytd", "hap_points", member, ytd_months, is_ytd=True
+                )
+            if club.separate_cap:
+                context["cap_top10_chart"] = _club_top10_chart_data(
+                    club, "culture_points", "cap_points", member, alltime_months
+                )
+                context["cap_top10_chart_ytd"] = _club_top10_chart_data(
+                    club, "culture_points_ytd", "cap_points", member, ytd_months, is_ytd=True
+                )
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -17865,6 +17972,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 auction__club=self.club,
                 auction__date_start__date__range=(start_date, end_date),
                 status__in=("DRAFT", "UNPAID"),
+                calculated_total__lt=0,
             ).count(),
         }
 

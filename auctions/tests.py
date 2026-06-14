@@ -8896,7 +8896,7 @@ class LotsByUserViewTest(StandardTestCase):
 
         # Context should have the correct user
         self.assertEqual(response.context["user"], self.user)
-        self.assertEqual(response.context["view"], "user")
+        self.assertEqual(response.context["lot_view_type"], "user")
 
     def test_lots_by_user_with_invalid_user_parameter(self):
         """Test that the view handles non-existent username gracefully"""

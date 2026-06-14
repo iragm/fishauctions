@@ -123,9 +123,17 @@
       <label class="form-check-label" for="ytd-toggle">Year to date only</label>
     </div>
     <div id="bap-ytd">
+      {% if bap_top10_chart_ytd %}
+      <canvas id="bap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart_ytd|json_script:"bap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard_ytd points_attr="bap_points_ytd" %}
     </div>
     <div id="bap-alltime" style="display:none">
+      {% if bap_top10_chart %}
+      <canvas id="bap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart|json_script:"bap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard points_attr="bap_points" %}
     </div>
   </div>
@@ -138,9 +146,17 @@
       <label class="form-check-label" for="ytd-toggle-hap">Year to date only</label>
     </div>
     <div id="hap-ytd">
+      {% if hap_top10_chart_ytd %}
+      <canvas id="hap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart_ytd|json_script:"hap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard_ytd points_attr="hap_points_ytd" %}
     </div>
     <div id="hap-alltime" style="display:none">
+      {% if hap_top10_chart %}
+      <canvas id="hap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart|json_script:"hap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard points_attr="hap_points" %}
     </div>
   </div>
@@ -154,9 +170,17 @@
       <label class="form-check-label" for="ytd-toggle-culture">Year to date only</label>
     </div>
     <div id="culture-ytd">
+      {% if cap_top10_chart_ytd %}
+      <canvas id="cap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart_ytd|json_script:"cap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard_ytd points_attr="culture_points_ytd" %}
     </div>
     <div id="culture-alltime" style="display:none">
+      {% if cap_top10_chart %}
+      <canvas id="cap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart|json_script:"cap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
     </div>
   </div>
@@ -269,17 +293,17 @@
   wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
   wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
 
-  var chartDataElement = document.getElementById('my-points-chart-data');
-  var chartCanvas = document.getElementById('my-points-chart');
-  if (chartDataElement && chartCanvas && typeof Chart !== 'undefined') {
-    var ctx = chartCanvas.getContext('2d');
-    var chartData = JSON.parse(chartDataElement.textContent);
-    new Chart(ctx, {
+  function initLineChart(canvasId, dataId) {
+    var dataEl = document.getElementById(dataId);
+    var canvas = document.getElementById(canvasId);
+    if (!dataEl || !canvas || typeof Chart === 'undefined') return;
+    new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: chartData,
+      data: JSON.parse(dataEl.textContent),
       options: {
         responsive: true,
         maintainAspectRatio: true,
+        legend: { position: 'bottom', labels: { boxWidth: 12 } },
         scales: {
           xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 } }],
           yAxes: [{ ticks: { beginAtZero: true } }],
@@ -287,6 +311,14 @@
       },
     });
   }
+
+  initLineChart('my-points-chart', 'my-points-chart-data');
+  initLineChart('bap-top10-chart-ytd', 'bap-top10-chart-ytd-data');
+  initLineChart('bap-top10-chart', 'bap-top10-chart-data');
+  initLineChart('hap-top10-chart-ytd', 'hap-top10-chart-ytd-data');
+  initLineChart('hap-top10-chart', 'hap-top10-chart-data');
+  initLineChart('cap-top10-chart-ytd', 'cap-top10-chart-ytd-data');
+  initLineChart('cap-top10-chart', 'cap-top10-chart-data');
 })();
 </script>
 {% endif %}
