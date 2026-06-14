@@ -1,5 +1,130 @@
 #!/bin/bash
 
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT_DIR"
+
+ENV_FILE="$ROOT_DIR/.env"
+EXAMPLE_ENV_FILE="$ROOT_DIR/.env.example"
+
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    fi
+}
+
+get_env_value() {
+    local key="$1"
+    python - <<'PY' "$ENV_FILE" "$key"
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = ""
+for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    if raw_line.startswith(f"{key}="):
+        value = raw_line.split("=", 1)[1].strip().strip("'\"")
+        break
+print(value)
+PY
+}
+
+ensure_env_file() {
+    if [ ! -f "$ENV_FILE" ]; then
+        cp "$EXAMPLE_ENV_FILE" "$ENV_FILE"
+        echo "Created .env from .env.example"
+    fi
+}
+
+generate_missing_values() {
+    python - <<'PY' "$ENV_FILE" | while IFS='=' read -r key value; do
+from base64 import urlsafe_b64encode
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.asymmetric import ec
+from pathlib import Path
+import secrets
+import sys
+
+env_path = Path(sys.argv[1])
+existing = {}
+for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    if "=" not in raw_line or raw_line.lstrip().startswith("#"):
+        continue
+    key, value = raw_line.split("=", 1)
+    existing[key.strip()] = value.strip().strip("'\"")
+
+def missing(name):
+    return existing.get(name, "").strip() in {"", "secret", "public-key", "private-key", "unsecure"}
+
+generated = {}
+if missing("SECRET_KEY"):
+    generated["SECRET_KEY"] = secrets.token_urlsafe(50)
+if missing("DATABASE_PASSWORD"):
+    generated["DATABASE_PASSWORD"] = secrets.token_urlsafe(24)
+if missing("DATABASE_ROOT_PASSWORD"):
+    generated["DATABASE_ROOT_PASSWORD"] = secrets.token_urlsafe(24)
+if missing("REDIS_PASSWORD"):
+    generated["REDIS_PASSWORD"] = secrets.token_urlsafe(24)
+if missing("INBOUND_ROUTING_SECRET"):
+    generated["INBOUND_ROUTING_SECRET"] = secrets.token_urlsafe(32)
+if missing("FIELD_ENCRYPTION_KEY"):
+    generated["FIELD_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+if missing("VAPID_PUBLIC_KEY") or missing("VAPID_PRIVATE_KEY"):
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_value = private_key.private_numbers().private_value.to_bytes(32, "big")
+    public_numbers = private_key.public_key().public_numbers()
+    public_value = b"\x04" + public_numbers.x.to_bytes(32, "big") + public_numbers.y.to_bytes(32, "big")
+    generated["VAPID_PUBLIC_KEY"] = urlsafe_b64encode(public_value).rstrip(b"=").decode()
+    generated["VAPID_PRIVATE_KEY"] = urlsafe_b64encode(private_value).rstrip(b"=").decode()
+
+for key, value in generated.items():
+    print(f"{key}=\"{value}\"")
+PY
+        set_env_value "$key" "$value"
+    done
+}
+
+prompt_for_site_domain() {
+    local current_domain
+    current_domain="$(get_env_value "SITE_DOMAIN")"
+    if [ -n "$current_domain" ] && [ "$current_domain" != "127.0.0.1" ] && [ "$current_domain" != "example.com" ]; then
+        return
+    fi
+
+    if [ -t 0 ]; then
+        printf "Enter the site domain to use [127.0.0.1]: "
+        read -r site_domain
+    else
+        site_domain="127.0.0.1"
+    fi
+    site_domain="${site_domain:-127.0.0.1}"
+    set_env_value "SITE_DOMAIN" "\"$site_domain\""
+}
+
+ensure_permissions() {
+    mkdir -p mediafiles logs staticfiles
+    chmod -R 777 logs || true
+    if ! chown -R 1000:1000 ./mediafiles ./logs ./staticfiles 2>/dev/null; then
+        echo "Could not change ownership on media/static/log directories."
+        echo "Please rerun with sudo if needed:"
+        echo "  sudo chown -R 1000:1000 ./mediafiles ./logs ./staticfiles"
+    fi
+}
+
+update_nginx_domain() {
+    local site_domain
+    site_domain="$(get_env_value "SITE_DOMAIN")"
+    if grep -q "server_name _;" ./nginx.prod.conf; then
+        sed -i "s/server_name _;/server_name $site_domain;/" "./nginx.prod.conf"
+    fi
+}
+
 echo "This will erase any local uncommited changes. Did you make a snapshot? (y/n)"
 read -r response
 
@@ -8,32 +133,17 @@ if [[ "$response" != "y" ]]; then
     exit 0
 fi
 
-# Get latest changes
 git restore .
 if ! git pull; then
     echo "Update failed. Docker services were not restarted."
     exit 1
 fi
 
-# Load environment variables from .env file (really only need $SITE_DOMAIN)
-if [ -f ./.env ]; then
-    while IFS= read -r line; do
-    if [ -n "$line" ] && [ "${line:0:1}" != "#" ]; then
-        eval "export $line"
-    fi
-    done < ./.env
-else
-    echo ".env file not found!"
-    # we could populate a default .env file here, not sure that makes sense though
-    exit 1
-fi
-
-if [ -z "$SITE_DOMAIN" ]; then
-    echo "SITE_DOMAIN is not set in the .env file!"
-    exit 1
-fi
-
-# Replace server_name _; with server_name $SITE_DOMAIN;
-sed -i "s/server_name _;/server_name $SITE_DOMAIN;/" "./nginx.prod.conf"
+ensure_env_file
+prompt_for_site_domain
+generate_missing_values
+ensure_permissions
+set_env_value "SETUP_COMPLETE" "\"1\""
+update_nginx_domain
 
 docker compose up -d --build

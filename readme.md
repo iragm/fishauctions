@@ -32,8 +32,7 @@ This project has now been packaged in Docker, so assuming you have docker instal
 ```
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
-cp .env.example .env
-[...edit your .env file as needed, make sure to remove the first 4 lines ...]
+./update.sh
 docker compose --profile "*" build
 docker compose up -d
 ```
@@ -41,7 +40,11 @@ You should now be able to access a development site at 127.0.0.1 (Note: unlike m
 
 **`DEBUG` is fail-closed**: an unset `DEBUG` env var resolves to `False` (production mode). The `.env.example` sets `DEBUG='True'` so a fresh dev setup works out of the box. If you have an existing `.env` from before this change, add `DEBUG='True'` (or `DEBUG=1`) to keep dev mode; otherwise the app will start in production mode and route real email, hit the live PayPal API, etc.
 
-**Demo data**: In development mode (DEBUG=True), the system will automatically load demo data including 3 sample auctions, users, lots, and bids when starting with an empty database. This provides realistic examples to explore the application's features.
+**Single club mode**: Fresh setups now default to a single-club configuration. `./update.sh` creates `.env` if needed, prompts for the site domain, generates missing secrets, marks setup complete, and the app creates the default club automatically on startup.
+
+**Setup checklist**: After signing in as a superuser, open **Admin → Setup Checklist** for copy/paste `.env` snippets and status checks for email, PayPal, Google Maps, Google OAuth, reCAPTCHA, and wallet integrations.
+
+**Demo data**: In development mode (DEBUG=True), demo data loads automatically only when single club mode is off and the database is empty.
 
 One last thing to do is to create an admin.  Back in the shell, enter:
 ```
@@ -128,10 +131,13 @@ Log into your VM and enter the following:
 ```
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
-cp .env.example .env
-nano .env
+./update.sh
 ```
-Go through what's there and enter the keys you got in the pre-setup checklist above.  One thing to pay attention to is the email configuration.
+`./update.sh` now copies `.env.example` if needed, prompts for `SITE_DOMAIN`, generates the app/database/VAPID/encryption secrets, and refuses to let the containers start until that one-time setup has been completed.
+
+After the site starts, sign in as a superuser and open **Admin → Setup Checklist**.  That page shows which optional integrations are configured and gives copy/paste `.env` examples for Gmail, SES, PayPal, Google Maps, Google OAuth, reCAPTCHA, and digital membership cards.
+
+One thing to pay attention to is the email configuration.
 If you chose Gmail, configure things like this:
 ```
 POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
@@ -368,12 +374,6 @@ Updates can be run by typing `./update.sh` in your VM.
 Very rarely following an update I've needed to run `docker compose down && docker compose up -d` instead of just running update, so if the site isn't coming back after an update, give this a try before rolling back to your snapshot.
 
 ### Changes and new features:
-There's quite a bit of other stuff (ads, google analytics, etc.) that was enabled in the past and has been disabled.  If you want this stuff, make a pull request for it.  If you want something:
-
-* you want to disable the captcha on sign up
-* or you can't figure out how to get a Vapid key and you want to disable push notifications
-* or you want to disable google oauth
-
-or whatever, **make a pull request**.  Make sure that the default settings keep things as they are.
+Most optional integrations are now safe to leave blank.  If Google Maps, Google OAuth, reCAPTCHA, PayPal, or digital wallet keys are not configured, the related UI stays hidden or degrades gracefully and the Admin → Setup Checklist page explains how to enable them later.
 
 I will (often) add new features that benefit auction.fish.  I will not add new features that benefit your website and don't help auction.fish.

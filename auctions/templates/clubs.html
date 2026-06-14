@@ -4,6 +4,7 @@
 {% load static %}
 
 {% block extra_js %}
+{% if google_maps_api_key %}
 <script
 src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly&libraries=marker"
 async
@@ -67,6 +68,9 @@ function initMap() {
     }
 }
 </script>
+{% else %}
+<script>console.error("Google Maps is not configured; skipping club map rendering.");</script>
+{% endif %}
 {% endblock %}
 {% block content %}
             <h1>Find a fish club near you</h1>

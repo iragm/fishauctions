@@ -4,7 +4,6 @@ check_writable_dir() {
   local dir="$1"
   local host_dir="$2"
   if [ ! -w "$dir" ]; then
-    # Get UID/GID of directory owner
     owner_uid=$(stat -c "%u" "$dir")
     owner_gid=$(stat -c "%g" "$dir")
     echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
@@ -15,12 +14,26 @@ check_writable_dir() {
   fi
 }
 
+setup_complete=$(
+python << END
+from fishauctions._env import parse_bool_env
+import os
+
+print("true" if parse_bool_env(os.environ.get("SETUP_COMPLETE"), default=False) else "false")
+END
+) || exit $?
+
+if [ "$setup_complete" != "true" ]; then
+    echo "Refusing to start containers before setup has been completed."
+    echo "Run ./update.sh from the repository root, then start Docker again."
+    exit 1
+fi
+
 echo Checking directory permissions...
 check_writable_dir "/home/app/web/mediafiles"   "./mediafiles"
 check_writable_dir "/home/app/web/staticfiles"  "./auctions/static"
 check_writable_dir "/home/app/web/logs"         "./logs"
 
-# Wait for MariaDB to be ready
 python << END
 import sys
 import time
@@ -44,15 +57,12 @@ while True:
     time.sleep(1)
 END
 
-# Run migrations and setup
 python manage.py migrate --no-input
 python manage.py collectstatic --no-input > /dev/null 2>&1
-
-# Setup Celery Beat periodic tasks in database (idempotent - safe to run multiple times)
 python manage.py setup_celery_beat > /dev/null 2>&1 || true
-
-# Load demo data if in DEBUG mode and database is empty (idempotent - safe to run multiple times)
+python manage.py ensure_site_defaults
 python manage.py load_demo_data
+python manage.py ensure_site_defaults
 
 debug_mode=$(
 python << END

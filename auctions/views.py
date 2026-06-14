@@ -228,6 +228,7 @@ from .serializers import (
     ClubMemberSerializer,
 )
 from .services import map_fields
+from .site_setup import get_single_club, single_club_manage_mode, site_paypal_configured
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -11660,6 +11661,120 @@ class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
 
     def get(self, request, *args, **kwargs):
         return 1 / 0
+
+
+class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
+    template_name = "auctions/admin_setup_checklist.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        single_club = get_single_club(create=False)
+        paypal_enabled = site_paypal_configured()
+        context["single_club"] = single_club
+        context["setup_items"] = [
+            {
+                "name": "Initial setup",
+                "configured": getattr(settings, "SETUP_COMPLETE", False),
+                "what_it_does": "Lets the containers start after update.sh prepares the environment.",
+                "where_to_get_it": "Run ./update.sh from the repository root.",
+                "env_snippet": 'SETUP_COMPLETE="1"',
+            },
+            {
+                "name": "Site domain",
+                "configured": bool((settings.SITE_DOMAIN or "").strip() and settings.SITE_DOMAIN != "127.0.0.1"),
+                "what_it_does": "Used in absolute URLs, routed email senders, and production nginx setup.",
+                "where_to_get_it": "Use the hostname people will type into their browser.",
+                "env_snippet": 'SITE_DOMAIN="example.com"',
+            },
+            {
+                "name": "Single club mode",
+                "configured": bool(getattr(settings, "SINGLE_CLUB_MODE", False) and single_club),
+                "what_it_does": "Creates one default club, auto-adds every user as a member, and ties auctions to it.",
+                "where_to_get_it": "Built in; update the club name or auto-add mode in .env if needed.",
+                "env_snippet": (
+                    'SINGLE_CLUB_MODE="True"\n'
+                    f'SINGLE_CLUB_NAME="{getattr(settings, "SINGLE_CLUB_NAME", "Default Club")}"\n'
+                    f'SINGLE_CLUB_MANAGE_MODE="{single_club_manage_mode()}"'
+                ),
+            },
+            {
+                "name": "Email delivery",
+                "configured": bool(
+                    settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
+                    and settings.AWS_ACCESS_KEY_ID
+                    and settings.AWS_SECRET_ACCESS_KEY
+                    or settings.EMAIL_HOST_USER
+                    and settings.EMAIL_HOST_PASSWORD
+                ),
+                "what_it_does": "Sends sign-in, invoice, and notification emails.",
+                "where_to_get_it": "Use a Gmail app password or AWS SES SMTP/API credentials.",
+                "env_snippet": (
+                    'POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"\n'
+                    'EMAIL_HOST="smtp.gmail.com"\n'
+                    'EMAIL_PORT="587"\n'
+                    'EMAIL_HOST_USER="you@example.com"\n'
+                    'EMAIL_HOST_PASSWORD="gmail-app-password"'
+                ),
+            },
+            {
+                "name": "PayPal",
+                "configured": paypal_enabled,
+                "what_it_does": "Lets the single club collect PayPal payments with the site's own credentials.",
+                "where_to_get_it": "Create a PayPal REST app in the PayPal developer dashboard.",
+                "env_snippet": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"',
+            },
+            {
+                "name": "Google Maps",
+                "configured": getattr(settings, "GOOGLE_MAPS_ENABLED", False),
+                "what_it_does": "Enables maps on auction and club pages and location pickers.",
+                "where_to_get_it": "Create a Maps JavaScript API key in Google Cloud.",
+                "env_snippet": 'GOOGLE_MAPS_API_KEY="your-browser-key"\nGOOGLE_MAPS_SERVER_API_KEY="your-server-key"',
+            },
+            {
+                "name": "Google OAuth",
+                "configured": bool((settings.GOOGLE_OAUTH_LINK or "").strip()),
+                "what_it_does": "Adds one-click Google sign-in.",
+                "where_to_get_it": "Create an OAuth web application in Google Cloud.",
+                "env_snippet": 'GOOGLE_OAUTH_LINK="your-client-id.apps.googleusercontent.com"',
+            },
+            {
+                "name": "reCAPTCHA",
+                "configured": getattr(settings, "RECAPTCHA_ENABLED", False),
+                "what_it_does": "Protects signup and password reset forms from abuse.",
+                "where_to_get_it": "Register v2 Invisible keys in Google reCAPTCHA admin.",
+                "env_snippet": 'RECAPTCHA_PUBLIC_KEY="your-site-key"\nRECAPTCHA_PRIVATE_KEY="your-secret-key"',
+            },
+            {
+                "name": "Google Wallet membership cards",
+                "configured": bool(
+                    settings.GOOGLE_WALLET_ISSUER_ID
+                    and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
+                    and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
+                ),
+                "what_it_does": "Lets members save digital membership cards to Google Wallet.",
+                "where_to_get_it": "Use the Google Wallet issuer console and a Google Cloud service account key JSON file.",
+                "env_snippet": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="wallet-service-account.json"',
+            },
+            {
+                "name": "Apple Wallet membership cards",
+                "configured": bool(
+                    settings.APPLE_WALLET_CERT_FILE
+                    and settings.APPLE_WALLET_WWDR_FILE
+                    and settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER
+                    and settings.APPLE_WALLET_TEAM_IDENTIFIER
+                ),
+                "what_it_does": "Lets members save digital membership cards to Apple Wallet.",
+                "where_to_get_it": "Use an Apple Wallet pass certificate and WWDR certificate from Apple Developer.",
+                "env_snippet": (
+                    'APPLE_WALLET_CERT_FILE="certificate.p12"\n'
+                    'APPLE_WALLET_CERT_PASSWORD=""\n'
+                    'APPLE_WALLET_WWDR_FILE="AppleWWDRCAG4.pem"\n'
+                    'APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership"\n'
+                    'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"'
+                ),
+            },
+        ]
+        return context
 
 
 class AdminTraffic(AdminOnlyViewMixin, TemplateView):

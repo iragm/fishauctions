@@ -51,6 +51,7 @@ from .models import (
     UserLabelPrefs,
     sanitize_summernote_html,
 )
+from .site_setup import get_single_club, single_club_manage_mode
 from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
@@ -60,6 +61,10 @@ MILES_TO_KM = 1.60934
 #     input_type = 'datetime-local'
 
 logger = logging.getLogger(__name__)
+
+
+def recaptcha_is_configured():
+    return bool(getattr(settings, "RECAPTCHA_ENABLED", False))
 
 
 def round_to_whole_dollar(value):
@@ -2001,6 +2006,14 @@ class AuctionEditForm(forms.ModelForm):
             club_id_set.add(self.instance.club_id)
         self.fields["club"].queryset = Club.objects.filter(pk__in=club_id_set).order_by("name")
         self.fields["club"].initial = self.instance.club if (self.instance and self.instance.pk) else None
+        single_club = get_single_club(create=False)
+        if getattr(settings, "SINGLE_CLUB_MODE", False) and single_club:
+            self.fields["club"].queryset = Club.objects.filter(pk=single_club.pk)
+            self.fields["club"].initial = single_club
+            self.fields["club"].widget = forms.HiddenInput()
+            self.fields["manage_users_through_club"].initial = single_club_manage_mode()
+            self.fields["manage_users_through_club"].widget = forms.HiddenInput()
+            self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
 
         # Resolve which payment accounts apply to this auction:
         # - club auctions: the club's linked sellers (or site PayPal if enabled).
@@ -2339,6 +2352,11 @@ class AuctionEditForm(forms.ModelForm):
         existing_instance = self.instance
 
         # When a club is selected, payments are controlled by club settings, not auction settings
+        single_club = get_single_club(create=False)
+        if getattr(settings, "SINGLE_CLUB_MODE", False) and single_club:
+            cleaned_data["club"] = single_club
+            cleaned_data["manage_users_through_club"] = single_club_manage_mode()
+            cleaned_data["copy_users_when_copying_this_auction"] = False
         if cleaned_data.get("club"):
             cleaned_data["enable_online_payments"] = False
             cleaned_data["enable_square_payments"] = False
@@ -3161,6 +3179,12 @@ class CustomSignupForm(SignupForm):
 
     field_order = ["email", "first_name", "last_name", "username", "password1", "password2"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not recaptcha_is_configured():
+            self.fields.pop("captcha", None)
+            logger.error("reCAPTCHA is not configured; removing captcha from the signup form.")
+
     def signup(self, request, user):
         user.first_name = self.cleaned_data["first_name"]
         user.last_name = self.cleaned_data["last_name"]
@@ -3170,6 +3194,12 @@ class CustomSignupForm(SignupForm):
 
 class CustomResetPasswordForm(ResetPasswordForm):
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not recaptcha_is_configured():
+            self.fields.pop("captcha", None)
+            logger.error("reCAPTCHA is not configured; removing captcha from the password reset form.")
 
 
 class UserLocation(forms.ModelForm):

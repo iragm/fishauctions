@@ -223,10 +223,12 @@ window.onload = function() {
     </head>
 
     <body class="{% block body_class %}{% endblock %}">
+      {% if GOOGLE_TAG_ID %}
       <!-- Google Tag Manager (noscript) -->
-    <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
-      height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+      <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
+        height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       <!-- End Google Tag Manager (noscript) -->
+      {% endif %}
       <div class="bs-canvas-overlay bs-canvas-anim bg-dark position-fixed w-100 h-100"></div>
       {% if hide_navbar %}
         <script>
@@ -288,6 +290,7 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Admin</a>
                     <div class="dropdown-menu">
                     <a class="dropdown-item" href="{% url 'admin_dashboard' %}">User stats</a>
+                    <a class="dropdown-item" href="{% url 'admin_setup_checklist' %}">Setup Checklist</a>
                     <a class="dropdown-item" href="{% url 'admin_user_map' %}?view=recent&filter=24">User map</a>
                     <a class="dropdown-item" href="{% url 'admin_traffic' %}?days=30">Traffic</a>
                     <a class="dropdown-item" href="{% url 'admin_referrers' %}?days=30">Referrers</a>

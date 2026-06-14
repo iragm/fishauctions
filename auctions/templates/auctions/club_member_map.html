@@ -81,5 +81,9 @@ function initMap() {
   });
 }
 </script>
+{% if google_maps_api_key %}
 <script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap"></script>
+{% else %}
+<script>console.error("Google Maps is not configured; skipping club member map rendering.");</script>
+{% endif %}
 {% endblock %}

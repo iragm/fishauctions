@@ -26,7 +26,15 @@ from . import brevo
 from . import mailchimp as mc
 from .email_routing import resolve_routed_recipient
 from .filters import LotAdminFilter
-from .forms import AuctionEditForm, ChangeUsernameForm, ClubEmailSettingsForm, ClubMembershipSettingsForm, CreateLotForm
+from .forms import (
+    AuctionEditForm,
+    ChangeUsernameForm,
+    ClubEmailSettingsForm,
+    ClubMembershipSettingsForm,
+    CreateLotForm,
+    CustomResetPasswordForm,
+    CustomSignupForm,
+)
 from .models import (
     Auction,
     AuctionCampaign,
@@ -4780,6 +4788,22 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
         self.assertIsInstance(form.fields["enable_square_payments"].widget, forms.HiddenInput)
+
+    @override_settings(SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Single Club", SINGLE_CLUB_MANAGE_MODE="checkin")
+    def test_single_club_mode_hides_club_fields_and_forces_single_club(self):
+        Club.objects.create(name="Single Club")
+        self.online_auction.club = None
+        self.online_auction.manage_users_through_club = ""
+        self.online_auction.save()
+
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+
+        self.assertIsInstance(form.fields["club"].widget, forms.HiddenInput)
+        self.assertIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+        self.assertEqual(form.fields["club"].initial.name, "Single Club")
+        self.assertEqual(form.fields["manage_users_through_club"].initial, "checkin")
 
 
 class LotListViewTests(StandardTestCase):
@@ -10778,6 +10802,39 @@ class LoadDemoDataTests(TestCase):
         # Verify no auctions were created
         self.assertEqual(Auction.objects.count(), 0)
 
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=True)
+    def test_load_demo_data_skips_when_single_club_mode_enabled(self):
+        from io import StringIO
+
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        self.assertIn("Skipping demo data load - SINGLE_CLUB_MODE is enabled", output)
+        self.assertEqual(Auction.objects.count(), 0)
+
+
+class EnsureSiteDefaultsCommandTests(TestCase):
+    @override_settings(
+        DEBUG=True, SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Command Club", SINGLE_CLUB_MANAGE_MODE="checkin"
+    )
+    def test_command_creates_single_club_and_memberships(self):
+        user = User.objects.create_user("commanduser", "command@example.com", "pw")
+        auction = Auction.objects.create(
+            title="Needs Club",
+            created_by=user,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        call_command("ensure_site_defaults")
+
+        club = Club.objects.get(name="Command Club")
+        self.assertTrue(ClubMember.objects.filter(club=club, user=user, is_deleted=False).exists())
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, club)
+        self.assertEqual(auction.manage_users_through_club, "checkin")
+
 
 class AdminReadonlyFieldsTests(StandardTestCase):
     """Test that admin readonly fields are properly configured"""
@@ -11867,6 +11924,7 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
+        self.assertIn("RECAPTCHA_ENABLED", context)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):
@@ -11887,6 +11945,26 @@ class GoogleLoginTemplateVisibilityTests(TestCase):
         response = self.client.get(reverse("account_signup"))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Looks like a Gmail address!")
+
+
+class AdminSetupChecklistViewTests(TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser("setupadmin", "setup@example.com", "testpass")
+        self.client.force_login(self.superuser)
+
+    def test_admin_menu_shows_setup_checklist_link(self):
+        response = self.client.get(reverse("home"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Setup Checklist")
+
+    @override_settings(SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Checklist Club", SETUP_COMPLETE=True)
+    def test_setup_checklist_page_renders(self):
+        Club.objects.create(name="Checklist Club")
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Setup Checklist")
+        self.assertContains(response, "Checklist Club")
+        self.assertContains(response, "Google Maps")
 
 
 class MiddlewareTestCase(TestCase):
@@ -14177,6 +14255,16 @@ class CustomSignupFormTest(TestCase):
         result = get_adapter().clean_username("validuser", shallow=True)
         self.assertEqual(result, "validuser")
 
+    @override_settings(RECAPTCHA_ENABLED=False)
+    def test_signup_form_removes_captcha_when_recaptcha_is_disabled(self):
+        form = CustomSignupForm()
+        self.assertNotIn("captcha", form.fields)
+
+    @override_settings(RECAPTCHA_ENABLED=False)
+    def test_reset_password_form_removes_captcha_when_recaptcha_is_disabled(self):
+        form = CustomResetPasswordForm()
+        self.assertNotIn("captcha", form.fields)
+
 
 class AdminUserSignupsJSONTests(TestCase):
     """Tests for the AdminUserSignupsJSON view with extended data series"""
@@ -16262,6 +16350,20 @@ class ParseBoolEnvTests(TestCase):
 
         self.assertIn("parse_bool_env", entrypoint_text)
         self.assertNotIn('[ "${DEBUG}" = "True" ]', entrypoint_text)
+
+    def test_entrypoint_requires_setup_complete(self) -> None:
+        entrypoint = Path(__file__).resolve().parent.parent / "entrypoint.sh"
+        entrypoint_text = entrypoint.read_text(encoding="utf-8")
+
+        self.assertIn("SETUP_COMPLETE", entrypoint_text)
+        self.assertIn("Run ./update.sh", entrypoint_text)
+
+    def test_update_script_marks_setup_complete(self) -> None:
+        update_script = Path(__file__).resolve().parent.parent / "update.sh"
+        update_text = update_script.read_text(encoding="utf-8")
+
+        self.assertIn("SETUP_COMPLETE", update_text)
+        self.assertIn("SITE_DOMAIN", update_text)
 
 
 class RequireSecureProdSecretsTests(TestCase):
