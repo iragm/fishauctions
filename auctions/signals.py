@@ -35,7 +35,7 @@ def _associate_auctions_for_member(member):
     from .models import Auction, AuctionHistory
 
     club = member.club
-    auctions_to_update = Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False)
+    auctions_to_update = list(Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False))
     for auction in auctions_to_update:
         Auction.objects.filter(pk=auction.pk).update(club=club)
         AuctionHistory.objects.create(
@@ -44,6 +44,9 @@ def _associate_auctions_for_member(member):
             action=f"Automatically associated with club '{club}' because {member.display_name} was granted a club permission.",
             applies_to="RULES",
         )
+        # The bulk update above bypasses Auction.save(), so book the club ledger for this
+        # auction's already-settled invoices the same way save() would on a fresh assignment.
+        auction.backfill_club_money()
 
 
 @receiver(pre_save, sender="auctions.Auction")
@@ -162,31 +165,26 @@ def update_user_location(sender, instance, **kwargs):
 def stash_previous_club_state(sender, instance, **kwargs):
     """Snapshot prev field values so post_save handlers can detect transitions.
 
-    Currently tracks: membership_number_mode (revocation logic), icon name
+    Currently tracks: show_member_barcode (revocation logic), icon name
     (re-push the Wallet class so new logos propagate), and club name
     (refresh member wallet object metadata on rename).
     """
     if instance.pk:
         from .models import Club
 
-        prev = Club.objects.filter(pk=instance.pk).values("membership_number_mode", "icon", "name").first() or {}
-        instance._previous_membership_number_mode = prev.get("membership_number_mode")
+        prev = Club.objects.filter(pk=instance.pk).values("show_member_barcode", "icon", "name").first() or {}
+        instance._previous_show_member_barcode = prev.get("show_member_barcode")
         instance._previous_icon_name = prev.get("icon") or ""
         instance._previous_name = prev.get("name") or ""
     else:
-        instance._previous_membership_number_mode = None
+        instance._previous_show_member_barcode = None
         instance._previous_icon_name = ""
         instance._previous_name = ""
 
 
 @receiver(post_save, sender="auctions.Club")
 def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
-    """When membership_number_mode tightens, expire active Wallet passes.
-
-    Transitions handled:
-      * anything → "disabled"   : expire ALL members' Wallet objects
-      * anything → "paid_only"  : expire UNPAID members' Wallet objects (only when
-                                  the previous mode was not already "paid_only")
+    """When barcodes are disabled, expire all active Wallet passes.
 
     Apple Wallet does not have an equivalent push-revocation API without the
     full Web Service implementation, so we rely on the embedded `expirationDate`
@@ -194,16 +192,14 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
     """
     if created:
         return
-    prev = getattr(instance, "_previous_membership_number_mode", None)
-    current = instance.membership_number_mode
+    prev = getattr(instance, "_previous_show_member_barcode", None)
+    current = instance.show_member_barcode
     if prev == current:
         return
     from .tasks import expire_google_wallet_objects_for_club
 
-    if current == "disabled":
+    if not current:
         transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk))
-    elif current == "paid_only" and prev != "paid_only":
-        transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk, unpaid_only=True))
 
 
 @receiver(pre_save, sender="auctions.ClubMember")

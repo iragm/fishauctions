@@ -177,16 +177,26 @@ document.addEventListener("DOMContentLoaded", function() {
     <h5 class="card-title">{{ start_date }} - {{ end_date }}</h5>
     <div class="row">
       <div class="col-md-6">
-        <p class="mb-1"><strong>Gross:</strong> {{ currency_symbol }}{{ report_summary.gross }}</p>
-        <p class="mb-1"><strong>Expenses:</strong> {{ currency_symbol }}{{ report_summary.expenses }}</p>
-        <p class="mb-1"><strong>Revenue:</strong> {{ currency_symbol }}{{ report_summary.revenue }}</p>
-        <p class="mb-1"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }}</p>
+        <h6 class="text-muted text-uppercase small">Cash flow</h6>
+        <p class="mb-1"><strong>Money in:</strong> {{ currency_symbol }}{{ report_summary.money_in }}</p>
+        <p class="mb-1"><strong>Money out:</strong> {{ currency_symbol }}{{ report_summary.money_out }}</p>
+        <p class="mb-1"><strong>Net change:</strong> {{ currency_symbol }}{{ report_summary.net }}</p>
+        <p class="mb-1 text-muted"><small>Every dollar that moved in or out of the club in this date range. Net change is what the balance moved by.</small></p>
+        <p class="mb-1 mt-2"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }} ({{ currency_symbol }}{{ report_summary.membership_dues }} dues)</p>
+        <p class="mb-1"><strong>Donations:</strong> {{ currency_symbol }}{{ report_summary.donations }}</p>
       </div>
       <div class="col-md-6">
-        <p class="mb-1"><strong>Auction gross:</strong> {{ currency_symbol }}{{ report_summary.auction_gross }}</p>
-        <p class="mb-1"><strong>Auction payouts:</strong> {{ currency_symbol }}{{ report_summary.auction_payouts }}</p>
-        <p class="mb-1"><strong>Auction profit:</strong> {{ currency_symbol }}{{ report_summary.auction_profit }}</p>
-        <p class="mb-1"><strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}</p>
+        <h6 class="text-muted text-uppercase small">Auctions</h6>
+        <p class="mb-1"><strong>Sales (from buyers):</strong> {{ currency_symbol }}{{ report_summary.auction_sales }}</p>
+        <p class="mb-1"><strong>Seller payouts:</strong> {{ currency_symbol }}{{ report_summary.seller_payouts }}</p>
+        <p class="mb-1"><strong>Commission (club's cut):</strong> {{ currency_symbol }}{{ report_summary.auction_commission }}</p>
+        <p class="mb-1"><strong>Sales tax collected:</strong> {{ currency_symbol }}{{ report_summary.tax_collected }}
+          <br><small class="text-muted">Held on behalf of the tax authority &mdash; not club income.</small></p>
+        <p class="mb-1 mt-2">
+          <strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}
+          {% if report_summary.outstanding_invoices %}({{ currency_symbol }}{{ report_summary.outstanding_invoices_amount }} still owed to the club){% endif %}
+          <br><small class="text-muted">Unpaid invoices from auctions in this date range. These are not in the balance until paid &mdash; mark one paid to clear it.</small>
+        </p>
       </div>
     </div>
   </div>

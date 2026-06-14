@@ -167,6 +167,13 @@ def update_generic_object_for_member(member) -> bool:
         return False
     object_id = _object_id_for_member(member)
     member_name = _member_display_name(member)
+    text_modules = [
+        {"id": "member_id", "header": "Member ID", "body": str(member.membership_number)},
+    ]
+    if member.membership_expiration_date:
+        text_modules.append(
+            {"id": "expires", "header": "Expires", "body": member.membership_expiration_date.strftime("%B %-d, %Y")}
+        )
     body = {
         "cardTitle": {
             "defaultValue": {"language": "en-US", "value": member.club.name},
@@ -174,9 +181,7 @@ def update_generic_object_for_member(member) -> bool:
         "subheader": {
             "defaultValue": {"language": "en-US", "value": member_name},
         },
-        "textModulesData": [
-            {"id": "member_id", "header": "Member ID", "body": str(member.membership_number)},
-        ],
+        "textModulesData": text_modules,
         "barcode": {
             "type": "CODE_128",
             "value": str(member.membership_number),

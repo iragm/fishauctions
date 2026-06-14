@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Setup - {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+<h3 class="mb-3">Setup</h3>
+<div class="list-group">
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_edit' club.slug %}">
+    <i class="bi bi-gear fs-5"></i>
+    <span><strong>General</strong><br><small class="text-muted">Club name, logo, location, and public page</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_membership_settings' club.slug %}">
+    <i class="bi bi-people-fill fs-5"></i>
+    <span><strong>Membership and payments</strong><br><small class="text-muted">Dues, renewal system, and payment accounts</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_email_settings' club.slug %}">
+    <i class="bi bi-envelope-fill fs-5"></i>
+    <span><strong>Emails</strong><br><small class="text-muted">Welcome, renewal, and expiration emails</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_discord_config' club.slug %}">
+    <i class="bi bi-discord fs-5"></i>
+    <span><strong>Discord</strong><br><small class="text-muted">Link a Discord server and sync roles</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_mailchimp_config' club.slug %}">
+    <i class="bi bi-envelope-paper fs-5"></i>
+    <span><strong>Mailchimp</strong><br><small class="text-muted">Sync members to a Mailchimp audience</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_brevo_config' club.slug %}">
+    <i class="bi bi-send fs-5"></i>
+    <span><strong>Brevo</strong><br><small class="text-muted">Sync members to a Brevo list</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_api_keys' club.slug %}">
+    <i class="bi bi-key fs-5"></i>
+    <span><strong>API keys</strong><br><small class="text-muted">Programmatic access to club data</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_bap_settings' club.slug %}">
+    <i class="bi bi-award fs-5"></i>
+    <span><strong>BAP settings</strong><br><small class="text-muted">Breeder Award Program points and rules</small></span>
+  </a>
+</div>
+{% endblock %}

@@ -88,7 +88,7 @@
     </span>
 
     {% if auction.show_paypal_csv_link %}
-      {% if auction.enable_online_payments %}
+      {% if auction.paypal_payments_enabled %}
         <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
       {% else %}
         {% for chunk in auction.paypal_invoice_chunks %}

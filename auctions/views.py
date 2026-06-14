@@ -13,7 +13,7 @@ from datetime import timezone as date_tz
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from random import choice, randint, sample, uniform
+from random import randint, sample, uniform
 from time import time
 from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
@@ -149,6 +149,7 @@ from .forms import (
     ClubMembershipSettingsForm,
     ClubMoneyBalanceForm,
     ClubMoneyForm,
+    ClubPayPalCredentialsForm,
     ClubTreasurerReportForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -365,6 +366,19 @@ class AuctionViewMixin:
                 return True
         raise PermissionDenied()
 
+    @property
+    def club_sidebar_club(self):
+        """The club whose nav sidebar should render on this auction page (or None)."""
+        return self.auction.club if self.auction else None
+
+    @property
+    def club_sidebar_can_view(self):
+        """Whether the current user may see the club sidebar on an auction page.
+        Non-raising (unlike is_auction_admin) so it's safe to call from templates."""
+        if not self.auction or not self.auction.club_id:
+            return False
+        return bool(self.auction.permission_check(self.request.user))
+
 
 def check_club_permission(user, club, permission_name):
     """Check if a user has a specific permission for a club.
@@ -505,7 +519,8 @@ def _invoice_membership_candidate(invoice):
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
     if not user and not email:
-        return None
+        # Fall back to the ClubMember directly linked on the TOS (no email/user needed).
+        return getattr(invoice.auctiontos_user, "clubmember", None)
     return _find_club_member(invoice.auction.club, user, email)
 
 
@@ -550,10 +565,12 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     if not club.membership_annual_fee:
         return False
-    # Without a usable email we cannot reliably look up or create a ClubMember;
+    # Without a usable email or user we cannot reliably look up or create a ClubMember;
     # don't auto-add the fee in that case (an admin can still toggle it on manually).
+    # Exception: if the TOS already has a directly linked ClubMember, proceed.
     if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
-        return False
+        if not (invoice.auctiontos_user and invoice.auctiontos_user.clubmember_id):
+            return False
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
@@ -568,6 +585,9 @@ def _ensure_invoice_renewal_state(invoice):
         return
     if not invoice.auction:
         # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
+        return
+    # An admin has explicitly set the checkbox — respect that choice.
+    if invoice.renewal_manually_set:
         return
     should_need = _should_mark_invoice_renewal_needed(invoice)
     if invoice.renewal_needed != should_need:
@@ -662,9 +682,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             )
             if club.membership_annual_fee and not locked.auction:
                 # Club-only invoices: create the membership ClubMoney here.
-                # Auction invoices: create_club_payment_history (via Invoice.save) already books the
-                # membership fee through _add_paid_entries, including the proper reversal when the
-                # invoice is un-paid. Booking it here too would double-count membership revenue.
+                # Auction invoices: Invoice.sync_club_money (via Invoice.save) already books the
+                # membership dues, including the reversal when the invoice is un-paid. Booking it
+                # here too would double-count membership revenue.
                 ClubMoney.objects.create(
                     club=club,
                     created_by=acting_user,
@@ -821,6 +841,96 @@ def _last_n_month_starts(count):
     return list(reversed(months))
 
 
+def _ytd_month_starts():
+    """Months from Jan 1 of the current year through the current month."""
+    today = timezone.now().date()
+    months = []
+    month = today.replace(month=1, day=1)
+    current = today.replace(day=1)
+    while month <= current:
+        months.append(month)
+        if month.month == 12:
+            month = month.replace(year=month.year + 1, month=1)
+        else:
+            month = month.replace(month=month.month + 1)
+    return months
+
+
+def _club_top10_chart_data(club, rank_field, award_field, current_member, months, is_ytd=False):
+    """Cumulative points-over-time chart for the top 10 members.
+
+    Color scheme: green = current_member, red = first place (when not current), blue = everyone else.
+    Returns a Chart.js-compatible dict or None if no members have points.
+    """
+    top10 = list(
+        ClubMember.objects.filter(club=club, is_deleted=False, **{f"{rank_field}__gt": 0}).order_by(f"-{rank_field}")[
+            :10
+        ]
+    )
+    if not top10:
+        return None
+
+    start_month = months[0]
+    member_ids = [m.pk for m in top10]
+
+    # Mirror BapAward.recalculate_member_points: awards tied to a deleted or banned lot
+    # do not count toward a member's standings, so the chart must drop them too or its
+    # running totals will disagree with the leaderboard numbers shown alongside it.
+    awards = (
+        BapAward.objects.filter(club_member_id__in=member_ids).exclude(lot__is_deleted=True).exclude(lot__banned=True)
+    )
+
+    monthly_awards = (
+        awards.filter(date__gte=start_month)
+        .annotate(month=TruncMonth("date"))
+        .values("club_member_id", "month")
+        .annotate(total=Sum(award_field))
+        .order_by("club_member_id", "month")
+    )
+    member_monthly = collections.defaultdict(dict)
+    for item in monthly_awards:
+        month_key = (item["month"] if isinstance(item["month"], date_type) else item["month"].date()).replace(day=1)
+        member_monthly[item["club_member_id"]][month_key] = item["total"] or 0
+
+    if is_ytd:
+        initial_totals = {}
+    else:
+        initial_qs = awards.filter(date__lt=start_month).values("club_member_id").annotate(total=Sum(award_field))
+        initial_totals = {item["club_member_id"]: item["total"] or 0 for item in initial_qs}
+
+    first_place = top10[0]
+    datasets = []
+    for m in top10:
+        is_current = m == current_member
+        is_first = m == first_place
+        if is_current:
+            color, width = "#198754", 2.5
+        elif is_first:
+            color, width = "#dc3545", 1.5
+        else:
+            color, width = "#0d6efd", 1.0
+
+        running = initial_totals.get(m.pk, 0)
+        data = []
+        for month in months:
+            running += member_monthly[m.pk].get(month, 0)
+            data.append(running)
+
+        datasets.append(
+            {
+                "label": str(m),
+                "borderColor": color,
+                "backgroundColor": "transparent",
+                "fill": False,
+                "data": data,
+                "borderWidth": width,
+                "pointRadius": 0,
+            }
+        )
+
+    return {"labels": [m.strftime("%b %Y") for m in months], "datasets": datasets}
+
+
 def _club_points_chart_data(club, member):
     if not member:
         return None
@@ -950,6 +1060,19 @@ class ClubViewMixin:
     @property
     def can_add_edit(self):
         return self.user_has_club_permission("permission_add_edit")
+
+    @property
+    def club_sidebar_club(self):
+        """The club whose nav sidebar should render on this page (or None)."""
+        return self.club
+
+    @property
+    def club_sidebar_can_view(self):
+        """Whether the current user may see the club sidebar on a club page.
+        Mirrors the union of permissions that gated the old club_ribbon tabs."""
+        if not self.club:
+            return False
+        return bool(self.can_access_admin or self.can_edit_settings or self.can_manage_bap or self.can_manage_money)
 
 
 class AdminOnlyViewMixin:
@@ -1443,7 +1566,7 @@ class MyWonLots(LotListView):
             data["status"] = "closed"
         context = super().get_context_data(**kwargs)
         context["filter"] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["view"] = "mywonlots"
+        context["lot_view_type"] = "mywonlots"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1455,7 +1578,7 @@ class MyBids(LotListView):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
         context["filter"] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["view"] = "mybids"
+        context["lot_view_type"] = "mybids"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1517,7 +1640,7 @@ class MyWatched(LotListView):
             request=self.request,
             ignore=False,
         )
-        context["view"] = "watch"
+        context["lot_view_type"] = "watch"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1532,7 +1655,7 @@ class LotsByUser(LotListView):
         if username:
             try:
                 context["user"] = User.objects.get(username=username)
-                context["view"] = "user"
+                context["lot_view_type"] = "user"
             except User.DoesNotExist:
                 context["user"] = None
         else:
@@ -2209,7 +2332,8 @@ class InvoiceRenewalNeededToggleView(APIView):
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
         renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
         invoice.renewal_needed = renewal_needed
-        invoice.save(update_fields=["renewal_needed"])
+        invoice.renewal_manually_set = True
+        invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
@@ -3339,11 +3463,20 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
                     return self.form_invalid(form)
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
+        was_promoted = self.get_object().promote_this_auction
         try:
             form = super().form_valid(form)
         except ValidationError as exc:
             form.add_error(None, exc)
             return self.form_invalid(form)
+        # Promoting a previously-unpromoted auction makes it the club's current auction.
+        updated_auction = self.get_object()
+        if not was_promoted and updated_auction.promote_this_auction and updated_auction.club_id:
+            club = updated_auction.club
+            if club.current_auction_id != updated_auction.pk:
+                club.current_auction = updated_auction
+                club.save(update_fields=["current_auction"])
+                messages.info(self.request, f"This is now the current auction for {club.name}.")
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
@@ -3569,6 +3702,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs()
         kwargs["request"] = self.request
         kwargs["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        kwargs["is_managed"] = self.auction.is_club_managed
         return kwargs
 
     def get_filter_placeholder_text(self):
@@ -3824,7 +3958,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not candidate_ids:
             messages.warning(request, "No checked-in users are left for door prizes.")
             return redirect(redirect_url)
-        winner = AuctionTOS.objects.get(pk=choice(candidate_ids))
+        winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
         winner.door_prize_called = timezone.now()
         winner.save(update_fields=["door_prize_called"])
         self.auction.create_history(
@@ -4065,6 +4199,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """A form to set lot winners.  Totally async with no page loads, just POST"""
 
     template_name = "auctions/dynamic_set_lot_winner.html"
+    club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -6135,7 +6270,8 @@ class ViewLot(DetailView):
             if viewer_is_seller or viewer_has_bap:
                 context["show_bap_badge"] = True
                 if lot.ended and not lot.sold:
-                    reason = "not_sold"
+                    club = lot.auction.club if lot.auction else None
+                    reason = "not_sold" if (not club or club.only_sold_lots) else lot.unsold_lot_no_bap_reason
                 else:
                     reason = lot.unsold_lot_no_bap_reason
                 context["bap_eligible_reason"] = reason
@@ -6812,7 +6948,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 "Looks like {user} couldn't handle the heat and pulled their bid!",
                 "{user} just remembered they haven't paid rent this month and removed their bid!",
             ]
-            history_message = choice(own_bid_removal_messages).format(user=self.request.user)
+            history_message = secrets.choice(own_bid_removal_messages).format(user=self.request.user)
         else:
             history_message = f"{self.request.user} has removed {bid.user}'s bid"
         if lot.ended:
@@ -7789,6 +7925,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
                 self.auction.save()
+            if str(request.GET.get("make_current_auction", "")).lower() in ("1", "true") and self.auction.club_id:
+                club = self.auction.club
+                club.current_auction = self.auction
+                club.save(update_fields=["current_auction"])
+                messages.success(request, f"This is now the current auction for {club.name}.")
+                return redirect("auction_main", slug=self.auction.slug)
             if request.user.is_superuser:
                 if str(request.GET.get("trust_user", "")).lower() in ("1", "true"):
                     self.auction.created_by.userdata.is_trusted = True
@@ -7814,12 +7956,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                             member.phone_number = getattr(creator.userdata, "phone_number", None) or None
                         if not member.address:
                             member.address = getattr(creator.userdata, "address", None) or ""
+                        # Count the creator's clubless auctions before saving: granting
+                        # permission_admin fires the on_club_member_saved signal, which associates
+                        # those auctions with the club and books their club ledger. Capturing the
+                        # count first keeps the success message accurate.
+                        assigned_count = Auction.objects.filter(
+                            created_by=creator, club__isnull=True, is_deleted=False
+                        ).count()
                         member.permission_admin = True
                         member.save()
-                        # Assign all auctions created by this user that lack a club to creator_club.
-                        unassigned = Auction.objects.filter(created_by=creator, club__isnull=True)
-                        assigned_count = unassigned.count()
-                        unassigned.update(club=creator_club)
                         ClubHistory.objects.create(
                             club=creator_club,
                             user=request.user,
@@ -7905,6 +8050,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        # Offer "make this the current club auction" to admins when the auction has a club
+        # and isn't already that club's current auction.
+        context["can_make_current_auction"] = bool(
+            self.auction.club_id and self.is_auction_admin and self.auction.club.current_auction_id != self.auction.pk
+        )
         # Show "make club admin" button to superusers when auction creator has a club in their profile.
         # Show when: creator isn't yet an admin of that club, OR this auction has no club assigned yet.
         if self.request.user.is_superuser and self.auction.created_by:
@@ -8437,7 +8587,7 @@ class AllLots(LotListView, AuctionViewMixin):
                 if self.request.user.is_authenticated:
                     user = self.request.user
                 SearchHistory.objects.create(user=user, search=data["q"], auction=self.auction)
-        context["view"] = "all"
+        context["lot_view_type"] = "all"
         context["filter"] = LotFilter(
             data,
             queryset=self.get_queryset(),
@@ -9463,10 +9613,23 @@ class PayPalAPIMixin:
       - PAYPAL_WEBHOOK_ID: Registered webhook ID (for webhook verification)
     """
 
+    def _paypal_auth(self):
+        """Return ``(client_id, secret)`` for the current PayPal request.
+
+        A club in non-OAuth mode supplies its own app credentials via
+        ``self.club_paypal_credentials`` (set by callers from the invoice); every other
+        caller falls back to the site's platform app from settings.
+        """
+        creds = getattr(self, "club_paypal_credentials", None)
+        if creds and creds[0] and creds[1]:
+            return creds[0], creds[1]
+        return settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET
+
     def _get_access_token(self):
+        client_id, secret = self._paypal_auth()
         token_resp = requests.post(
             f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
-            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET),
+            auth=(client_id, secret),
             headers={"Accept": "application/json", "Accept-Language": "en_US"},
             data={"grant_type": "client_credentials"},
             timeout=10,
@@ -9480,7 +9643,10 @@ class PayPalAPIMixin:
             "Authorization": f"Bearer {token or self._get_access_token()}",
             "Content-Type": "application/json",
         }
-        if include_bn_code and getattr(settings, "PAYPAL_BN_CODE", None):
+        # The BN code is our platform partner-attribution id; it's meaningless (and
+        # potentially rejected) when calling with a club's own standalone app credentials.
+        using_club_creds = bool(getattr(self, "club_paypal_credentials", None))
+        if include_bn_code and not using_club_creds and getattr(settings, "PAYPAL_BN_CODE", None):
             headers["PayPal-Partner-Attribution-Id"] = settings.PAYPAL_BN_CODE
         if merchant_id:
             headers["PayPal-Auth-Assertion"] = self._build_auth_assertion(merchant_id)
@@ -9490,7 +9656,7 @@ class PayPalAPIMixin:
         """Build unsigned PayPal-Auth-Assertion JWT for acting on behalf of a merchant."""
         header = {"alg": "none"}
         payload = {
-            "iss": settings.PAYPAL_CLIENT_ID,
+            "iss": self._paypal_auth()[0],
             "payer_id": merchant_payer_id,  # obtained from partner referral flow
         }
 
@@ -9541,6 +9707,9 @@ class PayPalAPIMixin:
     def create_order(self, invoice, member_pk=""):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
+        # A club using its own (non-OAuth) PayPal app pays through its own credentials,
+        # exactly as the site keys are used for the platform account. None => site app.
+        self.club_paypal_credentials = invoice.paypal_credentials
         currency = invoice.currency
 
         items = []
@@ -9611,7 +9780,11 @@ class PayPalAPIMixin:
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
         if invoice.club:
-            if invoice.club.uses_site_paypal:
+            if invoice.club.uses_own_paypal_credentials:
+                # The club's own app receives the payment directly -- no payee override and
+                # no platform fee, exactly as the site keys behave for the site account.
+                paypal_merchant_id = None
+            elif invoice.club.uses_site_paypal:
                 paypal_merchant_id = "admin"
             else:
                 club_seller = invoice.club.effective_paypal_seller
@@ -9653,8 +9826,15 @@ class PayPalAPIMixin:
             # },
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
+                # Include the invoice uuid so PayPalSuccessView can resolve the club's own
+                # credentials (if any) before capturing -- the capture must use the same app
+                # that created the order.
                 "return_url": self.request.build_absolute_uri(
-                    reverse("paypal_success") + (f"?member_pk={member_pk}" if member_pk else "")
+                    reverse("paypal_success")
+                    + "?"
+                    + urlencode(
+                        {"invoice": str(invoice.no_login_link), **({"member_pk": member_pk} if member_pk else {})}
+                    )
                 ),
                 "cancel_url": self.request.build_absolute_uri(
                     reverse("club_detail", kwargs={"slug": invoice.club.slug})
@@ -9861,6 +10041,15 @@ class PayPalAPIMixin:
     def refund_invoice(self, invoice, amount):
         """Refund the given amount on this invoice via PayPal.
         Returns error or none on success"""
+        # Clubs using their own (non-OAuth) credentials have no webhook wired up, so an
+        # automated refund here would never be recorded as a negative InvoicePayment
+        # (handle_refund only runs from the PayPal webhook). Force these to be done manually
+        # in the club's own PayPal account so our records never silently drift.
+        if invoice.paypal_credentials:
+            return (
+                "Automatic refunds aren't available for this club's PayPal account. "
+                "Please issue the refund manually in PayPal."
+            )
         if not self.can_refund_invoice(invoice, amount):
             return "Unable to automatically refund payment"
         payment = (
@@ -10155,6 +10344,15 @@ class PayPalSuccessView(PayPalAPIMixin, View):
 
     def get(self, request, *args, **kwargs):
         order_id = request.GET.get("token")
+        # Resolve the club's own (non-OAuth) credentials before capturing -- only the app
+        # that created the order can capture it. The invoice uuid is carried in the return URL
+        # set by create_order(); the captured order's reference_id remains authoritative for
+        # which invoice is actually credited.
+        invoice_uuid = request.GET.get("invoice")
+        if invoice_uuid:
+            invoice_for_creds = Invoice.objects.filter(no_login_link=invoice_uuid).first()
+            if invoice_for_creds:
+                self.club_paypal_credentials = invoice_for_creds.paypal_credentials
         error, invoice = self.handle_order(order_id)
         if error:
             messages.error(request, error)
@@ -14394,8 +14592,16 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                 context["invoice"] = invoice
                 _ensure_invoice_renewal_state(invoice)
             if invoice:
-                # Generate PayPal QR code if available
-                if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
+                # Generate PayPal QR code if available.
+                # The in-person QR flow relies on PayPal webhooks (CHECKOUT.ORDER.APPROVED /
+                # CHECKOUT.CAPTURE.COMPLETED) to update the cashier screen once the payer approves
+                # on their phone. Clubs using their own (non-OAuth) credentials have no webhook
+                # wired up, so skip the QR for them -- they can still take Square/cash here.
+                if (
+                    invoice.show_paypal_button
+                    and not invoice.reason_for_payment_not_available
+                    and not invoice.paypal_credentials
+                ):
                     try:
                         context["paypal_qr_code_link"] = self.create_order(invoice)
                     except Exception:
@@ -14494,6 +14700,26 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 context["my_bap_awards"] = BapAward.objects.filter(club_member=member).order_by("-date", "-pk")[:25]
                 context["my_points_chart_data"] = _club_points_chart_data(club, member)
                 available_tabs.add("my-points")
+            alltime_months = _last_n_month_starts(60)
+            ytd_months = _ytd_month_starts()
+            context["bap_top10_chart"] = _club_top10_chart_data(club, "bap_points", "points", member, alltime_months)
+            context["bap_top10_chart_ytd"] = _club_top10_chart_data(
+                club, "bap_points_ytd", "points", member, ytd_months, is_ytd=True
+            )
+            if club.separate_hap:
+                context["hap_top10_chart"] = _club_top10_chart_data(
+                    club, "hap_points", "hap_points", member, alltime_months
+                )
+                context["hap_top10_chart_ytd"] = _club_top10_chart_data(
+                    club, "hap_points_ytd", "hap_points", member, ytd_months, is_ytd=True
+                )
+            if club.separate_cap:
+                context["cap_top10_chart"] = _club_top10_chart_data(
+                    club, "culture_points", "cap_points", member, alltime_months
+                )
+                context["cap_top10_chart_ytd"] = _club_top10_chart_data(
+                    club, "culture_points_ytd", "cap_points", member, ytd_months, is_ytd=True
+                )
         else:
             context["show_bap_tabs"] = False
             # Legacy flat leaderboard for clubs without BAP enabled
@@ -14519,6 +14745,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_manage_auctions"
         )
         context["can_manage_auctions"] = can_manage_auctions
+        context["now"] = timezone.now()
+        context["current_auction_id"] = self.club.current_auction_id
         membership_expiration_date = member.membership_expiration_date if member else None
         context["membership_expiration_date"] = membership_expiration_date
         membership_invoice = None
@@ -14575,6 +14803,19 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if not request.user.is_authenticated:
             return redirect_to_login(request.get_full_path())
         action = request.POST.get("action", "join")
+        if action == "make_current":
+            can_manage_auctions = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+                "permission_manage_auctions"
+            )
+            if can_manage_auctions:
+                auction = Auction.objects.filter(
+                    pk=request.POST.get("auction"), club=self.club, is_deleted=False
+                ).first()
+                if auction:
+                    self.club.current_auction = auction
+                    self.club.save(update_fields=["current_auction"])
+                    messages.success(request, f"{auction} is now the current auction.")
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
         if action == "update":
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
             if member:
@@ -15015,7 +15256,7 @@ class ClubMemberAdminView(APIView):
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
         # Header: "{name} - {member_number}" when the club uses membership numbers
         title = str(member)
-        if member.club.membership_number_mode != "off" and member.membership_number:
+        if member.club.show_member_barcode and member.membership_number:
             title = f"{member} — #{member.membership_number}"
         ctx = {
             "club": member.club,
@@ -15644,7 +15885,7 @@ class ClubMembershipNumberView(APIView):
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        if member.club.membership_number_mode == "disabled":
+        if not member.club.show_member_barcode:
             # Feature is off for this club — admin endpoint should not be reachable.
             raise Http404
         return member
@@ -15685,7 +15926,7 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         if not request.user.is_authenticated or member.user_id != request.user.id:
             raise PermissionDenied()
         # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
@@ -15707,7 +15948,7 @@ class ClubMemberAppleWalletByUUIDView(View):
         if not is_configured():
             raise Http404
         member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
-        if not member.membership_number_visible:
+        if not member.club.show_member_barcode:
             raise Http404
         member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
@@ -16231,6 +16472,30 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             return url
         return ""
 
+    @staticmethod
+    def _format_membership_date(value):
+        if not value:
+            return "—"
+        return value.strftime("%b %-d, %Y")
+
+    def _membership_info_rows(self, source, target):
+        rows = []
+        for attr, label in [
+            ("membership_expiration_date", "Expires"),
+            ("membership_last_paid", "Last paid"),
+        ]:
+            src_val = getattr(source, attr, None)
+            tgt_val = getattr(target, attr, None)
+            if src_val or tgt_val:
+                rows.append(
+                    {
+                        "label": label,
+                        "source_value": self._format_membership_date(src_val),
+                        "target_value": self._format_membership_date(tgt_val),
+                    }
+                )
+        return rows
+
     def _build_review_context(self, request, source, target, review_form, next_url=""):
         cancel_url = next_url or reverse("club_admin", kwargs={"slug": self.club.slug})
         return {
@@ -16244,14 +16509,17 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "target_label": str(target),
             "review_form": review_form,
             "next_url": next_url,
-            "comparison_rows": [
-                {
-                    "label": field.label,
-                    "source_value": self._format_merge_value(getattr(source, name, None)),
-                    "target_value": self._format_merge_value(getattr(target, name, None)),
-                }
-                for name, field in review_form.fields.items()
-            ],
+            "comparison_rows": (
+                self._membership_info_rows(source, target)
+                + [
+                    {
+                        "label": field.label,
+                        "source_value": self._format_merge_value(getattr(source, name, None)),
+                        "target_value": self._format_merge_value(getattr(target, name, None)),
+                    }
+                    for name, field in review_form.fields.items()
+                ]
+            ),
             "summary_lines": [
                 f"{source} will be deactivated.",
                 f"{target} will be kept.",
@@ -16322,6 +16590,10 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source_name = str(source)
+                    # Re-point all related records from source to target before deactivating.
+                    AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
+                    BapAward.objects.filter(club_member=source).update(club_member=target)
+                    InvoicePayment.objects.filter(club_member=source).update(club_member=target)
                     source.is_deleted = True
                     source.save(update_fields=["is_deleted"])
                     ClubHistory.objects.create(
@@ -16362,6 +16634,26 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
         return render(request, "auctions/contact_merge.html", context)
+
+
+class ClubSetupView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Hub page linking to all of a club's settings pages."""
+
+    active_tab = "setup"
+    template_name = "auctions/club_setup.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
@@ -16451,6 +16743,10 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["square_configured"] = bool(
             getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
         )
+        # Non-OAuth PayPal (admin-only opt-in): the club enters its own REST credentials here
+        # instead of connecting via OAuth.
+        if club.allow_non_oauth_paypal:
+            context["paypal_credentials_form"] = ClubPayPalCredentialsForm(instance=club)
         return context
 
     def form_valid(self, form):
@@ -16536,6 +16832,46 @@ class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
 
 
+class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only endpoint to save a club's own (non-OAuth) PayPal REST credentials.
+
+    Shown on the membership settings page only when the club has ``allow_non_oauth_paypal``
+    set (an admin-only flag). Editable by the same people who manage the club's money/settings.
+    """
+
+    http_method_names = ["post"]
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        # Credentials can only be entered when an admin has opted this club into non-OAuth PayPal.
+        if not self.club.allow_non_oauth_paypal:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        settings_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        form = ClubPayPalCredentialsForm(request.POST, instance=self.club)
+        if not form.is_valid():
+            for errors in form.errors.values():
+                for error in errors:
+                    messages.error(request, error)
+            return redirect(settings_url)
+        had_credentials = self.club.uses_own_paypal_credentials
+        form.save()
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action="Updated PayPal credentials" if had_credentials else "Added PayPal credentials",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, "PayPal credentials saved.")
+        return redirect(settings_url)
+
+
 class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     active_tab = "email_settings"
     template_name = "auctions/club_email_settings.html"
@@ -16578,7 +16914,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         if preview_member:
             preview_name = (preview_member.name or "").strip() or "Member"
             preview_member_link = preview_member.member_page_url
-            preview_barcode_url = preview_member.barcode_image_link if preview_member.membership_number_visible else ""
+            preview_barcode_url = preview_member.barcode_image_link if preview_member.club.show_member_barcode else ""
         else:
             full_name = user.get_full_name() if user.is_authenticated else ""
             preview_name = full_name.strip() or "Member"
@@ -16587,7 +16923,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_name"] = preview_name
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
-        context["membership_numbers_enabled"] = self.club.membership_number_mode != "disabled"
+        context["membership_numbers_enabled"] = self.club.show_member_barcode
 
         today = timezone.localdate()
         next_auction = (
@@ -16809,16 +17145,15 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             | Q(user=OuterRef("user"))
             | Q(email__iexact=OuterRef("auctiontos_seller__email"))
         )
+        qs = Lot.objects.filter(
+            auction__club=self.club,
+            is_deleted=False,
+            active=False,
+        )
+        if self.club.only_sold_lots:
+            qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return (
-            Lot.objects.filter(
-                auction__club=self.club,
-                is_deleted=False,
-                active=False,
-                auctiontos_winner__isnull=False,
-                winning_price__isnull=False,
-                i_bred_this_fish=True,
-            )
-            .filter(Exists(matching_member))
+            qs.filter(Exists(matching_member))
             .select_related("auctiontos_seller__user", "auction__club", "species_category")
             .prefetch_related("bap_award")
             .order_by("-date_end")
@@ -17350,12 +17685,15 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.utils import timezone
 
         today = timezone.now().date()
+        expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
+        if self.club.membership_annual_fee:
+            expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))
         qs = (
             ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
             .exclude(address="")
             .annotate(
                 is_expired=Case(
-                    When(membership_expiration_date__lt=today, then=Value(True)),
+                    *expired_whens,
                     default=Value(False),
                     output_field=BooleanField(),
                 )
@@ -17609,7 +17947,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return form, data["start_date"] or initial["start_date"], data["end_date"] or initial["end_date"]
 
     def _manual_category_choices(self):
-        excluded = {ClubMoney.CATEGORY_ADJUSTMENT}
+        # Auto categories are reconciled from invoices and the balance adjustment is created
+        # by the "balance books" tool, so neither may be entered by hand here.
+        excluded = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
         return [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in excluded]
 
     def _filtered_entries(self, start_date, end_date):
@@ -17619,28 +17959,74 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         total = queryset.filter(**filters).aggregate(total=Sum("amount"))["total"]
         return total or Decimal("0.00")
 
+    def _outstanding_invoices(self, start_date, end_date):
+        """Auction invoices from the period that still owe the club money.
+
+        An invoice is only outstanding when, after applying every recorded payment, the
+        member still owes the club (a negative balance). The previous implementation
+        looked at ``calculated_total`` alone — the invoice total *before* payments — so an
+        invoice that had been paid (in full or in part) but not yet flipped to ``PAID``
+        was reported as outstanding even though nothing was owed. Comparing the stored
+        total against recorded payments fixes that over-count.
+
+        Returns a dict with the number of such invoices and the total still owed.
+        """
+        from django.db.models import DecimalField
+        from django.db.models.functions import Coalesce
+
+        rows = (
+            Invoice.objects.filter(
+                auction__club=self.club,
+                auction__date_start__date__range=(start_date, end_date),
+                status__in=("DRAFT", "UNPAID"),
+                calculated_total__isnull=False,
+            )
+            .annotate(
+                paid=Coalesce(
+                    Sum("payments__amount"),
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values("pk", "calculated_total", "paid")
+        )
+        count = 0
+        amount_owed = Decimal("0.00")
+        for row in rows:
+            balance = Decimal(row["calculated_total"]) + (row["paid"] or Decimal("0.00"))
+            if balance < 0:
+                count += 1
+                amount_owed += -balance
+        return {"count": count, "amount": amount_owed}
+
     def _report_summary(self, entries, start_date, end_date):
-        revenue = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
-        expenses = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
-        auction_profit = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_PROFIT)
-        auction_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
+        # money_in / money_out are the raw cash flow for the period; everything else is a
+        # breakdown of where it came from. Each figure below is a sum over ledger entries,
+        # so they always reconcile to the running balance.
+        money_in = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
+        money_out = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
+        auction_sales = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SALE)
+        seller_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
+        outstanding = self._outstanding_invoices(start_date, end_date)
         return {
-            "gross": revenue - expenses,
-            "revenue": revenue,
-            "expenses": expenses,
+            "money_in": money_in,
+            "money_out": money_out,
+            "net": money_in - money_out,
             "membership_renewals": ClubMember.objects.filter(
                 club=self.club,
                 is_deleted=False,
                 membership_last_paid__range=(start_date, end_date),
             ).count(),
-            "auction_gross": auction_profit + auction_payouts,
-            "auction_payouts": auction_payouts,
-            "auction_profit": auction_profit,
-            "outstanding_invoices": Invoice.objects.filter(
-                auction__club=self.club,
-                auction__date_start__date__range=(start_date, end_date),
-                status__in=("DRAFT", "UNPAID"),
-            ).count(),
+            # Auction commission is sales minus payouts — the club's cut — never stored as
+            # its own ledger row, so the gross numbers keep matching the bank.
+            "auction_sales": auction_sales,
+            "seller_payouts": seller_payouts,
+            "auction_commission": auction_sales - seller_payouts,
+            "tax_collected": self._money_sum(entries, category=ClubMoney.CATEGORY_TAX),
+            "membership_dues": self._money_sum(entries, category=ClubMoney.CATEGORY_MEMBERSHIP),
+            "donations": self._money_sum(entries, category=ClubMoney.CATEGORY_DONATION),
+            "outstanding_invoices": outstanding["count"],
+            "outstanding_invoices_amount": outstanding["amount"],
         }
 
     def _club_currency_symbol(self):
@@ -17715,9 +18101,10 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        category_choices = [
-            choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] != ClubMoney.CATEGORY_ADJUSTMENT
-        ]
+        # Reject the invoice-reconciled categories and the balance adjustment: a hand-entered
+        # auto category would be undone the next time the owning invoice is reconciled.
+        blocked = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
+        category_choices = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in blocked]
         form = ClubMoneyForm(request.POST, category_choices=category_choices)
         if not form.is_valid():
             return JsonResponse({"ok": False, "errors": form.errors}, status=400)
@@ -17937,7 +18324,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         writer = csv.writer(response)
         # Omit the Membership Number column entirely when the club has the
         # feature disabled — user asked for "no UI" referencing those numbers.
-        include_membership_number = self.club.membership_number_mode != "disabled"
+        include_membership_number = self.club.show_member_barcode
         header = [
             "Name",
             "Email",
@@ -18790,7 +19177,8 @@ class DiscordInteractionsView(View):
 
         expiry = member.membership_expiration_date
         if not expiry:
-            lines.append("Status: No paid membership on record")
+            if club.membership_annual_fee:
+                lines.append("Status: ❌ Expired — please renew your membership")
         else:
             today = timezone.now().date()
             expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())

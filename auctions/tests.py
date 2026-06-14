@@ -5627,7 +5627,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
     These cover paths that previously lacked assertions on the ClubMoney that gets
     created, where the brittle behavior lives:
     - a membership renewal must book exactly ONE membership ClubMoney entry, never two
-      (auction invoices book it via Invoice.create_club_payment_history; club-only
+      (auction invoices book it via Invoice.sync_club_money; club-only
       invoices book it via _process_invoice_membership_renewal -- never both).
     - flipping an auction invoice PAID -> UNPAID -> PAID must not drift the club balance.
     - the self-service renewal invoice lookup must be idempotent (no invoice proliferation).
@@ -8896,7 +8896,7 @@ class LotsByUserViewTest(StandardTestCase):
 
         # Context should have the correct user
         self.assertEqual(response.context["user"], self.user)
-        self.assertEqual(response.context["view"], "user")
+        self.assertEqual(response.context["lot_view_type"], "user")
 
     def test_lots_by_user_with_invalid_user_parameter(self):
         """Test that the view handles non-existent username gracefully"""
@@ -16749,7 +16749,7 @@ class ClubSettingsViewTests(TestCase):
             {
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
-                "membership_number_mode": "disabled",
+                # show_member_barcode omitted → False (unchecked checkbox)
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -17170,8 +17170,14 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_sold_lot_no_bap_reason_not_sold(self):
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)
         self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_sold_lot_no_bap_reason_unsold_eligible_when_only_sold_lots_off(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertIsNone(lot.sold_lot_no_bap_reason)
 
     def test_auto_award_bap_points_awards_category_points(self):
         lot = self._make_lot()
@@ -18864,6 +18870,245 @@ class PaymentSellerClubLinkTests(TestCase):
         self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
 
 
+class NonOAuthPayPalTests(TestCase):
+    """Club-supplied (non-OAuth) PayPal credentials.
+
+    When an admin sets ``Club.allow_non_oauth_paypal``, the club enters its own PayPal REST
+    API client ID/secret and they're used exactly like the site's PAYPAL_CLIENT_ID/SECRET:
+    payments go straight to that PayPal account with no payee override or platform fee.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.member_user = User.objects.create_user(username="nonoauth_member", password="pw", email="m@example.com")
+        self.money_user = User.objects.create_user(username="nonoauth_money", password="pw", email="money@example.com")
+        self.club = Club.objects.create(
+            name="BYO PayPal Club",
+            enable_club_page=True,
+            enable_membership=True,
+            membership_annual_fee=Decimal("30.00"),
+            membership_system="rolling",
+        )
+        ClubMember.objects.create(club=self.club, user=self.member_user, name="M", email="m@example.com")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+
+    def _enable_credentials(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "club-client-id"
+        self.club.paypal_secret = "club-secret"
+        self.club.save()
+
+    def _make_club_invoice(self):
+        return Invoice.objects.create(club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True)
+
+    # -- model properties ------------------------------------------------------
+
+    def test_uses_own_credentials_requires_flag_and_both_values(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)  # flag still off
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertEqual(self.club.paypal_credentials, ("c", "s"))
+
+    def test_uses_own_credentials_false_when_value_missing(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = ""
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)
+        self.assertIsNone(self.club.paypal_credentials)
+
+    def test_can_accept_paypal_via_own_credentials(self):
+        self.assertFalse(self.club.can_accept_paypal)
+        self._enable_credentials()
+        self.assertTrue(self.club.can_accept_paypal)
+
+    # -- invoice credential resolution + buttons -------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_membership_invoice_button_without_site_keys(self):
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertTrue(invoice.show_payment_button)
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_no_button_when_flag_off(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"  # flag still off => credentials not active
+        self.club.save()
+        invoice = self._make_club_invoice()
+        self.assertIsNone(invoice.paypal_credentials)
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_auction_invoice_resolves_club_credentials_with_no_payee(self):
+        self._enable_credentials()
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        invoice = Invoice(auction=auction)
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        # No linked seller and not the site account => no payee merchant id, so the money
+        # goes straight to the club's own PayPal account (same as the site keys do).
+        self.assertIsNone(auction.paypal_information)
+
+    # -- mixin auth resolution -------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_paypal_auth_prefers_club_credentials(self):
+        from auctions.views import PayPalAPIMixin
+
+        mixin = PayPalAPIMixin()
+        self.assertEqual(mixin._paypal_auth(), ("site-id", "site-secret"))
+        mixin.club_paypal_credentials = ("club-client-id", "club-secret")
+        self.assertEqual(mixin._paypal_auth(), ("club-client-id", "club-secret"))
+
+    # -- credentials view ------------------------------------------------------
+
+    def test_credentials_view_requires_flag(self):
+        self.client.login(username="nonoauth_money", password="pw")  # has permission_money
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_requires_permission(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_member", password="pw")  # no money permission
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_saves(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "abc", "paypal_secret": "shh"})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "abc")
+        self.assertEqual(self.club.paypal_secret, "shh")
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+    def test_credentials_view_blank_secret_keeps_existing(self):
+        self._enable_credentials()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "new-client", "paypal_secret": ""})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "new-client")
+        self.assertEqual(self.club.paypal_secret, "club-secret")  # secret unchanged
+
+    # -- settings page UI ------------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_hides_oauth_shows_credentials_form(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertNotIn("Connect a PayPal account for this club", content)
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_shows_oauth_when_flag_off(self):
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertIn("Connect a PayPal account for this club", content)
+
+    # -- refunds (forced manual for non-OAuth clubs) ---------------------------
+
+    def test_refund_invoice_refuses_for_non_oauth_club(self):
+        from auctions.views import PayPalAPIMixin
+
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        mixin = PayPalAPIMixin()
+        # Returns a manual-refund message and never touches the PayPal API (no webhook
+        # means an automated refund would go unrecorded).
+        result = mixin.refund_invoice(invoice, Decimal("5.00"))
+        self.assertIn("manually", result.lower())
+
+    # -- in-person quick checkout (PayPal QR disabled for non-OAuth) -----------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_quick_checkout_suppresses_paypal_qr_for_non_oauth_club(self):
+        self._enable_credentials()
+        admin = User.objects.create_user(username="nonoauth_admin", password="pw", email="a@example.com")
+        ClubMember.objects.create(club=self.club, user=admin, permission_admin=True)
+        auction = Auction.objects.create(
+            created_by=admin,
+            club=self.club,
+            title="In-person BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        seller_tos = AuctionTOS.objects.create(
+            user=admin, auction=auction, pickup_location=location, bidder_number="100", is_admin=True
+        )
+        buyer_tos = AuctionTOS.objects.create(
+            user=self.member_user, auction=auction, pickup_location=location, bidder_number="777"
+        )
+        Lot.objects.create(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            auctiontos_winner=buyer_tos,
+            winning_price=10,
+            quantity=1,
+            active=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer_tos)
+        # The button itself is available and the club's own credentials resolve -- so the QR is
+        # suppressed by the non-OAuth gate, not because PayPal is unavailable.
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertIsNotNone(invoice.paypal_credentials)
+
+        self.client.force_login(admin)
+        url = reverse("auction_quick_checkout_htmx", kwargs={"slug": auction.slug, "filter": "777"})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn("Scan this code to pay with PayPal", content)
+
+    # -- PayPal bulk-invoice CSV export disabled when PayPal payments are live --
+
+    def test_paypal_payments_enabled_for_non_oauth_club_auction(self):
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="CSV Gate Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            enable_online_payments=False,  # club config supersedes this for club auctions
+        )
+        # Off by default => the per-auction flag (False) decides, so the CSV export stays available.
+        self.assertFalse(auction.paypal_payments_enabled)
+        # Turning on non-OAuth PayPal means buyers can pay directly => hide the manual CSV export.
+        self._enable_credentials()
+        auction.refresh_from_db()
+        self.assertTrue(auction.paypal_payments_enabled)
+
+
 class ClubMoneyInvoiceHistoryTests(StandardTestCase):
     def setUp(self):
         super().setUp()
@@ -18874,50 +19119,448 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
         self.online_auction.save(update_fields=["club"])
         ClubMoney.objects.all().delete()
 
-    def test_marking_invoice_paid_creates_finance_entries(self):
-        self.invoice.create_club_payment_history(force_current_state=True)
+    def test_marking_seller_invoice_paid_books_payout_not_receivables(self):
+        # self.invoice's user sold lots, so paying it books a seller payout. The old
+        # receivable/profit categories are gone (commission is computed, not stored).
         self.invoice.status = "PAID"
         self.invoice.save(update_fields=["status"])
         categories = set(ClubMoney.objects.filter(invoice=self.invoice).values_list("category", flat=True))
-        self.assertIn(ClubMoney.CATEGORY_UNPAID_INVOICES, categories)
-        self.assertIn(ClubMoney.CATEGORY_AUCTION_PROFIT, categories)
         self.assertIn(ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT, categories)
+        self.assertNotIn("unpaid_invoices", categories)
+        self.assertNotIn("auction_profit", categories)
 
-    def test_reopening_paid_invoice_creates_offsetting_entries(self):
-        self.invoice.create_club_payment_history(force_current_state=True)
+    def test_paid_unpaid_paid_nets_to_zero(self):
         self.invoice.status = "PAID"
         self.invoice.save(update_fields=["status"])
         self.invoice.status = "DRAFT"
         self.invoice.save(update_fields=["status"])
-        profit_total = sum(
-            ClubMoney.objects.filter(invoice=self.invoice, category=ClubMoney.CATEGORY_AUCTION_PROFIT).values_list(
-                "amount", flat=True
-            ),
-            Decimal("0.00"),
-        )
-        self.assertEqual(profit_total, Decimal("0.00"))
+        total = sum(ClubMoney.objects.filter(invoice=self.invoice).values_list("amount", flat=True), Decimal("0.00"))
+        self.assertEqual(total, Decimal("0.00"))
 
-    def test_paid_invoice_logs_membership_and_adjustments(self):
+    def test_paid_buyer_invoice_books_sale_tax_and_membership(self):
         self.invoiceB.renewal_needed = True
         self.invoiceB.save(update_fields=["renewal_needed"])
-        self.invoiceB.create_club_payment_history(force_current_state=True)
         self.invoiceB.status = "PAID"
         self.invoiceB.save(update_fields=["status"])
         categories = set(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("category", flat=True))
+        # tosB bought lots in a 25%-tax auction and needs to renew.
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_SALE, categories)
+        self.assertIn(ClubMoney.CATEGORY_TAX, categories)
         self.assertIn(ClubMoney.CATEGORY_MEMBERSHIP, categories)
-        self.assertIn(ClubMoney.CATEGORY_DONATION, categories)
-        self.assertIn(ClubMoney.CATEGORY_REFUNDS, categories)
 
-    def test_setting_auction_club_backfills_existing_invoice_history(self):
+    def test_setting_auction_club_backfills_paid_invoice_history(self):
         invoice = Invoice.objects.get_or_create(auctiontos_user=self.admin_in_person_tos)[0]
         self.in_person_lot.winning_price = Decimal("20.00")
         self.in_person_lot.auctiontos_winner = self.in_person_buyer
         self.in_person_lot.active = False
         self.in_person_lot.save(update_fields=["winning_price", "auctiontos_winner", "active"])
+        invoice.status = "PAID"
+        invoice.save(update_fields=["status"])
         ClubMoney.objects.all().delete()
         self.in_person_auction.club = self.club
         self.in_person_auction.save(update_fields=["club"])
         self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
+
+
+class ClubMoneyLedgerCashBasisTests(TestCase):
+    """The cash-basis club ledger booked from invoices (Invoice.sync_club_money).
+
+    A PAID invoice books one entry per component (buyer payment, seller payout, tax,
+    membership, adjustment, first-bid payout, rounding); they sum to the cash that moves
+    and the club's auction commission is sales minus payouts. Booking is reversible.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("ledger_creator", "lc@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Ledger Cash Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self._n = 0
+
+    def _auction(self, tax=0, rounding=False, club_pct=20):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Ledger Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            tax=tax,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            invoice_rounding=rounding,
+        )
+        PickupLocation.objects.create(name="Ledger Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+
+    def _paid_invoice(self, tos):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=tos)[0]
+        invoice.status = "PAID"
+        invoice.save()
+        return invoice
+
+    def _by_category(self, invoice):
+        result = {}
+        for entry in ClubMoney.objects.filter(invoice=invoice):
+            result[entry.category] = result.get(entry.category, Decimal("0.00")) + entry.amount
+        return result
+
+    def _ledger_total(self, **filters):
+        return sum((entry.amount for entry in ClubMoney.objects.filter(**filters)), Decimal("0.00"))
+
+    def test_sale_and_payout_are_separate_and_imply_commission(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        seller_invoice = self._paid_invoice(seller)
+        buyer_invoice = self._paid_invoice(buyer)
+
+        self.assertEqual(self._by_category(seller_invoice)[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-80.00"))
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        # Commission (club cut) = sales - payouts = 100 - 80 = 20, which is the club's balance.
+        self.assertEqual(self._ledger_total(club=self.club), Decimal("20.00"))
+
+    def test_tax_is_broken_out(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        entries = self._by_category(buyer_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_TAX], Decimal("10.00"))
+
+    def test_adjustment_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        InvoiceAdjustment.objects.create(invoice=buyer_invoice, adjustment_type="ADD", amount=5, notes="late fee")
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("5.00"))
+
+    def test_membership_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.renewal_needed = True
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+
+    def test_rounding_is_broken_out(self):
+        # club_pct=15 on a $10 lot -> seller cut 8.50; rounding (in the seller's favor) pays 9.
+        auction = self._auction(club_pct=15, rounding=True)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        seller_invoice = self._paid_invoice(seller)
+        entries = self._by_category(seller_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-8.50"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_ROUNDING], Decimal("-0.50"))
+        # The entries still sum to the cash that actually changed hands (a whole 9 dollars out).
+        self.assertEqual(self._ledger_total(invoice=seller_invoice), Decimal("-9.00"))
+
+    def test_entries_sum_to_rounded_invoice_total(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        buyer_invoice.refresh_from_db()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), -Decimal(buyer_invoice.rounded_net))
+
+    def test_unpaid_to_paid_changes_balance_by_invoice_total(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        before = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        after = self._ledger_total(invoice=buyer_invoice)
+        self.assertEqual(before, Decimal("0.00"))
+        self.assertEqual(after, Decimal("100.00"))  # the buyer paid the club 100
+
+    def test_paid_unpaid_paid_is_neutral(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        first = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "UNPAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), Decimal("0.00"))
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), first)
+
+    def test_report_commission_is_sales_minus_payouts(self):
+        from .views import ClubTreasurerReportView
+
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._paid_invoice(seller)
+        self._paid_invoice(buyer)
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        entries = ClubMoney.objects.filter(club=self.club)
+        summary = view._report_summary(entries, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        self.assertEqual(summary["auction_sales"], Decimal("100.00"))
+        self.assertEqual(summary["seller_payouts"], Decimal("80.00"))
+        self.assertEqual(summary["auction_commission"], Decimal("20.00"))
+
+    def test_legacy_category_rows_are_not_perpetuated(self):
+        # A database carried over from the old ledger may hold rows in retired categories.
+        # Reconciling an invoice must not write new rows in those dead categories.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        ClubMoney.objects.create(
+            club=self.club,
+            invoice=buyer_invoice,
+            date=datetime.date(2026, 3, 15),
+            amount=Decimal("20.00"),
+            category="auction_profit",  # retired category
+        )
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # The seeded legacy row is left as-is (count stays 1) and current categories are booked.
+        self.assertEqual(ClubMoney.objects.filter(invoice=buyer_invoice, category="auction_profit").count(), 1)
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+
+class MakeClubAdminAssignsAuctionsTests(TestCase):
+    """The superuser "make {creator} admin of {club}" button assigns the creator's clubless
+    auctions to their club and books the club ledger for them, but never reassigns auctions
+    that already belong to a club."""
+
+    def setUp(self):
+        self.creator = User.objects.create_superuser("mca_creator", "mca@example.com", "pw")
+        self.club = Club.objects.create(name="MCA Club")
+        self.creator.userdata.club = self.club
+        self.creator.userdata.save()
+        self.other_club = Club.objects.create(name="MCA Other Club")
+
+    def _auction(self, club=None, title="MCA Auction"):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title=title,
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=club,
+            winning_bid_percent_to_club=20,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+        )
+        PickupLocation.objects.create(name="MCA Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _make_club_admin(self, auction):
+        client = Client()
+        client.force_login(self.creator)
+        return client.get(reverse("auction_main", kwargs={"slug": auction.slug}) + "?make_club_admin=true")
+
+    def test_assigns_clubless_auction_and_books_ledger(self):
+        auction = self._auction(club=None)
+        pickup = PickupLocation.objects.filter(auction=auction).first()
+        seller = AuctionTOS.objects.create(name="Seller", auction=auction, pickup_location=pickup)
+        buyer = AuctionTOS.objects.create(name="Buyer", auction=auction, pickup_location=pickup)
+        Lot.objects.create(
+            lot_name="L",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(100),
+            active=False,
+            quantity=1,
+        )
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # No club yet, so nothing is in the ledger.
+        self.assertFalse(ClubMoney.objects.filter(invoice=buyer_invoice).exists())
+
+        response = self._make_club_admin(auction)
+        self.assertEqual(response.status_code, 200)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.club)
+        # The bulk assignment bypassed Auction.save(), but the ledger is still booked.
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+    def test_does_not_reassign_auction_already_in_a_club(self):
+        auction = self._auction(club=self.other_club)
+        self._make_club_admin(auction)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.other_club)
+
+
+class BapTop10ChartTests(TestCase):
+    """Cumulative points-over-time chart for the top 10 club members.
+
+    Green = current user, red = current first place, blue = everyone else; the chart
+    mirrors the data behind the "my points" chart but for the leaderboard's top 10,
+    and respects the year-to-date toggle.
+    """
+
+    GREEN = "#198754"
+    RED = "#dc3545"
+    BLUE = "#0d6efd"
+
+    def setUp(self):
+        from .views import _club_top10_chart_data, _last_n_month_starts, _ytd_month_starts
+
+        self._chart = _club_top10_chart_data
+        self._all_months = _last_n_month_starts(60)
+        self._ytd_months = _ytd_month_starts()
+        self.club = Club.objects.create(
+            name="Chart Club", slug="chartclub", enable_breeder_award_program=True, enable_club_page=True
+        )
+        self.this_year = timezone.now().year
+        # Three members so we can see all three colors at once.
+        self.first = self._member("First Place", user_name="firstplace")
+        self.current = self._member("Current User", user_name="currentuser")
+        self.third = self._member("Third Member", user_name="thirdmember")
+        # First place: most points. Current user: middle. Third: least.
+        self._award(self.first, points=30, month_offset=2)
+        self._award(self.first, points=20, month_offset=1)
+        self._award(self.current, points=15, month_offset=2)
+        self._award(self.current, points=10, month_offset=0)
+        self._award(self.third, points=5, month_offset=1)
+
+    def _member(self, name, user_name):
+        user = User.objects.create_user(user_name, f"{user_name}@example.com", "pw")
+        return ClubMember.objects.create(club=self.club, user=user, name=name)
+
+    def _award(self, member, points, month_offset=0, year=None, lot=None):
+        today = timezone.now().date().replace(day=1)
+        month = today.month - month_offset
+        year = year or self.this_year
+        while month <= 0:
+            month += 12
+            year -= 1
+        return BapAward.objects.create(club_member=member, date=datetime.date(year, month, 1), points=points, lot=lot)
+
+    def _chart_data(self, current_member=None, is_ytd=False):
+        months = self._ytd_months if is_ytd else self._all_months
+        return self._chart(self.club, "bap_points", "points", current_member, months, is_ytd=is_ytd)
+
+    def test_color_scheme(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.RED)
+        self.assertEqual(by_label["Current User"]["borderColor"], self.GREEN)
+        self.assertEqual(by_label["Third Member"]["borderColor"], self.BLUE)
+
+    def test_current_user_wins_when_also_first_place(self):
+        # If the viewer is the leader, the current-user color (green) takes precedence.
+        data = self._chart_data(current_member=self.first)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.GREEN)
+
+    def test_first_place_dataset_is_ordered_first(self):
+        data = self._chart_data()
+        self.assertEqual(data["datasets"][0]["label"], "First Place")
+
+    def test_cumulative_running_totals(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # First place ends at 30 + 20 = 50, monotonic non-decreasing.
+        first_series = by_label["First Place"]["data"]
+        self.assertEqual(first_series[-1], 50)
+        self.assertEqual(first_series, sorted(first_series))
+
+    def test_limited_to_ten_members(self):
+        for i in range(12):
+            m = self._member(f"Filler {i}", user_name=f"filler{i}")
+            self._award(m, points=1, month_offset=1)
+        data = self._chart_data()
+        self.assertEqual(len(data["datasets"]), 10)
+
+    def test_returns_none_without_points(self):
+        empty = Club.objects.create(name="Empty", slug="emptyclub", enable_breeder_award_program=True)
+        self.assertIsNone(self._chart(empty, "bap_points", "points", None, self._all_months, is_ytd=False))
+
+    def test_ytd_excludes_prior_years(self):
+        # An award from a prior year must not appear in the YTD running total.
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current, is_ytd=True)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # YTD total for current user is 15 + 10 = 25, not 125.
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_all_time_includes_prior_years(self):
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        data = self._chart_data(current_member=self.current, is_ytd=False)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], 125)
+
+    def test_deleted_lot_award_excluded_to_match_leaderboard(self):
+        # Awards tied to a deleted lot are dropped from the leaderboard totals, so the
+        # chart must drop them too (otherwise the line ends above the leaderboard number).
+        auction = Auction.objects.create(
+            created_by=self.current.user,
+            title="Chart Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            club=self.club,
+        )
+        lot = Lot.objects.create(lot_name="Deleted lot", auction=auction, quantity=1, is_deleted=True)
+        self._award(self.current, points=99, month_offset=0, lot=lot)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], self.current.bap_points)
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_hap_and_cap_use_their_own_fields(self):
+        BapAward.objects.create(
+            club_member=self.first, date=timezone.now().date().replace(day=1), hap_points=7, cap_points=3
+        )
+        self.first.refresh_from_db()
+        hap = self._chart(self.club, "hap_points", "hap_points", None, self._all_months)
+        cap = self._chart(self.club, "culture_points", "cap_points", None, self._all_months)
+        self.assertEqual(hap["datasets"][0]["data"][-1], 7)
+        self.assertEqual(cap["datasets"][0]["data"][-1], 3)
+
+    def test_chart_markup_renders_in_bap_tab(self):
+        client = Client()
+        client.force_login(self.current.user)
+        response = client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "bap"}))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        # Both the canvas and its json_script payload must be present for the chart to draw.
+        self.assertIn('id="bap-top10-chart-ytd"', html)
+        self.assertIn('id="bap-top10-chart-ytd-data"', html)
+        self.assertIsNotNone(response.context.get("bap_top10_chart_ytd"))
 
 
 class ClubTreasurerReportViewTests(TestCase):
@@ -19000,6 +19643,143 @@ class ClubTreasurerReportViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertTrue(ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_ADJUSTMENT).exists())
+
+
+class ClubTreasurerOutstandingInvoiceTests(TestCase):
+    """The treasurer report's "outstanding invoices" figure.
+
+    An invoice is outstanding only when, after payments, the member still owes the club.
+    Regression guard for invoices being reported as outstanding when they had actually
+    been paid (the old code looked at the invoice total before payments).
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="oi_owner", password="pw", email="oi_owner@example.com")
+        self.money_user = User.objects.create_user(username="oi_money", password="pw", email="oi_money@example.com")
+        self.club = Club.objects.create(name="Outstanding Club")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Outstanding Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 5, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 5, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        self.pickup = PickupLocation.objects.create(name="OI Pickup", auction=self.auction, pickup_time=timezone.now())
+        self.start = datetime.date(2026, 5, 1)
+        self.end = datetime.date(2026, 5, 31)
+        self._tos_count = 0
+
+    def _invoice(self, calculated_total, status="UNPAID", payment=None, auction=None):
+        auction = auction or self.auction
+        self._tos_count += 1
+        tos = AuctionTOS.objects.create(
+            name=f"Member {self._tos_count}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+        invoice = Invoice.objects.create(auctiontos_user=tos, status=status)
+        Invoice.objects.filter(pk=invoice.pk).update(calculated_total=calculated_total)
+        if payment is not None:
+            InvoicePayment.objects.create(invoice=invoice, amount=Decimal(str(payment)))
+        return invoice
+
+    def _summary(self):
+        from .views import ClubTreasurerReportView
+
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        return view._outstanding_invoices(self.start, self.end)
+
+    def test_unpaid_invoice_with_balance_is_outstanding(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("50.00"))
+
+    def test_fully_paid_invoice_is_not_outstanding(self):
+        # Paid in full but still UNPAID (admin hasn't flipped status) — must NOT be counted.
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)
+        result = self._summary()
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["amount"], Decimal("0.00"))
+
+    def test_partial_payment_counts_only_remaining_balance(self):
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("6.00"))
+
+    def test_paid_status_invoice_is_not_outstanding(self):
+        self._invoice(calculated_total=-25, status="PAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_seller_invoice_owed_by_club_is_not_outstanding(self):
+        # Positive total == the club owes the seller; that is a payout, not an outstanding receivable.
+        self._invoice(calculated_total=40, status="UNPAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_counts_and_amounts_aggregate(self):
+        self._invoice(calculated_total=-50, status="UNPAID")  # owes 50
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)  # settled
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)  # owes 6
+        self._invoice(calculated_total=40, status="UNPAID")  # club owes seller
+        self._invoice(calculated_total=-20, status="PAID")  # paid
+        result = self._summary()
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["amount"], Decimal("56.00"))
+
+    def test_auction_outside_date_range_is_excluded(self):
+        other = Auction.objects.create(
+            created_by=self.owner,
+            title="Old Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 1, 10, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 1, 11, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Old Pickup", auction=other, pickup_time=timezone.now())
+        self._invoice(calculated_total=-99, status="UNPAID", auction=other)
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_report_page_shows_outstanding_amount(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["outstanding_invoices"], 1)
+        self.assertEqual(summary["outstanding_invoices_amount"], Decimal("50.00"))
+        self.assertContains(response, "still owed to the club")
+
+    def test_summary_reports_money_in_out_and_net(self):
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 10),
+            amount=Decimal("100.00"),
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 11),
+            amount=Decimal("-40.00"),
+            category=ClubMoney.CATEGORY_SPEAKER_COSTS,
+        )
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["money_in"], Decimal("100.00"))
+        self.assertEqual(summary["money_out"], Decimal("40.00"))
+        self.assertEqual(summary["net"], Decimal("60.00"))
 
 
 class DiscordJoinModalNameTests(TestCase):
@@ -19464,7 +20244,7 @@ class AppleWalletPassTests(TestCase):
 
 
 class MembershipNumberModeTests(TestCase):
-    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+    """Visibility gating + revocation triggers for Club.show_member_barcode."""
 
     def setUp(self):
         import datetime as _dt
@@ -19489,34 +20269,25 @@ class MembershipNumberModeTests(TestCase):
         self.assertTrue(self.paid.is_paid_member)
         self.assertFalse(self.unpaid.is_paid_member)
 
-    def test_visibility_all_members(self):
-        self.club.membership_number_mode = "all_members"
+    def test_visibility_enabled(self):
+        self.club.show_member_barcode = True
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertTrue(self.unpaid.membership_number_visible)
-
-    def test_visibility_paid_only(self):
-        self.club.membership_number_mode = "paid_only"
-        self.club.save()
-        self.paid.refresh_from_db()
-        self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertTrue(self.paid.club.show_member_barcode)
+        self.assertTrue(self.unpaid.club.show_member_barcode)
 
     def test_visibility_disabled(self):
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertFalse(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertFalse(self.paid.club.show_member_barcode)
+        self.assertFalse(self.unpaid.club.show_member_barcode)
 
-    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_pkpass_404_when_barcode_disabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
-        # Unpaid user logged in as themselves → 404 (number isn't visible).
         unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
         self.unpaid.user = unpaid_user
         self.unpaid.save()
@@ -19532,48 +20303,39 @@ class MembershipNumberModeTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
 
-    def test_google_wallet_url_empty_when_number_hidden(self):
+    def test_google_wallet_url_empty_when_barcode_disabled(self):
         from .templatetags.membership_tags import google_wallet_save_url
 
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
-        # Should bail out before ever touching settings/JWT.
         self.assertEqual(google_wallet_save_url(self.paid), "")
 
     def test_admin_membership_number_view_404_when_disabled(self):
         from .models import ClubMember
 
-        # Give the user admin permissions on the club so the perm check passes.
         admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
         ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.client.force_login(admin)
         url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
-    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+    def test_signal_revokes_all_passes_when_barcode_disabled(self):
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "disabled"
+                self.club.show_member_barcode = False
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
-        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "paid_only"
-                self.club.save()
-            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
-
-    def test_signal_no_revoke_when_loosening_to_all_members(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_signal_no_revoke_when_barcode_enabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "all_members"
+                self.club.show_member_barcode = True
                 self.club.save()
             delay.assert_not_called()
 

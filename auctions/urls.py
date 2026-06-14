@@ -684,6 +684,7 @@ urlpatterns = [
         name="club_member_nocomm",
     ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
+    path("clubs/<slug:slug>/setup/", views.ClubSetupView.as_view(), name="club_setup"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
         "clubs/<slug:slug>/membership-settings/",
@@ -694,6 +695,11 @@ urlpatterns = [
         "clubs/<slug:slug>/link-payment/",
         views.ClubLinkPaymentAccountView.as_view(),
         name="club_link_payment_account",
+    ),
+    path(
+        "clubs/<slug:slug>/paypal-credentials/",
+        views.ClubPayPalCredentialsView.as_view(),
+        name="club_paypal_credentials",
     ),
     path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),

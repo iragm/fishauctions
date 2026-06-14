@@ -9,7 +9,7 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact or show_club_map %}
+{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if member %}
   <button type="button" class="btn btn-sm btn-success" data-club-panel-toggle="membership-panel">
@@ -33,11 +33,6 @@
   {% if has_club_contact and request.user.is_authenticated %}
   <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
-  {% if show_club_map %}
-  <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="map-panel">
-    <i class="bi bi-map"></i> Map
-  </button>
-  {% endif %}
 </div>
 {% endif %}
 
@@ -58,14 +53,6 @@
   </div>
 {% elif not club.allow_joining %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
-{% endif %}
-
-{% if show_club_map %}
-<div class="card mb-3 d-none" id="map-panel">
-  <div class="card-body">
-    <div id="club-map-canvas" style="width:100%; height:350px;"></div>
-  </div>
-</div>
 {% endif %}
 
 {% if show_bap_tabs %}
@@ -106,9 +93,21 @@
           <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
           <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
         </span>
+        <span class="d-flex align-items-center gap-2">
         {% if can_manage_auctions and not auction.promote_this_auction %}
-        <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+        <span class="badge bg-secondary rounded-pill">Not promoted</span>
         {% endif %}
+        {% if auction.pk == current_auction_id %}
+        <span class="badge bg-success rounded-pill">Current</span>
+        {% elif can_manage_auctions and auction.date_start > now %}
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="make_current">
+          <input type="hidden" name="auction" value="{{ auction.pk }}">
+          <button type="submit" class="btn btn-sm btn-outline-secondary text-light py-0">Make current</button>
+        </form>
+        {% endif %}
+        </span>
       </li>
       {% endfor %}
     </ul>
@@ -124,9 +123,19 @@
       <label class="form-check-label" for="ytd-toggle">Year to date only</label>
     </div>
     <div id="bap-ytd">
+      {% if bap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="bap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart_ytd|json_script:"bap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard_ytd points_attr="bap_points_ytd" %}
     </div>
     <div id="bap-alltime" style="display:none">
+      {% if bap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="bap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart|json_script:"bap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard points_attr="bap_points" %}
     </div>
   </div>
@@ -139,9 +148,19 @@
       <label class="form-check-label" for="ytd-toggle-hap">Year to date only</label>
     </div>
     <div id="hap-ytd">
+      {% if hap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="hap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart_ytd|json_script:"hap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard_ytd points_attr="hap_points_ytd" %}
     </div>
     <div id="hap-alltime" style="display:none">
+      {% if hap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="hap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart|json_script:"hap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard points_attr="hap_points" %}
     </div>
   </div>
@@ -155,9 +174,19 @@
       <label class="form-check-label" for="ytd-toggle-culture">Year to date only</label>
     </div>
     <div id="culture-ytd">
+      {% if cap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="cap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart_ytd|json_script:"cap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard_ytd points_attr="culture_points_ytd" %}
     </div>
     <div id="culture-alltime" style="display:none">
+      {% if cap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="cap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart|json_script:"cap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
     </div>
   </div>
@@ -228,9 +257,21 @@
       <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
       <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
     </span>
+    <span class="d-flex align-items-center gap-2">
     {% if can_manage_auctions and not auction.promote_this_auction %}
-    <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+    <span class="badge bg-secondary rounded-pill">Not promoted</span>
     {% endif %}
+    {% if auction.pk == current_auction_id %}
+    <span class="badge bg-success rounded-pill">Current</span>
+    {% elif can_manage_auctions and auction.date_start > now %}
+    <form method="post" class="d-inline">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="make_current">
+      <input type="hidden" name="auction" value="{{ auction.pk }}">
+      <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+    </form>
+    {% endif %}
+    </span>
   </li>
   {% endfor %}
 </ul>
@@ -242,39 +283,33 @@
 {% endblock %}
 
 {% block extra_js %}
-{% if show_club_map %}
-<script
-src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initClubMap&v=weekly&libraries=marker"
-async
-></script>
-{% endif %}
 {% if show_bap_tabs %}
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
 (function () {
-  function wireToggle(toggleId, ytdId, alltimeId) {
-    const toggle = document.getElementById(toggleId);
-    if (!toggle) return;
-    toggle.addEventListener('change', function () {
-      document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
-      document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
-    });
-  }
-  wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
-  wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
-  wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+  var chartIds = [
+    'my-points-chart',
+    'bap-top10-chart-ytd', 'bap-top10-chart',
+    'hap-top10-chart-ytd', 'hap-top10-chart',
+    'cap-top10-chart-ytd', 'cap-top10-chart',
+  ];
 
-  var chartDataElement = document.getElementById('my-points-chart-data');
-  var chartCanvas = document.getElementById('my-points-chart');
-  if (chartDataElement && chartCanvas && typeof Chart !== 'undefined') {
-    var ctx = chartCanvas.getContext('2d');
-    var chartData = JSON.parse(chartDataElement.textContent);
-    new Chart(ctx, {
+  // Chart.js v2 cannot size a canvas that lives inside a display:none ancestor —
+  // an inactive tab pane, or the hidden side of the YTD/all-time toggle. Building a
+  // chart there yields a 0x0, permanently-blank canvas (the markup is present but
+  // nothing is drawn). So build each chart lazily, the first time its canvas is
+  // actually on-screen, and (re)build on tab show / toggle change.
+  function buildChart(canvas) {
+    var dataEl = document.getElementById(canvas.id + '-data');
+    if (!dataEl || typeof Chart === 'undefined') return;
+    canvas.dataset.chartReady = '1';
+    new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: chartData,
+      data: JSON.parse(dataEl.textContent),
       options: {
         responsive: true,
         maintainAspectRatio: true,
+        legend: { position: 'bottom', labels: { boxWidth: 12 } },
         scales: {
           xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 } }],
           yAxes: [{ ticks: { beginAtZero: true } }],
@@ -282,6 +317,36 @@ async
       },
     });
   }
+
+  function renderVisibleCharts() {
+    chartIds.forEach(function (id) {
+      var canvas = document.getElementById(id);
+      // offsetParent is null while the canvas (or an ancestor) is display:none.
+      if (canvas && !canvas.dataset.chartReady && canvas.offsetParent !== null) {
+        buildChart(canvas);
+      }
+    });
+  }
+
+  function wireToggle(toggleId, ytdId, alltimeId) {
+    const toggle = document.getElementById(toggleId);
+    if (!toggle) return;
+    toggle.addEventListener('change', function () {
+      document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
+      document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
+      renderVisibleCharts();
+    });
+  }
+  wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
+  wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
+  wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+
+  // Render charts visible on first paint (the active tab), then again whenever a
+  // tab becomes visible.
+  renderVisibleCharts();
+  document.querySelectorAll('#clubTabs button[data-bs-toggle="tab"]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', renderVisibleCharts);
+  });
 })();
 </script>
 {% endif %}
@@ -305,29 +370,6 @@ async
     });
   }
 
-  function maybeInitClubMap() {
-    if (window._clubMapRendered || !window._clubMapApiReady) return;
-    var mapCanvas = document.getElementById('club-map-canvas');
-    if (!mapCanvas || mapCanvas.closest('.d-none')) return;
-    var center = {
-      lat: Number('{{ club.latitude|default:"0"|escapejs }}'),
-      lng: Number('{{ club.longitude|default:"0"|escapejs }}')
-    };
-    var map = new google.maps.Map(mapCanvas, {center: center, zoom: 9, mapId: 'club_detail_map'});
-    var marker = new google.maps.marker.AdvancedMarkerElement({
-      position: center,
-      map: map,
-      title: '{{ club.name|escapejs }}',
-    });
-    var infoWindow = new google.maps.InfoWindow({
-      content: '<div style="color:black;"><strong>{{ club.name|escapejs }}</strong><br><a href="{{ club_map_directions_url|escapejs }}" target="_blank" rel="noopener noreferrer">Get directions</a></div>',
-    });
-    marker.addListener('click', function () {
-      infoWindow.open(map, marker);
-    });
-    window._clubMapRendered = true;
-  }
-
   panelToggleButtons.forEach(function (button) {
     button.addEventListener('click', function () {
       var panel = document.getElementById(this.getAttribute('data-club-panel-toggle'));
@@ -335,16 +377,8 @@ async
       var shouldHide = !panel.classList.contains('d-none');
       hidePanels(panel.id);
       panel.classList.toggle('d-none', shouldHide);
-      if (!shouldHide && panel.id === 'map-panel') {
-        maybeInitClubMap();
-      }
     });
   });
-
-  window.initClubMap = function () {
-    window._clubMapApiReady = true;
-    maybeInitClubMap();
-  };
 
   document.querySelectorAll('#clubTabs [data-tab-url]').forEach(function (btn) {
     btn.addEventListener('shown.bs.tab', function () {

@@ -649,19 +649,12 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    MEMBERSHIP_NUMBER_MODE_CHOICES = (
-        ("disabled", "No member numbers"),
-        ("paid_only", "Paid members only"),
-        ("all_members", "All members"),
-    )
-    membership_number_mode = models.CharField(
-        max_length=20,
-        choices=MEMBERSHIP_NUMBER_MODE_CHOICES,
-        default="all_members",
-        verbose_name="Member number",
+    show_member_barcode = models.BooleanField(
+        default=True,
+        verbose_name="Show member barcodes",
         help_text=(
-            "10 digit automatically generated number that can be scanned with a "
-            "barcode reader, QR code, and added to Google Wallet."
+            "When checked, members receive a 10-digit barcode that can be scanned "
+            "at auctions, added to Google/Apple Wallet, and included in emails."
         ),
     )
     use_site_paypal_account = models.BooleanField(
@@ -671,6 +664,34 @@ class Club(models.Model):
             "When checked, PayPal payments for this club use the site's own merchant account "
             "(PAYPAL_CLIENT_ID / PAYPAL_SECRET from settings) instead of any linked PayPalSeller. "
             "Only useful for site admins; Square has no platform-account equivalent."
+        ),
+    )
+    allow_non_oauth_paypal = models.BooleanField(
+        default=False,
+        verbose_name="Allow non-OAuth PayPal (admin only)",
+        help_text=(
+            "When checked, this club skips PayPal OAuth and instead enters its own PayPal REST API "
+            "client ID and secret on the membership settings page. Those credentials are used for the "
+            "club's auctions and membership payments exactly the way the site's PAYPAL_CLIENT_ID / "
+            "PAYPAL_SECRET are: payments go straight to that PayPal account with no platform fee. "
+            "Set this here in the Django admin only."
+        ),
+    )
+    paypal_client_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="PayPal client ID",
+        help_text="REST API client ID from this club's own PayPal app. Only used when non-OAuth PayPal is allowed.",
+    )
+    paypal_secret = EncryptedCharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="PayPal secret",
+        help_text=(
+            "REST API secret from this club's own PayPal app (stored encrypted). "
+            "Only used when non-OAuth PayPal is allowed."
         ),
     )
     auction_email_member = models.ForeignKey(
@@ -745,6 +766,14 @@ class Club(models.Model):
         help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",
     )
     allow_joining = models.BooleanField(default=False)
+    current_auction = models.ForeignKey(
+        "Auction",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The auction whose admin links are surfaced in the club sidebar.",
+    )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
         default=False,
@@ -797,6 +826,23 @@ class Club(models.Model):
     only_donation_lots = models.BooleanField(
         default=False,
         help_text="Require all BAP lots to be a donation.",
+    )
+    only_sold_lots = models.BooleanField(
+        default=False,
+        help_text=(
+            "Require lots to be sold for points to be awarded. "
+            "Uncheck to give points for submitted and unsold lots. "
+            "If automatically award points is on, they will only be automatically awarded to sold lots."
+        ),
+        verbose_name="Only sold lots",
+    )
+    no_min_bids = models.BooleanField(
+        default=False,
+        help_text=(
+            "Lots with a minimum bid set are disqualified. "
+            "You can still set an auction-wide minimum bid, but any lots that set their own will not be awarded points."
+        ),
+        verbose_name="No minimum bids",
     )
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
@@ -985,9 +1031,26 @@ class Club(models.Model):
         )
 
     @property
+    def uses_own_paypal_credentials(self):
+        """True when this club pays through its own PayPal app credentials (non-OAuth mode)."""
+        return bool(self.allow_non_oauth_paypal and self.paypal_client_id and self.paypal_secret)
+
+    @property
+    def paypal_credentials(self):
+        """``(client_id, secret)`` for this club's own PayPal app, or ``None``.
+
+        Set only in non-OAuth mode with both values present. Callers use these in place
+        of the site's ``PAYPAL_CLIENT_ID`` / ``PAYPAL_SECRET``, so payments go directly to
+        the club's PayPal account just as the site keys send payments to the site account.
+        """
+        if self.uses_own_paypal_credentials:
+            return self.paypal_client_id, self.paypal_secret
+        return None
+
+    @property
     def can_accept_paypal(self):
-        """True when this club has any PayPal route configured (linked seller OR site account)."""
-        if self.uses_site_paypal:
+        """True when this club has any PayPal route configured (linked seller, site account, or own credentials)."""
+        if self.uses_site_paypal or self.uses_own_paypal_credentials:
             return True
         seller = self.effective_paypal_seller
         return bool(seller and seller.paypal_merchant_id)
@@ -1285,22 +1348,6 @@ class ClubMember(ContactRecord):
         if self.user and self.user.email:
             return self.user.email
         return ""
-
-    @property
-    def membership_number_visible(self) -> bool:
-        """True when this member's number/QR/barcode should be shown / wallet-saveable.
-
-        Honors the club's `membership_number_mode`:
-          - disabled    → never
-          - paid_only   → only when is_paid_member
-          - all_members → always
-        """
-        mode = self.club.membership_number_mode
-        if mode == "disabled":
-            return False
-        if mode == "paid_only":
-            return self.is_paid_member
-        return True
 
     @property
     def is_paid_member(self) -> bool:
@@ -1602,9 +1649,9 @@ class ClubMember(ContactRecord):
 
     @property
     def is_expired(self):
-        if not self.membership_expiration_date:
-            return False
-        return self.membership_expiration_date < timezone.now().date()
+        if self.membership_expiration_date:
+            return self.membership_expiration_date < timezone.now().date()
+        return bool(self.club.membership_annual_fee) and not self.is_paid_member
 
     @property
     def is_expiring_soon(self):
@@ -2360,10 +2407,14 @@ class Auction(models.Model):
         """
         Return the merchant ID for PayPal payments.
 
-        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``.
+        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``,
+          or ``None`` when the club uses its own (non-OAuth) credentials (payment goes
+          straight to that account, so there's no payee override).
         - Non-club auctions: creator's PayPalSeller, or ``"admin"`` when creator is a superuser.
         """
         if self.club:
+            if self.club.uses_own_paypal_credentials:
+                return None
             if self.club.uses_site_paypal:
                 return "admin"
             seller = self.club.effective_paypal_seller
@@ -2490,13 +2541,23 @@ class Auction(models.Model):
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
-            invoices = (
-                Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
-                .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
-                .distinct()
-            )
-            for invoice in invoices:
-                invoice.create_club_payment_history(force_current_state=True)
+            self.backfill_club_money()
+
+    def backfill_club_money(self):
+        """Reconcile the club ledger for every invoice tied to this auction.
+
+        Called when a club is first attached to an auction so existing PAID invoices get
+        their cash-basis ledger entries. ``save`` calls this automatically, but a bulk
+        ``Auction.objects.update(club=...)`` bypasses ``save``, so those call sites must
+        invoke it themselves. Idempotent — ``Invoice.sync_club_money`` books only deltas.
+        """
+        invoices = (
+            Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
+            .select_related("auction", "auctiontos_user", "auctiontos_user__auction")
+            .distinct()
+        )
+        for invoice in invoices:
+            invoice.sync_club_money()
 
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
@@ -2968,6 +3029,19 @@ class Auction(models.Model):
         if self.online_bidding == "disable":
             return False
         return True
+
+    @property
+    def paypal_payments_enabled(self):
+        """True when buyers can pay this auction's invoices directly via PayPal.
+
+        Used to hide the manual PayPal bulk-invoice CSV export -- sending those invoices would
+        double-request payment from buyers who can already pay online. Covers the per-auction
+        flag plus club auctions that route through the club's site or own (non-OAuth) PayPal
+        credentials, where the club config supersedes the per-auction flag.
+        """
+        if self.club and (self.club.uses_site_paypal or self.club.uses_own_paypal_credentials):
+            return True
+        return bool(self.enable_online_payments)
 
     @property
     def tos_qs(self):
@@ -4441,6 +4515,28 @@ class AuctionTOS(models.Model):
             },
         )
         result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
+        # For club-managed/check-in auctions, the participant is a ClubMember; surface the
+        # club membership actions (renew, set expiration, membership number) here so the
+        # users list doubles as the member list.
+        if self.auction.is_club_managed and self.clubmember_id:
+            club = self.auction.club
+            cm = self.clubmember
+            result += "<div class='dropdown-divider'></div>"
+            if club.membership_annual_fee:
+                renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
+                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{renew_url}' "
+                    f"hx-target='#modals-here'><i class='bi bi-calendar-check me-1'></i>Renew membership</a></span>"
+                    f"<span class='dropdown-item'><a href='{set_expiry_url}'>"
+                    f"<i class='bi bi-calendar-range me-1'></i>Set expiration date</a></span>"
+                )
+            if club.show_member_barcode:
+                membership_number_url = reverse("club_member_membership_number", kwargs={"pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{membership_number_url}' "
+                    f"hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>Membership number</a></span>"
+                )
         if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
             already_in_club = False
@@ -5276,6 +5372,7 @@ class Lot(models.Model):
         ("not_sold", "Not sold"),
         ("low_quantity", "Quantity below club minimum"),
         ("not_donation", "Lot is not a donation"),
+        ("has_min_bid", "Lot has a minimum bid set"),
     )
     bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
     manually_approved = models.BooleanField(default=False)
@@ -6086,6 +6183,8 @@ class Lot(models.Model):
             return "not_bred"
         if club.only_donation_lots and not self.donation:
             return "not_donation"
+        if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
+            return "has_min_bid"
         category_name = self.species_category.name if self.species_category else None
         # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
         # When CAP is disabled they have no BAP track, so treat them as ineligible.
@@ -6147,7 +6246,9 @@ class Lot(models.Model):
     def sold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
         if not self.sold:
-            return "not_sold"
+            club = self.auction.club if self.auction else None
+            if not club or club.only_sold_lots:
+                return "not_sold"
         return self.unsold_lot_no_bap_reason
 
     def auto_award_bap_points(self):
@@ -7065,6 +7166,7 @@ class Invoice(models.Model):
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
     renewal_needed = models.BooleanField(default=False)
+    renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
     @property
@@ -7087,10 +7189,22 @@ class Invoice(models.Model):
         return get_currency_symbol(self.currency)
 
     @property
+    def paypal_credentials(self):
+        """Club-supplied PayPal app credentials governing this invoice, or ``None``.
+
+        When the invoice's club (membership) or its auction's club is in non-OAuth
+        PayPal mode, returns that club's ``(client_id, secret)``; otherwise ``None`` so
+        callers fall back to the site's platform PayPal app.
+        """
+        club = self.club or (self.auction.club if self.auction else None)
+        return club.paypal_credentials if club else None
+
+    @property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
-        # Check PayPal
-        paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
+        # even when the site has no platform PayPal keys.
+        paypal_configured = bool((settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) or self.paypal_credentials)
         # Square now requires OAuth - just check if OAuth is configured
         square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
             settings, "SQUARE_CLIENT_SECRET", None
@@ -7140,14 +7254,15 @@ class Invoice(models.Model):
     @property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
-        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
+        # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
+        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) and not self.paypal_credentials:
             return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
         if self.club:
-            if self.club.uses_site_paypal:
+            if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
                 return True
             seller = self.club.effective_paypal_seller
             if not seller or not seller.paypal_merchant_id:
@@ -7157,9 +7272,10 @@ class Invoice(models.Model):
             return True
         if not self.auction:
             return False
-        # For club-managed auctions using the site's PayPal account, the club-level
-        # configuration supersedes the per-auction enable_online_payments flag.
-        if self.auction.club and self.auction.club.uses_site_paypal:
+        # For club-managed auctions using the site's PayPal account or the club's own
+        # credentials, the club-level configuration supersedes the per-auction
+        # enable_online_payments flag.
+        if self.auction.club and (self.auction.club.uses_site_paypal or self.auction.club.uses_own_paypal_credentials):
             return True
         if not self.auction.enable_online_payments:
             return False
@@ -7282,7 +7398,7 @@ class Invoice(models.Model):
         if not member:
             return "No membership"
         if not member.membership_last_paid:
-            return "Never paid"
+            return "Expired"
         expiration_date = member.membership_expiration_date
         if not expiration_date:
             return "Unknown"
@@ -7720,102 +7836,121 @@ class Invoice(models.Model):
                     InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
                 newer.delete()
                 self.recalculate()
-        if previous_status != self.status or previous_status is None:
-            self.create_club_payment_history(previous_status=previous_status)
+        # Keep the club ledger in step with the invoice. Reconcile on any status change and
+        # on every save of a PAID invoice (so edits to its lots/adjustments re-flow into the
+        # ledger); sync_club_money books only the delta, so a no-op save costs one query.
+        if previous_status != self.status or previous_status is None or self.status == "PAID":
+            self.sync_club_money()
 
-    def create_club_payment_history(self, previous_status=None, force_current_state=False, acting_user=None):
+    def sync_club_money(self, acting_user=None):
+        """Reconcile this invoice's entries in the club ledger (ClubMoney) with its state.
+
+        The ledger is **cash basis**: it records money that actually changes hands when an
+        invoice is settled, broken out so a treasurer can see where every dollar came from
+        or went, and so the running balance matches the club's bank account. A PAID invoice
+        contributes one entry per component (club-cash sign, ``+`` means money into the club):
+
+            + auction sale ......... what the buyer paid for lots they won (pre-tax)
+            - seller payout ........ what the club pays this seller for lots sold
+            + sales tax ............ tax collected from the buyer (a liability to remit)
+            + membership dues ...... renewal fee collected on the invoice
+            +/- invoice adjustment . manual surcharges (+) and discounts (-)
+            - first-bid payout ..... promotional payout to the bidder
+            +/- rounding ........... the whole-dollar rounding applied to the invoice
+
+        These sum to the cash that moves (the rounded invoice total). The club's auction
+        commission is intentionally **not** a stored entry — it is ``sales - payouts`` — so
+        the gross money in/out always reconciles to the bank. A draft/unpaid invoice
+        contributes nothing; outstanding invoices are reported separately rather than booked
+        as receivables.
+
+        Reconciliation books, per category, only the *difference* between what the current
+        state should show and what is already booked. That keeps the ledger:
+          * self-correcting if lots, adjustments or status change,
+          * exactly reversible — paid -> unpaid -> paid nets to zero, unpaid -> paid is a
+            net change of the invoice total,
+          * append-only — existing rows are never edited or deleted.
+        """
         auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
         if not auction or not auction.club_id:
             return []
         club = auction.club
         event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
+        cents = Decimal("0.01")
+
+        def _q(value):
+            return Decimal(value or 0).quantize(cents)
+
+        if self.auctiontos_user and self.auctiontos_user.name:
+            who = self.auctiontos_user.name
+        else:
+            who = f"invoice #{self.pk}"
+
+        # What the ledger SHOULD show for this invoice, per category, given its current state.
+        desired = {}
+        descriptions = {}
+        if self.status == "PAID":
+            # All amounts are club-cash (+ into the club) and sum to the cash that moves, i.e.
+            # the rounded invoice total. Adjustments fold in both the flat and (legacy) percent
+            # forms so they net to the invoice; rounding is the remainder so the entries always
+            # reconcile to the penny against rounded_net.
+            sale = _q(self.total_bought)
+            payout = -_q(self.total_sold)
+            tax = _q(self.tax)
+            membership = _q(self.membership_fee_amount)
+            first_bid = -_q(self.first_bid_payout)
+            adjustment_to_net = Decimal(self.flat_value_adjustments) + (
+                Decimal(self.subtotal) * Decimal(self.percent_value_adjustments) / Decimal(100)
+            )
+            adjustment = -_q(adjustment_to_net)
+            rounding = -_q(self.rounded_net) - (sale + payout + tax + membership + first_bid + adjustment)
+            desired = {
+                ClubMoney.CATEGORY_AUCTION_SALE: sale,
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT: payout,
+                ClubMoney.CATEGORY_TAX: tax,
+                ClubMoney.CATEGORY_MEMBERSHIP: membership,
+                ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: adjustment,
+                ClubMoney.CATEGORY_FIRST_BID_PAYOUT: first_bid,
+                ClubMoney.CATEGORY_ROUNDING: rounding,
+            }
+            descriptions = {
+                ClubMoney.CATEGORY_AUCTION_SALE: f"Payment from {who} for lots purchased in {auction}",
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT: f"Seller payout to {who} for lots sold in {auction}",
+                ClubMoney.CATEGORY_TAX: f"Sales tax collected from {who} in {auction}",
+                ClubMoney.CATEGORY_MEMBERSHIP: f"Membership dues from {who} in {auction}",
+                ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: f"Invoice adjustment for {who} in {auction}",
+                ClubMoney.CATEGORY_FIRST_BID_PAYOUT: f"First-bid payout to {who} in {auction}",
+                ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
+            }
+
+        # What the ledger ALREADY shows for this invoice, per category.
+        booked = {}
+        for row in ClubMoney.objects.filter(invoice=self).values("category").annotate(total=Sum("amount")):
+            booked[row["category"]] = row["total"] or Decimal("0.00")
+
+        # Only ever reconcile the current categories. A database carried over from the old
+        # ledger can hold rows in retired categories (e.g. ``auction_profit``,
+        # ``unpaid_invoices``); reversing those here would just write *more* rows in those dead
+        # categories. We leave them alone — migration 0305 rebuilds legacy ledger data — and
+        # never emit an unknown category string.
+        known_categories = {choice[0] for choice in ClubMoney.CATEGORY_CHOICES}
+        default_description = f"Ledger correction for {who} in {auction}"
         entries = []
-        quantize_precision = Decimal("0.01")
-
-        def _quantize(value):
-            return Decimal(value or 0).quantize(quantize_precision)
-
-        def _add_entry(amount, category, description):
-            amount = _quantize(amount)
-            if not amount:
-                return
+        for category in (set(desired) | set(booked)) & known_categories:
+            delta = _q(desired.get(category, Decimal("0.00"))) - _q(booked.get(category, Decimal("0.00")))
+            if not delta:
+                continue
             entries.append(
                 ClubMoney(
                     club=club,
                     invoice=self,
                     date=event_date,
-                    amount=amount,
-                    description=description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
+                    amount=delta,
+                    description=descriptions.get(category, default_description)[: ClubMoney.DESCRIPTION_MAX_LENGTH],
                     category=category,
                     created_by=acting_user,
                 )
             )
-
-        def _invoice_label():
-            if self.auctiontos_user and self.auctiontos_user.name:
-                return self.auctiontos_user.name
-            return f"invoice #{self.pk}"
-
-        def _add_paid_entries(multiplier):
-            _add_entry(
-                -_quantize(self.total_sold) * multiplier,
-                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT,
-                f"Auction seller payout for {_invoice_label()} in {auction}",
-            )
-            _add_entry(
-                _quantize(self.total_sold_club_cut) * multiplier,
-                ClubMoney.CATEGORY_AUCTION_PROFIT,
-                f"Auction profit for {_invoice_label()} in {auction}",
-            )
-
-            for adjustment in self.adjustments.exclude(amount=0):
-                if adjustment.adjustment_type == "DISCOUNT":
-                    amount = -_quantize(adjustment.amount) * multiplier
-                    category = ClubMoney.CATEGORY_REFUNDS
-                else:
-                    amount = _quantize(adjustment.amount) * multiplier
-                    category = ClubMoney.CATEGORY_DONATION
-                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {auction}"
-                _add_entry(amount, category, description)
-
-            _add_entry(
-                _quantize(self.membership_fee_amount) * multiplier,
-                ClubMoney.CATEGORY_MEMBERSHIP,
-                f"Membership fee for {_invoice_label()} in {auction}",
-            )
-
-        outstanding_amount = -_quantize(self.net_after_payments)
-        old_status = previous_status
-        new_status = self.status
-        if force_current_state:
-            old_status = None
-        elif old_status == new_status:
-            return []
-
-        old_outstanding = old_status in ("DRAFT", "UNPAID")
-        new_outstanding = new_status in ("DRAFT", "UNPAID")
-        if force_current_state:
-            if new_outstanding:
-                _add_entry(
-                    outstanding_amount,
-                    ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {auction}",
-                )
-            if new_status == "PAID":
-                _add_paid_entries(Decimal(1))
-        else:
-            if old_outstanding != new_outstanding:
-                direction = Decimal(1) if new_outstanding else Decimal(-1)
-                _add_entry(
-                    outstanding_amount * direction,
-                    ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {auction}",
-                )
-            if old_status == "PAID" and new_status != "PAID":
-                _add_paid_entries(Decimal(-1))
-            elif old_status != "PAID" and new_status == "PAID":
-                _add_paid_entries(Decimal(1))
-
         if entries:
             ClubMoney.objects.bulk_create(entries)
         return entries
@@ -7907,25 +8042,46 @@ class InvoicePayment(models.Model):
 
 class ClubMoney(models.Model):
     DESCRIPTION_MAX_LENGTH = 500
+
+    # Booked automatically from invoices by Invoice.sync_club_money (cash basis).
+    CATEGORY_AUCTION_SALE = "auction_sale"
+    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
+    CATEGORY_TAX = "tax"
+    CATEGORY_MEMBERSHIP = "membership"
+    CATEGORY_INVOICE_ADJUSTMENT = "invoice_adjustment"
+    CATEGORY_FIRST_BID_PAYOUT = "first_bid_payout"
+    CATEGORY_ROUNDING = "rounding"
+    # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
     CATEGORY_SPEAKER_COSTS = "speaker_costs"
     CATEGORY_MEETING_LOCATION_COST = "meeting_location_cost"
-    CATEGORY_MEMBERSHIP = "membership"
-    CATEGORY_AUCTION_PROFIT = "auction_profit"
-    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
-    CATEGORY_UNPAID_INVOICES = "unpaid_invoices"
     CATEGORY_REFUNDS = "refunds"
     CATEGORY_ADJUSTMENT = "adjustment"
+
+    # These are reconciled from invoices, so a treasurer must not add them by hand (a manual
+    # entry would be silently undone the next time the invoice's ledger is reconciled).
+    AUTO_CATEGORIES = (
+        CATEGORY_AUCTION_SALE,
+        CATEGORY_AUCTION_SELLER_PAYOUT,
+        CATEGORY_TAX,
+        CATEGORY_INVOICE_ADJUSTMENT,
+        CATEGORY_FIRST_BID_PAYOUT,
+        CATEGORY_ROUNDING,
+    )
+
     CATEGORY_CHOICES = (
+        (CATEGORY_AUCTION_SALE, "Auction sale (buyer payment)"),
+        (CATEGORY_AUCTION_SELLER_PAYOUT, "Seller payout"),
+        (CATEGORY_TAX, "Sales tax collected"),
+        (CATEGORY_MEMBERSHIP, "Membership dues"),
+        (CATEGORY_INVOICE_ADJUSTMENT, "Invoice adjustment"),
+        (CATEGORY_FIRST_BID_PAYOUT, "First-bid payout"),
+        (CATEGORY_ROUNDING, "Invoice rounding"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
         (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
-        (CATEGORY_MEMBERSHIP, "Membership"),
-        (CATEGORY_AUCTION_PROFIT, "Auction profit"),
-        (CATEGORY_AUCTION_SELLER_PAYOUT, "Auction seller payout"),
-        (CATEGORY_UNPAID_INVOICES, "Unpaid invoices"),
-        (CATEGORY_REFUNDS, "Refunds"),
-        (CATEGORY_ADJUSTMENT, "Adjustment"),
+        (CATEGORY_REFUNDS, "Refund"),
+        (CATEGORY_ADJUSTMENT, "Balance adjustment"),
     )
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="money")

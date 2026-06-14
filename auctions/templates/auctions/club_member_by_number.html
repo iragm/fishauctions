@@ -7,7 +7,7 @@
     <h3 class="card-title mb-1">{{ club.name }}</h3>
     <p class="text-muted mb-3">{{ member.display_name }}</p>
 
-    {% if member.membership_number_visible %}
+    {% if member.club.show_member_barcode %}
       <div class="text-muted small mb-1">Membership number</div>
       <div class="font-monospace fs-4 mb-3">{{ member.membership_number }}</div>
       {% if member.barcode_image_link %}
@@ -27,8 +27,8 @@
           <strong>Active</strong> — expires {{ expiration|date:"M j, Y" }}.
         </div>
       {% endif %}
-    {% elif not is_paid_member %}
-      <div class="alert alert-warning text-dark">No paid membership on record.</div>
+    {% elif club.membership_annual_fee and is_expired %}
+      <div class="alert alert-danger">Expired</div>
     {% endif %}
 
     {% if membership_invoice %}
