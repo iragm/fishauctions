@@ -4,6 +4,7 @@
 {% timezone user_timezone|default:"America/New_York" %}
 {% load static %}
 {% load django_htmx %}
+{% load club_nav_tags %}
 <!DOCTYPE html>
 {# {% include 'demo_formatting.html' %} #}
 <!-- Global site tag (gtag.js) - Google Analytics -->
@@ -420,10 +421,15 @@ window.onload = function() {
             </div>
             {% endfor %}
         {% endif %}
-        <div class="container mt-5 mb-5">
-            <div class="col-md-12">
-              {% block content %}{% endblock %}
-              {% block extra_content %}{% endblock %}
+        <div class="{% if view.club_sidebar_can_view %}container-fluid{% else %}container{% endif %} mt-5 mb-5">
+            <div class="row">
+              {% if view.club_sidebar_can_view %}
+              <div class="col-lg-3 col-xl-2 mb-3">{% club_sidebar %}</div>
+              {% endif %}
+              <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% else %}col-md-12{% endif %}">
+                {% block content %}{% endblock %}
+                {% block extra_content %}{% endblock %}
+              </div>
             </div>
         </div>
         {% block undiv_content %}{% endblock %}

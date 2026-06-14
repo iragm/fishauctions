@@ -144,6 +144,15 @@ function initMap() {
 
             {% include 'auction_ribbon.html' %}
 
+            {% if can_make_current_auction %}
+            <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+              <span><i class="bi bi-star"></i> Pin this auction to {{ auction.club.name }}'s sidebar.</span>
+              <a href="{% url 'auction_main' slug=auction.slug %}?make_current_auction=true" class="btn btn-sm btn-info">
+                <i class="bi bi-pin-angle"></i> Make this the current club auction
+              </a>
+            </div>
+            {% endif %}
+
             {# Quick Actions Section - Organized and Clean #}
             <div class="card mb-4">
                 <div class="card-body">

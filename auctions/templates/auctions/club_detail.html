@@ -9,7 +9,7 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact or show_club_map %}
+{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if member %}
   <button type="button" class="btn btn-sm btn-success" data-club-panel-toggle="membership-panel">
@@ -33,11 +33,6 @@
   {% if has_club_contact and request.user.is_authenticated %}
   <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
-  {% if show_club_map %}
-  <button type="button" class="btn btn-sm btn-primary" data-club-panel-toggle="map-panel">
-    <i class="bi bi-map"></i> Map
-  </button>
-  {% endif %}
 </div>
 {% endif %}
 
@@ -58,14 +53,6 @@
   </div>
 {% elif not club.allow_joining %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
-{% endif %}
-
-{% if show_club_map %}
-<div class="card mb-3 d-none" id="map-panel">
-  <div class="card-body">
-    <div id="club-map-canvas" style="width:100%; height:350px;"></div>
-  </div>
-</div>
 {% endif %}
 
 {% if show_bap_tabs %}
@@ -106,9 +93,21 @@
           <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
           <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
         </span>
+        <span class="d-flex align-items-center gap-2">
         {% if can_manage_auctions and not auction.promote_this_auction %}
-        <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+        <span class="badge bg-secondary rounded-pill">Not promoted</span>
         {% endif %}
+        {% if auction.pk == current_auction_id %}
+        <span class="badge bg-success rounded-pill">Current</span>
+        {% elif can_manage_auctions and auction.date_start > now %}
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="make_current">
+          <input type="hidden" name="auction" value="{{ auction.pk }}">
+          <button type="submit" class="btn btn-sm btn-outline-secondary text-light py-0">Make current</button>
+        </form>
+        {% endif %}
+        </span>
       </li>
       {% endfor %}
     </ul>
@@ -228,9 +227,21 @@
       <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
       <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
     </span>
+    <span class="d-flex align-items-center gap-2">
     {% if can_manage_auctions and not auction.promote_this_auction %}
-    <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+    <span class="badge bg-secondary rounded-pill">Not promoted</span>
     {% endif %}
+    {% if auction.pk == current_auction_id %}
+    <span class="badge bg-success rounded-pill">Current</span>
+    {% elif can_manage_auctions and auction.date_start > now %}
+    <form method="post" class="d-inline">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="make_current">
+      <input type="hidden" name="auction" value="{{ auction.pk }}">
+      <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+    </form>
+    {% endif %}
+    </span>
   </li>
   {% endfor %}
 </ul>
@@ -242,12 +253,6 @@
 {% endblock %}
 
 {% block extra_js %}
-{% if show_club_map %}
-<script
-src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initClubMap&v=weekly&libraries=marker"
-async
-></script>
-{% endif %}
 {% if show_bap_tabs %}
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
@@ -305,29 +310,6 @@ async
     });
   }
 
-  function maybeInitClubMap() {
-    if (window._clubMapRendered || !window._clubMapApiReady) return;
-    var mapCanvas = document.getElementById('club-map-canvas');
-    if (!mapCanvas || mapCanvas.closest('.d-none')) return;
-    var center = {
-      lat: Number('{{ club.latitude|default:"0"|escapejs }}'),
-      lng: Number('{{ club.longitude|default:"0"|escapejs }}')
-    };
-    var map = new google.maps.Map(mapCanvas, {center: center, zoom: 9, mapId: 'club_detail_map'});
-    var marker = new google.maps.marker.AdvancedMarkerElement({
-      position: center,
-      map: map,
-      title: '{{ club.name|escapejs }}',
-    });
-    var infoWindow = new google.maps.InfoWindow({
-      content: '<div style="color:black;"><strong>{{ club.name|escapejs }}</strong><br><a href="{{ club_map_directions_url|escapejs }}" target="_blank" rel="noopener noreferrer">Get directions</a></div>',
-    });
-    marker.addListener('click', function () {
-      infoWindow.open(map, marker);
-    });
-    window._clubMapRendered = true;
-  }
-
   panelToggleButtons.forEach(function (button) {
     button.addEventListener('click', function () {
       var panel = document.getElementById(this.getAttribute('data-club-panel-toggle'));
@@ -335,16 +317,8 @@ async
       var shouldHide = !panel.classList.contains('d-none');
       hidePanels(panel.id);
       panel.classList.toggle('d-none', shouldHide);
-      if (!shouldHide && panel.id === 'map-panel') {
-        maybeInitClubMap();
-      }
     });
   });
-
-  window.initClubMap = function () {
-    window._clubMapApiReady = true;
-    maybeInitClubMap();
-  };
 
   document.querySelectorAll('#clubTabs [data-tab-url]').forEach(function (btn) {
     btn.addEventListener('shown.bs.tab', function () {

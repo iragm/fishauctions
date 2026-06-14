@@ -766,6 +766,14 @@ class Club(models.Model):
         help_text="Set to True once the Wallet GenericClass has been confirmed on Google's side.",
     )
     allow_joining = models.BooleanField(default=False)
+    current_auction = models.ForeignKey(
+        "Auction",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The auction whose admin links are surfaced in the club sidebar.",
+    )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
         default=False,
@@ -4497,6 +4505,28 @@ class AuctionTOS(models.Model):
             },
         )
         result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
+        # For club-managed/check-in auctions, the participant is a ClubMember; surface the
+        # club membership actions (renew, set expiration, membership number) here so the
+        # users list doubles as the member list.
+        if self.auction.is_club_managed and self.clubmember_id:
+            club = self.auction.club
+            cm = self.clubmember
+            result += "<div class='dropdown-divider'></div>"
+            if club.membership_annual_fee:
+                renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
+                set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{renew_url}' "
+                    f"hx-target='#modals-here'><i class='bi bi-calendar-check me-1'></i>Renew membership</a></span>"
+                    f"<span class='dropdown-item'><a href='{set_expiry_url}'>"
+                    f"<i class='bi bi-calendar-range me-1'></i>Set expiration date</a></span>"
+                )
+            if club.show_member_barcode:
+                membership_number_url = reverse("club_member_membership_number", kwargs={"pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{membership_number_url}' "
+                    f"hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>Membership number</a></span>"
+                )
         if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
             already_in_club = False

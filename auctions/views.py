@@ -366,6 +366,19 @@ class AuctionViewMixin:
                 return True
         raise PermissionDenied()
 
+    @property
+    def club_sidebar_club(self):
+        """The club whose nav sidebar should render on this auction page (or None)."""
+        return self.auction.club if self.auction else None
+
+    @property
+    def club_sidebar_can_view(self):
+        """Whether the current user may see the club sidebar on an auction page.
+        Non-raising (unlike is_auction_admin) so it's safe to call from templates."""
+        if not self.auction or not self.auction.club_id:
+            return False
+        return bool(self.auction.permission_check(self.request.user))
+
 
 def check_club_permission(user, club, permission_name):
     """Check if a user has a specific permission for a club.
@@ -958,6 +971,19 @@ class ClubViewMixin:
     def can_add_edit(self):
         return self.user_has_club_permission("permission_add_edit")
 
+    @property
+    def club_sidebar_club(self):
+        """The club whose nav sidebar should render on this page (or None)."""
+        return self.club
+
+    @property
+    def club_sidebar_can_view(self):
+        """Whether the current user may see the club sidebar on a club page.
+        Mirrors the union of permissions that gated the old club_ribbon tabs."""
+        if not self.club:
+            return False
+        return bool(self.can_access_admin or self.can_edit_settings or self.can_manage_bap or self.can_manage_money)
+
 
 class AdminOnlyViewMixin:
     """Include to make this view only visible to super users on the website
@@ -1450,7 +1476,7 @@ class MyWonLots(LotListView):
             data["status"] = "closed"
         context = super().get_context_data(**kwargs)
         context["filter"] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["view"] = "mywonlots"
+        context["lot_view_type"] = "mywonlots"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1462,7 +1488,7 @@ class MyBids(LotListView):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
         context["filter"] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["view"] = "mybids"
+        context["lot_view_type"] = "mybids"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1524,7 +1550,7 @@ class MyWatched(LotListView):
             request=self.request,
             ignore=False,
         )
-        context["view"] = "watch"
+        context["lot_view_type"] = "watch"
         context["lotsAreHidden"] = -1
         return context
 
@@ -1539,7 +1565,7 @@ class LotsByUser(LotListView):
         if username:
             try:
                 context["user"] = User.objects.get(username=username)
-                context["view"] = "user"
+                context["lot_view_type"] = "user"
             except User.DoesNotExist:
                 context["user"] = None
         else:
@@ -3347,11 +3373,20 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
                     return self.form_invalid(form)
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
+        was_promoted = self.get_object().promote_this_auction
         try:
             form = super().form_valid(form)
         except ValidationError as exc:
             form.add_error(None, exc)
             return self.form_invalid(form)
+        # Promoting a previously-unpromoted auction makes it the club's current auction.
+        updated_auction = self.get_object()
+        if not was_promoted and updated_auction.promote_this_auction and updated_auction.club_id:
+            club = updated_auction.club
+            if club.current_auction_id != updated_auction.pk:
+                club.current_auction = updated_auction
+                club.save(update_fields=["current_auction"])
+                messages.info(self.request, f"This is now the current auction for {club.name}.")
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
@@ -3577,6 +3612,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs()
         kwargs["request"] = self.request
         kwargs["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
+        kwargs["is_managed"] = self.auction.is_club_managed
         return kwargs
 
     def get_filter_placeholder_text(self):
@@ -4073,6 +4109,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """A form to set lot winners.  Totally async with no page loads, just POST"""
 
     template_name = "auctions/dynamic_set_lot_winner.html"
+    club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -7798,6 +7835,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
                 self.auction.save()
+            if str(request.GET.get("make_current_auction", "")).lower() in ("1", "true") and self.auction.club_id:
+                club = self.auction.club
+                club.current_auction = self.auction
+                club.save(update_fields=["current_auction"])
+                messages.success(request, f"This is now the current auction for {club.name}.")
+                return redirect("auction_main", slug=self.auction.slug)
             if request.user.is_superuser:
                 if str(request.GET.get("trust_user", "")).lower() in ("1", "true"):
                     self.auction.created_by.userdata.is_trusted = True
@@ -7914,6 +7957,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        # Offer "make this the current club auction" to admins when the auction has a club
+        # and isn't already that club's current auction.
+        context["can_make_current_auction"] = bool(
+            self.auction.club_id and self.is_auction_admin and self.auction.club.current_auction_id != self.auction.pk
+        )
         # Show "make club admin" button to superusers when auction creator has a club in their profile.
         # Show when: creator isn't yet an admin of that club, OR this auction has no club assigned yet.
         if self.request.user.is_superuser and self.auction.created_by:
@@ -8446,7 +8494,7 @@ class AllLots(LotListView, AuctionViewMixin):
                 if self.request.user.is_authenticated:
                     user = self.request.user
                 SearchHistory.objects.create(user=user, search=data["q"], auction=self.auction)
-        context["view"] = "all"
+        context["lot_view_type"] = "all"
         context["filter"] = LotFilter(
             data,
             queryset=self.get_queryset(),
@@ -14584,6 +14632,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_manage_auctions"
         )
         context["can_manage_auctions"] = can_manage_auctions
+        context["now"] = timezone.now()
+        context["current_auction_id"] = self.club.current_auction_id
         membership_expiration_date = member.membership_expiration_date if member else None
         context["membership_expiration_date"] = membership_expiration_date
         membership_invoice = None
@@ -14640,6 +14690,19 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if not request.user.is_authenticated:
             return redirect_to_login(request.get_full_path())
         action = request.POST.get("action", "join")
+        if action == "make_current":
+            can_manage_auctions = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+                "permission_manage_auctions"
+            )
+            if can_manage_auctions:
+                auction = Auction.objects.filter(
+                    pk=request.POST.get("auction"), club=self.club, is_deleted=False
+                ).first()
+                if auction:
+                    self.club.current_auction = auction
+                    self.club.save(update_fields=["current_auction"])
+                    messages.success(request, f"{auction} is now the current auction.")
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
         if action == "update":
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
             if member:
@@ -16458,6 +16521,26 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "action_url": reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
         }
         return render(request, "auctions/contact_merge.html", context)
+
+
+class ClubSetupView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Hub page linking to all of a club's settings pages."""
+
+    active_tab = "setup"
+    template_name = "auctions/club_setup.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not (
+            self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
+        ):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):

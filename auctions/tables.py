@@ -34,11 +34,56 @@ class AuctionTOSHTMxTable(tables.Table):
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     # email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    membership = tables.Column(
+        accessor="pk",
+        verbose_name="Membership",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     actions = tables.Column(
         accessor="actions_dropdown_html",
         orderable=False,
         attrs={"th": {"class": show_on_mobile_string}, "cell": {"class": show_on_mobile_string}},
     )
+
+    def render_membership(self, value, record):
+        """Expiration date + Expired badge + Renew button for club-managed auctions,
+        mirroring ClubMemberHTMxTable. Blank when the row has no linked ClubMember."""
+        from django.utils import timezone
+
+        cm = record.clubmember
+        if not cm:
+            return "—"
+        today = timezone.now().date()
+        has_fee = bool(cm.club.membership_annual_fee)
+        renew_btn = format_html("")
+        if has_fee and not cm.is_deleted:
+            renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
+            renew_btn = format_html(
+                " <a href='javascript:void(0)' hx-get='{}' hx-target='#modals-here'"
+                " class='btn btn-sm btn-primary py-0 px-1'>Renew</a>",
+                renew_url,
+            )
+        expires = cm.membership_expiration_date
+        if not expires:
+            if has_fee and not cm.is_deleted:
+                badge = format_html(" <span class='badge bg-danger ms-1'>Expired</span>")
+                return format_html("—{}{}", badge, renew_btn)
+            return format_html("—")
+        formatted = expires.strftime("%b %-d, %Y")
+        days_expired = (today - expires).days
+        if days_expired > 0:
+            return format_html(
+                "{} <span class='badge bg-danger ms-1'>{} day{} expired</span>{}",
+                formatted,
+                days_expired,
+                "s" if days_expired != 1 else "",
+                renew_btn,
+            )
+        days_until = (expires - today).days
+        if days_until <= 30:
+            return format_html("{}{}", formatted, renew_btn)
+        return format_html("{}", formatted)
 
     def render_bidder_number(self, value, record):
         if record.bidder_number == "ERROR":
@@ -105,6 +150,7 @@ class AuctionTOSHTMxTable(tables.Table):
             "bidder_number",
             "name",
             # "email",
+            "membership",
             "print_invoice_link",
             "add_lot_link",
             "invoice_link",
@@ -120,7 +166,12 @@ class AuctionTOSHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_manage_check_in = kwargs.pop("can_manage_check_in", False)
-        super().__init__(*args, **kwargs)
+        is_managed = kwargs.pop("is_managed", False)
+        exclude = list(kwargs.pop("exclude", None) or [])
+        # The membership column is only meaningful for club-managed/check-in auctions.
+        if not is_managed:
+            exclude.append("membership")
+        super().__init__(*args, exclude=exclude, **kwargs)
 
 
 class AuctionHistoryHTMxTable(tables.Table):

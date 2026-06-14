@@ -1,0 +1,16 @@
+{% comment %}Responsive club nav: inline column on desktop (>=lg), offcanvas on mobile. Rendered by the club_sidebar tag (club_nav_tags).{% endcomment %}
+{% if can_view %}
+<button class="btn btn-outline-secondary btn-sm text-light d-lg-none mb-3" type="button"
+        data-bs-toggle="offcanvas" data-bs-target="#clubSidebar" aria-controls="clubSidebar">
+  <i class="bi bi-list"></i> {{ club.name }} menu
+</button>
+<div class="offcanvas-lg offcanvas-start" tabindex="-1" id="clubSidebar" aria-labelledby="clubSidebarLabel">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title" id="clubSidebarLabel">{{ club.name }}</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#clubSidebar" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body d-block p-0">
+    {% include "club_sidebar_nav.html" %}
+  </div>
+</div>
+{% endif %}

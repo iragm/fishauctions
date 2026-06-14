@@ -684,6 +684,7 @@ urlpatterns = [
         name="club_member_nocomm",
     ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
+    path("clubs/<slug:slug>/setup/", views.ClubSetupView.as_view(), name="club_setup"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
         "clubs/<slug:slug>/membership-settings/",
