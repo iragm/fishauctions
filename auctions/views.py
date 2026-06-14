@@ -11700,11 +11700,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "name": "Email delivery",
                 "configured": bool(
-                    settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
-                    and settings.AWS_ACCESS_KEY_ID
-                    and settings.AWS_SECRET_ACCESS_KEY
-                    or settings.EMAIL_HOST_USER
-                    and settings.EMAIL_HOST_PASSWORD
+                    (
+                        settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
+                        and settings.AWS_ACCESS_KEY_ID
+                        and settings.AWS_SECRET_ACCESS_KEY
+                    )
+                    or (settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD)
                 ),
                 "what_it_does": "Sends sign-in, invoice, and notification emails.",
                 "where_to_get_it": "Use a Gmail app password or AWS SES SMTP/API credentials.",

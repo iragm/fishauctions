@@ -90,9 +90,11 @@ def ensure_single_club_membership_for_user(user):
         if update_fields:
             member.save(update_fields=update_fields)
 
+    from .models import UserData
+
     try:
         userdata = user.userdata
-    except Exception:
+    except UserData.DoesNotExist:
         return member
 
     if userdata.club_id != club.pk:

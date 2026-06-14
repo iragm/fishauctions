@@ -3183,7 +3183,7 @@ class CustomSignupForm(SignupForm):
         super().__init__(*args, **kwargs)
         if not recaptcha_is_configured():
             self.fields.pop("captcha", None)
-            logger.error("reCAPTCHA is not configured; removing captcha from the signup form.")
+            logger.warning("reCAPTCHA is not configured; removing captcha from the signup form.")
 
     def signup(self, request, user):
         user.first_name = self.cleaned_data["first_name"]
@@ -3199,7 +3199,7 @@ class CustomResetPasswordForm(ResetPasswordForm):
         super().__init__(*args, **kwargs)
         if not recaptcha_is_configured():
             self.fields.pop("captcha", None)
-            logger.error("reCAPTCHA is not configured; removing captcha from the password reset form.")
+            logger.warning("reCAPTCHA is not configured; removing captcha from the password reset form.")
 
 
 class UserLocation(forms.ModelForm):

@@ -77,4 +77,5 @@ def env_has_real_value(value: str | None, *, placeholder_values: frozenset[str] 
     """Return True when an optional env value is present and not a known placeholder."""
     if value is None:
         return False
-    return value.strip() not in placeholder_values
+    normalized = value.strip()
+    return bool(normalized) and normalized not in placeholder_values

@@ -43,11 +43,13 @@ ensure_env_file() {
 }
 
 generate_missing_values() {
-    python - <<'PY' "$ENV_FILE" | while IFS='=' read -r key value; do
+    while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        set_env_value "$key" "$value"
+    done < <(python - <<'PY' "$ENV_FILE"
 from base64 import urlsafe_b64encode
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.asymmetric import ec
 from pathlib import Path
+import os
 import secrets
 import sys
 
@@ -74,20 +76,26 @@ if missing("REDIS_PASSWORD"):
 if missing("INBOUND_ROUTING_SECRET"):
     generated["INBOUND_ROUTING_SECRET"] = secrets.token_urlsafe(32)
 if missing("FIELD_ENCRYPTION_KEY"):
-    generated["FIELD_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+    generated["FIELD_ENCRYPTION_KEY"] = urlsafe_b64encode(os.urandom(32)).decode()
 if missing("VAPID_PUBLIC_KEY") or missing("VAPID_PRIVATE_KEY"):
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    private_value = private_key.private_numbers().private_value.to_bytes(32, "big")
-    public_numbers = private_key.public_key().public_numbers()
-    public_value = b"\x04" + public_numbers.x.to_bytes(32, "big") + public_numbers.y.to_bytes(32, "big")
-    generated["VAPID_PUBLIC_KEY"] = urlsafe_b64encode(public_value).rstrip(b"=").decode()
-    generated["VAPID_PRIVATE_KEY"] = urlsafe_b64encode(private_value).rstrip(b"=").decode()
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        private_value = private_key.private_numbers().private_value.to_bytes(32, "big")
+        public_numbers = private_key.public_key().public_numbers()
+        public_value = b"\x04" + public_numbers.x.to_bytes(32, "big") + public_numbers.y.to_bytes(32, "big")
+        generated["VAPID_PUBLIC_KEY"] = urlsafe_b64encode(public_value).rstrip(b"=").decode()
+        generated["VAPID_PRIVATE_KEY"] = urlsafe_b64encode(private_value).rstrip(b"=").decode()
+    except ImportError:
+        print("Warning: cryptography is not installed locally; generated fallback VAPID placeholders.", file=sys.stderr)
+        generated["VAPID_PUBLIC_KEY"] = secrets.token_urlsafe(48)
+        generated["VAPID_PRIVATE_KEY"] = secrets.token_urlsafe(24)
 
 for key, value in generated.items():
     print(f"{key}=\"{value}\"")
 PY
-        set_env_value "$key" "$value"
-    done
+}
 }
 
 prompt_for_site_domain() {
@@ -108,12 +116,18 @@ prompt_for_site_domain() {
 }
 
 ensure_permissions() {
+    local puid
+    local pgid
+    puid="$(get_env_value "PUID")"
+    pgid="$(get_env_value "PGID")"
+    puid="${puid:-1000}"
+    pgid="${pgid:-1000}"
     mkdir -p mediafiles logs staticfiles
     chmod -R 777 logs || true
-    if ! chown -R 1000:1000 ./mediafiles ./logs ./staticfiles 2>/dev/null; then
+    if ! chown -R "$puid:$pgid" ./mediafiles ./logs ./staticfiles 2>/dev/null; then
         echo "Could not change ownership on media/static/log directories."
         echo "Please rerun with sudo if needed:"
-        echo "  sudo chown -R 1000:1000 ./mediafiles ./logs ./staticfiles"
+        echo "  sudo chown -R $puid:$pgid ./mediafiles ./logs ./staticfiles"
     fi
 }
 

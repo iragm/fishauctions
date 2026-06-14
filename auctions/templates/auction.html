@@ -138,6 +138,7 @@ function initMap() {
 }
 </script>
 {% elif not auction.no_location %}
+<div class="alert alert-warning">Map unavailable until a Google Maps API key is configured.</div>
 <script>console.error("Google Maps is not configured; skipping auction map rendering.");</script>
 {% endif %}
 {% endblock %}

@@ -54,6 +54,7 @@ function initMap() {
 }
 </script>
 {% else %}
+<div class="alert alert-warning">User maps are unavailable until a Google Maps API key is configured.</div>
 <script>console.error("Google Maps is not configured; skipping user map rendering.");</script>
 {% endif %}
 {% endblock %}
