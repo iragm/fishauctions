@@ -2547,7 +2547,7 @@ class Auction(models.Model):
                 .distinct()
             )
             for invoice in invoices:
-                invoice.create_club_payment_history(force_current_state=True)
+                invoice.sync_club_money()
 
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
@@ -7826,102 +7826,115 @@ class Invoice(models.Model):
                     InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
                 newer.delete()
                 self.recalculate()
-        if previous_status != self.status or previous_status is None:
-            self.create_club_payment_history(previous_status=previous_status)
+        # Keep the club ledger in step with the invoice. Reconcile on any status change and
+        # on every save of a PAID invoice (so edits to its lots/adjustments re-flow into the
+        # ledger); sync_club_money books only the delta, so a no-op save costs one query.
+        if previous_status != self.status or previous_status is None or self.status == "PAID":
+            self.sync_club_money()
 
-    def create_club_payment_history(self, previous_status=None, force_current_state=False, acting_user=None):
+    def sync_club_money(self, acting_user=None):
+        """Reconcile this invoice's entries in the club ledger (ClubMoney) with its state.
+
+        The ledger is **cash basis**: it records money that actually changes hands when an
+        invoice is settled, broken out so a treasurer can see where every dollar came from
+        or went, and so the running balance matches the club's bank account. A PAID invoice
+        contributes one entry per component (club-cash sign, ``+`` means money into the club):
+
+            + auction sale ......... what the buyer paid for lots they won (pre-tax)
+            - seller payout ........ what the club pays this seller for lots sold
+            + sales tax ............ tax collected from the buyer (a liability to remit)
+            + membership dues ...... renewal fee collected on the invoice
+            +/- invoice adjustment . manual surcharges (+) and discounts (-)
+            - first-bid payout ..... promotional payout to the bidder
+            +/- rounding ........... the whole-dollar rounding applied to the invoice
+
+        These sum to the cash that moves (the rounded invoice total). The club's auction
+        commission is intentionally **not** a stored entry — it is ``sales - payouts`` — so
+        the gross money in/out always reconciles to the bank. A draft/unpaid invoice
+        contributes nothing; outstanding invoices are reported separately rather than booked
+        as receivables.
+
+        Reconciliation books, per category, only the *difference* between what the current
+        state should show and what is already booked. That keeps the ledger:
+          * self-correcting if lots, adjustments or status change,
+          * exactly reversible — paid -> unpaid -> paid nets to zero, unpaid -> paid is a
+            net change of the invoice total,
+          * append-only — existing rows are never edited or deleted.
+        """
         auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
         if not auction or not auction.club_id:
             return []
         club = auction.club
         event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
+        cents = Decimal("0.01")
+
+        def _q(value):
+            return Decimal(value or 0).quantize(cents)
+
+        if self.auctiontos_user and self.auctiontos_user.name:
+            who = self.auctiontos_user.name
+        else:
+            who = f"invoice #{self.pk}"
+
+        # What the ledger SHOULD show for this invoice, per category, given its current state.
+        desired = {}
+        descriptions = {}
+        if self.status == "PAID":
+            # All amounts are club-cash (+ into the club) and sum to the cash that moves, i.e.
+            # the rounded invoice total. Adjustments fold in both the flat and (legacy) percent
+            # forms so they net to the invoice; rounding is the remainder so the entries always
+            # reconcile to the penny against rounded_net.
+            sale = _q(self.total_bought)
+            payout = -_q(self.total_sold)
+            tax = _q(self.tax)
+            membership = _q(self.membership_fee_amount)
+            first_bid = -_q(self.first_bid_payout)
+            adjustment_to_net = Decimal(self.flat_value_adjustments) + (
+                Decimal(self.subtotal) * Decimal(self.percent_value_adjustments) / Decimal(100)
+            )
+            adjustment = -_q(adjustment_to_net)
+            rounding = -_q(self.rounded_net) - (sale + payout + tax + membership + first_bid + adjustment)
+            desired = {
+                ClubMoney.CATEGORY_AUCTION_SALE: sale,
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT: payout,
+                ClubMoney.CATEGORY_TAX: tax,
+                ClubMoney.CATEGORY_MEMBERSHIP: membership,
+                ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: adjustment,
+                ClubMoney.CATEGORY_FIRST_BID_PAYOUT: first_bid,
+                ClubMoney.CATEGORY_ROUNDING: rounding,
+            }
+            descriptions = {
+                ClubMoney.CATEGORY_AUCTION_SALE: f"Payment from {who} for lots purchased in {auction}",
+                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT: f"Seller payout to {who} for lots sold in {auction}",
+                ClubMoney.CATEGORY_TAX: f"Sales tax collected from {who} in {auction}",
+                ClubMoney.CATEGORY_MEMBERSHIP: f"Membership dues from {who} in {auction}",
+                ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: f"Invoice adjustment for {who} in {auction}",
+                ClubMoney.CATEGORY_FIRST_BID_PAYOUT: f"First-bid payout to {who} in {auction}",
+                ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
+            }
+
+        # What the ledger ALREADY shows for this invoice, per category.
+        booked = {}
+        for row in ClubMoney.objects.filter(invoice=self).values("category").annotate(total=Sum("amount")):
+            booked[row["category"]] = row["total"] or Decimal("0.00")
+
+        default_description = f"Ledger correction for {who} in {auction}"
         entries = []
-        quantize_precision = Decimal("0.01")
-
-        def _quantize(value):
-            return Decimal(value or 0).quantize(quantize_precision)
-
-        def _add_entry(amount, category, description):
-            amount = _quantize(amount)
-            if not amount:
-                return
+        for category in set(desired) | set(booked):
+            delta = _q(desired.get(category, Decimal("0.00"))) - _q(booked.get(category, Decimal("0.00")))
+            if not delta:
+                continue
             entries.append(
                 ClubMoney(
                     club=club,
                     invoice=self,
                     date=event_date,
-                    amount=amount,
-                    description=description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
+                    amount=delta,
+                    description=descriptions.get(category, default_description)[: ClubMoney.DESCRIPTION_MAX_LENGTH],
                     category=category,
                     created_by=acting_user,
                 )
             )
-
-        def _invoice_label():
-            if self.auctiontos_user and self.auctiontos_user.name:
-                return self.auctiontos_user.name
-            return f"invoice #{self.pk}"
-
-        def _add_paid_entries(multiplier):
-            _add_entry(
-                -_quantize(self.total_sold) * multiplier,
-                ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT,
-                f"Auction seller payout for {_invoice_label()} in {auction}",
-            )
-            _add_entry(
-                _quantize(self.total_sold_club_cut) * multiplier,
-                ClubMoney.CATEGORY_AUCTION_PROFIT,
-                f"Auction profit from lots sold by {_invoice_label()} in {auction}",
-            )
-
-            for adjustment in self.adjustments.exclude(amount=0):
-                if adjustment.adjustment_type == "DISCOUNT":
-                    amount = -_quantize(adjustment.amount) * multiplier
-                    category = ClubMoney.CATEGORY_REFUNDS
-                else:
-                    amount = _quantize(adjustment.amount) * multiplier
-                    category = ClubMoney.CATEGORY_DONATION
-                description = adjustment.notes or f"Invoice adjustment for {_invoice_label()} in {auction}"
-                _add_entry(amount, category, description)
-
-            _add_entry(
-                _quantize(self.membership_fee_amount) * multiplier,
-                ClubMoney.CATEGORY_MEMBERSHIP,
-                f"Membership fee for {_invoice_label()} in {auction}",
-            )
-
-        outstanding_amount = -_quantize(self.net_after_payments)
-        old_status = previous_status
-        new_status = self.status
-        if force_current_state:
-            old_status = None
-        elif old_status == new_status:
-            return []
-
-        old_outstanding = old_status in ("DRAFT", "UNPAID")
-        new_outstanding = new_status in ("DRAFT", "UNPAID")
-        if force_current_state:
-            if new_outstanding:
-                _add_entry(
-                    outstanding_amount,
-                    ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {auction}",
-                )
-            if new_status == "PAID":
-                _add_paid_entries(Decimal(1))
-        else:
-            if old_outstanding != new_outstanding:
-                direction = Decimal(1) if new_outstanding else Decimal(-1)
-                _add_entry(
-                    outstanding_amount * direction,
-                    ClubMoney.CATEGORY_UNPAID_INVOICES,
-                    f"Outstanding invoice for {_invoice_label()} in {auction}",
-                )
-            if old_status == "PAID" and new_status != "PAID":
-                _add_paid_entries(Decimal(-1))
-            elif old_status != "PAID" and new_status == "PAID":
-                _add_paid_entries(Decimal(1))
-
         if entries:
             ClubMoney.objects.bulk_create(entries)
         return entries
@@ -8013,25 +8026,46 @@ class InvoicePayment(models.Model):
 
 class ClubMoney(models.Model):
     DESCRIPTION_MAX_LENGTH = 500
+
+    # Booked automatically from invoices by Invoice.sync_club_money (cash basis).
+    CATEGORY_AUCTION_SALE = "auction_sale"
+    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
+    CATEGORY_TAX = "tax"
+    CATEGORY_MEMBERSHIP = "membership"
+    CATEGORY_INVOICE_ADJUSTMENT = "invoice_adjustment"
+    CATEGORY_FIRST_BID_PAYOUT = "first_bid_payout"
+    CATEGORY_ROUNDING = "rounding"
+    # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
     CATEGORY_SPEAKER_COSTS = "speaker_costs"
     CATEGORY_MEETING_LOCATION_COST = "meeting_location_cost"
-    CATEGORY_MEMBERSHIP = "membership"
-    CATEGORY_AUCTION_PROFIT = "auction_profit"
-    CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
-    CATEGORY_UNPAID_INVOICES = "unpaid_invoices"
     CATEGORY_REFUNDS = "refunds"
     CATEGORY_ADJUSTMENT = "adjustment"
+
+    # These are reconciled from invoices, so a treasurer must not add them by hand (a manual
+    # entry would be silently undone the next time the invoice's ledger is reconciled).
+    AUTO_CATEGORIES = (
+        CATEGORY_AUCTION_SALE,
+        CATEGORY_AUCTION_SELLER_PAYOUT,
+        CATEGORY_TAX,
+        CATEGORY_INVOICE_ADJUSTMENT,
+        CATEGORY_FIRST_BID_PAYOUT,
+        CATEGORY_ROUNDING,
+    )
+
     CATEGORY_CHOICES = (
+        (CATEGORY_AUCTION_SALE, "Auction sale (buyer payment)"),
+        (CATEGORY_AUCTION_SELLER_PAYOUT, "Seller payout"),
+        (CATEGORY_TAX, "Sales tax collected"),
+        (CATEGORY_MEMBERSHIP, "Membership dues"),
+        (CATEGORY_INVOICE_ADJUSTMENT, "Invoice adjustment"),
+        (CATEGORY_FIRST_BID_PAYOUT, "First-bid payout"),
+        (CATEGORY_ROUNDING, "Invoice rounding"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
         (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
-        (CATEGORY_MEMBERSHIP, "Membership"),
-        (CATEGORY_AUCTION_PROFIT, "Auction profit"),
-        (CATEGORY_AUCTION_SELLER_PAYOUT, "Auction seller payout"),
-        (CATEGORY_UNPAID_INVOICES, "Unpaid invoices"),
-        (CATEGORY_REFUNDS, "Refunds"),
-        (CATEGORY_ADJUSTMENT, "Adjustment"),
+        (CATEGORY_REFUNDS, "Refund"),
+        (CATEGORY_ADJUSTMENT, "Balance adjustment"),
     )
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="money")

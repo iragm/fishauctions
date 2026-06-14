@@ -682,9 +682,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             )
             if club.membership_annual_fee and not locked.auction:
                 # Club-only invoices: create the membership ClubMoney here.
-                # Auction invoices: create_club_payment_history (via Invoice.save) already books the
-                # membership fee through _add_paid_entries, including the proper reversal when the
-                # invoice is un-paid. Booking it here too would double-count membership revenue.
+                # Auction invoices: Invoice.sync_club_money (via Invoice.save) already books the
+                # membership dues, including the reversal when the invoice is un-paid. Booking it
+                # here too would double-count membership revenue.
                 ClubMoney.objects.create(
                     club=club,
                     created_by=acting_user,
@@ -17944,7 +17944,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return form, data["start_date"] or initial["start_date"], data["end_date"] or initial["end_date"]
 
     def _manual_category_choices(self):
-        excluded = {ClubMoney.CATEGORY_ADJUSTMENT}
+        # Auto categories are reconciled from invoices and the balance adjustment is created
+        # by the "balance books" tool, so neither may be entered by hand here.
+        excluded = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
         return [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in excluded]
 
     def _filtered_entries(self, start_date, end_date):
@@ -17995,23 +17997,31 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return {"count": count, "amount": amount_owed}
 
     def _report_summary(self, entries, start_date, end_date):
-        revenue = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
-        expenses = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
-        auction_profit = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_PROFIT)
-        auction_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
+        # money_in / money_out are the raw cash flow for the period; everything else is a
+        # breakdown of where it came from. Each figure below is a sum over ledger entries,
+        # so they always reconcile to the running balance.
+        money_in = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
+        money_out = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
+        auction_sales = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SALE)
+        seller_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
         outstanding = self._outstanding_invoices(start_date, end_date)
         return {
-            "net": revenue - expenses,
-            "revenue": revenue,
-            "expenses": expenses,
+            "money_in": money_in,
+            "money_out": money_out,
+            "net": money_in - money_out,
             "membership_renewals": ClubMember.objects.filter(
                 club=self.club,
                 is_deleted=False,
                 membership_last_paid__range=(start_date, end_date),
             ).count(),
-            "auction_gross": auction_profit + auction_payouts,
-            "auction_payouts": auction_payouts,
-            "auction_profit": auction_profit,
+            # Auction commission is sales minus payouts — the club's cut — never stored as
+            # its own ledger row, so the gross numbers keep matching the bank.
+            "auction_sales": auction_sales,
+            "seller_payouts": seller_payouts,
+            "auction_commission": auction_sales - seller_payouts,
+            "tax_collected": self._money_sum(entries, category=ClubMoney.CATEGORY_TAX),
+            "membership_dues": self._money_sum(entries, category=ClubMoney.CATEGORY_MEMBERSHIP),
+            "donations": self._money_sum(entries, category=ClubMoney.CATEGORY_DONATION),
             "outstanding_invoices": outstanding["count"],
             "outstanding_invoices_amount": outstanding["amount"],
         }
@@ -18088,9 +18098,10 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        category_choices = [
-            choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] != ClubMoney.CATEGORY_ADJUSTMENT
-        ]
+        # Reject the invoice-reconciled categories and the balance adjustment: a hand-entered
+        # auto category would be undone the next time the owning invoice is reconciled.
+        blocked = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
+        category_choices = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in blocked]
         form = ClubMoneyForm(request.POST, category_choices=category_choices)
         if not form.is_valid():
             return JsonResponse({"ok": False, "errors": form.errors}, status=400)

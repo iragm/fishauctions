@@ -5627,7 +5627,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
     These cover paths that previously lacked assertions on the ClubMoney that gets
     created, where the brittle behavior lives:
     - a membership renewal must book exactly ONE membership ClubMoney entry, never two
-      (auction invoices book it via Invoice.create_club_payment_history; club-only
+      (auction invoices book it via Invoice.sync_club_money; club-only
       invoices book it via _process_invoice_membership_renewal -- never both).
     - flipping an auction invoice PAID -> UNPAID -> PAID must not drift the club balance.
     - the self-service renewal invoice lookup must be idempotent (no invoice proliferation).
@@ -19119,50 +19119,216 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
         self.online_auction.save(update_fields=["club"])
         ClubMoney.objects.all().delete()
 
-    def test_marking_invoice_paid_creates_finance_entries(self):
-        self.invoice.create_club_payment_history(force_current_state=True)
+    def test_marking_seller_invoice_paid_books_payout_not_receivables(self):
+        # self.invoice's user sold lots, so paying it books a seller payout. The old
+        # receivable/profit categories are gone (commission is computed, not stored).
         self.invoice.status = "PAID"
         self.invoice.save(update_fields=["status"])
         categories = set(ClubMoney.objects.filter(invoice=self.invoice).values_list("category", flat=True))
-        self.assertIn(ClubMoney.CATEGORY_UNPAID_INVOICES, categories)
-        self.assertIn(ClubMoney.CATEGORY_AUCTION_PROFIT, categories)
         self.assertIn(ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT, categories)
+        self.assertNotIn("unpaid_invoices", categories)
+        self.assertNotIn("auction_profit", categories)
 
-    def test_reopening_paid_invoice_creates_offsetting_entries(self):
-        self.invoice.create_club_payment_history(force_current_state=True)
+    def test_paid_unpaid_paid_nets_to_zero(self):
         self.invoice.status = "PAID"
         self.invoice.save(update_fields=["status"])
         self.invoice.status = "DRAFT"
         self.invoice.save(update_fields=["status"])
-        profit_total = sum(
-            ClubMoney.objects.filter(invoice=self.invoice, category=ClubMoney.CATEGORY_AUCTION_PROFIT).values_list(
-                "amount", flat=True
-            ),
-            Decimal("0.00"),
-        )
-        self.assertEqual(profit_total, Decimal("0.00"))
+        total = sum(ClubMoney.objects.filter(invoice=self.invoice).values_list("amount", flat=True), Decimal("0.00"))
+        self.assertEqual(total, Decimal("0.00"))
 
-    def test_paid_invoice_logs_membership_and_adjustments(self):
+    def test_paid_buyer_invoice_books_sale_tax_and_membership(self):
         self.invoiceB.renewal_needed = True
         self.invoiceB.save(update_fields=["renewal_needed"])
-        self.invoiceB.create_club_payment_history(force_current_state=True)
         self.invoiceB.status = "PAID"
         self.invoiceB.save(update_fields=["status"])
         categories = set(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("category", flat=True))
+        # tosB bought lots in a 25%-tax auction and needs to renew.
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_SALE, categories)
+        self.assertIn(ClubMoney.CATEGORY_TAX, categories)
         self.assertIn(ClubMoney.CATEGORY_MEMBERSHIP, categories)
-        self.assertIn(ClubMoney.CATEGORY_DONATION, categories)
-        self.assertIn(ClubMoney.CATEGORY_REFUNDS, categories)
 
-    def test_setting_auction_club_backfills_existing_invoice_history(self):
+    def test_setting_auction_club_backfills_paid_invoice_history(self):
         invoice = Invoice.objects.get_or_create(auctiontos_user=self.admin_in_person_tos)[0]
         self.in_person_lot.winning_price = Decimal("20.00")
         self.in_person_lot.auctiontos_winner = self.in_person_buyer
         self.in_person_lot.active = False
         self.in_person_lot.save(update_fields=["winning_price", "auctiontos_winner", "active"])
+        invoice.status = "PAID"
+        invoice.save(update_fields=["status"])
         ClubMoney.objects.all().delete()
         self.in_person_auction.club = self.club
         self.in_person_auction.save(update_fields=["club"])
         self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
+
+
+class ClubMoneyLedgerCashBasisTests(TestCase):
+    """The cash-basis club ledger booked from invoices (Invoice.sync_club_money).
+
+    A PAID invoice books one entry per component (buyer payment, seller payout, tax,
+    membership, adjustment, first-bid payout, rounding); they sum to the cash that moves
+    and the club's auction commission is sales minus payouts. Booking is reversible.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("ledger_creator", "lc@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Ledger Cash Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self._n = 0
+
+    def _auction(self, tax=0, rounding=False, club_pct=20):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Ledger Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            tax=tax,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            invoice_rounding=rounding,
+        )
+        PickupLocation.objects.create(name="Ledger Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+
+    def _paid_invoice(self, tos):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=tos)[0]
+        invoice.status = "PAID"
+        invoice.save()
+        return invoice
+
+    def _by_category(self, invoice):
+        result = {}
+        for entry in ClubMoney.objects.filter(invoice=invoice):
+            result[entry.category] = result.get(entry.category, Decimal("0.00")) + entry.amount
+        return result
+
+    def _ledger_total(self, **filters):
+        return sum((entry.amount for entry in ClubMoney.objects.filter(**filters)), Decimal("0.00"))
+
+    def test_sale_and_payout_are_separate_and_imply_commission(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        seller_invoice = self._paid_invoice(seller)
+        buyer_invoice = self._paid_invoice(buyer)
+
+        self.assertEqual(self._by_category(seller_invoice)[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-80.00"))
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        # Commission (club cut) = sales - payouts = 100 - 80 = 20, which is the club's balance.
+        self.assertEqual(self._ledger_total(club=self.club), Decimal("20.00"))
+
+    def test_tax_is_broken_out(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        entries = self._by_category(buyer_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_TAX], Decimal("10.00"))
+
+    def test_adjustment_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        InvoiceAdjustment.objects.create(invoice=buyer_invoice, adjustment_type="ADD", amount=5, notes="late fee")
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("5.00"))
+
+    def test_membership_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.renewal_needed = True
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+
+    def test_rounding_is_broken_out(self):
+        # club_pct=15 on a $10 lot -> seller cut 8.50; rounding (in the seller's favor) pays 9.
+        auction = self._auction(club_pct=15, rounding=True)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        seller_invoice = self._paid_invoice(seller)
+        entries = self._by_category(seller_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-8.50"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_ROUNDING], Decimal("-0.50"))
+        # The entries still sum to the cash that actually changed hands (a whole 9 dollars out).
+        self.assertEqual(self._ledger_total(invoice=seller_invoice), Decimal("-9.00"))
+
+    def test_entries_sum_to_rounded_invoice_total(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        buyer_invoice.refresh_from_db()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), -Decimal(buyer_invoice.rounded_net))
+
+    def test_unpaid_to_paid_changes_balance_by_invoice_total(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        before = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        after = self._ledger_total(invoice=buyer_invoice)
+        self.assertEqual(before, Decimal("0.00"))
+        self.assertEqual(after, Decimal("100.00"))  # the buyer paid the club 100
+
+    def test_paid_unpaid_paid_is_neutral(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        first = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "UNPAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), Decimal("0.00"))
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), first)
+
+    def test_report_commission_is_sales_minus_payouts(self):
+        from .views import ClubTreasurerReportView
+
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._paid_invoice(seller)
+        self._paid_invoice(buyer)
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        entries = ClubMoney.objects.filter(club=self.club)
+        summary = view._report_summary(entries, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        self.assertEqual(summary["auction_sales"], Decimal("100.00"))
+        self.assertEqual(summary["seller_payouts"], Decimal("80.00"))
+        self.assertEqual(summary["auction_commission"], Decimal("20.00"))
 
 
 class BapTop10ChartTests(TestCase):
@@ -19501,7 +19667,7 @@ class ClubTreasurerOutstandingInvoiceTests(TestCase):
         self.assertEqual(summary["outstanding_invoices_amount"], Decimal("50.00"))
         self.assertContains(response, "still owed to the club")
 
-    def test_summary_reports_net_of_revenue_and_expenses(self):
+    def test_summary_reports_money_in_out_and_net(self):
         ClubMoney.objects.create(
             club=self.club,
             date=datetime.date(2026, 5, 10),
@@ -19521,8 +19687,8 @@ class ClubTreasurerOutstandingInvoiceTests(TestCase):
             {"start_date": "2026-05-01", "end_date": "2026-05-31"},
         )
         summary = response.context["report_summary"]
-        self.assertEqual(summary["revenue"], Decimal("100.00"))
-        self.assertEqual(summary["expenses"], Decimal("40.00"))
+        self.assertEqual(summary["money_in"], Decimal("100.00"))
+        self.assertEqual(summary["money_out"], Decimal("40.00"))
         self.assertEqual(summary["net"], Decimal("60.00"))
 
 

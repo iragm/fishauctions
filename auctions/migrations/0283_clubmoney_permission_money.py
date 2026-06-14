@@ -7,7 +7,7 @@ def backfill_club_money(apps, schema_editor):
     # Fetch invoice IDs using the historical (apps-frozen) Invoice model so the SELECT
     # only references columns that exist at this migration's point in history. Then load
     # each invoice via the live model (deferring any fields added in later migrations)
-    # so we can call ``create_club_payment_history`` on it.
+    # so we can call ``sync_club_money`` on it (renamed from create_club_payment_history).
     Invoice_historical = apps.get_model("auctions", "Invoice")
     invoice_ids = list(
         Invoice_historical.objects.filter(
@@ -42,7 +42,7 @@ def backfill_club_money(apps, schema_editor):
         queryset = queryset.defer(*deferred_lookups)
 
     for invoice in queryset.iterator(chunk_size=200):
-        invoice.create_club_payment_history(force_current_state=True)
+        invoice.sync_club_money()
 
 
 class Migration(migrations.Migration):
