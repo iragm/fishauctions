@@ -175,7 +175,8 @@ def _t_view_users(user):
 
 def _t_set_winners(user):
     auction = _last_auction_admin(user)
-    if not auction or _auction_ended(auction):
+    # Online auctions pick winners automatically from bids; only in-person, still-open auctions apply.
+    if not auction or auction.is_online or _auction_ended(auction):
         return []
     return [
         {
@@ -253,6 +254,34 @@ def _t_auction_custom_fields(user):
             "title": f"Custom fields — {auction.title}",
             "description": "Configure the custom fields shown when adding lots",
             "icon": "bi-input-cursor-text",
+        }
+    ]
+
+
+def _t_print_labels(user):
+    auction = _last_auction(user)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("print_my_labels", kwargs={"slug": auction.slug}),
+            "title": f"Print labels — {auction.title}",
+            "description": "Print labels for your lots in your most recent auction",
+            "icon": "bi-printer",
+        }
+    ]
+
+
+def _t_label_setup(user):
+    auction = _last_auction_admin(user)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("auction_label_config", kwargs={"slug": auction.slug}),
+            "title": f"Label setup — {auction.title}",
+            "description": "Choose what prints on your auction's lot labels",
+            "icon": "bi-tags",
         }
     ]
 
@@ -437,6 +466,8 @@ DYNAMIC_TARGETS = {
     "last_auction:bulk_add_lots": _t_bulk_add_lots,
     "last_auction:edit": _t_auction_edit,
     "last_auction:custom_fields": _t_auction_custom_fields,
+    "last_auction:print_labels": _t_print_labels,
+    "last_auction:label_setup": _t_label_setup,
     "last_auction:bap": _t_bap,
     "last_auction:invoice": _t_invoice,
     "clubs:members": _t_club_members,
@@ -503,28 +534,54 @@ def _page_items(user, ql):
     return items[:PAGE_LIMIT]
 
 
+def _editable_auction_fields():
+    """Names of Auction fields that can actually be changed, split by which form owns them.
+
+    Restricting matches to these prevents advertising settings the user can't edit here, such as
+    ``paypal_email_address`` (a model field that lives on no form -> "configure paypal email address").
+    """
+    from .forms import AuctionCustomFieldsForm, AuctionEditForm
+
+    return set(AuctionEditForm.Meta.fields), set(AuctionCustomFieldsForm.Meta.fields)
+
+
 def _auction_field_items(user, q):
-    """If the query matches any Auction field name, offer the settings page for the user's last auction."""
+    """Match the query against the verbose name or help text of editable Auction fields.
+
+    Only fields shown on the auction settings or custom fields forms are considered, and a
+    verbose-name match wins over a help-text-only match when choosing the field to name.
+    """
     auction = _last_auction_admin(user)
     if not auction or len(q) < 3:
         return []
     ql = q.lower()
-    edit_url = reverse("edit_auction", kwargs={"slug": auction.slug})
-    custom_url = reverse("edit_auction_custom_fields", kwargs={"slug": auction.slug})
+    edit_fields, custom_fields = _editable_auction_fields()
+    editable = edit_fields | custom_fields
+    urls = {
+        False: (reverse("edit_auction", kwargs={"slug": auction.slug}), "Auction settings"),
+        True: (reverse("edit_auction_custom_fields", kwargs={"slug": auction.slug}), "Custom fields"),
+    }
+    # url -> (item, matched_on_verbose_name) so a precise verbose-name hit can replace a help-text one.
     by_url = {}
     for field in auction._meta.get_fields():
-        verbose = str(getattr(field, "verbose_name", "") or "")
-        if not verbose:
+        if field.name not in editable:
             continue
-        name = field.name.lower()
-        if ql in verbose.lower() or ql in name:
-            is_custom = "custom" in name or "dropdown" in name
-            url = custom_url if is_custom else edit_url
-            label = "Custom fields" if is_custom else "Auction settings"
-            by_url.setdefault(
-                url, _item("page", f"{label} — {auction.title}", url, "bi-gear", f"Configure “{verbose}”")
-            )
-    return list(by_url.values())
+        verbose = str(getattr(field, "verbose_name", "") or "")
+        help_text = str(getattr(field, "help_text", "") or "")
+        verbose_match = bool(verbose) and ql in verbose.lower()
+        help_match = bool(help_text) and ql in help_text.lower()
+        if not (verbose_match or help_match):
+            continue
+        url, label = urls[field.name in custom_fields]
+        existing = by_url.get(url)
+        if existing is not None and not (verbose_match and not existing[1]):
+            continue
+        display = verbose or field.name.replace("_", " ")
+        by_url[url] = (
+            _item("page", f"{label} — {auction.title}", url, "bi-gear", f"Configure “{display}”"),
+            verbose_match,
+        )
+    return [item for item, _ in by_url.values()]
 
 
 def _is_email(q):

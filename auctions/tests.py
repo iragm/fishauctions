@@ -21783,6 +21783,64 @@ class CommandPaletteTests(StandardTestCase):
         urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
         self.assertIn(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}), urls)
 
+    def test_auction_field_search_only_includes_editable_form_fields(self):
+        # paypal_email_address is a model field that lives on no form, so "paypal" must not be
+        # advertised as a configurable auction setting ("configure paypal email address").
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "paypal"})
+        edit_url = reverse("edit_auction", kwargs={"slug": self.online_auction.slug})
+        settings_items = [
+            i for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"] if i["url"] == edit_url
+        ]
+        # The editable "PayPal payments" toggle (enable_online_payments) still surfaces...
+        self.assertTrue(settings_items)
+        for item in settings_items:
+            self.assertIn("PayPal payments", item["subtitle"])
+            # ...but the un-editable paypal_email_address field never does.
+            self.assertNotIn("email address", item["subtitle"].lower())
+
+    def test_set_winners_excluded_for_online_auction(self):
+        # Online auctions pick winners from bids; the set-lot-winners shortcut must not appear.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertNotIn(self.online_auction.set_lot_winners_link, urls)
+
+    def test_set_winners_shown_for_open_in_person_auction(self):
+        self.in_person_auction.date_start = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
+
+    def test_print_and_label_shortcuts(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        print_labels_url = reverse("print_my_labels", kwargs={"slug": self.online_auction.slug})
+        for q in ["print", "label"]:
+            urls = [
+                i["url"]
+                for g in self.client.get(reverse("command_palette"), {"q": q}).json()["groups"]
+                for i in g["items"]
+            ]
+            self.assertIn(print_labels_url, urls, f"print labels shortcut missing for '{q}'")
+            self.assertIn(reverse("printing"), urls, f"printing preferences shortcut missing for '{q}'")
+        # The per-auction label setup is admin-only and keyed off "label", not "print".
+        label_urls = [
+            i["url"]
+            for g in self.client.get(reverse("command_palette"), {"q": "label"}).json()["groups"]
+            for i in g["items"]
+        ]
+        self.assertIn(reverse("auction_label_config", kwargs={"slug": self.online_auction.slug}), label_urls)
+
     def test_bounce_is_recorded(self):
         self._login(self.user)
         resp = self.client.post(reverse("command_palette_log"), {"search": "zzzznotathing", "result": "bounce"})
