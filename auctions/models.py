@@ -9880,12 +9880,17 @@ class CommandPalettePage(models.Model):
     search_term = models.CharField(
         max_length=200, db_index=True, help_text="The phrase people type, e.g. 'sell lots' or 'address'."
     )
+    synonyms = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Extra phrases that map here too (comma- or newline-separated). Good for typos and alternate wording.",
+    )
     target = models.CharField(
         max_length=100,
         blank=True,
         help_text=(
             "Dynamic destination key resolved against the user's context, e.g. "
-            "'last_auction:set_winners' or 'club:brevo'. Leave blank to use the URL field instead."
+            "'last_auction:set_winners' or 'clubs:brevo'. Leave blank to use the URL field instead."
         ),
     )
     url = models.CharField(
@@ -9920,10 +9925,12 @@ class CommandPaletteSearch(models.Model):
     RESULT_PENDING = "pending"
     RESULT_CLICKED = "clicked"
     RESULT_ABANDONED = "abandoned"
+    RESULT_BOUNCE = "bounce"
     RESULT_CHOICES = [
         (RESULT_PENDING, "In progress"),
         (RESULT_CLICKED, "Clicked a result"),
         (RESULT_ABANDONED, "Cleared or left"),
+        (RESULT_BOUNCE, "No results found"),
     ]
 
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)

@@ -88,10 +88,10 @@ class SearchHistoryAdmin(admin.ModelAdmin):
 
 class CommandPalettePageAdmin(admin.ModelAdmin):
     model = CommandPalettePage
-    list_display = ("search_term", "target", "url", "title", "hits", "is_active")
-    list_editable = ("is_active",)
+    list_display = ("search_term", "synonyms", "target", "url", "title", "hits", "is_active")
+    list_editable = ("synonyms", "is_active")
     list_filter = ("is_active", "target")
-    search_fields = ("search_term", "title", "url", "target")
+    search_fields = ("search_term", "synonyms", "title", "url", "target")
 
 
 class CommandPaletteSearchAdmin(admin.ModelAdmin):

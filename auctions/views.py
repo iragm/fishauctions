@@ -197,6 +197,7 @@ from .models import (
     ClubHistory,
     ClubMember,
     ClubMoney,
+    CommandPaletteSearch,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -19614,3 +19615,30 @@ class CommandPaletteLogView(View):
             result_object_id=_int(request.POST.get("result_object_id")),
         )
         return JsonResponse({"id": search_id})
+
+
+class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
+    """Admin overview of what people search for in the command palette.
+
+    Surfaces the most common searches and, especially, the top 'bounce' searches
+    (queries that returned nothing) so we can add them as synonyms or new shortcuts.
+    """
+
+    template_name = "command_palette_analytics.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        base = CommandPaletteSearch.objects.exclude(search="")
+
+        def top(qs):
+            return list(
+                qs.values("search")
+                .annotate(count=Count("id"), clicks=Count("id", filter=Q(result="clicked")))
+                .order_by("-count")[:20]
+            )
+
+        context["top_searches"] = top(base)
+        context["top_bounces"] = top(base.filter(result="bounce"))
+        context["total_searches"] = base.count()
+        context["total_bounces"] = base.filter(result="bounce").count()
+        return context

@@ -21725,3 +21725,87 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
+
+    def test_email_search_is_exact_and_includes_auctiontos(self):
+        # online_auction is created by self.user, so they administer it.
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="findme@example.com",
+            name="Find Me",
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@example.com"})
+        labels = self._group_labels(resp)
+        self.assertIn("Auction users", labels)
+        # the link pre-populates ?query= so the record surfaces on the destination page
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Auction users" for i in g["items"]]
+        self.assertTrue(any("query=" in u for u in urls))
+        # exact match only: a partial email should not match
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@exa"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_auctiontos_tied_to_club_member_is_excluded(self):
+        club = Club.objects.create(name="Linked Club")
+        member = ClubMember.objects.create(club=club, email="linked@example.com", name="Linked Person")
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="linked@example.com",
+            name="Linked Person",
+            clubmember=member,
+        )
+        self._login(self.user)  # admin of online_auction, not of Linked Club
+        resp = self.client.get(reverse("command_palette"), {"q": "linked@example.com"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_multi_club_member_results_include_all_admin_clubs(self):
+        for name in ["Club Alpha", "Club Beta"]:
+            club = Club.objects.create(name=name)
+            ClubMember.objects.create(club=club, user=self.user, name=f"admin {name}", permission_view=True)
+            ClubMember.objects.create(club=club, name="Zelda Tester", email=f"zelda-{club.pk}@example.com")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Zelda"})
+        member_items = [i for g in resp.json()["groups"] if g["label"] == "Club members" for i in g["items"]]
+        self.assertEqual(len(member_items), 2)
+
+    def test_synonym_matches_page_shortcut(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "update email"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("account_email"), urls)
+
+    def test_auction_field_name_matches_settings_page(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "tax"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}), urls)
+
+    def test_bounce_is_recorded(self):
+        self._login(self.user)
+        resp = self.client.post(reverse("command_palette_log"), {"search": "zzzznotathing", "result": "bounce"})
+        row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
+        self.assertEqual(row.result, "bounce")
+
+    def test_ready_invoice_is_top_default_result(self):
+        self.invoice.status = "UNPAID"
+        self.invoice.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        first = resp.json()["groups"][0]["items"][0]
+        self.assertEqual(first["type"], "invoice")
+
+    def test_analytics_view_is_admin_only(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="needle", result="bounce")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 302)  # non-superuser redirected
+        superuser = User.objects.create_superuser("cp_super", "cp_super@example.com", "testpassword")
+        self.client.force_login(superuser)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "needle")
