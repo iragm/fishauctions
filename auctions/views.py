@@ -17985,7 +17985,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
             )
-            .values("calculated_total", "paid")
+.values("pk", "calculated_total", "paid")
         )
         count = 0
         amount_owed = Decimal("0.00")
