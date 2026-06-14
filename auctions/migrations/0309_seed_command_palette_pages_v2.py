@@ -43,7 +43,7 @@ def _new_entries():
             "search_term": "bulk add lots",
             "target": "last_auction:bulk_add_lots",
             "icon": "bi-card-list",
-            "synonyms": "bulk lots, add many lots, import lots, bulk add, multiple lots",
+            "synonyms": "bulk lots, add many lots, import lots, bulk add, multiple lots, sell in bulk, sell many lots",
         },
         {
             "search_term": "auction rules",
@@ -64,7 +64,7 @@ def _new_entries():
             "search_term": "invoice",
             "target": "last_auction:invoice",
             "icon": "bi-bag",
-            "synonyms": "invoices, my invoice, receipt, bill, what i owe, what i'm owed",
+            "synonyms": "invoices, my invoice, receipt, bill, what i owe, what i'm owed, paypal, square, get paid, payout",
         },
         # --- clubs (multi) ---
         {
