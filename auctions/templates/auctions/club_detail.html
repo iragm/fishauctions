@@ -124,6 +124,7 @@
     </div>
     <div id="bap-ytd">
       {% if bap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="bap-top10-chart-ytd" height="120" class="mb-3"></canvas>
       {{ bap_top10_chart_ytd|json_script:"bap-top10-chart-ytd-data" }}
       {% endif %}
@@ -131,6 +132,7 @@
     </div>
     <div id="bap-alltime" style="display:none">
       {% if bap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="bap-top10-chart" height="120" class="mb-3"></canvas>
       {{ bap_top10_chart|json_script:"bap-top10-chart-data" }}
       {% endif %}
@@ -147,6 +149,7 @@
     </div>
     <div id="hap-ytd">
       {% if hap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="hap-top10-chart-ytd" height="120" class="mb-3"></canvas>
       {{ hap_top10_chart_ytd|json_script:"hap-top10-chart-ytd-data" }}
       {% endif %}
@@ -154,6 +157,7 @@
     </div>
     <div id="hap-alltime" style="display:none">
       {% if hap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="hap-top10-chart" height="120" class="mb-3"></canvas>
       {{ hap_top10_chart|json_script:"hap-top10-chart-data" }}
       {% endif %}
@@ -171,6 +175,7 @@
     </div>
     <div id="culture-ytd">
       {% if cap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="cap-top10-chart-ytd" height="120" class="mb-3"></canvas>
       {{ cap_top10_chart_ytd|json_script:"cap-top10-chart-ytd-data" }}
       {% endif %}
@@ -178,6 +183,7 @@
     </div>
     <div id="culture-alltime" style="display:none">
       {% if cap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
       <canvas id="cap-top10-chart" height="120" class="mb-3"></canvas>
       {{ cap_top10_chart|json_script:"cap-top10-chart-data" }}
       {% endif %}
@@ -281,22 +287,22 @@
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
 (function () {
-  function wireToggle(toggleId, ytdId, alltimeId) {
-    const toggle = document.getElementById(toggleId);
-    if (!toggle) return;
-    toggle.addEventListener('change', function () {
-      document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
-      document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
-    });
-  }
-  wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
-  wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
-  wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+  var chartIds = [
+    'my-points-chart',
+    'bap-top10-chart-ytd', 'bap-top10-chart',
+    'hap-top10-chart-ytd', 'hap-top10-chart',
+    'cap-top10-chart-ytd', 'cap-top10-chart',
+  ];
 
-  function initLineChart(canvasId, dataId) {
-    var dataEl = document.getElementById(dataId);
-    var canvas = document.getElementById(canvasId);
-    if (!dataEl || !canvas || typeof Chart === 'undefined') return;
+  // Chart.js v2 cannot size a canvas that lives inside a display:none ancestor —
+  // an inactive tab pane, or the hidden side of the YTD/all-time toggle. Building a
+  // chart there yields a 0x0, permanently-blank canvas (the markup is present but
+  // nothing is drawn). So build each chart lazily, the first time its canvas is
+  // actually on-screen, and (re)build on tab show / toggle change.
+  function buildChart(canvas) {
+    var dataEl = document.getElementById(canvas.id + '-data');
+    if (!dataEl || typeof Chart === 'undefined') return;
+    canvas.dataset.chartReady = '1';
     new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: JSON.parse(dataEl.textContent),
@@ -312,13 +318,35 @@
     });
   }
 
-  initLineChart('my-points-chart', 'my-points-chart-data');
-  initLineChart('bap-top10-chart-ytd', 'bap-top10-chart-ytd-data');
-  initLineChart('bap-top10-chart', 'bap-top10-chart-data');
-  initLineChart('hap-top10-chart-ytd', 'hap-top10-chart-ytd-data');
-  initLineChart('hap-top10-chart', 'hap-top10-chart-data');
-  initLineChart('cap-top10-chart-ytd', 'cap-top10-chart-ytd-data');
-  initLineChart('cap-top10-chart', 'cap-top10-chart-data');
+  function renderVisibleCharts() {
+    chartIds.forEach(function (id) {
+      var canvas = document.getElementById(id);
+      // offsetParent is null while the canvas (or an ancestor) is display:none.
+      if (canvas && !canvas.dataset.chartReady && canvas.offsetParent !== null) {
+        buildChart(canvas);
+      }
+    });
+  }
+
+  function wireToggle(toggleId, ytdId, alltimeId) {
+    const toggle = document.getElementById(toggleId);
+    if (!toggle) return;
+    toggle.addEventListener('change', function () {
+      document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
+      document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
+      renderVisibleCharts();
+    });
+  }
+  wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
+  wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
+  wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+
+  // Render charts visible on first paint (the active tab), then again whenever a
+  // tab becomes visible.
+  renderVisibleCharts();
+  document.querySelectorAll('#clubTabs button[data-bs-toggle="tab"]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', renderVisibleCharts);
+  });
 })();
 </script>
 {% endif %}

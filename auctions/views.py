@@ -873,8 +873,15 @@ def _club_top10_chart_data(club, rank_field, award_field, current_member, months
     start_month = months[0]
     member_ids = [m.pk for m in top10]
 
+    # Mirror BapAward.recalculate_member_points: awards tied to a deleted or banned lot
+    # do not count toward a member's standings, so the chart must drop them too or its
+    # running totals will disagree with the leaderboard numbers shown alongside it.
+    awards = (
+        BapAward.objects.filter(club_member_id__in=member_ids).exclude(lot__is_deleted=True).exclude(lot__banned=True)
+    )
+
     monthly_awards = (
-        BapAward.objects.filter(club_member_id__in=member_ids, date__gte=start_month)
+        awards.filter(date__gte=start_month)
         .annotate(month=TruncMonth("date"))
         .values("club_member_id", "month")
         .annotate(total=Sum(award_field))
@@ -888,11 +895,7 @@ def _club_top10_chart_data(club, rank_field, award_field, current_member, months
     if is_ytd:
         initial_totals = {}
     else:
-        initial_qs = (
-            BapAward.objects.filter(club_member_id__in=member_ids, date__lt=start_month)
-            .values("club_member_id")
-            .annotate(total=Sum(award_field))
-        )
+        initial_qs = awards.filter(date__lt=start_month).values("club_member_id").annotate(total=Sum(award_field))
         initial_totals = {item["club_member_id"]: item["total"] or 0 for item in initial_qs}
 
     first_place = top10[0]
@@ -17951,13 +17954,54 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         total = queryset.filter(**filters).aggregate(total=Sum("amount"))["total"]
         return total or Decimal("0.00")
 
+    def _outstanding_invoices(self, start_date, end_date):
+        """Auction invoices from the period that still owe the club money.
+
+        An invoice is only outstanding when, after applying every recorded payment, the
+        member still owes the club (a negative balance). The previous implementation
+        looked at ``calculated_total`` alone — the invoice total *before* payments — so an
+        invoice that had been paid (in full or in part) but not yet flipped to ``PAID``
+        was reported as outstanding even though nothing was owed. Comparing the stored
+        total against recorded payments fixes that over-count.
+
+        Returns a dict with the number of such invoices and the total still owed.
+        """
+        from django.db.models import DecimalField
+        from django.db.models.functions import Coalesce
+
+        rows = (
+            Invoice.objects.filter(
+                auction__club=self.club,
+                auction__date_start__date__range=(start_date, end_date),
+                status__in=("DRAFT", "UNPAID"),
+                calculated_total__isnull=False,
+            )
+            .annotate(
+                paid=Coalesce(
+                    Sum("payments__amount"),
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values("calculated_total", "paid")
+        )
+        count = 0
+        amount_owed = Decimal("0.00")
+        for row in rows:
+            balance = Decimal(row["calculated_total"]) + (row["paid"] or Decimal("0.00"))
+            if balance < 0:
+                count += 1
+                amount_owed += -balance
+        return {"count": count, "amount": amount_owed}
+
     def _report_summary(self, entries, start_date, end_date):
         revenue = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
         expenses = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
         auction_profit = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_PROFIT)
         auction_payouts = abs(self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT))
+        outstanding = self._outstanding_invoices(start_date, end_date)
         return {
-            "gross": revenue - expenses,
+            "net": revenue - expenses,
             "revenue": revenue,
             "expenses": expenses,
             "membership_renewals": ClubMember.objects.filter(
@@ -17968,12 +18012,8 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             "auction_gross": auction_profit + auction_payouts,
             "auction_payouts": auction_payouts,
             "auction_profit": auction_profit,
-            "outstanding_invoices": Invoice.objects.filter(
-                auction__club=self.club,
-                auction__date_start__date__range=(start_date, end_date),
-                status__in=("DRAFT", "UNPAID"),
-                calculated_total__lt=0,
-            ).count(),
+            "outstanding_invoices": outstanding["count"],
+            "outstanding_invoices_amount": outstanding["amount"],
         }
 
     def _club_currency_symbol(self):

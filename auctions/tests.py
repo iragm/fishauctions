@@ -19165,6 +19165,148 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
         self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
 
 
+class BapTop10ChartTests(TestCase):
+    """Cumulative points-over-time chart for the top 10 club members.
+
+    Green = current user, red = current first place, blue = everyone else; the chart
+    mirrors the data behind the "my points" chart but for the leaderboard's top 10,
+    and respects the year-to-date toggle.
+    """
+
+    GREEN = "#198754"
+    RED = "#dc3545"
+    BLUE = "#0d6efd"
+
+    def setUp(self):
+        from .views import _club_top10_chart_data, _last_n_month_starts, _ytd_month_starts
+
+        self._chart = _club_top10_chart_data
+        self._all_months = _last_n_month_starts(60)
+        self._ytd_months = _ytd_month_starts()
+        self.club = Club.objects.create(
+            name="Chart Club", slug="chartclub", enable_breeder_award_program=True, enable_club_page=True
+        )
+        self.this_year = timezone.now().year
+        # Three members so we can see all three colors at once.
+        self.first = self._member("First Place", user_name="firstplace")
+        self.current = self._member("Current User", user_name="currentuser")
+        self.third = self._member("Third Member", user_name="thirdmember")
+        # First place: most points. Current user: middle. Third: least.
+        self._award(self.first, points=30, month_offset=2)
+        self._award(self.first, points=20, month_offset=1)
+        self._award(self.current, points=15, month_offset=2)
+        self._award(self.current, points=10, month_offset=0)
+        self._award(self.third, points=5, month_offset=1)
+
+    def _member(self, name, user_name):
+        user = User.objects.create_user(user_name, f"{user_name}@example.com", "pw")
+        return ClubMember.objects.create(club=self.club, user=user, name=name)
+
+    def _award(self, member, points, month_offset=0, year=None, lot=None):
+        today = timezone.now().date().replace(day=1)
+        month = today.month - month_offset
+        year = year or self.this_year
+        while month <= 0:
+            month += 12
+            year -= 1
+        return BapAward.objects.create(club_member=member, date=datetime.date(year, month, 1), points=points, lot=lot)
+
+    def _chart_data(self, current_member=None, is_ytd=False):
+        months = self._ytd_months if is_ytd else self._all_months
+        return self._chart(self.club, "bap_points", "points", current_member, months, is_ytd=is_ytd)
+
+    def test_color_scheme(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.RED)
+        self.assertEqual(by_label["Current User"]["borderColor"], self.GREEN)
+        self.assertEqual(by_label["Third Member"]["borderColor"], self.BLUE)
+
+    def test_current_user_wins_when_also_first_place(self):
+        # If the viewer is the leader, the current-user color (green) takes precedence.
+        data = self._chart_data(current_member=self.first)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.GREEN)
+
+    def test_first_place_dataset_is_ordered_first(self):
+        data = self._chart_data()
+        self.assertEqual(data["datasets"][0]["label"], "First Place")
+
+    def test_cumulative_running_totals(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # First place ends at 30 + 20 = 50, monotonic non-decreasing.
+        first_series = by_label["First Place"]["data"]
+        self.assertEqual(first_series[-1], 50)
+        self.assertEqual(first_series, sorted(first_series))
+
+    def test_limited_to_ten_members(self):
+        for i in range(12):
+            m = self._member(f"Filler {i}", user_name=f"filler{i}")
+            self._award(m, points=1, month_offset=1)
+        data = self._chart_data()
+        self.assertEqual(len(data["datasets"]), 10)
+
+    def test_returns_none_without_points(self):
+        empty = Club.objects.create(name="Empty", slug="emptyclub", enable_breeder_award_program=True)
+        self.assertIsNone(self._chart(empty, "bap_points", "points", None, self._all_months, is_ytd=False))
+
+    def test_ytd_excludes_prior_years(self):
+        # An award from a prior year must not appear in the YTD running total.
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current, is_ytd=True)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # YTD total for current user is 15 + 10 = 25, not 125.
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_all_time_includes_prior_years(self):
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        data = self._chart_data(current_member=self.current, is_ytd=False)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], 125)
+
+    def test_deleted_lot_award_excluded_to_match_leaderboard(self):
+        # Awards tied to a deleted lot are dropped from the leaderboard totals, so the
+        # chart must drop them too (otherwise the line ends above the leaderboard number).
+        auction = Auction.objects.create(
+            created_by=self.current.user,
+            title="Chart Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            club=self.club,
+        )
+        lot = Lot.objects.create(lot_name="Deleted lot", auction=auction, quantity=1, is_deleted=True)
+        self._award(self.current, points=99, month_offset=0, lot=lot)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], self.current.bap_points)
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_hap_and_cap_use_their_own_fields(self):
+        BapAward.objects.create(
+            club_member=self.first, date=timezone.now().date().replace(day=1), hap_points=7, cap_points=3
+        )
+        self.first.refresh_from_db()
+        hap = self._chart(self.club, "hap_points", "hap_points", None, self._all_months)
+        cap = self._chart(self.club, "culture_points", "cap_points", None, self._all_months)
+        self.assertEqual(hap["datasets"][0]["data"][-1], 7)
+        self.assertEqual(cap["datasets"][0]["data"][-1], 3)
+
+    def test_chart_markup_renders_in_bap_tab(self):
+        client = Client()
+        client.force_login(self.current.user)
+        response = client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "bap"}))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        # Both the canvas and its json_script payload must be present for the chart to draw.
+        self.assertIn('id="bap-top10-chart-ytd"', html)
+        self.assertIn('id="bap-top10-chart-ytd-data"', html)
+        self.assertIsNotNone(response.context.get("bap_top10_chart_ytd"))
+
+
 class ClubTreasurerReportViewTests(TestCase):
     def setUp(self):
         self.client = Client()
@@ -19245,6 +19387,143 @@ class ClubTreasurerReportViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertTrue(ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_ADJUSTMENT).exists())
+
+
+class ClubTreasurerOutstandingInvoiceTests(TestCase):
+    """The treasurer report's "outstanding invoices" figure.
+
+    An invoice is outstanding only when, after payments, the member still owes the club.
+    Regression guard for invoices being reported as outstanding when they had actually
+    been paid (the old code looked at the invoice total before payments).
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="oi_owner", password="pw", email="oi_owner@example.com")
+        self.money_user = User.objects.create_user(username="oi_money", password="pw", email="oi_money@example.com")
+        self.club = Club.objects.create(name="Outstanding Club")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Outstanding Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 5, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 5, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        self.pickup = PickupLocation.objects.create(name="OI Pickup", auction=self.auction, pickup_time=timezone.now())
+        self.start = datetime.date(2026, 5, 1)
+        self.end = datetime.date(2026, 5, 31)
+        self._tos_count = 0
+
+    def _invoice(self, calculated_total, status="UNPAID", payment=None, auction=None):
+        auction = auction or self.auction
+        self._tos_count += 1
+        tos = AuctionTOS.objects.create(
+            name=f"Member {self._tos_count}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+        invoice = Invoice.objects.create(auctiontos_user=tos, status=status)
+        Invoice.objects.filter(pk=invoice.pk).update(calculated_total=calculated_total)
+        if payment is not None:
+            InvoicePayment.objects.create(invoice=invoice, amount=Decimal(str(payment)))
+        return invoice
+
+    def _summary(self):
+        from .views import ClubTreasurerReportView
+
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        return view._outstanding_invoices(self.start, self.end)
+
+    def test_unpaid_invoice_with_balance_is_outstanding(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("50.00"))
+
+    def test_fully_paid_invoice_is_not_outstanding(self):
+        # Paid in full but still UNPAID (admin hasn't flipped status) — must NOT be counted.
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)
+        result = self._summary()
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["amount"], Decimal("0.00"))
+
+    def test_partial_payment_counts_only_remaining_balance(self):
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("6.00"))
+
+    def test_paid_status_invoice_is_not_outstanding(self):
+        self._invoice(calculated_total=-25, status="PAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_seller_invoice_owed_by_club_is_not_outstanding(self):
+        # Positive total == the club owes the seller; that is a payout, not an outstanding receivable.
+        self._invoice(calculated_total=40, status="UNPAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_counts_and_amounts_aggregate(self):
+        self._invoice(calculated_total=-50, status="UNPAID")  # owes 50
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)  # settled
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)  # owes 6
+        self._invoice(calculated_total=40, status="UNPAID")  # club owes seller
+        self._invoice(calculated_total=-20, status="PAID")  # paid
+        result = self._summary()
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["amount"], Decimal("56.00"))
+
+    def test_auction_outside_date_range_is_excluded(self):
+        other = Auction.objects.create(
+            created_by=self.owner,
+            title="Old Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 1, 10, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 1, 11, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Old Pickup", auction=other, pickup_time=timezone.now())
+        self._invoice(calculated_total=-99, status="UNPAID", auction=other)
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_report_page_shows_outstanding_amount(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["outstanding_invoices"], 1)
+        self.assertEqual(summary["outstanding_invoices_amount"], Decimal("50.00"))
+        self.assertContains(response, "still owed to the club")
+
+    def test_summary_reports_net_of_revenue_and_expenses(self):
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 10),
+            amount=Decimal("100.00"),
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 11),
+            amount=Decimal("-40.00"),
+            category=ClubMoney.CATEGORY_SPEAKER_COSTS,
+        )
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["revenue"], Decimal("100.00"))
+        self.assertEqual(summary["expenses"], Decimal("40.00"))
+        self.assertEqual(summary["net"], Decimal("60.00"))
 
 
 class DiscordJoinModalNameTests(TestCase):

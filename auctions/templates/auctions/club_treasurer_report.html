@@ -177,16 +177,20 @@ document.addEventListener("DOMContentLoaded", function() {
     <h5 class="card-title">{{ start_date }} - {{ end_date }}</h5>
     <div class="row">
       <div class="col-md-6">
-        <p class="mb-1"><strong>Gross:</strong> {{ currency_symbol }}{{ report_summary.gross }}</p>
-        <p class="mb-1"><strong>Expenses:</strong> {{ currency_symbol }}{{ report_summary.expenses }}</p>
         <p class="mb-1"><strong>Revenue:</strong> {{ currency_symbol }}{{ report_summary.revenue }}</p>
+        <p class="mb-1"><strong>Expenses:</strong> {{ currency_symbol }}{{ report_summary.expenses }}</p>
+        <p class="mb-1"><strong>Net (revenue &minus; expenses):</strong> {{ currency_symbol }}{{ report_summary.net }}</p>
         <p class="mb-1"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }}</p>
       </div>
       <div class="col-md-6">
         <p class="mb-1"><strong>Auction gross:</strong> {{ currency_symbol }}{{ report_summary.auction_gross }}</p>
         <p class="mb-1"><strong>Auction payouts:</strong> {{ currency_symbol }}{{ report_summary.auction_payouts }}</p>
         <p class="mb-1"><strong>Auction profit:</strong> {{ currency_symbol }}{{ report_summary.auction_profit }}</p>
-        <p class="mb-1"><strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}</p>
+        <p class="mb-1">
+          <strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}
+          {% if report_summary.outstanding_invoices %}({{ currency_symbol }}{{ report_summary.outstanding_invoices_amount }} still owed to the club){% endif %}
+          <br><small class="text-muted">Invoices from auctions in this date range that still owe the club money after payments. Mark an invoice paid to clear it.</small>
+        </p>
       </div>
     </div>
   </div>
