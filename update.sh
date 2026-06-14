@@ -12,7 +12,9 @@ set_env_value() {
     local key="$1"
     local value="$2"
     if grep -q "^${key}=" "$ENV_FILE"; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+        local escaped_value
+        escaped_value="$(printf '%s' "$value" | sed 's/[@&]/\\&/g')"
+        sed -i "s@^${key}=.*@${key}=${escaped_value}@" "$ENV_FILE"
     else
         printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
     fi
@@ -118,16 +120,17 @@ prompt_for_site_domain() {
 ensure_permissions() {
     local puid
     local pgid
+    local writable_paths=(./mediafiles ./logs ./staticfiles)
     puid="$(get_env_value "PUID")"
     pgid="$(get_env_value "PGID")"
     puid="${puid:-1000}"
     pgid="${pgid:-1000}"
-    mkdir -p mediafiles logs staticfiles
+    mkdir -p "${writable_paths[@]}"
     chmod -R 777 logs || true
-    if ! chown -R "$puid:$pgid" ./mediafiles ./logs ./staticfiles 2>/dev/null; then
+    if ! chown -R "$puid:$pgid" "${writable_paths[@]}" 2>/dev/null; then
         echo "Could not change ownership on media/static/log directories."
         echo "Please rerun with sudo if needed:"
-        echo "  sudo chown -R $puid:$pgid ./mediafiles ./logs ./staticfiles"
+        echo "  sudo chown -R $puid:$pgid ${writable_paths[*]}"
     fi
 }
 
