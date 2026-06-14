@@ -62,6 +62,9 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
+        {% if request.user.is_authenticated %}
+        <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
+        {% endif %}
         {% endblock %}
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}
@@ -438,6 +441,7 @@ window.onload = function() {
             {# Override this in templates to add extra javascript #}
         {% endblock %}
       <div id="modals-here"></div>
+      {% if request.user.is_authenticated %}{% include 'command_palette.html' %}{% endif %}
     </body>
     {# this is to redirect for printing #}
     <script>

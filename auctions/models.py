@@ -9869,6 +9869,81 @@ class SearchHistory(models.Model):
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
 
 
+class CommandPalettePage(models.Model):
+    """Maps a generic phrase typed in the command palette to a destination page.
+
+    Populated by data migrations and managed in the Django admin only (no front-end UI).
+    For example "sell lots" -> the set-lot-winners page for the user's most recent auction.
+    A single phrase may map to several pages (several rows with the same ``search_term``).
+    """
+
+    search_term = models.CharField(
+        max_length=200, db_index=True, help_text="The phrase people type, e.g. 'sell lots' or 'address'."
+    )
+    target = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text=(
+            "Dynamic destination key resolved against the user's context, e.g. "
+            "'last_auction:set_winners' or 'club:brevo'. Leave blank to use the URL field instead."
+        ),
+    )
+    url = models.CharField(
+        max_length=500, blank=True, help_text="Literal path used when target is blank, e.g. '/selling/'."
+    )
+    title = models.CharField(
+        max_length=200, blank=True, help_text="Optional label override. Leave blank to use a sensible default."
+    )
+    description = models.CharField(max_length=400, blank=True)
+    icon = models.CharField(max_length=50, blank=True, help_text="Bootstrap icon class, e.g. 'bi-cash-coin'.")
+    model = models.CharField(
+        max_length=20, blank=True, help_text="Optional hint: auction, club, or lot. Not currently required."
+    )
+    hits = models.PositiveIntegerField(default=0, help_text="Number of times this shortcut has been clicked.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-hits", "search_term"]
+
+    def __str__(self):
+        return f"{self.search_term} -> {self.target or self.url}"
+
+
+class CommandPaletteSearch(models.Model):
+    """One row per command-palette search session (not per keystroke).
+
+    The front end updates a single row as the user refines their query, then records
+    whether they clicked a result or abandoned the search. Only stored for logged-in users.
+    Built to be flexible so we can mine the data later and grow CommandPalettePage mappings.
+    """
+
+    RESULT_PENDING = "pending"
+    RESULT_CLICKED = "clicked"
+    RESULT_ABANDONED = "abandoned"
+    RESULT_CHOICES = [
+        (RESULT_PENDING, "In progress"),
+        (RESULT_CLICKED, "Clicked a result"),
+        (RESULT_ABANDONED, "Cleared or left"),
+    ]
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    search = models.CharField(max_length=600, blank=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    updatedon = models.DateTimeField(auto_now=True)
+    result = models.CharField(max_length=20, choices=RESULT_CHOICES, default=RESULT_PENDING)
+    result_type = models.CharField(
+        max_length=50, blank=True, help_text="auction, lot, club, clubmember, page, or default."
+    )
+    result_url = models.CharField(max_length=500, blank=True)
+    result_object_id = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} searched '{self.search}' ({self.result})"
+
+
 class ChatSubscription(models.Model):
     """Get notifications about new chat messages on lots"""
 

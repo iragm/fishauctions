@@ -45,6 +45,8 @@ from .models import (
     ClubHistory,
     ClubMember,
     ClubMoney,
+    CommandPalettePage,
+    CommandPaletteSearch,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -21609,3 +21611,117 @@ class BrevoErrorClassificationTests(TestCase):
 
     def test_non_401_returns_none(self):
         self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(400, "bad request from 1.2.3.4")))
+
+
+class CommandPaletteTests(StandardTestCase):
+    """Tests for the command palette: search scoping, default items, search logging, and routing."""
+
+    def _login(self, user):
+        self.client.force_login(user)
+
+    def _all_item_titles(self, response):
+        titles = []
+        for group in response.json()["groups"]:
+            for item in group["items"]:
+                titles.append(item["title"])
+        return titles
+
+    def _group_labels(self, response):
+        return [group["label"] for group in response.json()["groups"]]
+
+    def test_endpoints_require_login(self):
+        client = Client()
+        resp = client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("login", resp.url.lower())  # redirected to authenticate
+        resp = client.post(reverse("command_palette_log"), {"search": "x"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_default_items_for_admin(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 200)
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("View lots" in t for t in titles))
+        self.assertTrue(any("View users" in t for t in titles))  # admin-only
+        self.assertTrue(any("Quick checkout" in t for t in titles))  # admin-only
+
+    def test_default_items_for_non_admin_shows_invoice(self):
+        self.invoiceB.status = "UNPAID"
+        self.invoiceB.save()
+        self.userB.userdata.last_auction_used = self.online_auction
+        self.userB.userdata.save()
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"))
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("invoice" in t.lower() for t in titles))
+        self.assertFalse(any("View users" in t for t in titles))  # not an admin
+
+    def test_search_returns_auctions_and_lots(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("Auctions", self._group_labels(resp))
+        resp = self.client.get(reverse("command_palette"), {"q": "test lot"})
+        self.assertIn("Lots", self._group_labels(resp))
+
+    def test_search_matches_page_shortcuts(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "preferences"})
+        self.assertIn("Go to", self._group_labels(resp))
+
+    def test_club_member_search_scoped_to_admins(self):
+        club = Club.objects.create(name="Test Aquarium Club")
+        ClubMember.objects.create(club=club, name="Secret Member", email="secret@example.com")
+        # An admin of the club can find members.
+        ClubMember.objects.create(club=club, user=self.user, name="Admin Member", permission_view=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertIn("Club members", self._group_labels(resp))
+        # A user with no admin rights to the club cannot.
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertNotIn("Club members", self._group_labels(resp))
+
+    def test_log_upsert_keeps_one_row_and_records_click(self):
+        self._login(self.user)
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(reverse("command_palette_log"), {"search": "pref", "result": "pending"})
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row rather than creating a new one.
+        resp = self.client.post(
+            reverse("command_palette_log"), {"id": search_id, "search": "preferences", "result": "pending"}
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        # Clicking a page result finalizes the row and bumps that page's hit counter.
+        self.client.post(
+            reverse("command_palette_log"),
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        row = CommandPaletteSearch.objects.get(pk=search_id)
+        self.assertEqual(row.search, "preferences")
+        self.assertEqual(row.result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)
+
+    def test_recent_searches_appear_in_defaults(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="angelfish", result="abandoned")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
+
+    def test_landing_page_in_person_admin_redirects_to_users(self):
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.in_person_auction.user_admin_link)

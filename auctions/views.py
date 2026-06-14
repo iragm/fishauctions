@@ -8361,6 +8361,9 @@ class ToDefaultLandingPage(View):
             # if not, check and see if the user has been participating in an auction
             try:
                 auction = UserData.objects.get(user=request.user).last_auction_used
+                # Admins of an in-person auction land on the users list, not the lot list.
+                if auction and not auction.is_online and auction.permission_check(request.user):
+                    return redirect(auction.user_admin_link)
                 invoice = (
                     Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
                     .exclude(status="DRAFT")
@@ -19569,3 +19572,45 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         else:
             messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class CommandPaletteView(View):
+    """JSON results for the command palette.
+
+    GET ?q= returns search groups; an empty/absent query returns the default items.
+    Login is required (applied in urls.py); the response is never cached.
+    """
+
+    def get(self, request, *args, **kwargs):
+        from auctions import command_palette
+
+        groups = command_palette.search(request, request.GET.get("q", ""))
+        return JsonResponse({"groups": groups})
+
+
+class CommandPaletteLogView(View):
+    """Upsert the user's current command-palette search row.
+
+    Accepts form-encoded POST data (works with both fetch and navigator.sendBeacon):
+    id, search, result, result_type, result_url, result_object_id. Returns {"id": <pk>}.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import command_palette
+
+        def _int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        search_id = command_palette.log_search(
+            request.user,
+            search_id=_int(request.POST.get("id")),
+            search=request.POST.get("search", ""),
+            result=request.POST.get("result"),
+            result_type=request.POST.get("result_type", ""),
+            result_url=request.POST.get("result_url", ""),
+            result_object_id=_int(request.POST.get("result_object_id")),
+        )
+        return JsonResponse({"id": search_id})
