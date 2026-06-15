@@ -19,7 +19,7 @@
     </form>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    {% if not RECAPTCHA_ENABLED %}
+    {% if not recaptcha_enabled %}
     console.error('reCAPTCHA is not configured; signup is running without a captcha field.');
     {% endif %}
     const form = document.querySelector('form');

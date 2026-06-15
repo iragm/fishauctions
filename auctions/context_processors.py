@@ -148,7 +148,7 @@ def site_config(request):
         "enable_club_finder": settings.ENABLE_CLUB_FINDER,
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
-        "RECAPTCHA_ENABLED": getattr(settings, "RECAPTCHA_ENABLED", False),
+        "recaptcha_enabled": getattr(settings, "RECAPTCHA_ENABLED", False),
     }
 
 

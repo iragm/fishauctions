@@ -22,7 +22,7 @@ set_env_value() {
 
 get_env_value() {
     local key="$1"
-    python - <<'PY' "$ENV_FILE" "$key"
+    python3 - <<'PY' "$ENV_FILE" "$key"
 from pathlib import Path
 import sys
 
@@ -48,7 +48,7 @@ generate_missing_values() {
     while IFS='=' read -r key value; do
         [ -n "$key" ] || continue
         set_env_value "$key" "$value"
-    done < <(python - <<'PY' "$ENV_FILE"
+    done < <(python3 - <<'PY' "$ENV_FILE"
 from base64 import urlsafe_b64encode
 from pathlib import Path
 import os
@@ -120,7 +120,7 @@ prompt_for_site_domain() {
 ensure_permissions() {
     local puid
     local pgid
-    local writable_paths=(./mediafiles ./logs ./staticfiles)
+    local writable_paths=(./mediafiles ./logs ./auctions/static)
     puid="$(get_env_value "PUID")"
     pgid="$(get_env_value "PGID")"
     puid="${puid:-1000}"
@@ -136,14 +136,21 @@ ensure_permissions() {
 
 update_nginx_domain() {
     local site_domain
+    local escaped_site_domain
     site_domain="$(get_env_value "SITE_DOMAIN")"
+    escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&]/\\&/g')"
     if grep -q "server_name _;" ./nginx.prod.conf; then
-        sed -i "s/server_name _;/server_name $site_domain;/" "./nginx.prod.conf"
+        sed -i "s@server_name _;@server_name $escaped_site_domain;@" "./nginx.prod.conf"
     fi
 }
 
 echo "This will erase any local uncommited changes. Did you make a snapshot? (y/n)"
-read -r response
+if [ -t 0 ]; then
+    read -r response
+else
+    echo "Non-interactive mode detected; cancelling update by default."
+    response="n"
+fi
 
 if [[ "$response" != "y" ]]; then
     echo "Cancelled"

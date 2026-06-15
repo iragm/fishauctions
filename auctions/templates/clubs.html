@@ -69,14 +69,17 @@ function initMap() {
 }
 </script>
 {% else %}
-<div class="alert alert-warning">Club maps are unavailable until a Google Maps API key is configured.</div>
 <script>console.error("Google Maps is not configured; skipping club map rendering.");</script>
 {% endif %}
 {% endblock %}
 {% block content %}
             <h1>Find a fish club near you</h1>
             <div id="map_wrapper" style='height: 400px;'>
+                {% if google_maps_api_key %}
                 <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
+                {% else %}
+                <div class="alert alert-warning m-3">Club maps are unavailable until a Google Maps API key is configured.</div>
+                {% endif %}
             </div>
             {% if not has_user_location %}
             <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>

@@ -11924,7 +11924,7 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
-        self.assertIn("RECAPTCHA_ENABLED", context)
+        self.assertIn("recaptcha_enabled", context)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):
@@ -11965,6 +11965,26 @@ class AdminSetupChecklistViewTests(TestCase):
         self.assertContains(response, "Setup Checklist")
         self.assertContains(response, "Checklist Club")
         self.assertContains(response, "Google Maps")
+
+    @override_settings(SITE_DOMAIN="127.0.0.1")
+    def test_site_domain_item_treats_localhost_default_as_configured(self):
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        setup_items = response.context["setup_items"]
+        site_domain_item = next(item for item in setup_items if item["name"] == "Site domain")
+        self.assertTrue(site_domain_item["configured"])
+
+    @override_settings(
+        POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="user@example.com",
+        EMAIL_HOST_PASSWORD="unsecure",
+    )
+    def test_email_delivery_item_requires_non_placeholder_smtp_credentials(self):
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        setup_items = response.context["setup_items"]
+        email_item = next(item for item in setup_items if item["name"] == "Email delivery")
+        self.assertFalse(email_item["configured"])
 
 
 class MiddlewareTestCase(TestCase):

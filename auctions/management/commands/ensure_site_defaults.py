@@ -2,6 +2,7 @@ from allauth.account.models import EmailAddress
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
+from django.db.models import Exists, OuterRef, Q
 
 from auctions.site_setup import ensure_single_club_membership_for_user, get_single_club, single_club_manage_mode
 
@@ -31,7 +32,20 @@ class Command(BaseCommand):
         if club:
             self.stdout.write(self.style.SUCCESS(f"Single club mode ready: {club.name}"))
 
-        for user in User.objects.order_by("pk"):
+        from auctions.models import ClubMember
+
+        users_missing_membership = User.objects.annotate(
+            has_club_membership=Exists(
+                ClubMember.objects.filter(club=club, user_id=OuterRef("pk"), is_deleted=False),
+            )
+        ).filter(
+            Q(has_club_membership=False)
+            | Q(userdata__isnull=True)
+            | Q(userdata__club__isnull=True)
+            | ~Q(userdata__club_id=club.pk)
+        )
+
+        for user in users_missing_membership.distinct().order_by("pk"):
             ensure_single_club_membership_for_user(user)
 
         from auctions.models import Auction

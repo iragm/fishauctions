@@ -11681,7 +11681,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             },
             {
                 "name": "Site domain",
-                "configured": bool((settings.SITE_DOMAIN or "").strip() and settings.SITE_DOMAIN != "127.0.0.1"),
+                "configured": bool((settings.SITE_DOMAIN or "").strip() and settings.SITE_DOMAIN != "example.com"),
                 "what_it_does": "Used in absolute URLs, routed email senders, and production nginx setup.",
                 "where_to_get_it": "Use the hostname people will type into their browser.",
                 "env_snippet": 'SITE_DOMAIN="example.com"',
@@ -11705,7 +11705,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                         and settings.AWS_ACCESS_KEY_ID
                         and settings.AWS_SECRET_ACCESS_KEY
                     )
-                    or (settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD)
+                    or (
+                        settings.EMAIL_HOST_USER
+                        and settings.EMAIL_HOST_PASSWORD
+                        and settings.EMAIL_HOST_USER != "user@example.com"
+                        and settings.EMAIL_HOST_PASSWORD != "unsecure"
+                    )
                 ),
                 "what_it_does": "Sends sign-in, invoice, and notification emails.",
                 "where_to_get_it": "Use a Gmail app password or AWS SES SMTP/API credentials.",

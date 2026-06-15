@@ -62,7 +62,6 @@ python manage.py collectstatic --no-input > /dev/null 2>&1
 python manage.py setup_celery_beat > /dev/null 2>&1 || true
 python manage.py ensure_site_defaults
 python manage.py load_demo_data
-python manage.py ensure_site_defaults
 
 debug_mode=$(
 python << END
