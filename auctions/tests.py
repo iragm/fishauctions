@@ -21666,6 +21666,82 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("command_palette"), {"q": "test lot"})
         self.assertIn("Lots", self._group_labels(resp))
 
+    def test_search_hides_unlisted_auction_and_lots(self):
+        self.online_auction.title = "Visible Scope Auction"
+        self.online_auction.save()
+        self.lot.lot_name = "Visible Scope Lot"
+        self.lot.save()
+        hidden_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Visible Scope Auction Hidden",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=False,
+        )
+        hidden_location = PickupLocation.objects.create(
+            name="hidden location",
+            auction=hidden_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        hidden_tos = AuctionTOS.objects.create(
+            user=self.admin_user,
+            auction=hidden_auction,
+            pickup_location=hidden_location,
+        )
+        Lot.objects.create(
+            lot_name="Visible Scope Lot Hidden",
+            auction=hidden_auction,
+            auctiontos_seller=hidden_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Auction"})
+        auction_titles = [i["title"] for g in resp.json()["groups"] if g["label"] == "Auctions" for i in g["items"]]
+        self.assertIn(self.online_auction.title, auction_titles)
+        self.assertNotIn(hidden_auction.title, auction_titles)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Lot"})
+        lot_subtitles = [i["subtitle"] for g in resp.json()["groups"] if g["label"] == "Lots" for i in g["items"]]
+        self.assertIn(self.online_auction.title, lot_subtitles)
+        self.assertNotIn(hidden_auction.title, lot_subtitles)
+
+    def test_lot_search_excludes_deleted_parent_auction(self):
+        deleted_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Deleted Parent Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            is_deleted=True,
+        )
+        deleted_location = PickupLocation.objects.create(
+            name="deleted location",
+            auction=deleted_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        deleted_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=deleted_auction,
+            pickup_location=deleted_location,
+        )
+        Lot.objects.create(
+            lot_name="Deleted Parent Lot",
+            auction=deleted_auction,
+            auctiontos_seller=deleted_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Deleted Parent Lot"})
+        self.assertNotIn("Lots", self._group_labels(resp))
+
     def test_search_matches_page_shortcuts(self):
         self._login(self.user)
         resp = self.client.get(reverse("command_palette"), {"q": "preferences"})
@@ -21812,6 +21888,7 @@ class CommandPaletteTests(StandardTestCase):
 
     def test_set_winners_shown_for_open_in_person_auction(self):
         self.in_person_auction.date_start = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
         self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
         self.user.userdata.save()
@@ -21819,6 +21896,29 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
         urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
         self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
+
+    def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug}), urls)
+        self.assertNotIn(self.in_person_auction.add_lot_link, urls)
+
+        self.in_person_auction.allow_bulk_adding_lots = False
+        self.in_person_auction.save()
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.add_lot_link, urls)
+
+    def test_command_palette_response_is_not_cached(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("private", resp["Cache-Control"])
+        self.assertIn("no-store", resp["Cache-Control"])
 
     def test_print_and_label_shortcuts(self):
         self.user.userdata.last_auction_used = self.online_auction

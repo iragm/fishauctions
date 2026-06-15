@@ -19586,7 +19586,10 @@ class CommandPaletteView(View):
         from auctions import command_palette
 
         groups = command_palette.search(request, request.GET.get("q", ""))
-        return JsonResponse({"groups": groups})
+        response = JsonResponse({"groups": groups})
+        response["Cache-Control"] = "private, no-store"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class CommandPaletteLogView(View):

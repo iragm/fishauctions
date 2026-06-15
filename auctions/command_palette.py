@@ -16,6 +16,7 @@ palette stays consistent with the rest of the site.
 """
 
 import re
+from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.db.models import F, Q
@@ -59,6 +60,26 @@ def _last_auction(user):
         return user.userdata.last_auction_used
     except AttributeError:
         return None
+
+
+def _auction_visibility_filter(user):
+    next_90_days = timezone.now() + timedelta(days=90)
+    two_years_ago = timezone.now() - timedelta(days=365 * 2)
+    promoted_filter = Q(promote_this_auction=True, date_start__lte=next_90_days, date_posted__gte=two_years_ago)
+    if not user.is_authenticated:
+        return promoted_filter
+    return Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | promoted_filter
+
+
+def _visible_auctions(user):
+    qs = Auction.objects.exclude(is_deleted=True)
+    if user.is_superuser:
+        return qs
+    return qs.filter(_auction_visibility_filter(user)).distinct()
+
+
+def _use_bulk_add_lots(auction):
+    return bool(auction and not auction.is_online and auction.allow_bulk_adding_lots)
 
 
 def _member_clubs(user):
@@ -204,7 +225,7 @@ def _t_quick_checkout(user):
 
 def _t_add_lot(user):
     auction = _last_auction(user)
-    if not auction:
+    if not auction or _use_bulk_add_lots(auction):
         return []
     return [
         {
@@ -218,11 +239,11 @@ def _t_add_lot(user):
 
 def _t_bulk_add_lots(user):
     auction = _last_auction(user)
-    if not auction:
+    if not _use_bulk_add_lots(auction):
         return []
     return [
         {
-            "url": reverse("bulk_add_lots_for_myself", kwargs={"slug": auction.slug}),
+            "url": reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": auction.slug}),
             "title": f"Bulk add lots — {auction.title}",
             "description": "Add several of your lots at once",
             "icon": "bi-card-list",
@@ -807,12 +828,8 @@ def search(request, q):
     if page_items:
         groups.append({"label": "Go to", "items": page_items[:PAGE_LIMIT]})
 
-    auctions = (
-        Auction.objects.exclude(is_deleted=True)
-        .filter(Q(title__icontains=q) | Q(club__name__icontains=q))
-        .select_related("club")
-        .order_by("-date_posted")[:RESULT_LIMIT]
-    )
+    auctions = _visible_auctions(user).filter(Q(title__icontains=q) | Q(club__name__icontains=q)).select_related("club")
+    auctions = auctions.order_by("-date_posted")[:RESULT_LIMIT]
     auction_items = [
         _item("auction", a.title, a.get_absolute_url(), "bi-hammer", a.club.name if a.club else "", a.pk)
         for a in auctions
@@ -822,6 +839,8 @@ def search(request, q):
 
     lots = (
         Lot.objects.exclude(is_deleted=True)
+        .exclude(auction__is_deleted=True)
+        .filter(auction__in=_visible_auctions(user))
         .filter(Q(lot_name__icontains=q) | Q(summernote_description__icontains=q))
         .select_related("auction")
         .order_by("-date_posted")[:RESULT_LIMIT]

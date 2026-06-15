@@ -218,7 +218,6 @@ def unseed(apps, schema_editor):
         ).delete()
     for old, new in TARGET_RENAMES.items():
         CommandPalettePage.objects.filter(target=new).update(target=old)
-    CommandPalettePage.objects.update(synonyms="")
 
 
 class Migration(migrations.Migration):
