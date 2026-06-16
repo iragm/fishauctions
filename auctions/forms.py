@@ -3874,6 +3874,11 @@ class ClubPayPalCredentialsForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Stop Firefox/Chrome from offering the admin's own login here: the client ID/secret
+        # pair otherwise looks like a username/password login form. "new-password" is the only
+        # value browsers reliably honor on a password field ("off" is ignored for logins).
+        self.fields["paypal_client_id"].widget.attrs["autocomplete"] = "off"
+        self.fields["paypal_secret"].widget.attrs["autocomplete"] = "new-password"
         self.helper = FormHelper()
         # The template renders the <form> tag itself so it can point at the dedicated endpoint.
         self.helper.form_tag = False
