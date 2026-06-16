@@ -644,10 +644,11 @@ class Club(models.Model):
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
     MEMBERSHIP_SYSTEM_CHOICES = (
+        ("none", "No membership fees"),
         ("january_first", "January 1st renewal"),
         ("rolling", "Rolling annual membership"),
     )
-    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
+    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="none")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     show_member_barcode = models.BooleanField(
         default=True,
@@ -776,7 +777,7 @@ class Club(models.Model):
     )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
-        default=False,
+        default=True,
         verbose_name="Enable public club page",
         help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
     )
@@ -8358,6 +8359,14 @@ class UserData(models.Model):
     email_visible = models.BooleanField(default=False)
     email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
     last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+    last_club_used = models.ForeignKey(
+        Club,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The most recent club whose page this user viewed while a member. Used to scope command palette shortcuts.",
+    )
     last_activity = models.DateTimeField(auto_now_add=True)
     latitude = models.FloatField(default=0)
     longitude = models.FloatField(default=0)
@@ -8576,6 +8585,7 @@ class UserData(models.Model):
                 "location",
                 "club",
                 "last_auction_used",
+                "last_club_used",
                 "location_coordinates",
                 "paypal_email_address",
                 "preferred_bidder_number",
@@ -8779,6 +8789,7 @@ class UserData(models.Model):
             self.location = None
             self.club = None
             self.last_auction_used = None
+            self.last_club_used = None
             self.latitude = 0
             self.longitude = 0
             self.location_coordinates = None
@@ -8797,6 +8808,7 @@ class UserData(models.Model):
                     "location",
                     "club",
                     "last_auction_used",
+                    "last_club_used",
                     "latitude",
                     "longitude",
                     "location_coordinates",
@@ -9867,6 +9879,88 @@ class SearchHistory(models.Model):
     search = models.CharField(max_length=600)
     createdon = models.DateTimeField(auto_now_add=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+
+
+class CommandPalettePage(models.Model):
+    """Maps a generic phrase typed in the command palette to a destination page.
+
+    Populated by data migrations and managed in the Django admin only (no front-end UI).
+    For example "sell lots" -> the set-lot-winners page for the user's most recent auction.
+    A single phrase may map to several pages (several rows with the same ``search_term``).
+    """
+
+    search_term = models.CharField(
+        max_length=200, db_index=True, help_text="The phrase people type, e.g. 'sell lots' or 'address'."
+    )
+    synonyms = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Extra phrases that map here too (comma- or newline-separated). Good for typos and alternate wording.",
+    )
+    target = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text=(
+            "Dynamic destination key resolved against the user's context, e.g. "
+            "'last_auction:set_winners' or 'clubs:brevo'. Leave blank to use the URL field instead."
+        ),
+    )
+    url = models.CharField(
+        max_length=500, blank=True, help_text="Literal path used when target is blank, e.g. '/selling/'."
+    )
+    title = models.CharField(
+        max_length=200, blank=True, help_text="Optional label override. Leave blank to use a sensible default."
+    )
+    description = models.CharField(max_length=400, blank=True)
+    icon = models.CharField(max_length=50, blank=True, help_text="Bootstrap icon class, e.g. 'bi-cash-coin'.")
+    model = models.CharField(
+        max_length=20, blank=True, help_text="Optional hint: auction, club, or lot. Not currently required."
+    )
+    hits = models.PositiveIntegerField(default=0, help_text="Number of times this shortcut has been clicked.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-hits", "search_term"]
+
+    def __str__(self):
+        return f"{self.search_term} -> {self.target or self.url}"
+
+
+class CommandPaletteSearch(models.Model):
+    """One row per command-palette search session (not per keystroke).
+
+    The front end updates a single row as the user refines their query, then records
+    whether they clicked a result or abandoned the search. Only stored for logged-in users.
+    Built to be flexible so we can mine the data later and grow CommandPalettePage mappings.
+    """
+
+    RESULT_PENDING = "pending"
+    RESULT_CLICKED = "clicked"
+    RESULT_ABANDONED = "abandoned"
+    RESULT_BOUNCE = "bounce"
+    RESULT_CHOICES = [
+        (RESULT_PENDING, "In progress"),
+        (RESULT_CLICKED, "Clicked a result"),
+        (RESULT_ABANDONED, "Cleared or left"),
+        (RESULT_BOUNCE, "No results found"),
+    ]
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    search = models.CharField(max_length=600, blank=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    updatedon = models.DateTimeField(auto_now=True)
+    result = models.CharField(max_length=20, choices=RESULT_CHOICES, default=RESULT_PENDING)
+    result_type = models.CharField(
+        max_length=50, blank=True, help_text="auction, lot, club, clubmember, page, or default."
+    )
+    result_url = models.CharField(max_length=500, blank=True)
+    result_object_id = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} searched '{self.search}' ({self.result})"
 
 
 class ChatSubscription(models.Model):

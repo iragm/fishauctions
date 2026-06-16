@@ -24,6 +24,8 @@ from .models import (
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
+    CommandPalettePage,
+    CommandPaletteSearch,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -82,6 +84,22 @@ class SearchHistoryAdmin(admin.ModelAdmin):
     model = SearchHistory
     list_display = ("user", "search")
     search_fields = ()
+
+
+class CommandPalettePageAdmin(admin.ModelAdmin):
+    model = CommandPalettePage
+    list_display = ("search_term", "synonyms", "target", "url", "title", "hits", "is_active")
+    list_editable = ("synonyms", "is_active")
+    list_filter = ("is_active", "target")
+    search_fields = ("search_term", "synonyms", "title", "url", "target")
+
+
+class CommandPaletteSearchAdmin(admin.ModelAdmin):
+    model = CommandPaletteSearch
+    list_display = ("user", "search", "result", "result_type", "createdon")
+    list_filter = ("result", "result_type")
+    search_fields = ("search",)
+    readonly_fields = ("createdon", "updatedon")
 
 
 class AdCampaignResponseInline(admin.TabularInline):
@@ -313,7 +331,8 @@ class UserInline(admin.TabularInline):
     ]
     verbose_name = "Club member"
     verbose_name_plural = "Club members"
-    # fk_name = 'userdata'
+    # UserData has two FKs to Club (club + last_club_used); this inline is the user's club affiliation.
+    fk_name = "club"
     model = UserData
     extra = 0
 
@@ -809,6 +828,8 @@ admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(AdCampaign, AdCampaignAdmin)
 admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
+admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
+admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)

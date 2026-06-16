@@ -197,6 +197,7 @@ from .models import (
     ClubHistory,
     ClubMember,
     ClubMoney,
+    CommandPaletteSearch,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -1029,7 +1030,19 @@ class ClubViewMixin:
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
+        self.record_last_club_used(request)
         return super().dispatch(request, *args, **kwargs)
+
+    def record_last_club_used(self, request):
+        """Remember which club this member most recently looked at so the command palette
+        can scope its club shortcuts to it. Only members get tracked, and we only write when
+        the value actually changes to keep this dispatch hook cheap."""
+        user = request.user
+        if not user.is_authenticated or not self.club:
+            return
+        if not ClubMember.objects.filter(club=self.club, user=user, is_deleted=False).exists():
+            return
+        UserData.objects.filter(user=user).exclude(last_club_used=self.club).update(last_club_used=self.club)
 
     def user_has_club_permission(self, permission_name):
         """Check if the current user has a specific permission for self.club"""
@@ -8361,6 +8374,9 @@ class ToDefaultLandingPage(View):
             # if not, check and see if the user has been participating in an auction
             try:
                 auction = UserData.objects.get(user=request.user).last_auction_used
+                # Admins of an in-person auction land on the users list, not the lot list.
+                if auction and not auction.is_online and auction.permission_check(request.user):
+                    return redirect(auction.user_admin_link)
                 invoice = (
                     Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
                     .exclude(status="DRAFT")
@@ -16417,6 +16433,18 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
             and (self.club.can_accept_paypal or self.club.can_accept_square)
         ):
             raise Http404
+        # Members whose dues are current have nothing to pay — send them back to their
+        # membership card rather than showing an empty/confusing payment page.
+        if request.user.is_authenticated:
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if member:
+                _process_pending_membership_renewal_for_member(self.club, member)
+                member.refresh_from_db()
+                _, _, should_show_payment, _ = _membership_renewal_state(self.club, member)
+                if not should_show_payment:
+                    return redirect(
+                        reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": member.uuid})
+                    )
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -19569,3 +19597,75 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         else:
             messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class CommandPaletteView(View):
+    """JSON results for the command palette.
+
+    GET ?q= returns search groups; an empty/absent query returns the default items.
+    Login is required (applied in urls.py); the response is never cached.
+    """
+
+    def get(self, request, *args, **kwargs):
+        from auctions import command_palette
+
+        groups = command_palette.search(request, request.GET.get("q", ""))
+        response = JsonResponse({"groups": groups})
+        response["Cache-Control"] = "private, no-store"
+        response["Pragma"] = "no-cache"
+        return response
+
+
+class CommandPaletteLogView(View):
+    """Upsert the user's current command-palette search row.
+
+    Accepts form-encoded POST data (works with both fetch and navigator.sendBeacon):
+    id, search, result, result_type, result_url, result_object_id. Returns {"id": <pk>}.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import command_palette
+
+        def _int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        search_id = command_palette.log_search(
+            request.user,
+            search_id=_int(request.POST.get("id")),
+            search=request.POST.get("search", ""),
+            result=request.POST.get("result"),
+            result_type=request.POST.get("result_type", ""),
+            result_url=request.POST.get("result_url", ""),
+            result_object_id=_int(request.POST.get("result_object_id")),
+        )
+        return JsonResponse({"id": search_id})
+
+
+class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
+    """Admin overview of what people search for in the command palette.
+
+    Surfaces the most common searches and, especially, the top 'bounce' searches
+    (queries that returned nothing) so we can add them as synonyms or new shortcuts.
+    """
+
+    template_name = "command_palette_analytics.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        base = CommandPaletteSearch.objects.exclude(search="")
+
+        def top(qs):
+            return list(
+                qs.values("search")
+                .annotate(count=Count("id"), clicks=Count("id", filter=Q(result="clicked")))
+                .order_by("-count")[:20]
+            )
+
+        context["top_searches"] = top(base)
+        context["top_bounces"] = top(base.filter(result="bounce"))
+        context["total_searches"] = base.count()
+        context["total_bounces"] = base.filter(result="bounce").count()
+        return context
