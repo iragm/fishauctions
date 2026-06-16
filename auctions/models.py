@@ -8358,6 +8358,14 @@ class UserData(models.Model):
     email_visible = models.BooleanField(default=False)
     email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
     last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+    last_club_used = models.ForeignKey(
+        Club,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The most recent club whose page this user viewed while a member. Used to scope command palette shortcuts.",
+    )
     last_activity = models.DateTimeField(auto_now_add=True)
     latitude = models.FloatField(default=0)
     longitude = models.FloatField(default=0)
@@ -8576,6 +8584,7 @@ class UserData(models.Model):
                 "location",
                 "club",
                 "last_auction_used",
+                "last_club_used",
                 "location_coordinates",
                 "paypal_email_address",
                 "preferred_bidder_number",
@@ -8779,6 +8788,7 @@ class UserData(models.Model):
             self.location = None
             self.club = None
             self.last_auction_used = None
+            self.last_club_used = None
             self.latitude = 0
             self.longitude = 0
             self.location_coordinates = None
@@ -8797,6 +8807,7 @@ class UserData(models.Model):
                     "location",
                     "club",
                     "last_auction_used",
+                    "last_club_used",
                     "latitude",
                     "longitude",
                     "location_coordinates",

@@ -21,14 +21,10 @@
   <h3 class="h5">PayPal</h3>
   {% if club.allow_non_oauth_paypal %}
     {# Non-OAuth mode: this club uses its own PayPal app credentials instead of OAuth. #}
-    <p class="text-muted small">
-      This club uses its own PayPal app credentials. Payments go directly to the PayPal account
-      that owns these credentials, exactly like the site's own PayPal account.
-    </p>
     {% if club.uses_own_paypal_credentials %}
       <div class="alert alert-success py-2" role="alert">PayPal credentials are saved and active.</div>
     {% else %}
-      <div class="alert alert-warning py-2" role="alert">
+      <div class="alert alert-warning py-2 text-dark" role="alert">
         Enter your PayPal REST API client ID and secret below to start accepting payments.
       </div>
     {% endif %}

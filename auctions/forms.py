@@ -2070,6 +2070,10 @@ class AuctionEditForm(forms.ModelForm):
         # clean_manage_users_through_club rejects enabling on non-empty auctions
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
+            # Check-in mode only applies to in-person events, so don't offer it for online auctions.
+            self.fields["manage_users_through_club"].choices = [
+                choice for choice in self.fields["manage_users_through_club"].choices if choice[0] != "checkin"
+            ]
             self.fields[
                 "lot_submission_end_date"
             ].help_text = "This should be 1-24 hours before the end of your auction"
@@ -2389,6 +2393,11 @@ class AuctionEditForm(forms.ModelForm):
         instance = self.instance
         currently_enabled = bool(instance and instance.pk and instance.manage_users_through_club)
         target_enabled = bool(target)
+        # Check-in mode is an in-person concept (members are added as they arrive at the event);
+        # it has no meaning for online auctions.
+        if target == "checkin" and instance and instance.is_online:
+            msg = "Check-in mode is only available for in-person auctions."
+            raise forms.ValidationError(msg)
         if currently_enabled and not target_enabled:
             # Allow disabling only when there are no lots or invoices
             if instance and instance.pk:

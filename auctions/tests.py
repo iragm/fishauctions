@@ -15045,6 +15045,24 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_viewing_club_page_records_last_club_used_for_member(self):
+        """A member viewing a club page has it recorded as their last club used (for the palette)."""
+        self.owner.userdata.refresh_from_db()
+        self.assertIsNone(self.owner.userdata.last_club_used)
+        self.client.login(username="club_owner2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.owner.userdata.refresh_from_db()
+        self.assertEqual(self.owner.userdata.last_club_used, self.club)
+
+    def test_viewing_club_page_does_not_record_for_non_member(self):
+        """A non-member viewing a public club page does not get it recorded as their last club used."""
+        self.club.enable_club_page = True
+        self.club.save()
+        self.client.login(username="other2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.other_user.userdata.refresh_from_db()
+        self.assertIsNone(self.other_user.userdata.last_club_used)
+
     def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
         self.club.enable_club_page = True
         self.club.enable_breeder_award_program = True
@@ -18721,6 +18739,20 @@ class ClubMembershipInvoiceTests(TestCase):
             ).exists()
         )
 
+    def test_payment_view_redirects_member_not_due_to_card(self):
+        """A member whose dues are current is bounced back to their membership card."""
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
+        self.club_member.membership_last_paid = timezone.now().date()
+        self.club_member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=200)
+        self.club_member.save()
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertRedirects(
+            response,
+            reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.club_member.uuid}),
+            fetch_redirect_response=False,
+        )
+
     # -- CreatePayPalOrderView redirects for club invoices ---------------------
 
     def test_paypal_order_view_redirects_to_club_pay_on_error(self):
@@ -20741,6 +20773,45 @@ class ManageUsersThroughClubTests(TestCase):
         form.is_valid()
         self.assertNotIn("add_membership_fee_to_invoices_for_expired_members", form.errors)
 
+    def _online_club_auction(self):
+        online = Auction.objects.create(
+            created_by=self.creator,
+            title="Online Club Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            club=self.club,
+        )
+        PickupLocation.objects.create(
+            name="online loc", auction=online, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        return online
+
+    def test_checkin_choice_hidden_for_online_auction(self):
+        """Check-in mode is in-person only, so the option is dropped for online auctions."""
+        form = AuctionEditForm(
+            instance=self._online_club_auction(), user=self.creator, cloned_from=None, user_timezone="UTC"
+        )
+        choice_values = [c[0] for c in form.fields["manage_users_through_club"].choices]
+        self.assertNotIn("checkin", choice_values)
+        self.assertIn("all", choice_values)
+
+    def test_checkin_mode_rejected_for_online_auction(self):
+        """Even if check-in is forced past the UI, the validator rejects it for online auctions."""
+        online = self._online_club_auction()
+        form = AuctionEditForm(
+            data={"manage_users_through_club": "checkin", "club": str(self.club.pk)},
+            instance=online,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Restore the full choice set so the field accepts "checkin" and our custom validator runs.
+        form.fields["manage_users_through_club"].choices = Auction.MANAGE_USERS_CHOICES
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+        self.assertIn("in-person", " ".join(form.errors["manage_users_through_club"]).lower())
+
     def test_permission_check_grants_club_admin_and_manage_auctions(self):
         self._enable_club_managed()
         self.assertTrue(self.auction.permission_check(self.club_admin_user))
@@ -21956,6 +22027,142 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("command_palette"))
         first = resp.json()["groups"][0]["items"][0]
         self.assertEqual(first["type"], "invoice")
+
+    def _all_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+
+    def _go_to_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+
+    def _make_palette_club(self, user, **permissions):
+        """Create a club, make ``user`` a member with the given permissions, and record it as the
+        user's last club used so the palette's club shortcuts target it."""
+        club = Club.objects.create(name="Palette Club", enable_club_page=True)
+        ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
+        user.userdata.last_club_used = club
+        user.userdata.save()
+        return club
+
+    def test_api_search_returns_club_api_keys_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "api"})
+        self.assertIn(reverse("club_api_keys", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_username_search_returns_preferences_and_change_username(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "username"})
+        urls = self._go_to_urls(resp)
+        self.assertIn(reverse("change_username"), urls)
+        self.assertIn(reverse("preferences"), urls)
+        # The preferences hit names the specific field it would change.
+        pref_items = [
+            i
+            for g in resp.json()["groups"]
+            if g["label"] == "Go to"
+            for i in g["items"]
+            if i["url"] == reverse("preferences")
+        ]
+        self.assertTrue(any("username" in i["subtitle"].lower() for i in pref_items))
+
+    def test_club_settings_field_search_returns_settings_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "facebook"})
+        self.assertIn(reverse("club_edit", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_club_shortcuts_scoped_to_last_club_used(self):
+        club_a = Club.objects.create(name="Club A Palette")
+        club_b = Club.objects.create(name="Club B Palette")
+        ClubMember.objects.create(club=club_a, user=self.user, name="A", permission_view=True)
+        ClubMember.objects.create(club=club_b, user=self.user, name="B", permission_view=True)
+        self.user.userdata.last_club_used = club_a
+        self.user.userdata.save()
+        self._login(self.user)
+        urls = self._go_to_urls(self.client.get(reverse("command_palette"), {"q": "members"}))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club_a.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club_b.slug}), urls)
+
+    def test_lot_search_excludes_promoted_auction_user_has_not_joined(self):
+        promoted = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Promoted Palette Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=True,
+        )
+        loc = PickupLocation.objects.create(
+            name="promoted loc", auction=promoted, pickup_time=timezone.now() + datetime.timedelta(days=6)
+        )
+        seller = AuctionTOS.objects.create(user=self.admin_user, auction=promoted, pickup_location=loc)
+        Lot.objects.create(lot_name="Promoted Palette Lot", auction=promoted, auctiontos_seller=seller, quantity=1)
+        self._login(self.user)  # self.user has not joined the promoted auction
+        resp = self.client.get(reverse("command_palette"), {"q": "Promoted Palette"})
+        # The auction itself is visible (promoted), but its lots are not searchable by a non-participant.
+        self.assertIn("Auctions", self._group_labels(resp))
+        self.assertNotIn("Lots", self._group_labels(resp))
+
+    def test_checkin_membership_card_shown_for_unchecked_in_member(self):
+        club = Club.objects.create(name="Check-in Palette Club")
+        member_user = User.objects.create_user(username="cm_palette", password="testpassword", email="cm@example.com")
+        member = ClubMember.objects.create(club=club, user=member_user, name="CM Palette")
+        auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Check-in Palette Auction",
+            is_online=False,
+            date_start=timezone.now() + datetime.timedelta(days=2),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            club=club,
+            manage_users_through_club="checkin",
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.assertTrue(auction.use_check_in_mode)
+        member_user.userdata.last_auction_used = auction
+        member_user.userdata.save()
+        self._login(member_user)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}), urls)
+
+    def test_club_default_falls_back_to_home_without_manage_permissions(self):
+        club = Club.objects.create(name="Home Fallback Club")
+        ClubMember.objects.create(club=club, user=self.userB, name="Plain Member")
+        self.userB.userdata.last_club_used = club
+        self.userB.userdata.save()
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_detail", kwargs={"slug": club.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_club_default_shows_members_with_manage_permission(self):
+        club = self._make_palette_club(self.userB, permission_view=True)
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_membership_card_search_terms_return_uuid_card(self):
+        club = self._make_palette_club(self.user)
+        member = ClubMember.objects.get(club=club, user=self.user)
+        card_url = reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid})
+        self._login(self.user)
+        for term in ["card", "membership", "member", club.name]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertIn(card_url, urls, f"membership card missing for query '{term}'")
+
+    def test_membership_pay_page_not_in_palette(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        pay_url = reverse("club_membership_pay", kwargs={"slug": club.slug})
+        self._login(self.user)
+        for term in ["renew", "membership", "pay dues", "dues"]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertNotIn(pay_url, urls, f"pay page should not appear for '{term}'")
 
     def test_analytics_view_is_admin_only(self):
         CommandPaletteSearch.objects.create(user=self.user, search="needle", result="bounce")

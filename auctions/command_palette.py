@@ -9,10 +9,10 @@ shortcut resolution:
   * ``resolve_page(page, user)``   -> expand a ``CommandPalettePage`` row into item(s)
   * ``log_search(...)``            -> upsert a ``CommandPaletteSearch`` row + bump page hits
 
-A dynamic ``target`` resolver may return several items (e.g. one "Members" link per club
-the user administers), so resolvers return *lists*. Permission/destination helpers are reused
-from the models, from ``views.check_club_permission`` and from ``filters.rhyming_name_q`` so the
-palette stays consistent with the rest of the site.
+A dynamic ``target`` resolver may return several items, so resolvers return *lists*. Club shortcuts
+resolve against a single "palette club" (the member's last-used club) to keep results focused.
+Permission/destination helpers are reused from the models, from ``views.check_club_permission`` and
+from ``filters.rhyming_name_q`` so the palette stays consistent with the rest of the site.
 """
 
 import re
@@ -62,6 +62,44 @@ def _last_auction(user):
         return None
 
 
+def _last_club(user):
+    try:
+        return user.userdata.last_club_used
+    except AttributeError:
+        return None
+
+
+def _palette_club(user):
+    """The single club the palette's club shortcuts and club defaults target.
+
+    Prefers the explicitly recorded last club used (set when the member views a club page);
+    falls back to the most recent auction's club so someone who has only run an auction still
+    gets club shortcuts. Scoping to one club keeps the palette from listing the same shortcut
+    once per club the user belongs to.
+    """
+    club = _last_club(user)
+    if club:
+        return club
+    auction = _last_auction(user)
+    if auction and auction.club:
+        return auction.club
+    return None
+
+
+def _can_manage_members(user, club):
+    """Permission to see/manage the club's member list (the "Members" shortcut destination)."""
+    return _perm(user, club, "permission_view") or _perm(user, club, "permission_add_edit")
+
+
+def _is_mobile(request):
+    try:
+        from user_agents import parse
+
+        return bool(parse(request.META.get("HTTP_USER_AGENT", "")).is_mobile)
+    except Exception:
+        return False
+
+
 def _auction_visibility_filter(user):
     next_90_days = timezone.now() + timedelta(days=90)
     two_years_ago = timezone.now() - timedelta(days=365 * 2)
@@ -78,13 +116,22 @@ def _visible_auctions(user):
     return qs.filter(_auction_visibility_filter(user)).distinct()
 
 
+def _joined_auctions(user):
+    """Auctions the user has actually joined or created — *not* publicly promoted ones.
+
+    Lot search is scoped to these so the palette never surfaces lots from auctions the user
+    has no relationship with, even when those auctions are promoted/public.
+    """
+    qs = Auction.objects.exclude(is_deleted=True)
+    if user.is_superuser:
+        return qs
+    if not user.is_authenticated:
+        return qs.none()
+    return qs.filter(Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user)).distinct()
+
+
 def _use_bulk_add_lots(auction):
     return bool(auction and not auction.is_online and auction.allow_bulk_adding_lots)
-
-
-def _member_clubs(user):
-    """Every club the user belongs to (for member-facing shortcuts like renewals)."""
-    return list(Club.objects.filter(members__user=user, members__is_deleted=False).distinct().order_by("name"))
 
 
 def _admin_clubs(user):
@@ -142,7 +189,7 @@ def _invoice_status_label(invoice):
 
 # --- Dynamic target resolvers ------------------------------------------------
 # Each builder takes the user and returns a list of {url, title, description, icon} dicts
-# (empty when nothing applies). Lists let one target fan out across every club a user administers.
+# (empty when nothing applies). Returning lists lets a target fan out (e.g. several recent invoices).
 
 
 def _last_auction_admin(user):
@@ -367,19 +414,24 @@ def _t_invoice(user):
 
 
 def _clubs_items(user, url_name, title_prefix, icon, perm="permission_view", description=""):
-    items = []
-    for club in _admin_clubs(user):
-        if perm and not _perm(user, club, perm):
-            continue
-        items.append(
-            {
-                "url": reverse(url_name, kwargs={"slug": club.slug}),
-                "title": f"{title_prefix} — {club.name}",
-                "description": description,
-                "icon": icon,
-            }
-        )
-    return items
+    """Resolve a club shortcut against the single palette club (the last club used).
+
+    Returning at most one item keeps the palette focused on the club the user is currently
+    working with instead of fanning the same shortcut out across every club they belong to.
+    """
+    club = _palette_club(user)
+    if not club:
+        return []
+    if perm and not _perm(user, club, perm):
+        return []
+    return [
+        {
+            "url": reverse(url_name, kwargs={"slug": club.slug}),
+            "title": f"{title_prefix} — {club.name}",
+            "description": description,
+            "icon": icon,
+        }
+    ]
 
 
 def _t_club_members(user):
@@ -410,16 +462,10 @@ def _t_club_payments(user):
     )
 
 
-def _t_clubs_renew(user):
-    return [
-        {
-            "url": reverse("club_membership_pay", kwargs={"slug": club.slug}),
-            "title": f"Renew membership — {club.name}",
-            "description": "Pay or renew your club membership",
-            "icon": "bi-arrow-repeat",
-        }
-        for club in _member_clubs(user)
-    ]
+def _t_club_api(user):
+    return _clubs_items(
+        user, "club_api_keys", "API keys", "bi-key", "permission_edit_club", "Manage your club's API keys"
+    )
 
 
 def _t_user_paypal(user):
@@ -497,7 +543,7 @@ DYNAMIC_TARGETS = {
     "clubs:mailchimp": _t_club_mailchimp,
     "clubs:discord": _t_club_discord,
     "clubs:payments": _t_club_payments,
-    "clubs:renew": _t_clubs_renew,
+    "clubs:api": _t_club_api,
     "user:paypal": _t_user_paypal,
     "user:square": _t_user_square,
     "account:email": _t_account_email,
@@ -605,6 +651,98 @@ def _auction_field_items(user, q):
     return [item for item, _ in by_url.values()]
 
 
+def _form_field_match(model, field_names, ql):
+    """Return (field, matched_verbose) for the best field on ``model`` whose verbose name or
+    help text contains ``ql``, preferring a verbose-name hit. ``None`` when nothing matches.
+
+    Shared by the user-preferences and club-settings matchers so a query like "username" or
+    "annual fee" resolves to the page that actually edits that setting, the same way auction
+    field names resolve to the auction settings page.
+    """
+    best = None
+    for field in model._meta.get_fields():
+        if field.name not in field_names:
+            continue
+        verbose = str(getattr(field, "verbose_name", "") or "")
+        help_text = str(getattr(field, "help_text", "") or "")
+        verbose_match = bool(verbose) and ql in verbose.lower()
+        help_match = bool(help_text) and ql in help_text.lower()
+        if not (verbose_match or help_match):
+            continue
+        display = verbose or field.name.replace("_", " ")
+        if best is None or (verbose_match and not best[1]):
+            best = (display, verbose_match)
+        if verbose_match:
+            # A verbose-name hit is as precise as it gets; keep the first one we see.
+            return best
+    return best
+
+
+def _user_pref_field_items(user, q):
+    """Match the query against the user-preferences form fields and link to the preferences page.
+
+    Mirrors ``_auction_field_items``: searching "username" surfaces "Change username visible"
+    on the user preferences page (the standalone "change username" page is a separate shortcut).
+    """
+    if not user.is_authenticated or len(q) < 3:
+        return []
+    from .forms import ChangeUserPreferencesForm
+    from .models import UserData
+
+    match = _form_field_match(UserData, set(ChangeUserPreferencesForm.Meta.fields), q.lower())
+    if not match:
+        return []
+    display = match[0]
+    return [
+        _item(
+            "page",
+            "User preferences",
+            reverse("preferences"),
+            "bi-sliders",
+            f"Change {display}",
+        )
+    ]
+
+
+def _club_settings_field_items(user, q):
+    """Match the query against the palette club's settings forms and link to the right page."""
+    if len(q) < 3:
+        return []
+    club = _palette_club(user)
+    if not club:
+        return []
+    from .forms import ClubEditForm, ClubMembershipSettingsForm
+
+    ql = q.lower()
+    # (form fields, url name, label, permission needed to reach the page)
+    sources = [
+        (set(ClubEditForm.Meta.fields), "club_edit", "Club settings", "permission_edit_club"),
+        (
+            set(ClubMembershipSettingsForm.Meta.fields),
+            "club_membership_settings",
+            "Membership settings",
+            "permission_money",
+        ),
+    ]
+    items = []
+    for field_names, url_name, label, perm in sources:
+        if not (_perm(user, club, perm) or _perm(user, club, "permission_edit_club")):
+            continue
+        match = _form_field_match(Club, field_names, ql)
+        if not match:
+            continue
+        items.append(
+            _item(
+                "page",
+                f"{label} — {club.name}",
+                reverse(url_name, kwargs={"slug": club.slug}),
+                "bi-gear",
+                f"Change {match[0]}",
+            )
+        )
+    return items
+
+
 def _is_email(q):
     return "@" in q
 
@@ -664,6 +802,258 @@ def _auctiontos_search_items(user, q):
     return items
 
 
+_CARD_PHRASES = ("card", "membership card", "membership", "member", "my card", "wallet")
+
+
+def _membership_card_search_items(user, q):
+    """The user's own UUID membership card(s).
+
+    Surfaced when they search for card/membership/member, or for one of their clubs by name.
+    The palette club (last used) is listed first so the most relevant card leads.
+    """
+    if not user.is_authenticated:
+        return []
+    ql = q.lower().strip()
+    if len(ql) < 2:
+        return []
+    generic = any(phrase in ql or ql in phrase for phrase in _CARD_PHRASES)
+    palette = _palette_club(user)
+    palette_id = palette.id if palette else None
+    members = list(ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"))
+    members.sort(key=lambda m: (m.club_id != palette_id, (m.club.name or "").lower() if m.club else ""))
+    items = []
+    for member in members:
+        club = member.club
+        if not club:
+            continue
+        name_match = ql in club.name.lower() or bool(club.abbreviation and ql in club.abbreviation.lower())
+        if not (generic or name_match):
+            continue
+        items.append(
+            _item(
+                "clubmember",
+                f"Membership card — {club.name}",
+                reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}),
+                "bi-person-vcard",
+                "Your membership card",
+                member.pk,
+            )
+        )
+        if len(items) >= RESULT_LIMIT:
+            break
+    return items
+
+
+def _user_tos(user, auction):
+    return AuctionTOS.objects.filter(auction=auction, user=user).select_related("auction").first()
+
+
+def _ready_invoice(user, auction):
+    return Invoice.objects.filter(
+        auctiontos_user__user=user, auctiontos_user__auction=auction, status__in=["UNPAID", "PAID"]
+    ).first()
+
+
+def _invoice_item(invoice, auction, icon, description):
+    return _item(
+        "invoice",
+        f"Your invoice — {auction.title}",
+        reverse("invoice_by_pk", kwargs={"pk": invoice.pk}),
+        icon,
+        description,
+        invoice.pk,
+    )
+
+
+def _member_can_add_lots(auction, tos):
+    """A non-admin may add lots when they've joined, are allowed to sell, and submission is open.
+
+    ``can_submit_lots`` closes once lot submission ends, which is exactly when the spec says to
+    drop the add-lots default. It can raise if the auction has no submission start date, so guard.
+    """
+    if not tos or not tos.selling_allowed:
+        return False
+    try:
+        return bool(auction.can_submit_lots)
+    except (TypeError, AttributeError):
+        return False
+
+
+def _member_should_print_labels(auction, tos):
+    """Print-labels default: online auctions only after they end, in-person only before they start."""
+    if not tos:
+        return False
+    if auction.is_online:
+        return _auction_ended(auction) and tos.print_labels_qs.exists()
+    return bool(auction.date_start and timezone.now() < auction.date_start and tos.unprinted_label_count)
+
+
+def _membership_card_item(user, club):
+    """Link to the member's own membership card (carries the check-in barcode/QR)."""
+    if not club:
+        return None
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member:
+        return None
+    return _item(
+        "club",
+        f"My membership card — {club.name}",
+        reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}),
+        "bi-person-vcard",
+        "Show this to check in",
+    )
+
+
+def _auction_admin_items(request, auction, ended):
+    items = [
+        _item(
+            "auction", f"View users — {auction.title}", auction.user_admin_link, "bi-people-fill", "Manage participants"
+        )
+    ]
+    if not auction.is_online and not ended:
+        items.append(
+            _item(
+                "auction",
+                f"Set lot winners — {auction.title}",
+                auction.set_lot_winners_link,
+                "bi-calendar-check",
+                "Record who won each lot",
+            )
+        )
+    if not auction.is_online and auction.use_check_in_mode and _is_mobile(request):
+        items.append(
+            _item(
+                "auction",
+                f"Quick check-in — {auction.title}",
+                reverse("auction_quick_check_in", kwargs={"slug": auction.slug}),
+                "bi-qr-code-scan",
+                "Scan members in as they arrive",
+            )
+        )
+    items.append(
+        _item(
+            "auction",
+            f"Quick checkout — {auction.title}",
+            reverse("auction_quick_checkout", kwargs={"slug": auction.slug}),
+            "bi-bag-heart",
+            "Handle payments and mark invoices paid",
+        )
+    )
+    return items
+
+
+def _auction_member_items(user, auction, tos):
+    items = []
+    if _member_can_add_lots(auction, tos):
+        if _use_bulk_add_lots(auction):
+            items.append(
+                _item(
+                    "auction",
+                    f"Bulk add lots — {auction.title}",
+                    reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": auction.slug}),
+                    "bi-card-list",
+                    "Add several of your lots at once",
+                )
+            )
+        else:
+            items.append(
+                _item(
+                    "auction",
+                    f"Add a lot — {auction.title}",
+                    f"{reverse('new_lot')}?auction={auction.slug}",
+                    "bi-plus-circle",
+                    "Sell a lot in your most recent auction",
+                )
+            )
+    # Check-in auctions: if the user hasn't been checked in yet, hand them their membership card.
+    if not auction.is_online and auction.use_check_in_mode and (tos is None or tos.checked_in is None):
+        card = _membership_card_item(user, auction.club)
+        if card:
+            items.append(card)
+    if _member_should_print_labels(auction, tos):
+        items.append(
+            _item(
+                "auction",
+                f"Print labels — {auction.title}",
+                reverse("print_my_labels", kwargs={"slug": auction.slug}),
+                "bi-printer",
+                "Print labels for your lots",
+            )
+        )
+    return items
+
+
+def _auction_default_items(request, user, auction):
+    """Defaults for the user's most recent auction, ordered by the role/state they're in."""
+    items = []
+    is_admin = auction.permission_check(user)
+    ended = _auction_ended(auction)
+    tos = _user_tos(user, auction)
+
+    # An invoice for the most recent auction is the single most useful thing to surface first.
+    ready_invoice = _ready_invoice(user, auction)
+    if ready_invoice:
+        items.append(_invoice_item(ready_invoice, auction, "bi-bag-check", _invoice_status_label(ready_invoice)))
+
+    # View lots is always the first action.
+    items.append(
+        _item("auction", f"View lots — {auction.title}", auction.view_lot_link, "bi-grid", "Your most recent auction")
+    )
+
+    if is_admin:
+        items += _auction_admin_items(request, auction, ended)
+    else:
+        items += _auction_member_items(user, auction, tos)
+        # Once ended, a non-admin with no ready invoice still gets a link to whatever invoice exists.
+        if ended and not ready_invoice:
+            invoice = (
+                Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
+                .exclude(status="DRAFT")
+                .first()
+            )
+            if invoice:
+                items.append(_invoice_item(invoice, auction, "bi-bag", "View your invoice"))
+    return items
+
+
+def _club_default_items(user):
+    """Club defaults for the palette club: membership management and BAP gated on permissions,
+    falling back to the club home page when the user manages neither."""
+    club = _palette_club(user)
+    if not club:
+        return []
+    items = []
+    if _can_manage_members(user, club):
+        items.append(
+            _item(
+                "club",
+                f"Members — {club.name}",
+                reverse("club_admin", kwargs={"slug": club.slug}),
+                "bi-people-fill",
+                "Manage your club's members",
+            )
+        )
+    if club.enable_breeder_award_program and _perm(user, club, "permission_manage_bap"):
+        auction = _last_auction(user)
+        if auction and auction.club_id == club.id:
+            bap_url = _bap_url(club, auction)
+        else:
+            bap_url = reverse("club_bap", kwargs={"slug": club.slug})
+        items.append(_item("club", f"BAP — {club.name}", bap_url, "bi-award", "Breeder Award Program"))
+    if not items:
+        # No management role here — the club's home page is the relevant thing to offer.
+        items.append(
+            _item(
+                "club",
+                club.name,
+                reverse("club_detail", kwargs={"slug": club.slug}),
+                "bi-house",
+                "Your club's home page",
+            )
+        )
+    return items
+
+
 def default_items(request):
     """Groups shown when the palette opens with no query."""
     user = request.user
@@ -671,98 +1061,8 @@ def default_items(request):
     primary = []
     auction = _last_auction(user)
     if auction:
-        is_admin = auction.permission_check(user)
-        ended = _auction_ended(auction)
-        # A ready/paid invoice for the most recent auction is the most useful thing to surface first.
-        ready_invoice = Invoice.objects.filter(
-            auctiontos_user__user=user, auctiontos_user__auction=auction, status__in=["UNPAID", "PAID"]
-        ).first()
-        if ready_invoice:
-            primary.append(
-                _item(
-                    "invoice",
-                    f"Your invoice — {auction.title}",
-                    reverse("invoice_by_pk", kwargs={"pk": ready_invoice.pk}),
-                    "bi-bag-check",
-                    _invoice_status_label(ready_invoice),
-                    ready_invoice.pk,
-                )
-            )
-        primary.append(
-            _item(
-                "auction", f"View lots — {auction.title}", auction.view_lot_link, "bi-grid", "Your most recent auction"
-            )
-        )
-        if ended and not is_admin and not ready_invoice:
-            invoice = (
-                Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
-                .exclude(status="DRAFT")
-                .first()
-            )
-            if invoice:
-                primary.append(
-                    _item(
-                        "invoice",
-                        f"Your invoice — {auction.title}",
-                        reverse("invoice_by_pk", kwargs={"pk": invoice.pk}),
-                        "bi-bag",
-                        "View your invoice",
-                        invoice.pk,
-                    )
-                )
-        if is_admin:
-            primary.append(
-                _item(
-                    "auction",
-                    f"View users — {auction.title}",
-                    auction.user_admin_link,
-                    "bi-people-fill",
-                    "Manage participants",
-                )
-            )
-            if not auction.is_online and not ended:
-                primary.append(
-                    _item(
-                        "auction",
-                        f"Set lot winners — {auction.title}",
-                        auction.set_lot_winners_link,
-                        "bi-calendar-check",
-                        "Record who won each lot",
-                    )
-                )
-            primary.append(
-                _item(
-                    "auction",
-                    f"Quick checkout — {auction.title}",
-                    reverse("auction_quick_checkout", kwargs={"slug": auction.slug}),
-                    "bi-bag-heart",
-                    "Check buyers out",
-                )
-            )
-            if (
-                auction.club
-                and auction.club.enable_breeder_award_program
-                and _perm(user, auction.club, "permission_manage_bap")
-            ):
-                primary.append(
-                    _item(
-                        "club",
-                        f"BAP — {auction.club.name}",
-                        _bap_url(auction.club, auction),
-                        "bi-award",
-                        "Breeder Award Program",
-                    )
-                )
-    for club in _admin_clubs(user)[:3]:
-        primary.append(
-            _item(
-                "club",
-                f"Members — {club.name}",
-                reverse("club_admin", kwargs={"slug": club.slug}),
-                "bi-people-fill",
-                "Manage your club",
-            )
-        )
+        primary += _auction_default_items(request, user, auction)
+    primary += _club_default_items(user)
     next_auction = (
         Auction.objects.filter(
             club__members__user=user,
@@ -824,9 +1124,26 @@ def search(request, q):
     groups = []
     ql = q.lower()
 
-    page_items = _page_items(user, ql) + _auction_field_items(user, q)
+    page_items = (
+        _page_items(user, ql)
+        + _auction_field_items(user, q)
+        + _user_pref_field_items(user, q)
+        + _club_settings_field_items(user, q)
+    )
     if page_items:
-        groups.append({"label": "Go to", "items": page_items[:PAGE_LIMIT]})
+        # De-dupe by URL so a phrase shortcut and a field match don't both surface the same page.
+        seen_urls = set()
+        deduped = []
+        for item in page_items:
+            if item["url"] in seen_urls:
+                continue
+            seen_urls.add(item["url"])
+            deduped.append(item)
+        groups.append({"label": "Go to", "items": deduped[:PAGE_LIMIT]})
+
+    card_items = _membership_card_search_items(user, q)
+    if card_items:
+        groups.append({"label": "Membership card", "items": card_items})
 
     auctions = _visible_auctions(user).filter(Q(title__icontains=q) | Q(club__name__icontains=q)).select_related("club")
     auctions = auctions.order_by("-date_posted")[:RESULT_LIMIT]
@@ -840,7 +1157,7 @@ def search(request, q):
     lots = (
         Lot.objects.exclude(is_deleted=True)
         .exclude(auction__is_deleted=True)
-        .filter(auction__in=_visible_auctions(user))
+        .filter(auction__in=_joined_auctions(user))
         .filter(Q(lot_name__icontains=q) | Q(summernote_description__icontains=q))
         .select_related("auction")
         .order_by("-date_posted")[:RESULT_LIMIT]

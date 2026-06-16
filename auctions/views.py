@@ -1030,7 +1030,19 @@ class ClubViewMixin:
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
+        self.record_last_club_used(request)
         return super().dispatch(request, *args, **kwargs)
+
+    def record_last_club_used(self, request):
+        """Remember which club this member most recently looked at so the command palette
+        can scope its club shortcuts to it. Only members get tracked, and we only write when
+        the value actually changes to keep this dispatch hook cheap."""
+        user = request.user
+        if not user.is_authenticated or not self.club:
+            return
+        if not ClubMember.objects.filter(club=self.club, user=user, is_deleted=False).exists():
+            return
+        UserData.objects.filter(user=user).exclude(last_club_used=self.club).update(last_club_used=self.club)
 
     def user_has_club_permission(self, permission_name):
         """Check if the current user has a specific permission for self.club"""
@@ -16421,6 +16433,18 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
             and (self.club.can_accept_paypal or self.club.can_accept_square)
         ):
             raise Http404
+        # Members whose dues are current have nothing to pay — send them back to their
+        # membership card rather than showing an empty/confusing payment page.
+        if request.user.is_authenticated:
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if member:
+                _process_pending_membership_renewal_for_member(self.club, member)
+                member.refresh_from_db()
+                _, _, should_show_payment, _ = _membership_renewal_state(self.club, member)
+                if not should_show_payment:
+                    return redirect(
+                        reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": member.uuid})
+                    )
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):

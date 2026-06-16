@@ -331,7 +331,8 @@ class UserInline(admin.TabularInline):
     ]
     verbose_name = "Club member"
     verbose_name_plural = "Club members"
-    # fk_name = 'userdata'
+    # UserData has two FKs to Club (club + last_club_used); this inline is the user's club affiliation.
+    fk_name = "club"
     model = UserData
     extra = 0
 
