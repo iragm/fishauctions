@@ -16795,7 +16795,7 @@ class ClubSettingsViewTests(TestCase):
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.membership_system, "none")
-        self.assertEqual(self.club.membership_annual_fee, Decimal("0"))
+        self.assertEqual(self.club.membership_annual_fee, Decimal(0))
 
     def test_membership_settings_paid_system_rejects_zero_fee(self):
         """A paid membership system requires a fee greater than 0."""
@@ -16808,9 +16808,13 @@ class ClubSettingsViewTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertFormError(response.context["form"], "membership_annual_fee", [
-            'Enter a fee greater than 0, or choose "No membership fees" above.',
-        ])
+        self.assertFormError(
+            response.context["form"],
+            "membership_annual_fee",
+            [
+                'Enter a fee greater than 0, or choose "No membership fees" above.',
+            ],
+        )
         self.club.refresh_from_db()
         self.assertEqual(self.club.membership_system, "none")
 

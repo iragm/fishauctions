@@ -3851,7 +3851,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         fee = cleaned_data.get("membership_annual_fee")
         if membership_system == "none":
             # "No membership fees" always means a zero fee, regardless of what was submitted.
-            cleaned_data["membership_annual_fee"] = Decimal("0")
+            cleaned_data["membership_annual_fee"] = Decimal(0)
         elif not fee or fee <= 0:
             # A paid membership system requires a real fee — a zero fee would silently
             # disable dues, payment buttons, and reminders while still showing as "paid".

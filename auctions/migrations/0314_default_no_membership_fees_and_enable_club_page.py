@@ -10,27 +10,38 @@ def forwards(apps, schema_editor):
     # "No membership fees" is the new default. Apply it only to clubs that aren't actually
     # charging dues (fee is blank or 0); clubs with a real fee keep their january_first/rolling
     # system untouched. The invariant going forward is: membership_system == "none" <=> fee 0.
-    Club.objects.filter(
-        models.Q(membership_annual_fee__isnull=True) | models.Q(membership_annual_fee__lte=0)
-    ).update(membership_system="none", membership_annual_fee=0)
+    Club.objects.filter(models.Q(membership_annual_fee__isnull=True) | models.Q(membership_annual_fee__lte=0)).update(
+        membership_system="none", membership_annual_fee=0
+    )
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0313_remove_command_palette_renew'),
+        ("auctions", "0313_remove_command_palette_renew"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='club',
-            name='enable_club_page',
-            field=models.BooleanField(default=True, help_text='Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.', verbose_name='Enable public club page'),
+            model_name="club",
+            name="enable_club_page",
+            field=models.BooleanField(
+                default=True,
+                help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
+                verbose_name="Enable public club page",
+            ),
         ),
         migrations.AlterField(
-            model_name='club',
-            name='membership_system',
-            field=models.CharField(choices=[('none', 'No membership fees'), ('january_first', 'January 1st renewal'), ('rolling', 'Rolling annual membership')], default='none', max_length=20),
+            model_name="club",
+            name="membership_system",
+            field=models.CharField(
+                choices=[
+                    ("none", "No membership fees"),
+                    ("january_first", "January 1st renewal"),
+                    ("rolling", "Rolling annual membership"),
+                ],
+                default="none",
+                max_length=20,
+            ),
         ),
         migrations.RunPython(forwards, migrations.RunPython.noop),
     ]
