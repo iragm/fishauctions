@@ -644,10 +644,11 @@ class Club(models.Model):
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
     MEMBERSHIP_SYSTEM_CHOICES = (
+        ("none", "No membership fees"),
         ("january_first", "January 1st renewal"),
         ("rolling", "Rolling annual membership"),
     )
-    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
+    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="none")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     show_member_barcode = models.BooleanField(
         default=True,
@@ -776,7 +777,7 @@ class Club(models.Model):
     )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
-        default=False,
+        default=True,
         verbose_name="Enable public club page",
         help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
     )

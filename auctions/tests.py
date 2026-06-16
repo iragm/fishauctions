@@ -15018,8 +15018,9 @@ class ClubViewTests(TestCase):
         )
 
     def test_club_detail_requires_login(self):
-        """Anonymous user gets 404 when enable_club_page=False (default)"""
-        self.assertFalse(self.club.enable_club_page)
+        """Anonymous user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
@@ -15335,16 +15336,18 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_club_detail_disabled_returns_404(self):
-        """Non-admin user gets 404 when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Non-admin user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="other2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
     def test_club_detail_disabled_admin_can_view(self):
-        """Club admin can always view the club page even when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Club admin can always view the club page even when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -16778,6 +16781,38 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertFalse(self.club.send_membership_expiration_reminders)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+
+    def test_membership_settings_none_system_forces_zero_fee(self):
+        """Selecting 'No membership fees' zeroes the fee even if one was submitted."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "none",
+                "membership_annual_fee": "20.00",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
+        self.assertEqual(self.club.membership_annual_fee, Decimal("0"))
+
+    def test_membership_settings_paid_system_rejects_zero_fee(self):
+        """A paid membership system requires a fee greater than 0."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "rolling",
+                "membership_annual_fee": "0",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "membership_annual_fee", [
+            'Enter a fee greater than 0, or choose "No membership fees" above.',
+        ])
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
         self.client.login(username="club_settings_editor", password="testpass")

@@ -3731,7 +3731,6 @@ class ClubEditForm(forms.ModelForm):
             "homepage",
             "facebook_page",
             "discord_invite_link",
-            "enable_club_page",
             "allow_joining",
             "enable_breeder_award_program",
             "description",
@@ -3764,9 +3763,8 @@ class ClubEditForm(forms.ModelForm):
             "facebook_page",
             "discord_invite_link",
             Div(
-                Div("enable_club_page", css_class="col-4"),
-                Div("allow_joining", css_class="col-4"),
-                Div("enable_breeder_award_program", css_class="col-4"),
+                Div("allow_joining", css_class="col-6"),
+                Div("enable_breeder_award_program", css_class="col-6"),
                 css_class="row",
             ),
             "description",
@@ -3828,10 +3826,11 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         ]
         help_texts = {
             "membership_system": (
+                "No membership fees: members never pay dues and expiration tracking is off. "
                 "January 1st: all memberships expire on Jan 1 each year. "
                 "Rolling: memberships expire one year from the payment date."
             ),
-            "membership_annual_fee": "Leave blank or set to 0 to disable membership fees. When 0, expiration tracking, payment buttons, and reminder emails are all disabled.",
+            "membership_annual_fee": "The amount members pay each year to renew. Required when dues are enabled.",
         }
 
     def __init__(self, *args, **kwargs):
@@ -3847,7 +3846,20 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 
     def clean(self):
-        return super().clean()
+        cleaned_data = super().clean()
+        membership_system = cleaned_data.get("membership_system")
+        fee = cleaned_data.get("membership_annual_fee")
+        if membership_system == "none":
+            # "No membership fees" always means a zero fee, regardless of what was submitted.
+            cleaned_data["membership_annual_fee"] = Decimal("0")
+        elif not fee or fee <= 0:
+            # A paid membership system requires a real fee — a zero fee would silently
+            # disable dues, payment buttons, and reminders while still showing as "paid".
+            self.add_error(
+                "membership_annual_fee",
+                'Enter a fee greater than 0, or choose "No membership fees" above.',
+            )
+        return cleaned_data
 
 
 class ClubPayPalCredentialsForm(forms.ModelForm):

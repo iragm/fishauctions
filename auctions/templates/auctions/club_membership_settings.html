@@ -104,3 +104,21 @@
 
 <div id="modals-here"></div>
 {% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function () {
+  // Hide the annual fee field when "No membership fees" is selected. Server-side
+  // validation (ClubMembershipSettingsForm.clean) enforces this regardless of JS.
+  const systemSelect = document.getElementById("id_membership_system");
+  const feeWrapper = document.getElementById("div_id_membership_annual_fee");
+  if (!systemSelect || !feeWrapper) return;
+  function toggleFee() {
+    feeWrapper.style.display = systemSelect.value === "none" ? "none" : "";
+  }
+  systemSelect.addEventListener("change", toggleFee);
+  toggleFee();
+})();
+</script>
+{% endblock %}
