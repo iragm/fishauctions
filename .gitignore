@@ -41,4 +41,9 @@ auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/
 auctions/static/js/vendor/Vosklet.wasm
 auctions/static/models/vosk/vosk-model-small-en-us-0.15.tar.gz
 .devcontainer/devcontainer-lock.json
-auctions/static/
+# Vendored / minified third-party assets and collectstatic output.
+# Source static assets (e.g. js/command_palette.js) are tracked, so do NOT
+# blanket-ignore auctions/static/ — that silently drops new source files.
+auctions/static/js/highcharts/
+auctions/static/js/excanvas.js
+auctions/static/css/Chart.min.css
