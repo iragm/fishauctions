@@ -131,3 +131,30 @@ class MobilePaymentConfirmResponseSerializer(serializers.Serializer):
     payment_id = serializers.CharField()
     status = serializers.CharField()
     receipt_number = serializers.CharField(allow_null=True)
+
+
+# ---------------------------------------------------------------------------
+# Command palette
+# ---------------------------------------------------------------------------
+
+
+class CommandPaletteLogSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/command-palette/log/.
+
+    Mirrors the web ``command_palette_log`` view: every field is optional so the client can
+    upsert a single search-session row as the query is refined, then finalise it as ``clicked``
+    / ``abandoned`` / ``bounce``. ``result`` is intentionally a free CharField (not a ChoiceField):
+    ``command_palette.log_search`` coerces any unknown value to ``pending``, matching the web's
+    leniency and keeping the contract forward-compatible.
+    """
+
+    id = serializers.IntegerField(
+        required=False, allow_null=True, help_text="pk of the in-progress search row, from a previous log response"
+    )
+    search = serializers.CharField(required=False, allow_blank=True, default="")
+    result = serializers.CharField(
+        required=False, allow_blank=True, default="", help_text="pending | bounce | clicked | abandoned"
+    )
+    result_type = serializers.CharField(required=False, allow_blank=True, default="")
+    result_url = serializers.CharField(required=False, allow_blank=True, default="")
+    result_object_id = serializers.IntegerField(required=False, allow_null=True)

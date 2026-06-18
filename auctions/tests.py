@@ -22213,3 +22213,75 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("command_palette_analytics"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "needle")
+
+
+class MobileCommandPaletteTests(StandardTestCase):
+    """The /api/mobile/ command-palette endpoints reuse the shared command_palette module, so this
+    only covers what differs from the web: JWT (not session) auth, the JSON contract the app reads,
+    and that search-logging is wired through the same log_search upsert."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
+        self.search_url = reverse("mobile-command-palette")
+        self.log_url = reverse("mobile-command-palette-log")
+
+    def _labels(self, resp):
+        return [g["label"] for g in resp.json()["groups"]]
+
+    def test_requires_jwt_not_session(self):
+        # No token at all is rejected (DRF answers 401/403 depending on the auth header).
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+        # A web session must NOT grant access to the mobile endpoints (IsMobileAuthenticated only
+        # accepts JWT), so a session-authenticated request is still denied.
+        self.client.force_login(self.user)
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+
+    def test_search_returns_grouped_results(self):
+        resp = self.client.get(self.search_url, {"q": "online"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Auctions", self._labels(resp))
+        resp = self.client.get(self.search_url, {"q": "test lot"}, **self.bearer)
+        self.assertIn("Lots", self._labels(resp))
+
+    def test_item_shape_and_default_items(self):
+        resp = self.client.get(self.search_url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Cache-Control"], "private, no-store")
+        items = [i for g in resp.json()["groups"] for i in g["items"]]
+        self.assertTrue(items)
+        # Admin of the most recent auction sees the "View lots" default; every item carries the
+        # full contract the mobile client renders.
+        self.assertTrue(any("View lots" in i["title"] for i in items))
+        for key in ("type", "title", "subtitle", "url", "icon", "id"):
+            self.assertIn(key, items[0])
+
+    def test_log_upsert_and_click_bumps_page_hits(self):
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(self.log_url, {"search": "pref", "result": "pending"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row (one row per session).
+        resp = self.client.post(
+            self.log_url, {"id": search_id, "search": "preferences", "result": "pending"}, **self.bearer
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        self.client.post(
+            self.log_url,
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+            **self.bearer,
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(CommandPaletteSearch.objects.get(pk=search_id).result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)

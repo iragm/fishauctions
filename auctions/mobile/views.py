@@ -142,6 +142,56 @@ POST /api/mobile/payments/confirm/
           "status": "COMPLETED",
           "receipt_number": "FXRE"
         }
+
+Command palette
+---------------
+These are thin JWT wrappers over ``auctions.command_palette`` — the same shared module the
+web palette uses — so search scoping, permissions and search-logging stay identical across web
+and mobile. ``url`` values in items are server-relative web paths (e.g. ``/lots/42/foo/``);
+the client decides whether to open them in a WebView or deep-link to a native screen by ``type``.
+
+GET /api/mobile/command-palette/?q=<query>
+    Grouped search results; an empty/absent ``q`` returns the default ("pick up where you left
+    off") items. Never cached.
+
+    Response 200::
+
+        {
+          "groups": [
+            {
+              "label": "Auctions",
+              "items": [
+                {
+                  "type": "auction",   // page|auction|lot|club|clubmember|auctiontos|invoice|search
+                  "title": "Spring 2024",
+                  "subtitle": "My Club",
+                  "url": "/auctions/spring-2024/",   // "" for type "search" (re-run, don't navigate)
+                  "icon": "bi-hammer",               // Bootstrap Icons class
+                  "id": 12                            // object pk, or null
+                }
+              ]
+            }
+          ]
+        }
+
+POST /api/mobile/command-palette/log/
+    Upsert the user's current search-session row (one row per session, refined as the query
+    changes). Pass the returned ``id`` back on subsequent calls.
+
+    Request::
+
+        {
+          "id": 7,                 // optional: pk from a previous log response
+          "search": "oscar",
+          "result": "clicked",     // pending | bounce | clicked | abandoned
+          "result_type": "lot",    // for "clicked": the opened item's type/url/id
+          "result_url": "/lots/42/foo/",
+          "result_object_id": 42
+        }
+
+    Response 200::
+
+        { "id": 7 }
 """
 
 import logging
@@ -157,6 +207,7 @@ from auctions.models import Lot
 
 from .permissions import IsMobileAuthenticated
 from .serializers import (
+    CommandPaletteLogSerializer,
     LotLabelResponseSerializer,
     MobileDeviceSerializer,
     MobileLoginSerializer,
@@ -357,3 +408,60 @@ class MobilePaymentConfirmView(APIView):
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Command palette
+# ---------------------------------------------------------------------------
+
+
+class MobileCommandPaletteView(APIView):
+    """GET /api/mobile/command-palette/?q=<query> — grouped palette results.
+
+    Thin wrapper over ``command_palette.search`` (the same function the web view calls) so the
+    behaviour is identical; only the auth differs (JWT here, session+CSRF on the web).
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_search"  # interactive search-as-you-type; mobile_api (200/hr) is too tight
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        from auctions import command_palette
+
+        groups = command_palette.search(request, request.GET.get("q", ""))
+        response = Response({"groups": groups})
+        # Results are personalised — keep them out of any intermediary cache (matches the web view).
+        response["Cache-Control"] = "private, no-store"
+        return response
+
+
+class MobileCommandPaletteLogView(APIView):
+    """POST /api/mobile/command-palette/log/ — upsert the current search-session row.
+
+    Mirrors the web ``CommandPaletteLogView``; reuses ``command_palette.log_search`` so page-hit
+    bumping and the one-row-per-session behaviour stay consistent across web and mobile.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_search"  # paired with each palette search; shares the search budget
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from auctions import command_palette
+
+        serializer = CommandPaletteLogSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        search_id = command_palette.log_search(
+            request.user,
+            search_id=data.get("id"),
+            search=data.get("search", ""),
+            result=data.get("result") or None,
+            result_type=data.get("result_type", ""),
+            result_url=data.get("result_url", ""),
+            result_object_id=data.get("result_object_id"),
+        )
+        return Response({"id": search_id})
