@@ -78,30 +78,15 @@ POST /api/mobile/devices/register/
 
 Labels
 ------
-GET /api/mobile/labels/<lot_pk>/
-    Return structured label data for a lot.
+GET /api/mobile/labels/<lot_pk>/?format=png
+    Return the lot's label as a rendered image (default PNG) to send straight to a Bluetooth
+    printer. The server owns layout/rendering; the app does not draw the label. ``format`` selects
+    a registered renderer (currently ``png``); an unsupported format is a 400.
 
-    Response 200::
+    Access is restricted to the lot's own seller or an admin of its auction (mirrors the web
+    SingleLotLabelView). Others get 403; a missing/deleted lot is 404.
 
-        {
-          "label_data": {
-            "lot_number": "42",
-            "title": "Albino Oscar pair",
-            "quantity": 2,
-            "minimum_bid": "10.00",
-            "buy_now_price": "25.00",
-            "seller": "Bob Jones",
-            "auction": "Spring 2024",
-            "category": "Cichlids",
-            "i_bred_this_fish": true,
-            "custom_field_1": null
-          },
-          "metadata": {
-            "generated_at": "2024-06-01T12:00:00Z",
-            "lot_pk": 42,
-            "supported_formats": ["png", "pdf", "raw_commands"]
-          }
-        }
+    Response 200:  binary image body with ``Content-Type: image/png``.
 
 Payments
 --------
@@ -196,6 +181,7 @@ POST /api/mobile/command-palette/log/
 
 import logging
 
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -208,7 +194,6 @@ from auctions.models import Lot
 from .permissions import IsMobileAuthenticated
 from .serializers import (
     CommandPaletteLogSerializer,
-    LotLabelResponseSerializer,
     MobileDeviceSerializer,
     MobileLoginSerializer,
     MobilePaymentConfirmSerializer,
@@ -322,22 +307,51 @@ class MobileDeviceRegisterView(APIView):
 
 
 class MobileLotLabelView(APIView):
-    """GET /api/mobile/labels/<pk>/ — return structured label data for a lot."""
+    """GET /api/mobile/labels/<pk>/?format=png — rendered label image for a lot."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
     throttle_classes = [ScopedRateThrottle]
 
+    @staticmethod
+    def _can_access(user, lot):
+        """Seller of the lot, or an admin of its auction — mirrors web SingleLotLabelView.
+
+        With a seller TOS, the TOS owner or an auction admin may print; without one (an
+        unassigned/personal lot) only the lot's own user may.
+        """
+        tos = lot.auctiontos_seller
+        if tos:
+            if tos.user_id and tos.user_id == user.pk:
+                return True
+            return bool(tos.auction and tos.auction.permission_check(user))
+        return bool(lot.user_id and lot.user_id == user.pk)
+
     def get(self, request, pk):
         try:
-            lot = Lot.objects.select_related("user", "auction", "species_category").get(pk=pk)
+            lot = Lot.objects.select_related(
+                "user",
+                "auction",
+                "species_category",
+                "auctiontos_seller",
+                "auctiontos_seller__auction",
+                "auctiontos_seller__user",
+            ).get(pk=pk, is_deleted=False)
         except Lot.DoesNotExist:
             return Response({"detail": "Lot not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        payload = LabelService.get_lot_label_data(lot)
-        serializer = LotLabelResponseSerializer(data=payload)
-        serializer.is_valid()  # payload is constructed internally — always valid
-        return Response(payload)
+        if not self._can_access(request.user, lot):
+            return Response(
+                {"detail": "You do not have permission to print this lot's label."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            content, content_type = LabelService.render_label(lot, request.GET.get("format"))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return HttpResponse(content, content_type=content_type)
 
 
 # ---------------------------------------------------------------------------

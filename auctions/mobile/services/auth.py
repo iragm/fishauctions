@@ -17,12 +17,12 @@ class MobileAuthService:
         """
         user = authenticate(request=request, username=credential, password=password)
         if user is None:
-            # Try email-based lookup and retry
-            try:
-                user_obj = User.objects.get(email__iexact=credential)
-                user = authenticate(request=request, username=user_obj.username, password=password)
-            except (User.DoesNotExist, User.MultipleObjectsReturned):
-                pass
+            # credential may be an email. Emails are not unique in Django's User model, so try each
+            # account sharing that email and log in the one whose password matches (if any).
+            for candidate in User.objects.filter(email__iexact=credential):
+                user = authenticate(request=request, username=candidate.username, password=password)
+                if user is not None:
+                    break
 
         if user is not None and not user.is_active:
             logger.info("Mobile login attempted for inactive user: %s", credential)

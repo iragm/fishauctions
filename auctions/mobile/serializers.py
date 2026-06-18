@@ -60,41 +60,6 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Labels
-# ---------------------------------------------------------------------------
-
-
-class LabelDataSerializer(serializers.Serializer):
-    """Inner label_data returned by GET /api/mobile/labels/<pk>/."""
-
-    lot_number = serializers.CharField()
-    title = serializers.CharField()
-    quantity = serializers.IntegerField()
-    minimum_bid = serializers.CharField()
-    buy_now_price = serializers.CharField(allow_null=True)
-    seller = serializers.CharField()
-    auction = serializers.CharField(allow_null=True)
-    category = serializers.CharField(allow_null=True)
-    i_bred_this_fish = serializers.BooleanField()
-    custom_field_1 = serializers.CharField(allow_null=True)
-
-
-class LabelMetadataSerializer(serializers.Serializer):
-    """Inner metadata returned by GET /api/mobile/labels/<pk>/."""
-
-    generated_at = serializers.CharField()
-    lot_pk = serializers.IntegerField()
-    supported_formats = serializers.ListField(child=serializers.CharField())
-
-
-class LotLabelResponseSerializer(serializers.Serializer):
-    """Full response from GET /api/mobile/labels/<pk>/."""
-
-    label_data = LabelDataSerializer()
-    metadata = LabelMetadataSerializer()
-
-
-# ---------------------------------------------------------------------------
 # Payments
 # ---------------------------------------------------------------------------
 
