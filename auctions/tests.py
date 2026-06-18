@@ -22285,3 +22285,169 @@ class MobileCommandPaletteTests(StandardTestCase):
         self.assertEqual(CommandPaletteSearch.objects.get(pk=search_id).result, "clicked")
         page.refresh_from_db()
         self.assertEqual(page.hits, 1)
+
+
+class MobileLabelTests(StandardTestCase):
+    """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.url = reverse("mobile-label-lot", kwargs={"pk": self.lot.pk})  # self.lot is sold by self.user
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def test_returns_png_for_lot_seller(self):
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_auction_admin_can_print_other_sellers_lot(self):
+        resp = self.client.get(self.url, **self._bearer(self.admin_user))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_forbidden_for_non_owner_non_admin(self):
+        resp = self.client.get(self.url, **self._bearer(self.userB))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_missing_lot_is_404(self):
+        url = reverse("mobile-label-lot", kwargs={"pk": 99999999})
+        self.assertEqual(self.client.get(url, **self._bearer(self.user)).status_code, 404)
+
+    def test_unsupported_format_is_400(self):
+        resp = self.client.get(self.url, {"format": "zpl"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_jwt(self):
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+class MobileEmailLoginTests(TestCase):
+    """MobileAuthService email fallback must work even when multiple users share an email."""
+
+    def setUp(self):
+        self.alice = User.objects.create_user("alice", "dup@example.com", "pw-alice")
+        self.bob = User.objects.create_user("bob", "dup@example.com", "pw-bob")
+
+    def test_login_by_username_still_works(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("alice", "pw-alice"), self.alice)
+
+    def test_duplicate_email_resolves_to_password_owner(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-bob"), self.bob)
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-alice"), self.alice)
+
+    def test_wrong_password_returns_none(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertIsNone(MobileAuthService.authenticate("dup@example.com", "nope"))
+
+
+class MobilePaymentConfirmTests(StandardTestCase):
+    """confirm_mobile_payment against the new squareup SDK + idempotent recording."""
+
+    def setUp(self):
+        super().setUp()
+        # A fresh buyer with no lots + one ADD adjustment owes a deterministic $20.
+        self.buyer = User.objects.create_user("mobilebuyer", "mb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+    def _mock_seller(self, create_return=None, create_side_effect=None):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        client = MagicMock()
+        if create_side_effect is not None:
+            client.payments.create.side_effect = create_side_effect
+        else:
+            client.payments.create.return_value = create_return
+        seller.get_square_client.return_value = client
+        return seller, client
+
+    @staticmethod
+    def _payment_response(pid="PAY1", status_="COMPLETED", receipt="RC123"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(errors=None, payment=SimpleNamespace(id=pid, status=status_, receipt_number=receipt))
+
+    def test_confirm_uses_new_sdk_records_and_marks_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(create_return=self._payment_response())
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            result = PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, source_id="nonce", idempotency_key="idem-1", user=self.buyer
+            )
+        self.assertTrue(client.payments.create.called)  # new API, not legacy create_payment(body=...)
+        kwargs = client.payments.create.call_args.kwargs
+        self.assertEqual(kwargs["source_id"], "nonce")
+        self.assertEqual(kwargs["amount_money"], {"amount": 2000, "currency": self.pay_invoice.currency})
+        self.assertEqual(kwargs["location_id"], "LOC1")
+        self.assertEqual(result["payment_id"], "PAY1")
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+
+    def test_confirm_rejects_already_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        self.pay_invoice.status = "PAID"
+        self.pay_invoice.save(update_fields=["status"])
+        seller, client = self._mock_seller(create_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+                )
+        self.assertFalse(client.payments.create.called)
+
+    def test_confirm_is_idempotent_on_external_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        # Simulate the Square webhook (or a prior retry) already recording this payment.
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        seller, _ = self._mock_seller(create_return=self._payment_response(pid="PAY1"))
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+            )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+        ensure.assert_not_called()  # didn't create the record → must not re-run renewal side effects
+        renew.assert_not_called()
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+
+    def test_confirm_square_error_raises_valueerror(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(create_side_effect=Exception("card declined"))
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+                )
