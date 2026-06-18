@@ -82,7 +82,7 @@ docker logs celery_worker -f
 docker logs celery_beat -f
 ```
 
-Periodic tasks are automatically configured in the database on container startup.
+Periodic tasks are automatically configured in the database on container startup
 
 ## Managing Periodic Tasks
 
