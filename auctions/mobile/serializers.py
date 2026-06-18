@@ -60,41 +60,6 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Labels
-# ---------------------------------------------------------------------------
-
-
-class LabelDataSerializer(serializers.Serializer):
-    """Inner label_data returned by GET /api/mobile/labels/<pk>/."""
-
-    lot_number = serializers.CharField()
-    title = serializers.CharField()
-    quantity = serializers.IntegerField()
-    minimum_bid = serializers.CharField()
-    buy_now_price = serializers.CharField(allow_null=True)
-    seller = serializers.CharField()
-    auction = serializers.CharField(allow_null=True)
-    category = serializers.CharField(allow_null=True)
-    i_bred_this_fish = serializers.BooleanField()
-    custom_field_1 = serializers.CharField(allow_null=True)
-
-
-class LabelMetadataSerializer(serializers.Serializer):
-    """Inner metadata returned by GET /api/mobile/labels/<pk>/."""
-
-    generated_at = serializers.CharField()
-    lot_pk = serializers.IntegerField()
-    supported_formats = serializers.ListField(child=serializers.CharField())
-
-
-class LotLabelResponseSerializer(serializers.Serializer):
-    """Full response from GET /api/mobile/labels/<pk>/."""
-
-    label_data = LabelDataSerializer()
-    metadata = LabelMetadataSerializer()
-
-
-# ---------------------------------------------------------------------------
 # Payments
 # ---------------------------------------------------------------------------
 
@@ -131,3 +96,30 @@ class MobilePaymentConfirmResponseSerializer(serializers.Serializer):
     payment_id = serializers.CharField()
     status = serializers.CharField()
     receipt_number = serializers.CharField(allow_null=True)
+
+
+# ---------------------------------------------------------------------------
+# Command palette
+# ---------------------------------------------------------------------------
+
+
+class CommandPaletteLogSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/command-palette/log/.
+
+    Mirrors the web ``command_palette_log`` view: every field is optional so the client can
+    upsert a single search-session row as the query is refined, then finalise it as ``clicked``
+    / ``abandoned`` / ``bounce``. ``result`` is intentionally a free CharField (not a ChoiceField):
+    ``command_palette.log_search`` coerces any unknown value to ``pending``, matching the web's
+    leniency and keeping the contract forward-compatible.
+    """
+
+    id = serializers.IntegerField(
+        required=False, allow_null=True, help_text="pk of the in-progress search row, from a previous log response"
+    )
+    search = serializers.CharField(required=False, allow_blank=True, default="")
+    result = serializers.CharField(
+        required=False, allow_blank=True, default="", help_text="pending | bounce | clicked | abandoned"
+    )
+    result_type = serializers.CharField(required=False, allow_blank=True, default="")
+    result_url = serializers.CharField(required=False, allow_blank=True, default="")
+    result_object_id = serializers.IntegerField(required=False, allow_null=True)

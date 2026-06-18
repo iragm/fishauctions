@@ -216,6 +216,7 @@ ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -857,7 +858,13 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
         "mobile_auth": "10/min",
-        "mobile_api": "200/hour",
+        # Catch-all for mobile reads/writes. Sized for admin bulk workflows that live here — checkout
+        # is 2 calls/buyer (create+confirm) and labels are 1 call/lot, so a busy auction hour is
+        # several hundred calls; 200/hour blocked that mid-checkout.
+        "mobile_api": "1000/hour",
+        # Search-as-you-type: each query fires a search + a log call on a ~300ms debounce, so a fast
+        # typer briefly peaks ~6 req/sec. 120/min tolerates that burst while capping sustained abuse.
+        "mobile_search": "120/min",
     },
 }
 

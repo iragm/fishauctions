@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    MobileCommandPaletteLogView,
+    MobileCommandPaletteView,
     MobileDeviceRegisterView,
     MobileLoginView,
     MobileLotLabelView,
@@ -22,4 +24,7 @@ urlpatterns = [
     # Payments
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),
     path("payments/confirm/", MobilePaymentConfirmView.as_view(), name="mobile-payment-confirm"),
+    # Command palette
+    path("command-palette/", MobileCommandPaletteView.as_view(), name="mobile-command-palette"),
+    path("command-palette/log/", MobileCommandPaletteLogView.as_view(), name="mobile-command-palette-log"),
 ]
