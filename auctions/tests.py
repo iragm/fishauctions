@@ -22319,7 +22319,7 @@ class MobileLabelTests(StandardTestCase):
         self.assertEqual(self.client.get(url, **self._bearer(self.user)).status_code, 404)
 
     def test_unsupported_format_is_400(self):
-        resp = self.client.get(self.url, {"format": "zpl"}, **self._bearer(self.user))
+        resp = self.client.get(self.url, {"fmt": "zpl"}, **self._bearer(self.user))
         self.assertEqual(resp.status_code, 400)
 
     def test_requires_jwt(self):
@@ -22418,6 +22418,10 @@ class MobilePaymentConfirmTests(StandardTestCase):
     def test_confirm_is_idempotent_on_external_id(self):
         from auctions.mobile.services.payments import PaymentService
 
+        # Owe more than the pre-existing payment so a balance remains (a payment that covers the
+        # whole invoice would trip the "no amount due" guard before the dedup path is reached).
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=40, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
         # Simulate the Square webhook (or a prior retry) already recording this payment.
         InvoicePayment.objects.create(
             invoice=self.pay_invoice,

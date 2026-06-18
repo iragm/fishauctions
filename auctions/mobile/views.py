@@ -78,10 +78,11 @@ POST /api/mobile/devices/register/
 
 Labels
 ------
-GET /api/mobile/labels/<lot_pk>/?format=png
+GET /api/mobile/labels/<lot_pk>/?fmt=png
     Return the lot's label as a rendered image (default PNG) to send straight to a Bluetooth
-    printer. The server owns layout/rendering; the app does not draw the label. ``format`` selects
-    a registered renderer (currently ``png``); an unsupported format is a 400.
+    printer. The server owns layout/rendering; the app does not draw the label. ``fmt`` selects a
+    registered renderer (currently ``png``); an unsupported format is a 400. (The param is ``fmt``,
+    not ``format`` — DRF reserves ``?format=`` for content negotiation.)
 
     Access is restricted to the lot's own seller or an admin of its auction (mirrors the web
     SingleLotLabelView). Others get 403; a missing/deleted lot is 404.
@@ -346,8 +347,9 @@ class MobileLotLabelView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # NB: param is "fmt", not "format" — DRF reserves ?format= for its own content negotiation.
         try:
-            content, content_type = LabelService.render_label(lot, request.GET.get("format"))
+            content, content_type = LabelService.render_label(lot, request.GET.get("fmt"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
