@@ -160,7 +160,7 @@ django==5.2.15
     #   jsonfield
 django-allauth==65.18.0
     # via -r requirements.in
-django-autocomplete-light==4.0.1
+django-autocomplete-light==4.0.0
     # via -r requirements.in
 django-autoslug==1.9.9
     # via -r requirements.in
