@@ -350,8 +350,12 @@ class MobileLotLabelView(APIView):
         # NB: param is "fmt", not "format" — DRF reserves ?format= for its own content negotiation.
         try:
             content, content_type = LabelService.render_label(lot, request.GET.get("fmt"))
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            logger.warning("Invalid label format requested.", exc_info=True)
+            return Response(
+                {"detail": "Invalid label format."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return HttpResponse(content, content_type=content_type)
 
