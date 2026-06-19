@@ -245,7 +245,7 @@ from .serializers import (
 from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
-from .services.payments import PaymentService, PaymentVerificationError
+from .services.payments import PaymentService, PaymentVerificationError, SquareReconnectRequired
 from .services.web_session import WebSessionService
 
 # The allauth backend is what the web login uses; logging the handoff in under the same backend
@@ -488,6 +488,13 @@ class MobilePaymentCreateView(APIView):
             logger.warning("Mobile payment create failed: permission denied.", exc_info=exc)
             return Response(
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
+            )
+        except SquareReconnectRequired as exc:
+            # Surface a distinguishable signal (not a generic 400) so the app can show a
+            # "Reconnect Square" prompt instead of a flat error. The message is operator-safe.
+            logger.info("Mobile payment create blocked: Square account needs reconnect.", exc_info=exc)
+            return Response(
+                {"detail": str(exc), "code": "square_reconnect_required"}, status=status.HTTP_409_CONFLICT
             )
         except ValueError as exc:
             logger.warning("Mobile payment create failed: invalid request data.", exc_info=exc)

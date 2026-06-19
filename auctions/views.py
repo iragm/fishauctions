@@ -176,6 +176,7 @@ from .helper_functions import bin_data, get_currency_symbol
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
+    SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
     Auction,
@@ -10458,7 +10459,7 @@ class SquareConnectView(LoginRequiredMixin, View):
         # Build OAuth parameters
         params = {
             "client_id": settings.SQUARE_APPLICATION_ID,
-            "scope": "PAYMENTS_WRITE PAYMENTS_READ MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE",
+            "scope": " ".join(SQUARE_OAUTH_SCOPES),
             "state": state,
             # "session": "false",  # Don't require login if already logged in
             "redirect_uri": redirect_uri,
@@ -10542,6 +10543,10 @@ class SquareCallbackView(LoginRequiredMixin, View):
             seller.square_merchant_id = merchant_id
             seller.access_token = access_token
             seller.refresh_token = refresh_token
+            # Record what this token was granted. Square OAuth is all-or-nothing for the requested
+            # set, so the scopes we asked for are the scopes the merchant approved. This is what
+            # supports_tap_to_pay reads, and reconnecting an old account refreshes it here.
+            seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
             if expires_at:
                 from datetime import datetime
 

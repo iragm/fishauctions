@@ -9259,6 +9259,44 @@ class SquarePaymentTests(StandardTestCase):
         self.square_seller.save()
         self.assertTrue(self.square_seller.is_token_expired())
 
+    def test_supports_tap_to_pay_reflects_scopes(self):
+        """supports_tap_to_pay is True only when the in-person scope was granted."""
+        from .models import SQUARE_OAUTH_SCOPES
+
+        # The seller was created without scopes (legacy connection) → must reconnect.
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+        # A full reconnect records the requested scopes, which include the in-person scope.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        self.assertTrue(self.square_seller.supports_tap_to_pay)
+        # A non-empty grant that still lacks the in-person scope is not enough (no substring match).
+        self.square_seller.scopes = "PAYMENTS_WRITE PAYMENTS_READ"
+        self.square_seller.save()
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+
+    def test_find_square_reconnects_command(self):
+        """The audit command lists legacy sellers and drops them once they have the scope."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from .models import SQUARE_OAUTH_SCOPES
+
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 1", output)
+        self.assertIn(self.admin_user.username, output)
+
+        # Once the scope is recorded (reconnected), the seller drops off the list.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 0", output)
+        self.assertNotIn(self.admin_user.username, output)
+
     def test_winner_invoice_property(self):
         """Test Lot.winner_invoice property"""
         # Lot with auctiontos_winner
@@ -22773,6 +22811,17 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(result["amount"], "20.00")
         # The client must charge with this reference_id; it matches the web convention (str(pk)).
         self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+
+    def test_create_blocks_seller_without_tap_to_pay_scope(self):
+        # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device
+        # is handed a token, with a distinguishable error so the app can prompt a reconnect.
+        from auctions.mobile.services.payments import PaymentService, SquareReconnectRequired
+
+        seller, _ = self._mock_seller()
+        seller.supports_tap_to_pay = False
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(SquareReconnectRequired):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
 
     def test_create_denies_buyer(self):
         # The buyer must NOT be able to create a payment — that would leak the seller's Square token.

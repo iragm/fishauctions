@@ -9201,6 +9201,21 @@ class PayPalSeller(models.Model):
         return super().delete()
 
 
+# Square OAuth scopes we request. PAYMENTS_WRITE_IN_PERSON powers Tap to Pay; sellers who
+# connected before it was added hold tokens without it and must reconnect (refreshing keeps the
+# original scopes). This is the single source of truth for the authorize request and for what we
+# record as granted on the seller.
+SQUARE_TAP_TO_PAY_SCOPE = "PAYMENTS_WRITE_IN_PERSON"
+SQUARE_OAUTH_SCOPES = (
+    "PAYMENTS_WRITE",
+    "PAYMENTS_READ",
+    "MERCHANT_PROFILE_READ",
+    "ORDERS_READ",
+    "ORDERS_WRITE",
+    SQUARE_TAP_TO_PAY_SCOPE,
+)
+
+
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
@@ -9220,6 +9235,12 @@ class SquareSeller(models.Model):
     access_token = EncryptedCharField(max_length=500, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
+    scopes = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Space-separated OAuth scopes granted at connect time. Empty = legacy connection (pre Tap to Pay).",
+    )
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
     connected_on = models.DateTimeField(auto_now_add=True)
@@ -9267,6 +9288,15 @@ class SquareSeller(models.Model):
                 applies_to="SETTINGS",
             )
         return super().delete()
+
+    @property
+    def supports_tap_to_pay(self):
+        """True if this seller's stored OAuth grant includes the in-person scope Tap to Pay needs.
+
+        Sellers connected before the scope was added have empty/legacy ``scopes`` and must
+        reconnect; refreshing their token keeps the original (non-in-person) scopes.
+        """
+        return SQUARE_TAP_TO_PAY_SCOPE in (self.scopes or "").split()
 
     def is_token_expired(self):
         """Check if the access token is expired or will expire soon (within 1 hour)"""

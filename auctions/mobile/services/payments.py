@@ -18,6 +18,16 @@ class PaymentVerificationError(ValueError):
     """
 
 
+class SquareReconnectRequired(ValueError):
+    """The seller's Square account predates Tap to Pay (token missing PAYMENTS_WRITE_IN_PERSON).
+
+    The seller must reconnect their Square account before any in-person charge will work; refreshing
+    the existing token keeps the original (non-in-person) scopes. Raised *before* the device is ever
+    handed a token, so the app can show a "Reconnect Square" prompt instead of failing mid-tap.
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers still catch it as a fallback.
+    """
+
+
 class PaymentService:
     """Mobile Square Tap-to-Pay infrastructure.
 
@@ -134,6 +144,12 @@ class PaymentService:
         if not seller:
             msg = "Square payments are not configured for this invoice"
             raise ValueError(msg)
+
+        # Block before fetching a token: a legacy account's token lacks the in-person scope, so the
+        # on-device authorize() would fail with an opaque Square error. Tell the operator to reconnect.
+        if not seller.supports_tap_to_pay:
+            msg = "This Square account must be reconnected to enable Tap to Pay."
+            raise SquareReconnectRequired(msg)
 
         access_token = seller.get_valid_access_token()
         if not access_token:
