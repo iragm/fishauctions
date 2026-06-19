@@ -217,6 +217,10 @@ class PaymentService:
         sq_reference_id = getattr(sq_payment, "reference_id", None)
         expected_reference_id = f"invoice:{invoice_pk}"
 
+        # NOTE: we accept ONLY "COMPLETED" — not the auth-only "APPROVED" — to match the web Square
+        # webhook handler, which treats only COMPLETED as paid. This may change later: if Tap-to-Pay
+        # charges can legitimately settle as "APPROVED" for this integration, widen the check here
+        # (and keep it consistent with the web flow).
         if payment_status != "COMPLETED":
             msg = f"Square payment {payment_id} is not completed (status={payment_status})"
             raise ValueError(msg)
