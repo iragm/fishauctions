@@ -3007,7 +3007,9 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
-                    if invoice.net_after_payments < 0:
+                    # Bill the rounded balance so the PayPal invoice matches the invoice total the
+                    # buyer sees (and skip anyone who only owes a rounded-away residual).
+                    if invoice.rounded_net_after_payments < 0:
                         if invoice.auctiontos_user.email:
                             name_parts = (invoice.auctiontos_user.name or "").split()
                             if len(name_parts) >= 2:
@@ -3026,7 +3028,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                                     reference,
                                     itemName,
                                     description,
-                                    abs(invoice.net_after_payments),
+                                    abs(invoice.rounded_net_after_payments),
                                     shippingAmount,
                                     discountAmount,
                                     currencyCode,
@@ -9741,7 +9743,10 @@ class PayPalAPIMixin:
                 }
             )
 
-        target_total = (Decimal("0.00") - Decimal(invoice.net_after_payments)).quantize(Decimal("0.01"))
+        # Charge the rounded balance so the amount matches the invoice total the buyer sees; the
+        # breakdown below absorbs the rounding delta as an adjustment/discount line. Falls back to
+        # the exact amount when invoice rounding is off (rounded_net_after_payments handles that).
+        target_total = (Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)).quantize(Decimal("0.01"))
         # Base components from items
         item_total = Decimal(str(invoice.total_bought)).quantize(Decimal("0.01"))
         tax_total = Decimal(str(invoice.tax)).quantize(Decimal("0.01"))
@@ -9788,7 +9793,8 @@ class PayPalAPIMixin:
             "reference_id": str(invoice.pk),
             "amount": {
                 "currency_code": currency,
-                "value": f"{Decimal(-invoice.net_after_payments):.2f}",
+                # Must equal the breakdown sum (which is built to total target_total), or PayPal rejects it.
+                "value": f"{target_total:.2f}",
                 "breakdown": breakdown,
             },
             "items": items,
@@ -10004,8 +10010,9 @@ class PayPalAPIMixin:
                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
             except Exception:
                 logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
-        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
-        if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
+        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID. Use the rounded
+        # balance so a rounded-down charge (the amount we actually billed) still settles the invoice.
+        if invoice.rounded_net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             if not invoice.renewal_needed:
                 try:
                     _ensure_invoice_renewal_state(invoice)
@@ -14493,7 +14500,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                             except Exception:
                                 logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
-                        if invoice.net_after_payments >= 0:
+                        # Use the rounded balance so a rounded-down charge (the amount we billed)
+                        # still settles the invoice.
+                        if invoice.rounded_net_after_payments >= 0:
                             if not invoice.renewal_needed:
                                 try:
                                     _ensure_invoice_renewal_state(invoice)

@@ -143,6 +143,11 @@ POST /api/mobile/payments/confirm/
           "receipt_number": "FXRE"
         }
 
+    Response 409: the charge could not be verified against Square (status/amount/currency/location/
+    reference mismatch, or Square was unreachable). The card may already have been charged — the
+    Square webhook reconciles the same payment by reference_id, so the client should refresh the
+    invoice before charging again rather than retrying blindly.
+
 Command palette
 ---------------
 These are thin JWT wrappers over ``auctions.command_palette`` — the same shared module the
@@ -218,7 +223,7 @@ from .serializers import (
 from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
-from .services.payments import PaymentService
+from .services.payments import PaymentService, PaymentVerificationError
 
 logger = logging.getLogger(__name__)
 
@@ -436,6 +441,20 @@ class MobilePaymentConfirmView(APIView):
             logger.warning("Mobile payment confirm failed: permission denied.", exc_info=exc)
             return Response(
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
+            )
+        except PaymentVerificationError as exc:
+            # The card may already have been charged on-device; the Square webhook reconciles the
+            # same payment by reference_id, so tell the operator to refresh rather than retry blindly.
+            logger.warning("Mobile payment confirm failed: charge could not be verified.", exc_info=exc)
+            return Response(
+                {
+                    "detail": (
+                        "We couldn't confirm this charge automatically. If the card was charged, the "
+                        "payment should appear on the invoice within a minute — refresh to check before "
+                        "charging again."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
             )
         except ValueError as exc:
             logger.warning("Mobile payment confirm failed: invalid request data.", exc_info=exc)

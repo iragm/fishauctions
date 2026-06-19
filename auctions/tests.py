@@ -14773,6 +14773,64 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertEqual(payment.payment_method, "PayPal")
         self.assertEqual(payment.amount, Decimal("37.50"))
 
+    def test_rounded_paypal_payment_marks_invoice_paid_and_zeroes_balance(self):
+        """With invoice rounding on, paying the rounded balance must settle to PAID / $0.00.
+
+        A fractional balance paid at the rounded amount leaves a sub-dollar residual on
+        net_after_payments; the PAID check must use the rounded balance so the invoice still settles.
+        This would fail under the old `net_after_payments >= 0` check (it would stay UNPAID).
+        """
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundpaypal", "rp@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance → rounds to $19.00.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        self.assertNotEqual(rounded, unrounded)  # rounding actually applies here
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        event = {
+            "id": "WH-ORDER-ROUNDED",
+            "event_type": "CHECKOUT.ORDER.COMPLETED",
+            "resource": {
+                "id": "ORDER-ROUNDED-1",
+                "status": "COMPLETED",
+                "purchase_units": [
+                    {
+                        "reference_id": str(invoice.pk),
+                        "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                        "payments": {
+                            "captures": [
+                                {
+                                    "id": "CAPTURE-ROUNDED-1",
+                                    "status": "COMPLETED",
+                                    "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        self.assertEqual(invoice.rounded_net_after_payments, Decimal("0.00"))  # balance due shows 0.00
+
     def test_checkout_order_completed_non_completed_status_is_ignored(self):
         """CHECKOUT.ORDER.COMPLETED with non-COMPLETED status does not create a payment"""
         from auctions.models import InvoicePayment
@@ -22327,11 +22385,17 @@ class MobileLabelTests(StandardTestCase):
 
 
 class MobileEmailLoginTests(TestCase):
-    """MobileAuthService email fallback must work even when multiple users share an email."""
+    """MobileAuthService email fallback must work even when multiple users share an email, and it
+    must honour allauth's mandatory email-verification policy (no weaker side door than the web)."""
 
     def setUp(self):
+        from allauth.account.models import EmailAddress
+
         self.alice = User.objects.create_user("alice", "dup@example.com", "pw-alice")
         self.bob = User.objects.create_user("bob", "dup@example.com", "pw-bob")
+        # ACCOUNT_EMAIL_VERIFICATION is mandatory, so these must have a verified email to log in.
+        for user in (self.alice, self.bob):
+            EmailAddress.objects.create(user=user, email=user.email, verified=True, primary=True)
 
     def test_login_by_username_still_works(self):
         from auctions.mobile.services.auth import MobileAuthService
@@ -22348,6 +22412,24 @@ class MobileEmailLoginTests(TestCase):
         from auctions.mobile.services.auth import MobileAuthService
 
         self.assertIsNone(MobileAuthService.authenticate("dup@example.com", "nope"))
+
+    def test_unverified_email_blocked_when_verification_mandatory(self):
+        """A correct password is not enough when the email is unverified — matches web login."""
+        from auctions.mobile.services.auth import MobileAuthService
+
+        # No verified EmailAddress for carol.
+        User.objects.create_user("carol", "carol@example.com", "pw-carol")
+        self.assertIsNone(MobileAuthService.authenticate("carol", "pw-carol"))
+        self.assertIsNone(MobileAuthService.authenticate("carol@example.com", "pw-carol"))
+
+    def test_inactive_user_blocked(self):
+        from allauth.account.models import EmailAddress
+
+        from auctions.mobile.services.auth import MobileAuthService
+
+        dave = User.objects.create_user("dave", "dave@example.com", "pw-dave", is_active=False)
+        EmailAddress.objects.create(user=dave, email=dave.email, verified=True, primary=True)
+        self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
 
 
 class MobilePaymentConfirmTests(StandardTestCase):
@@ -22426,6 +22508,57 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.pay_invoice.refresh_from_db()
         self.assertEqual(self.pay_invoice.status, "PAID")
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+
+    def test_create_and_confirm_use_rounded_amount(self):
+        """With invoice rounding on, Tap to Pay charges/verifies the rounded balance, not the cents.
+
+        A fractional residual ($19.60 owed) is charged at the rounded $19.00 (customer's favour);
+        confirm must accept the $19.00 (1900c) Square charge and mark the invoice PAID even though a
+        fractional residual remains on net_after_payments.
+        """
+        from decimal import Decimal
+
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default; the fix is a no-op without it
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundbuyer", "rb@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        # Rounding must actually change the amount for this test to be meaningful.
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        self.assertNotEqual(rounded, unrounded)
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        amount_cents = int(rounded * 100)
+        seller, _ = self._mock_seller(
+            get_return=self._payment_response(amount=amount_cents, reference_id=str(invoice.pk))
+        )
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            create_result = PaymentService.create_mobile_payment(invoice_pk=invoice.pk, user=self.admin_user)
+            self.assertEqual(create_result["amount"], str(rounded))  # rounded, not the fractional balance
+
+            confirm_result = PaymentService.confirm_mobile_payment(
+                invoice_pk=invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+            )
+        self.assertEqual(confirm_result["payment_id"], "PAY1")
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        payment = InvoicePayment.objects.get(invoice=invoice, external_id="PAY1")
+        self.assertEqual(payment.amount, rounded)  # recorded the verified (rounded) Square amount
 
     def _assert_rejected_and_unrecorded(self, payment_response):
         """A verification failure must raise ValueError and record / mark nothing."""

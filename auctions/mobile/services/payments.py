@@ -8,6 +8,16 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 
+class PaymentVerificationError(ValueError):
+    """A Tap to Pay charge could not be verified against Square *after* the card was charged.
+
+    Distinct from a plain ``ValueError`` (bad/early input) so the view can tell the operator the
+    charge may have gone through — the Square webhook reconciles the same payment by reference_id,
+    so refreshing the invoice usually shows it as paid — rather than a flat "invalid request".
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers still catch it.
+    """
+
+
 class PaymentService:
     """Mobile Square Tap-to-Pay infrastructure.
 
@@ -135,7 +145,9 @@ class PaymentService:
             msg = "No active Square location found for this seller"
             raise ValueError(msg)
 
-        amount_due = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        # Charge the rounded balance so the amount matches the invoice total shown to the buyer
+        # (rounded_net_after_payments falls back to the exact amount when invoice rounding is off).
+        amount_due = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
         if amount_due <= 0:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
@@ -171,10 +183,13 @@ class PaymentService:
 
         Raises
         ------
-        PermissionError  — user is not an admin of the invoice's auction/club.
-        ValueError       — invoice already paid, Square error, zero amount, or the
-                           fetched payment fails any verification check.
-        LookupError      — invoice not found.
+        PermissionError           — user is not an admin of the invoice's auction/club.
+        PaymentVerificationError  — the card may have been charged but the fetched payment failed a
+                                    verification check (status/amount/currency/location/reference)
+                                    or could not be fetched from Square. Subclasses ValueError.
+        ValueError                — invoice already paid, zero amount, or Square not configured
+                                    (checked before any charge would have happened).
+        LookupError               — invoice not found.
         """
         from auctions.models import Invoice, InvoicePayment
 
@@ -210,7 +225,8 @@ class PaymentService:
             msg = "No active Square location found"
             raise ValueError(msg)
 
-        amount_due = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        # Verify against the rounded balance — the same amount create told the SDK to charge.
+        amount_due = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
         if amount_due <= 0:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
@@ -227,14 +243,14 @@ class PaymentService:
             detail = PaymentService._square_error_detail(exc)
             logger.error("Square get payment failed for invoice %s: %s", invoice_pk, detail)
             msg = f"Square payment lookup failed: {detail}"
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
 
         # Some SDK paths report errors on the response instead of raising; handle both.
         if getattr(result, "errors", None):
             detail = "; ".join(getattr(e, "detail", None) or str(e) for e in result.errors)
             logger.error("Square get payment errors for invoice %s: %s", invoice_pk, result.errors)
             msg = f"Square payment lookup failed: {detail}"
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
 
         sq_payment = result.payment
         fetched_payment_id = getattr(sq_payment, "id", "") or ""
@@ -261,22 +277,23 @@ class PaymentService:
         # (and keep it consistent with the web flow).
         if payment_status != "COMPLETED":
             msg = f"Square payment {payment_id} is not completed (status={payment_status})"
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
         if sq_amount != amount_cents or sq_currency != invoice.currency:
             msg = (
                 f"Square payment {payment_id} amount mismatch: "
                 f"got {sq_amount} {sq_currency}, expected {amount_cents} {invoice.currency}"
             )
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
         if sq_location_id != location_id:
             msg = f"Square payment {payment_id} location mismatch: got {sq_location_id}, expected {location_id}"
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
         if sq_reference_id != expected_reference_id:
             msg = f"Square payment {payment_id} reference mismatch: got {sq_reference_id}, expected {expected_reference_id}"
-            raise ValueError(msg)
+            raise PaymentVerificationError(msg)
 
-        # Verified — use Square's own id for the record, not whatever the client claimed.
+        # Verified — use Square's own id and amount for the record, not whatever the client claimed.
         payment_id = fetched_payment_id or payment_id
+        verified_amount = (Decimal(sq_amount) / 100) if sq_amount is not None else amount_due
 
         # Record idempotently. The Square webhook reconciles the same payment via get_or_create on
         # (invoice, external_id), so a double-tap or a webhook landing first must not double-record or
@@ -288,8 +305,8 @@ class PaymentService:
                 external_id=payment_id,
                 defaults={
                     "payment_method": "Square",
-                    "amount": amount_due,
-                    "amount_available_to_refund": amount_due,
+                    "amount": verified_amount,
+                    "amount_available_to_refund": verified_amount,
                     "currency": invoice.currency,
                     "receipt_number": receipt_number or None,
                 },

@@ -7215,7 +7215,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             return self.show_paypal_button or self.show_square_button
@@ -7260,7 +7261,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
@@ -7298,7 +7300,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             seller = self.club.effective_square_seller
@@ -9409,7 +9412,9 @@ class SquareSeller(models.Model):
         try:
             from decimal import Decimal
 
-            amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
+            # Charge the rounded balance so the amount matches the invoice total the buyer sees
+            # (rounded_net_after_payments falls back to the exact amount when rounding is off).
+            amount_decimal = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
             amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
         except Exception:
             logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
