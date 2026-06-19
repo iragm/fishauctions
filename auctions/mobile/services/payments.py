@@ -54,6 +54,39 @@ class PaymentService:
                 return errors[0].get("detail") or errors[0].get("code") or str(exc)
         return str(exc)
 
+    # Club permissions that may take a Tap to Pay payment. permission_admin is treated as a wildcard
+    # inside check_club_permission, so it is covered implicitly.
+    _CLUB_PAYMENT_PERMISSIONS = ("permission_money", "permission_manage_auctions")
+
+    @staticmethod
+    def _check_admin_access(invoice, user) -> bool:
+        """Authorize the merchant operating Tap to Pay — never the buyer.
+
+        Tap to Pay is run by the person collecting payment on a device authorized with the
+        *seller's* Square account; buyers must not reach this flow (it would hand them the
+        seller's OAuth token). Authorization mirrors the web admin checks:
+
+        * Auction invoices — the auction creator, a superuser, or anyone with an ``is_admin``
+          AuctionTOS on the auction (this is what covers a Square auction that has no club), via
+          ``Auction.permission_check``.
+        * Club auctions / membership invoices — a club admin, a money manager, or an auction
+          manager (``permission_manage_auctions``) for the invoice's club. The club path is
+          checked directly (not only via ``permission_check``) so it also applies when the
+          auction is not ``manage_users_through_club``.
+
+        Anything else is denied.
+        """
+        auction = invoice.auction
+        if auction and auction.permission_check(user):
+            return True
+        club = invoice.club or (auction.club if auction else None)
+        if club:
+            from auctions.views import check_club_permission
+
+            if any(check_club_permission(user, club, perm) for perm in PaymentService._CLUB_PAYMENT_PERMISSIONS):
+                return True
+        return False
+
     @staticmethod
     def create_mobile_payment(invoice_pk: int, user) -> dict:
         """Validate an invoice and return payment context for the mobile SDK.
@@ -63,7 +96,7 @@ class PaymentService:
 
         Raises
         ------
-        PermissionError  — user is not the invoice buyer.
+        PermissionError  — user is not an admin of the invoice's auction/club.
         ValueError       — invoice already paid, Square not configured,
                            amount is zero/negative.
         LookupError      — invoice not found.
@@ -78,10 +111,9 @@ class PaymentService:
             msg = f"Invoice {invoice_pk} not found"
             raise LookupError(msg)
 
-        # Access check: buyer or auctiontos user must match
-        invoice_user = (invoice.auctiontos_user.user if invoice.auctiontos_user else None) or invoice.buyer
-        if invoice_user and invoice_user != user:
-            msg = "You do not have access to this invoice"
+        # Only the merchant (auction/club admin) may take a Tap to Pay payment — never the buyer.
+        if not PaymentService._check_admin_access(invoice, user):
+            msg = "You do not have permission to take payment for this invoice"
             raise PermissionError(msg)
 
         if invoice.status == "PAID":
@@ -93,7 +125,8 @@ class PaymentService:
             msg = "Square payments are not configured for this invoice"
             raise ValueError(msg)
 
-        if not seller.get_valid_access_token():
+        access_token = seller.get_valid_access_token()
+        if not access_token:
             msg = "Square account token is invalid; the seller must reconnect Square"
             raise ValueError(msg)
 
@@ -112,10 +145,13 @@ class PaymentService:
             "amount": str(amount_due),
             "currency": invoice.currency,
             "location_id": location_id,
+            # The client must charge with this reference_id so confirm (and the Square webhook) can
+            # bind the payment back to this invoice. Matches the web convention: str(invoice.pk).
+            "reference_id": str(invoice_pk),
             # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId),
             # so this ships the seller's OAuth access token to the device by design — the SDK
             # requires it. Prefer the shortest-lived token the seller's Square OAuth allows.
-            "access_token": seller.get_valid_access_token(),
+            "access_token": access_token,
             "idempotency_key": str(uuid.uuid4()),
             "square_environment": settings.SQUARE_ENVIRONMENT,
         }
@@ -135,7 +171,7 @@ class PaymentService:
 
         Raises
         ------
-        PermissionError  — user is not the invoice buyer.
+        PermissionError  — user is not an admin of the invoice's auction/club.
         ValueError       — invoice already paid, Square error, zero amount, or the
                            fetched payment fails any verification check.
         LookupError      — invoice not found.
@@ -150,9 +186,9 @@ class PaymentService:
             msg = f"Invoice {invoice_pk} not found"
             raise LookupError(msg)
 
-        invoice_user = (invoice.auctiontos_user.user if invoice.auctiontos_user else None) or invoice.buyer
-        if invoice_user and invoice_user != user:
-            msg = "You do not have access to this invoice"
+        # Only the merchant (auction/club admin) may confirm a Tap to Pay payment — never the buyer.
+        if not PaymentService._check_admin_access(invoice, user):
+            msg = "You do not have permission to take payment for this invoice"
             raise PermissionError(msg)
 
         if invoice.status == "PAID":
@@ -215,7 +251,9 @@ class PaymentService:
         sq_currency = getattr(amount_money, "currency", None)
         sq_location_id = getattr(sq_payment, "location_id", None)
         sq_reference_id = getattr(sq_payment, "reference_id", None)
-        expected_reference_id = f"invoice:{invoice_pk}"
+        # Match the web Square convention (create_payment_link sets reference_id = str(invoice.pk),
+        # and the webhook resolves the invoice by pk), so the webhook can also reconcile this charge.
+        expected_reference_id = str(invoice_pk)
 
         # NOTE: we accept ONLY "COMPLETED" — not the auth-only "APPROVED" — to match the web Square
         # webhook handler, which treats only COMPLETED as paid. This may change later: if Tap-to-Pay

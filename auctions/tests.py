@@ -22355,6 +22355,9 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
     The Mobile Payments SDK charges the card on-device and returns a completed payment_id; the
     server re-fetches it via GetPayment (client.payments.get) and verifies it before recording.
+
+    Tap to Pay is operated by the merchant (auction admin), so the service is driven here as
+    ``self.admin_user`` (an is_admin TOS on the auction); the buyer is never authorized.
     """
 
     def setUp(self):
@@ -22393,7 +22396,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         # Mirror the squareup 44.x typed GetPaymentResponse: .errors, .payment, and a nested Money
         # object (attributes, not a dict) on .amount_money.
         currency = currency if currency is not None else self.pay_invoice.currency
-        reference_id = reference_id if reference_id is not None else f"invoice:{self.pay_invoice.pk}"
+        reference_id = reference_id if reference_id is not None else str(self.pay_invoice.pk)
         payment = SimpleNamespace(
             id=pid,
             status=status_,
@@ -22414,7 +22417,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
             patch("auctions.views._process_invoice_membership_renewal"),
         ):
             result = PaymentService.confirm_mobile_payment(
-                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="idem-1", user=self.buyer
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="idem-1", user=self.admin_user
             )
         self.assertTrue(client.payments.get.called)  # GetPayment, not payments.create
         self.assertFalse(client.payments.create.called)  # the server must NOT charge anything
@@ -22436,7 +22439,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         ):
             with self.assertRaises(ValueError):
                 PaymentService.confirm_mobile_payment(
-                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
                 )
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
         self.pay_invoice.refresh_from_db()
@@ -22457,7 +22460,8 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self._assert_rejected_and_unrecorded(self._payment_response(location_id="LOC_OTHER"))
 
     def test_confirm_rejects_wrong_reference_id(self):
-        self._assert_rejected_and_unrecorded(self._payment_response(reference_id="invoice:99999"))
+        # A payment bound to a different invoice's reference (its pk) must not pay this one.
+        self._assert_rejected_and_unrecorded(self._payment_response(reference_id=str(self.pay_invoice.pk + 99999)))
 
     def test_confirm_rejects_already_paid(self):
         from auctions.mobile.services.payments import PaymentService
@@ -22468,7 +22472,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
             with self.assertRaises(ValueError):
                 PaymentService.confirm_mobile_payment(
-                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
                 )
         self.assertFalse(client.payments.get.called)
 
@@ -22497,7 +22501,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
             patch("auctions.views._process_invoice_membership_renewal") as renew,
         ):
             PaymentService.confirm_mobile_payment(
-                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
             )
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
         ensure.assert_not_called()  # didn't create the record → must not re-run renewal side effects
@@ -22512,7 +22516,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
             with self.assertRaises(ValueError):
                 PaymentService.confirm_mobile_payment(
-                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
                 )
 
     def test_create_returns_access_token_not_application_id(self):
@@ -22520,8 +22524,143 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
         seller, _ = self._mock_seller()
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
-            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
         self.assertEqual(result["access_token"], "tok")
         self.assertNotIn("square_application_id", result)
         self.assertEqual(result["location_id"], "LOC1")
         self.assertEqual(result["amount"], "20.00")
+        # The client must charge with this reference_id; it matches the web convention (str(pk)).
+        self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+
+    def test_create_denies_buyer(self):
+        # The buyer must NOT be able to create a payment — that would leak the seller's Square token.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+
+    def test_create_denies_non_admin_other_user(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.userB)
+
+    def test_create_allows_is_admin_tos_on_square_auction_without_club(self):
+        # A Square auction with no club: anyone with an is_admin AuctionTOS (not just the creator)
+        # can take payment. online_auction has no club, and this fresh admin isn't its creator.
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertIsNone(self.online_auction.club_id)  # no club on this auction
+        tos_admin = User.objects.create_user("tos_admin", "ta@example.com", "pw")
+        AuctionTOS.objects.create(
+            user=tos_admin, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=tos_admin)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_allows_club_manage_auctions_permission(self):
+        # A club member with "manage auctions" can take payment for that club's auction invoice —
+        # even when the auction is not manage_users_through_club (so Auction.permission_check alone,
+        # which gates the club branch on is_club_managed, would not grant it).
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Mgr Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        manager = User.objects.create_user("club_mgr", "mgr@example.com", "pw")
+        ClubMember.objects.create(club=club, user=manager, name="Mgr", permission_manage_auctions=True)
+        self.assertFalse(self.online_auction.permission_check(manager))  # not granted by the auction alone
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=manager)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_denies_club_member_without_payment_permission(self):
+        # A plain club member (no money / manage-auctions / admin permission) is still denied.
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Plain Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        member = User.objects.create_user("plain_member", "pm@example.com", "pw")
+        ClubMember.objects.create(club=club, user=member, name="Plain")
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=member)
+
+    def test_confirm_denies_buyer_before_charging(self):
+        # Buyer is rejected before any Square call and nothing is recorded.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                )
+        self.assertFalse(client.payments.get.called)
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+
+
+class MobilePaymentEndpointTests(StandardTestCase):
+    """The /api/mobile/payments/ HTTP layer: JWT auth, the PermissionError->403 mapping, and that
+    only the merchant (auction admin) — not the buyer — can reach create/confirm."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.buyer = User.objects.create_user("endpointbuyer", "eb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+        self.create_url = reverse("mobile-payment-create")
+        self.confirm_url = reverse("mobile-payment-confirm")
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def _mock_seller(self):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        return seller
+
+    def test_create_requires_jwt(self):
+        self.assertIn(self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}).status_code, (401, 403))
+
+    def test_admin_can_create_and_gets_reference_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(
+                self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.admin_user)
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["access_token"], "tok")
+        self.assertEqual(body["reference_id"], str(self.pay_invoice.pk))
+
+    def test_buyer_create_is_403(self):
+        # Even with Square configured, the buyer must get 403 and never see the access token.
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.buyer))
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("access_token", resp.json())
+
+    def test_buyer_confirm_is_403(self):
+        resp = self.client.post(
+            self.confirm_url,
+            {"invoice_pk": self.pay_invoice.pk, "payment_id": "PAY1", "idempotency_key": "i"},
+            **self._bearer(self.buyer),
+        )
+        self.assertEqual(resp.status_code, 403)

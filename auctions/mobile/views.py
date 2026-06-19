@@ -95,10 +95,17 @@ The Flutter app uses Square's Mobile Payments SDK (Tap to Pay): it charges the c
 and returns a completed Square payment_id. There is no nonce and the server never calls
 payments.create — confirm re-fetches the payment from Square and verifies it before recording.
 
+Both endpoints are restricted to the merchant collecting payment — the auction creator, a
+superuser, anyone with an is_admin AuctionTOS on the auction (so a Square auction needs no club),
+or a club admin / money manager / auction manager for the invoice's club. The buyer is never
+authorized: the device authorizes with the *seller's* Square account, so the access token must
+not reach a buyer.
+
 POST /api/mobile/payments/create/
     Validate an invoice and return the parameters needed to authorize the Mobile Payments SDK.
     The seller's OAuth access token is returned because the SDK authorizes on-device with
-    authorize(accessToken, locationId).
+    authorize(accessToken, locationId). Charge with the returned ``reference_id`` so confirm and
+    the Square webhook can bind the payment back to the invoice.
 
     Request::
 
@@ -111,6 +118,7 @@ POST /api/mobile/payments/create/
           "amount": "35.00",
           "currency": "USD",
           "location_id": "LXXXXXXXXXXXXXXXX",
+          "reference_id": "123",
           "access_token": "EAAA...",
           "idempotency_key": "550e8400-...",
           "square_environment": "sandbox"

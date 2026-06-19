@@ -77,6 +77,9 @@ class MobilePaymentCreateResponseSerializer(serializers.Serializer):
     amount = serializers.CharField(help_text="Decimal string, e.g. '15.00'")
     currency = serializers.CharField()
     location_id = serializers.CharField()
+    # The client must charge with this reference_id so confirm (and the Square webhook) can bind the
+    # payment to the invoice. Matches the web convention (str(invoice.pk)).
+    reference_id = serializers.CharField()
     # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId), so we
     # ship the seller's OAuth access token to the device by design (the SDK requires it).
     access_token = serializers.CharField()
@@ -89,7 +92,15 @@ class MobilePaymentConfirmSerializer(serializers.Serializer):
 
     invoice_pk = serializers.IntegerField(min_value=1)
     payment_id = serializers.CharField(help_text="Square payment id from the on-device Tap to Pay charge")
-    idempotency_key = serializers.CharField(help_text="Key from the create response — must match")
+    idempotency_key = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        help_text=(
+            "Key from the create response. Accepted for contract compatibility only; the charge is "
+            "verified by payment_id against Square and this is not used to charge."
+        ),
+    )
 
 
 class MobilePaymentConfirmResponseSerializer(serializers.Serializer):

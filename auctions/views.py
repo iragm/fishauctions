@@ -14453,9 +14453,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
 
-                # Only proceed if we have a reference_id to look up the invoice
+                # Only proceed if we have a reference_id to look up the invoice. reference_id is our
+                # invoice pk as a string; guard against any non-numeric value so a stray payment
+                # can't raise (Invoice.pk is an int) and 500 the webhook.
                 if reference_id:
-                    invoice = Invoice.objects.filter(pk=reference_id).first()
+                    try:
+                        invoice = Invoice.objects.filter(pk=int(reference_id)).first()
+                    except (TypeError, ValueError):
+                        invoice = None
+                        logger.warning("Square webhook: non-numeric reference_id: %s", reference_id)
                     if invoice:
                         amount_money = payment.get("amount_money", {})
                         amount_value = Decimal(amount_money.get("amount", 0)) / 100
