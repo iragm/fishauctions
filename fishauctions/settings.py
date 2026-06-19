@@ -361,6 +361,16 @@ ACCOUNT_CHANGE_EMAIL = True
 
 SESSION_COOKIE_AGE = 1209600 * 100
 
+# The mobile WebView handoff relies on the session cookie being server-set with these flags so the
+# native app never has to read or reconstruct it. HttpOnly/SameSite=Lax are Django defaults, set
+# explicitly here; Secure is enabled whenever we're not in local dev (production is HTTPS-only behind
+# nginx — see SECURE_PROXY_SSL_HEADER). Dev runs over plain http on port 80, so Secure would drop the
+# cookie there; gating on DEBUG keeps local login working.
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
 if DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 else:

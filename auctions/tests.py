@@ -22432,6 +22432,115 @@ class MobileEmailLoginTests(TestCase):
         self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
 
 
+class MobileWebSessionTests(TestCase):
+    """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
+    WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
+    must never be established by the mint call and must carry HttpOnly/Secure flags from the consume
+    redirect; the token must be single-use and fail closed (redirect to login, no session)."""
+
+    SESSION_COOKIE = "sessionid"
+
+    def setUp(self):
+        from django.conf import settings
+        from django.core.cache import cache
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        # Random-token TTL keys can't collide between tests, but clear to keep the cache deterministic.
+        cache.clear()
+        self.user = User.objects.create_user("websession", "ws@example.com", "pw")
+        self.access = str(RefreshToken.for_user(self.user).access_token)
+        self.mint_url = reverse("mobile-auth-web-session")
+        self.consume_url = reverse("mobile-auth-web-session-consume")
+        self.login_url = reverse("account_login")
+        self.home_url = settings.LOGIN_REDIRECT_URL
+
+    def _bearer(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+
+    def _mint_token(self):
+        from auctions.mobile.services.web_session import WebSessionService
+
+        return WebSessionService.create_handoff_token(self.user)
+
+    def _logged_in_user_id(self):
+        from django.contrib.auth import SESSION_KEY
+
+        return self.client.session.get(SESSION_KEY)
+
+    def test_mint_requires_jwt(self):
+        self.assertIn(self.client.post(self.mint_url).status_code, (401, 403))
+
+    def test_mint_returns_consume_url_without_establishing_a_session(self):
+        resp = self.client.post(self.mint_url, **self._bearer())
+        self.assertEqual(resp.status_code, 200)
+        handoff_url = resp.json()["handoff_url"]
+        self.assertIn(self.consume_url, handoff_url)
+        self.assertIn("t=", handoff_url)
+        # The mint call must NOT log anyone in: no session cookie, the token is the only credential.
+        self.assertNotIn(self.SESSION_COOKIE, resp.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_logs_in_and_sets_session_cookie(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.home_url)
+        self.assertIn(self.SESSION_COOKIE, resp.cookies)
+        # The follow-up request carries the cookie, so the WebView is now authenticated as the user.
+        self.assertEqual(self._logged_in_user_id(), str(self.user.pk))
+
+    @override_settings(SESSION_COOKIE_SECURE=True)
+    def test_session_cookie_carries_httponly_and_secure(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        morsel = resp.cookies[self.SESSION_COOKIE]
+        self.assertTrue(morsel["httponly"])
+        self.assertTrue(morsel["secure"])
+
+    def test_token_is_single_use(self):
+        token = self._mint_token()
+        first = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(first.url, self.home_url)
+
+        # Replaying the same token must not mint a second session.
+        self.client.logout()
+        second = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(second.url, self.login_url)
+        self.assertNotIn(self.SESSION_COOKIE, second.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_missing_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_invalid_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url, {"t": "not-a-real-token"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_inactive_user_cannot_consume(self):
+        token = self._mint_token()
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        resp = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_honours_safe_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "/lots/"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/lots/")
+
+    def test_consume_rejects_offsite_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "https://evil.example.com/"})
+        self.assertEqual(resp.status_code, 302)
+        # Open-redirect attempt falls back to the safe default rather than the attacker's host.
+        self.assertEqual(resp.url, self.home_url)
+
+
 class MobilePaymentConfirmTests(StandardTestCase):
     """confirm_mobile_payment verifies an on-device Tap to Pay charge + idempotent recording.
 

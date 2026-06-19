@@ -50,6 +50,24 @@ GET /api/mobile/auth/me/
           "date_joined": "2024-01-01T00:00:00Z"
         }
 
+POST /api/mobile/auth/web-session/
+    Pre-authenticate the WebView from the native JWT session (requires Bearer token). Mints a
+    single-use, ~60s handoff token bound to the user and returns the URL the WebView should load as
+    its initial request. No session is established here, and the session cookie never touches Dart.
+
+    Response 200::
+
+        { "handoff_url": "https://auction.fish/api/mobile/auth/web-session/consume/?t=<token>" }
+
+GET /api/mobile/auth/web-session/consume/?t=<token>
+    Loaded by the WebView itself (no Authorization header — the token is the credential). Atomically
+    validates and burns the token, then logs the user into a real Django/allauth session: the
+    sessionid cookie is set by the server on the redirect, keeping HttpOnly/Secure/SameSite. An
+    optional ``next`` (same-host only) sets the redirect target; the default is the web home.
+
+    Response 302 → ``next`` (default ``/``) on success, with ``Set-Cookie: sessionid=...``.
+    Response 302 → ``/accounts/login/`` if the token is missing, expired, or already used (no session).
+
 Devices
 -------
 POST /api/mobile/devices/register/
@@ -201,7 +219,11 @@ POST /api/mobile/command-palette/log/
 
 import logging
 
-from django.http import HttpResponse
+from django.conf import settings
+from django.contrib.auth import login
+from django.http import HttpResponse, HttpResponseRedirect
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -224,6 +246,11 @@ from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
 from .services.payments import PaymentService, PaymentVerificationError
+from .services.web_session import WebSessionService
+
+# The allauth backend is what the web login uses; logging the handoff in under the same backend
+# keeps the resulting session indistinguishable from a normal web sign-in.
+_ALLAUTH_BACKEND = "allauth.account.auth_backends.AuthenticationBackend"
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +308,61 @@ class MobileUserMeView(APIView):
     def get(self, request):
         serializer = MobileUserSerializer(request.user)
         return Response(serializer.data)
+
+
+class MobileWebSessionView(APIView):
+    """POST /api/mobile/auth/web-session/ — mint a one-time WebView handoff token.
+
+    Bridges the native JWT session into a real Django/allauth session so the WebView is
+    pre-authenticated after a single native sign-in. No session is established here — we only mint
+    a single-use, short-TTL token bound to the user and hand back the URL the WebView should load.
+    The session cookie itself is set later by the consume view (server-set, all flags intact); it
+    never touches the Dart layer.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        token = WebSessionService.create_handoff_token(request.user)
+        handoff_url = request.build_absolute_uri(f"{reverse('mobile-auth-web-session-consume')}?t={token}")
+        return Response({"handoff_url": handoff_url}, status=status.HTTP_200_OK)
+
+
+class MobileWebSessionConsumeView(APIView):
+    """GET /api/mobile/auth/web-session/consume/?t=<token> — log the WebView in, then redirect.
+
+    Loaded by the WebView itself (no Authorization header — the token is the credential). On a valid
+    token we call django.contrib.auth.login() with the allauth backend, so SessionMiddleware sets the
+    sessionid cookie with the configured HttpOnly/Secure/SameSite flags on the redirect response. A
+    missing/expired/already-used token establishes no session and redirects to the web login page.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        user = WebSessionService.consume_handoff_token(request.GET.get("t", ""))
+        if user is None:
+            return HttpResponseRedirect(reverse("account_login"))
+
+        # login() cycles the session key and rotates the CSRF token; SessionMiddleware /
+        # CsrfViewMiddleware then set sessionid (+ csrftoken) on this redirect, with all cookie flags.
+        login(request, user, backend=_ALLAUTH_BACKEND)
+        return HttpResponseRedirect(self._safe_next(request))
+
+    @staticmethod
+    def _safe_next(request):
+        """Honour ?next= only if it points back at this host, else fall back to the web home."""
+        next_url = request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(
+            next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            return next_url
+        return settings.LOGIN_REDIRECT_URL
 
 
 # ---------------------------------------------------------------------------
