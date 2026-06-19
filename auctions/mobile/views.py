@@ -91,8 +91,14 @@ GET /api/mobile/labels/<lot_pk>/?fmt=png
 
 Payments
 --------
+The Flutter app uses Square's Mobile Payments SDK (Tap to Pay): it charges the card on-device
+and returns a completed Square payment_id. There is no nonce and the server never calls
+payments.create — confirm re-fetches the payment from Square and verifies it before recording.
+
 POST /api/mobile/payments/create/
-    Validate an invoice and return Square SDK initialisation parameters.
+    Validate an invoice and return the parameters needed to authorize the Mobile Payments SDK.
+    The seller's OAuth access token is returned because the SDK authorizes on-device with
+    authorize(accessToken, locationId).
 
     Request::
 
@@ -105,19 +111,19 @@ POST /api/mobile/payments/create/
           "amount": "35.00",
           "currency": "USD",
           "location_id": "LXXXXXXXXXXXXXXXX",
+          "access_token": "EAAA...",
           "idempotency_key": "550e8400-...",
-          "square_application_id": "sq0idp-...",
           "square_environment": "sandbox"
         }
 
 POST /api/mobile/payments/confirm/
-    Charge the nonce returned by the Square mobile SDK.
+    Verify the on-device Tap to Pay charge (by payment_id) and record it on the invoice.
 
     Request::
 
         {
           "invoice_pk": 123,
-          "source_id": "cnon:card-nonce-ok",
+          "payment_id": "GQTFp1ZlXdpoW4o6eGiZhbjosiDFf",
           "idempotency_key": "550e8400-..."
         }
 
@@ -396,7 +402,7 @@ class MobilePaymentCreateView(APIView):
 
 
 class MobilePaymentConfirmView(APIView):
-    """POST /api/mobile/payments/confirm/ — charge the nonce from the mobile SDK."""
+    """POST /api/mobile/payments/confirm/ — verify the on-device Tap to Pay charge."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -411,7 +417,7 @@ class MobilePaymentConfirmView(APIView):
         try:
             result = PaymentService.confirm_mobile_payment(
                 invoice_pk=data["invoice_pk"],
-                source_id=data["source_id"],
+                payment_id=data["payment_id"],
                 idempotency_key=data["idempotency_key"],
                 user=request.user,
             )

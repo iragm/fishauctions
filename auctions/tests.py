@@ -22351,7 +22351,11 @@ class MobileEmailLoginTests(TestCase):
 
 
 class MobilePaymentConfirmTests(StandardTestCase):
-    """confirm_mobile_payment against the new squareup SDK + idempotent recording."""
+    """confirm_mobile_payment verifies an on-device Tap to Pay charge + idempotent recording.
+
+    The Mobile Payments SDK charges the card on-device and returns a completed payment_id; the
+    server re-fetches it via GetPayment (client.payments.get) and verifies it before recording.
+    """
 
     def setUp(self):
         super().setUp()
@@ -22362,58 +22366,111 @@ class MobilePaymentConfirmTests(StandardTestCase):
         InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
         self.pay_invoice.refresh_from_db()
 
-    def _mock_seller(self, create_return=None, create_side_effect=None):
+    def _mock_seller(self, get_return=None, get_side_effect=None):
         seller = MagicMock()
         seller.get_valid_access_token.return_value = "tok"
         seller.get_location_id.return_value = "LOC1"
         client = MagicMock()
-        if create_side_effect is not None:
-            client.payments.create.side_effect = create_side_effect
+        if get_side_effect is not None:
+            client.payments.get.side_effect = get_side_effect
         else:
-            client.payments.create.return_value = create_return
+            client.payments.get.return_value = get_return
         seller.get_square_client.return_value = client
         return seller, client
 
-    @staticmethod
-    def _payment_response(pid="PAY1", status_="COMPLETED", receipt="RC123"):
+    def _payment_response(
+        self,
+        pid="PAY1",
+        status_="COMPLETED",
+        receipt="RC123",
+        amount=2000,
+        currency=None,
+        location_id="LOC1",
+        reference_id=None,
+    ):
         from types import SimpleNamespace
 
-        return SimpleNamespace(errors=None, payment=SimpleNamespace(id=pid, status=status_, receipt_number=receipt))
+        # Mirror the squareup 44.x typed GetPaymentResponse: .errors, .payment, and a nested Money
+        # object (attributes, not a dict) on .amount_money.
+        currency = currency if currency is not None else self.pay_invoice.currency
+        reference_id = reference_id if reference_id is not None else f"invoice:{self.pay_invoice.pk}"
+        payment = SimpleNamespace(
+            id=pid,
+            status=status_,
+            receipt_number=receipt,
+            amount_money=SimpleNamespace(amount=amount, currency=currency),
+            location_id=location_id,
+            reference_id=reference_id,
+        )
+        return SimpleNamespace(errors=None, payment=payment)
 
-    def test_confirm_uses_new_sdk_records_and_marks_paid(self):
+    def test_confirm_verifies_payment_records_and_marks_paid(self):
         from auctions.mobile.services.payments import PaymentService
 
-        seller, client = self._mock_seller(create_return=self._payment_response())
+        seller, client = self._mock_seller(get_return=self._payment_response())
         with (
             patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
             patch("auctions.views._ensure_invoice_renewal_state"),
             patch("auctions.views._process_invoice_membership_renewal"),
         ):
             result = PaymentService.confirm_mobile_payment(
-                invoice_pk=self.pay_invoice.pk, source_id="nonce", idempotency_key="idem-1", user=self.buyer
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="idem-1", user=self.buyer
             )
-        self.assertTrue(client.payments.create.called)  # new API, not legacy create_payment(body=...)
-        kwargs = client.payments.create.call_args.kwargs
-        self.assertEqual(kwargs["source_id"], "nonce")
-        self.assertEqual(kwargs["amount_money"], {"amount": 2000, "currency": self.pay_invoice.currency})
-        self.assertEqual(kwargs["location_id"], "LOC1")
+        self.assertTrue(client.payments.get.called)  # GetPayment, not payments.create
+        self.assertFalse(client.payments.create.called)  # the server must NOT charge anything
+        self.assertEqual(client.payments.get.call_args.kwargs["payment_id"], "PAY1")
         self.assertEqual(result["payment_id"], "PAY1")
         self.pay_invoice.refresh_from_db()
         self.assertEqual(self.pay_invoice.status, "PAID")
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+
+    def _assert_rejected_and_unrecorded(self, payment_response):
+        """A verification failure must raise ValueError and record / mark nothing."""
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(get_return=payment_response)
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+        self.pay_invoice.refresh_from_db()
+        self.assertNotEqual(self.pay_invoice.status, "PAID")
+        ensure.assert_not_called()
+        renew.assert_not_called()
+
+    def test_confirm_rejects_wrong_amount(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(amount=1999))
+
+    def test_confirm_rejects_wrong_currency(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(currency="EUR"))
+
+    def test_confirm_rejects_non_completed_status(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(status_="PENDING"))
+
+    def test_confirm_rejects_wrong_location(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(location_id="LOC_OTHER"))
+
+    def test_confirm_rejects_wrong_reference_id(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(reference_id="invoice:99999"))
 
     def test_confirm_rejects_already_paid(self):
         from auctions.mobile.services.payments import PaymentService
 
         self.pay_invoice.status = "PAID"
         self.pay_invoice.save(update_fields=["status"])
-        seller, client = self._mock_seller(create_return=self._payment_response())
+        seller, client = self._mock_seller(get_return=self._payment_response())
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
             with self.assertRaises(ValueError):
                 PaymentService.confirm_mobile_payment(
-                    invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
                 )
-        self.assertFalse(client.payments.create.called)
+        self.assertFalse(client.payments.get.called)
 
     def test_confirm_is_idempotent_on_external_id(self):
         from auctions.mobile.services.payments import PaymentService
@@ -22431,14 +22488,16 @@ class MobilePaymentConfirmTests(StandardTestCase):
             amount_available_to_refund=20,
             currency=self.pay_invoice.currency,
         )
-        seller, _ = self._mock_seller(create_return=self._payment_response(pid="PAY1"))
+        # $60 owed, $20 already recorded → $40 (4000 cents) due at confirm time; the verification
+        # recomputes amount_due net of the existing payment, so the fetched payment must match it.
+        seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=4000))
         with (
             patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
             patch("auctions.views._ensure_invoice_renewal_state") as ensure,
             patch("auctions.views._process_invoice_membership_renewal") as renew,
         ):
             PaymentService.confirm_mobile_payment(
-                invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
             )
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
         ensure.assert_not_called()  # didn't create the record → must not re-run renewal side effects
@@ -22449,9 +22508,20 @@ class MobilePaymentConfirmTests(StandardTestCase):
     def test_confirm_square_error_raises_valueerror(self):
         from auctions.mobile.services.payments import PaymentService
 
-        seller, _ = self._mock_seller(create_side_effect=Exception("card declined"))
+        seller, _ = self._mock_seller(get_side_effect=Exception("payment not found"))
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
             with self.assertRaises(ValueError):
                 PaymentService.confirm_mobile_payment(
-                    invoice_pk=self.pay_invoice.pk, source_id="n", idempotency_key="i", user=self.buyer
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
                 )
+
+    def test_create_returns_access_token_not_application_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+        self.assertEqual(result["access_token"], "tok")
+        self.assertNotIn("square_application_id", result)
+        self.assertEqual(result["location_id"], "LOC1")
+        self.assertEqual(result["amount"], "20.00")
