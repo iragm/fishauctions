@@ -32,6 +32,7 @@ from .models import (
     Location,
     Lot,
     LotHistory,
+    MobileDevice,
     PageView,
     PickupLocation,
     Product,
@@ -272,6 +273,41 @@ class UserLabelPrefsInline(admin.StackedInline):
     verbose_name_plural = "User Label Preferences"
 
 
+class MobileDeviceInline(admin.TabularInline):
+    """Read-only view of a user's registered mobile devices. Devices are created by the app, not the admin."""
+
+    model = MobileDevice
+    extra = 0
+    fields = ("platform", "app_version", "device_name", "device_uuid", "created_at", "last_seen")
+    readonly_fields = ("platform", "app_version", "device_name", "device_uuid", "created_at", "last_seen")
+    verbose_name = "Mobile device"
+    verbose_name_plural = "Mobile devices"
+    show_change_link = True
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class HasMobileAppFilter(admin.SimpleListFilter):
+    """Filter users by whether they have registered at least one mobile device (i.e. installed the app)."""
+
+    title = "mobile app installed"
+    parameter_name = "has_mobile_app"
+
+    def lookups(self, request, model_admin):
+        return [
+            ("yes", "Yes"),
+            ("no", "No"),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(mobile_devices__isnull=False).distinct()
+        if self.value() == "no":
+            return queryset.filter(mobile_devices__isnull=True)
+        return queryset
+
+
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
     list_display = [
@@ -282,9 +318,11 @@ class UserAdmin(BaseUserAdmin):
         "last_activity",
         "date_joined",
     ]
+    list_filter = (HasMobileAppFilter, "is_staff", "is_superuser", "is_active", "groups")
     inlines = [
         UserdataInline,
         UserLabelPrefsInline,
+        MobileDeviceInline,
         # AuctionTOSInline,  # too much noise, but important to have
         # InterestInline,  # too much noise
     ]
@@ -316,6 +354,23 @@ class UserAdmin(BaseUserAdmin):
     # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4
     last_activity.admin_order_field = "userdata__last_activity"
     last_activity.short_description = "Last activity"
+
+
+@admin.register(MobileDevice)
+class MobileDeviceAdmin(admin.ModelAdmin):
+    list_display = ("user", "platform", "app_version", "device_name", "last_seen", "created_at")
+    list_filter = ("platform", "app_version")
+    search_fields = (
+        "user__username",
+        "user__email",
+        "user__first_name",
+        "user__last_name",
+        "device_uuid",
+        "device_name",
+    )
+    readonly_fields = ("created_at", "last_seen")
+    raw_id_fields = ("user",)
+    date_hierarchy = "last_seen"
 
 
 class GeneralInterestAdmin(admin.ModelAdmin):

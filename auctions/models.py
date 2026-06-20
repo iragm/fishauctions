@@ -3942,6 +3942,9 @@ class Auction(models.Model):
             .count()
         )
         chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        mobile_app = (
+            auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
+        )
         if self.is_online:
             lot_with_buy_now = (
                 Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
@@ -3958,9 +3961,11 @@ class Auction(models.Model):
         if auctiontos.count() == 0:
             lot_with_buy_now_percent = 0
             account_percent = 0
+            mobile_app_percent = 0
         else:
             account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
             lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+            mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self)
         viewed_invoices = invoices.filter(opened=True)
         if invoices.count():
@@ -3977,6 +3982,7 @@ class Auction(models.Model):
         return {
             "labels": [
                 "An account",
+                "Mobile app",
                 "Search",
                 "Watch",
                 "Push notifications as lots sell",
@@ -3990,6 +3996,7 @@ class Auction(models.Model):
             "data": [
                 [
                     account_percent,
+                    mobile_app_percent,
                     seach_percent,
                     watch_percent,
                     notification_percent,

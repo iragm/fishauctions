@@ -205,6 +205,7 @@ from .models import (
     Lot,
     LotHistory,
     LotImage,
+    MobileDevice,
     PageView,
     PayPalSeller,
     PickupLocation,
@@ -11982,6 +11983,30 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             AuctionTOS.objects.filter(user__isnull=True, email__isnull=False).values("email").distinct().count()
         )
 
+        # Mobile app adoption
+        app_devices = MobileDevice.objects.filter(user__is_active=True)
+        mobile_app_users = app_devices.values("user").distinct().count()
+        context["mobile_app_users_count"] = mobile_app_users
+        context["mobile_app_users_percent"] = int(mobile_app_users / qs.count() * 100) if qs.count() else 0
+        context["mobile_app_users_ios"] = (
+            app_devices.filter(platform=MobileDevice.PLATFORM_IOS).values("user").distinct().count()
+        )
+        context["mobile_app_users_android"] = (
+            app_devices.filter(platform=MobileDevice.PLATFORM_ANDROID).values("user").distinct().count()
+        )
+        context["mobile_app_users_active_30d"] = (
+            app_devices.filter(last_seen__gte=timezone.now() - timezone.timedelta(days=30))
+            .values("user")
+            .distinct()
+            .count()
+        )
+        context["mobile_app_versions"] = (
+            app_devices.exclude(app_version="")
+            .values("app_version")
+            .annotate(count=Count("user", distinct=True))
+            .order_by("-count")
+        )
+
         # context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
         # context["anonymous"] = (
         #     qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
@@ -13404,6 +13429,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
 
         return [
             "An account",
+            "Mobile app",
             "Search",
             "Watch",
             "Push notifications as lots sell",
@@ -13478,6 +13504,9 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                 .count()
             )
             chat_percent = int(chat / auctiontos_with_account.count() * 100)
+            mobile_app = (
+                auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
+            )
             if self.auction.is_online:
                 lot_with_buy_now = (
                     Lot.objects.filter(auction=self.auction, buy_now_used=True)
@@ -13495,9 +13524,11 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             if auctiontos.count() == 0:
                 lot_with_buy_now_percent = 0
                 account_percent = 0
+                mobile_app_percent = 0
             else:
                 account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
                 lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+                mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
             invoices = Invoice.objects.filter(auction=self.auction)
             viewed_invoices = invoices.filter(opened=True)
             if invoices.count():
@@ -13514,6 +13545,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             data = [
                 [
                     account_percent,
+                    mobile_app_percent,
                     seach_percent,
                     watch_percent,
                     notification_percent,
