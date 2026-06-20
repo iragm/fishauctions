@@ -4,15 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0314_default_no_membership_fees_and_enable_club_page'),
+        ("auctions", "0314_default_no_membership_fees_and_enable_club_page"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='squareseller',
-            name='scopes',
-            field=models.CharField(blank=True, default='', help_text='Space-separated OAuth scopes granted at connect time. Empty = legacy connection (pre Tap to Pay).', max_length=255),
+            model_name="squareseller",
+            name="scopes",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Space-separated OAuth scopes granted at connect time. Empty = legacy connection (pre Tap to Pay).",
+                max_length=255,
+            ),
         ),
     ]
