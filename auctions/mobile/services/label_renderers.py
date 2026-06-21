@@ -24,8 +24,14 @@ class LabelRenderer(ABC):
     content_type: str = ""
 
     @abstractmethod
-    def render(self, label_data: dict) -> bytes:
-        """Return the encoded label (e.g. PNG bytes) for ``label_data``."""
+    def render(
+        self, label_data: dict, *, width: int | None = None, height: int | None = None, dpi: int | None = None
+    ) -> bytes:
+        """Return the encoded label (e.g. PNG bytes) for ``label_data``.
+
+        ``width``/``height`` are the output pixel size (default 600x400) and ``dpi`` the intended
+        print density; renderers that ignore them are free to.
+        """
         raise NotImplementedError
 
 
@@ -40,21 +46,36 @@ class PngLabelRenderer(LabelRenderer):
     format = "png"
     content_type = "image/png"
 
-    WIDTH = 600
-    HEIGHT = 400
-    MARGIN = 18
+    # Base layout. A request for a different ``width`` scales the whole label off these, so a small
+    # native raster (e.g. a 96px-wide Niimbot D11 label) prints crisp instead of the app downscaling
+    # a 600px image and smearing the embedded barcode.
+    BASE_WIDTH = 600
+    BASE_HEIGHT = 400
+    BASE_MARGIN = 18
+    DEFAULT_DPI = 203
 
-    def render(self, label_data: dict) -> bytes:
+    def render(
+        self, label_data: dict, *, width: int | None = None, height: int | None = None, dpi: int | None = None
+    ) -> bytes:
         from PIL import Image, ImageDraw, ImageFont
 
-        def font(size):
-            return ImageFont.load_default(size=size)
+        width = width or self.BASE_WIDTH
+        height = height or self.BASE_HEIGHT
+        dpi = dpi or self.DEFAULT_DPI
+        scale = width / self.BASE_WIDTH
 
-        img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "white")
+        def font(size):
+            return ImageFont.load_default(size=max(1, round(size * scale)))
+
+        def s(value):
+            return round(value * scale)
+
+        margin = max(1, s(self.BASE_MARGIN))
+        img = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(img)
-        x = self.MARGIN
-        y = self.MARGIN
-        max_w = self.WIDTH - 2 * self.MARGIN
+        x = margin
+        y = margin
+        max_w = width - 2 * margin
 
         lot_number = str(label_data.get("lot_number") or "")
         title = str(label_data.get("title") or "")
@@ -66,18 +87,18 @@ class PngLabelRenderer(LabelRenderer):
 
         # Lot number — the most important thing on the label.
         draw.text((x, y), lot_number, fill="black", font=font(56))
-        y += 66
+        y += s(66)
 
         # Title, wrapped to the label width.
-        y = self._draw_wrapped(draw, title, (x, y), font(30), max_w, line_height=34)
-        y += 6
+        y = self._draw_wrapped(draw, title, (x, y), font(30), max_w, line_height=s(34))
+        y += s(6)
 
         # Seller + quantity.
         meta = seller
         if quantity:
             meta = f"{meta}  ·  Qty {quantity}" if meta else f"Qty {quantity}"
         if meta:
-            y = self._draw_wrapped(draw, meta, (x, y), font(24), max_w, line_height=28)
+            y = self._draw_wrapped(draw, meta, (x, y), font(24), max_w, line_height=s(28))
 
         # Price.
         price_bits = []
@@ -89,14 +110,14 @@ class PngLabelRenderer(LabelRenderer):
             draw.text((x, y), "   ".join(price_bits), fill="black", font=font(24))
 
         # Barcode of the lot number, pinned bottom-right (best-effort — never break the label over it).
-        self._draw_barcode(img, lot_number)
+        self._draw_barcode(img, lot_number, width, height, margin)
 
         # Auction name, bottom-left.
         if auction:
-            draw.text((x, self.HEIGHT - self.MARGIN - 18), str(auction), fill="black", font=font(18))
+            draw.text((x, height - margin - s(18)), str(auction), fill="black", font=font(18))
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img.save(buf, format="PNG", dpi=(dpi, dpi))
         return buf.getvalue()
 
     @staticmethod
@@ -118,7 +139,7 @@ class PngLabelRenderer(LabelRenderer):
             y += line_height
         return y
 
-    def _draw_barcode(self, img, value):
+    def _draw_barcode(self, img, value, width, height, margin):
         if not value:
             return
         try:
@@ -131,9 +152,9 @@ class PngLabelRenderer(LabelRenderer):
             code.write(buf, options={"write_text": False, "module_height": 8.0, "quiet_zone": 1.0})
             buf.seek(0)
             bc = Image.open(buf).convert("RGB")
-            target_w = self.WIDTH // 2
+            target_w = width // 2
             bc = bc.resize((target_w, max(1, int(bc.height * (target_w / bc.width)))))
-            img.paste(bc, (self.WIDTH - target_w - self.MARGIN, self.HEIGHT - bc.height - self.MARGIN))
+            img.paste(bc, (width - target_w - margin, height - bc.height - margin))
         except Exception:
             logger.warning("Could not render barcode for label value %r", value, exc_info=True)
 

@@ -96,11 +96,14 @@ POST /api/mobile/devices/register/
 
 Labels
 ------
-GET /api/mobile/labels/<lot_pk>/?fmt=png
+GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
     Return the lot's label as a rendered image (default PNG) to send straight to a Bluetooth
     printer. The server owns layout/rendering; the app does not draw the label. ``fmt`` selects a
     registered renderer (currently ``png``); an unsupported format is a 400. (The param is ``fmt``,
-    not ``format`` — DRF reserves ``?format=`` for content negotiation.)
+    not ``format`` — DRF reserves ``?format=`` for content negotiation.) ``resolution``
+    (``WIDTHxHEIGHT``, default ``600x400``) and ``dpi`` (default ``203``) size the raster: render at
+    the printer's native width (e.g. a 96px-wide D11 label) so the app prints it 1:1 instead of
+    downscaling a 600px image and smearing the embedded barcode. Bad resolution/dpi is a 400.
 
     Access is restricted to the lot's own seller or an admin of its auction (mirrors the web
     SingleLotLabelView). Others get 403; a missing/deleted lot is 404.
@@ -409,7 +412,7 @@ class MobileDeviceRegisterView(APIView):
 
 
 class MobileLotLabelView(APIView):
-    """GET /api/mobile/labels/<pk>/?format=png — rendered label image for a lot."""
+    """GET /api/mobile/labels/<pk>/?fmt=png&resolution=600x400&dpi=203 — rendered label image for a lot."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -449,12 +452,18 @@ class MobileLotLabelView(APIView):
             )
 
         # NB: param is "fmt", not "format" — DRF reserves ?format= for its own content negotiation.
+        # ?resolution=WIDTHxHEIGHT&dpi=N control the output raster (default 600x400 @ 203dpi).
         try:
-            content, content_type = LabelService.render_label(lot, request.GET.get("fmt"))
-        except ValueError:
-            logger.warning("Invalid label format requested.", exc_info=True)
+            content, content_type = LabelService.render_label(
+                lot,
+                request.GET.get("fmt"),
+                resolution=request.GET.get("resolution"),
+                dpi=request.GET.get("dpi"),
+            )
+        except ValueError as exc:
+            logger.warning("Invalid label request.", exc_info=True)
             return Response(
-                {"detail": "Invalid label format."},
+                {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

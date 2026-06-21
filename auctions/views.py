@@ -9279,6 +9279,22 @@ class SingleLotLabelView(LotLabelView):
             if self.lot.user and self.lot.user is not request.user:
                 messages.error(request, "You can only print labels for your own lots")
                 return redirect(reverse("home"))
+        # ?format=png (or ?fmt=png) returns a single rendered PNG via the shared label renderer
+        # instead of the WeasyPrint PDF sheet, so the web endpoint matches the mobile app. Honors
+        # ?resolution=WIDTHxHEIGHT&dpi=N (default 600x400 @ 203dpi).
+        if (request.GET.get("format") or request.GET.get("fmt")) == "png":
+            from .mobile.services.labels import LabelService
+
+            try:
+                content, content_type = LabelService.render_label(
+                    self.lot,
+                    "png",
+                    resolution=request.GET.get("resolution"),
+                    dpi=request.GET.get("dpi"),
+                )
+            except ValueError as exc:
+                return HttpResponseBadRequest(str(exc))
+            return HttpResponse(content, content_type=content_type)
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
 

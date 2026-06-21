@@ -22418,8 +22418,70 @@ class MobileLabelTests(StandardTestCase):
         resp = self.client.get(self.url, {"fmt": "zpl"}, **self._bearer(self.user))
         self.assertEqual(resp.status_code, 400)
 
+    def test_default_resolution_is_600x400(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (600, 400))
+
+    def test_resolution_param_sizes_the_png(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"resolution": "96x64", "dpi": "203"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        img = Image.open(BytesIO(resp.content))
+        self.assertEqual(img.size, (96, 64))
+        # PIL round-trips DPI through the PNG pixels-per-meter chunk, so it comes back ~203.0.
+        dpi_x, dpi_y = img.info.get("dpi")
+        self.assertEqual((round(dpi_x), round(dpi_y)), (203, 203))
+
+    def test_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "not-a-size"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_out_of_range_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "99999x99999"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
     def test_requires_jwt(self):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+class SingleLotLabelPngTests(StandardTestCase):
+    """The web single-lot label endpoint can also emit a PNG (?format=png) via the shared renderer,
+    with the same ?resolution / ?dpi controls as the mobile endpoint; default stays the PDF sheet."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("single_lot_label", kwargs={"pk": self.lot.pk})  # self.lot's seller is self.user
+        self.client.login(username="my_lot", password="testpassword")
+
+    def test_default_is_pdf(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotEqual(resp["Content-Type"], "image/png")
+
+    def test_format_png_returns_png(self):
+        resp = self.client.get(self.url, {"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_png_honors_resolution(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"format": "png", "resolution": "96x64"})
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (96, 64))
+
+    def test_png_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"format": "png", "resolution": "garbage"})
+        self.assertEqual(resp.status_code, 400)
 
 
 class MobileEmailLoginTests(TestCase):
