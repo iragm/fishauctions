@@ -430,12 +430,21 @@ class LotConsumer(WebsocketConsumer):
             self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot_number}"
             self.lot = Lot.objects.get(pk=self.lot_number)
 
+            # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
+            logger.info(
+                "WS connect lot=%s user_pk=%s authed=%s",
+                self.lot_number,
+                self.user.pk,
+                self.user.is_authenticated,
+            )
+
             # Join room group
             async_to_sync(self.channel_layer.group_add)(self.room_group_name, self.channel_name)
 
             # Join private room for notifications only to this user
             async_to_sync(self.channel_layer.group_add)(self.user_room_name, self.channel_name)
             self.accept()
+            logger.info("WS accepted lot=%s user_pk=%s", self.lot_number, self.user.pk)
             # send the most recent history
             allHistory = LotHistory.objects.filter(lot=self.lot, removed=False).order_by("-timestamp")[:200]
             # send oldest first
@@ -505,9 +514,18 @@ class LotConsumer(WebsocketConsumer):
                     existing_subscription.last_notification_sent = timezone.now()
                     existing_subscription.save()
         except Exception as e:
-            logger.exception(e)
+            # TEMP lifecycle logging (remove once resolved): a failure here may mean the socket
+            # was never accepted, so the client silently can't bid.
+            logger.exception("WS connect FAILED lot=%s: %s", getattr(self, "lot_number", "?"), e)
 
     def disconnect(self, close_code):
+        # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
+        logger.info(
+            "WS disconnect lot=%s user_pk=%s close_code=%s",
+            getattr(self, "lot_number", "?"),
+            getattr(getattr(self, "user", None), "pk", None),
+            close_code,
+        )
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
         # bit redundant, but 'seen' is used for lot notifications for the owner of a given lot
@@ -531,6 +549,15 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
+        # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
+        if "bid" in text_data_json:
+            logger.info(
+                "WS bid received lot=%s user_pk=%s authed=%s amount=%s",
+                getattr(self, "lot_number", "?"),
+                getattr(getattr(self, "user", None), "pk", None),
+                self.user.is_authenticated,
+                text_data_json.get("bid"),
+            )
         if self.user.is_authenticated:
             try:
                 error = check_all_permissions(self.lot, self.user)
@@ -626,7 +653,13 @@ class LotConsumer(WebsocketConsumer):
             except Exception as e:
                 logger.exception(e)
         else:
-            pass
+            # TEMP lifecycle logging (remove once resolved): the socket authed as anonymous,
+            # so anything sent here (including bids) is silently discarded.
+            logger.info(
+                "WS message from UNAUTHENTICATED socket dropped lot=%s keys=%s",
+                getattr(self, "lot_number", "?"),
+                list(text_data_json.keys()),
+            )
 
     # Send a toast error to a single user
     def error_message(self, event):

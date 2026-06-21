@@ -541,9 +541,11 @@ function deactivate_lot() {
                                         {% endif %}
                                         $('#confirmDialogText').html(dialogText);
                                         document.querySelector('#finalize-bid').onclick = function(e) {
-                                            lotWebSocket.send(JSON.stringify({
-                                                'bid': bid
-                                            }));
+                                            if (!lotWebSocketSend({ 'bid': bid })) {
+                                                // Socket was down: don't fake a confirmation, the bid was not placed.
+                                                $('#confirmBid').modal('hide');
+                                                return;
+                                            }
                                             var your_bid = Number($('#your_bid_price').html());
                                             var price = Number($('#price').html());
                                             if (bid > your_bid) {
@@ -748,13 +750,16 @@ function deactivate_lot() {
         {% endif %}
         var viewer_bid = '{{ lot.viewer_bid }}';
         var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
-        const lotWebSocket = new WebSocket(
-            ws_protocol
-            + window.location.host
-            + '/ws/lots/{{ lot.lot_number }}/'
-        );
+        var lotWebSocketUrl = ws_protocol + window.location.host + '/ws/lots/{{ lot.lot_number }}/';
+        // A WebSocket can be closed at any time by idle proxy timeouts, network blips, or a
+        // server restart.  send() on a closed socket is *silently discarded* by the browser
+        // (no error thrown), so without reconnect logic a dropped connection makes every
+        // later bid/chat vanish with no feedback until a full page reload.  Use let + a
+        // reconnect helper instead of a one-shot const so the page can heal itself.
+        var lotWebSocket = null;
+        var lotWebSocketReconnectDelay = 1000;
 
-        lotWebSocket.onmessage = function(e) {
+        function handleLotSocketMessage(e) {
             const data = JSON.parse(e.data);
             if (data.current_high_bid) {
                 $("#price").html(data.current_high_bid);
@@ -855,18 +860,42 @@ function deactivate_lot() {
             }
             showLatestChat();
         }
-        // lotWebSocket.onclose = function(e) {
-        //     var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
-        //     <input id="reconnect_button" onclick="window.location.reload(true);"\
-        //     type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
-        //     $('#send_chat_area').html(errorHtml);
-        //     $('#bid_area').html(errorHtml);
-        //     $.toast({
-        //         title: 'Connection lost',
-        //         type: 'error',
-        //         delay: 10000
-        //     });
-        // };
+        function connectLotWebSocket() {
+            lotWebSocket = new WebSocket(lotWebSocketUrl);
+            lotWebSocket.onmessage = handleLotSocketMessage;
+            lotWebSocket.onopen = function() {
+                lotWebSocketReconnectDelay = 1000;
+            };
+            lotWebSocket.onclose = function() {
+                // Reconnect with backoff so the page heals itself instead of silently
+                // dropping every future bid into a dead socket.
+                setTimeout(connectLotWebSocket, lotWebSocketReconnectDelay);
+                lotWebSocketReconnectDelay = Math.min(lotWebSocketReconnectDelay * 2, 15000);
+            };
+            lotWebSocket.onerror = function() {
+                try { lotWebSocket.close(); } catch (err) {}
+            };
+        }
+        connectLotWebSocket();
+
+        // Only send when the socket is actually open.  Returns true if the message was
+        // handed to an open socket, or false (and warns the user + kicks off a reconnect)
+        // when the socket is down -- so callers can avoid showing a false confirmation.
+        function lotWebSocketSend(payload) {
+            if (lotWebSocket && lotWebSocket.readyState === WebSocket.OPEN) {
+                lotWebSocket.send(JSON.stringify(payload));
+                return true;
+            }
+            if (!lotWebSocket || lotWebSocket.readyState === WebSocket.CLOSED) {
+                connectLotWebSocket();
+            }
+            $.toast({
+                title: 'Connection dropped, so that did not go through. Reconnecting now -- please try again in a moment.',
+                type: 'warning',
+                delay: 8000
+            });
+            return false;
+        }
 
         function showLatestChat() {
             var objDiv = document.getElementById("chat");
@@ -882,9 +911,7 @@ function deactivate_lot() {
             const messageInputDom = document.querySelector('#chat_input');
             const message = messageInputDom.value;
             if (message) {
-                lotWebSocket.send(JSON.stringify({
-                    'message': message
-                }));
+                lotWebSocketSend({ 'message': message });
             }
             messageInputDom.value = '';
             {% if show_chat_subscriptions_checkbox %}
