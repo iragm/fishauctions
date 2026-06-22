@@ -18245,3 +18245,111 @@ class ManageUsersThroughClubTests(TestCase):
         )
         cm2.generate_bidder_number()
         self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)
+
+
+class PlaceBidApiTests(TestCase):
+    """The /api/lots/<pk>/bid/ endpoint persists bids over HTTP so a dropped or
+    stalled websocket can't silently lose them (the in-person bidding regression).
+    These cover persistence, permissions, the websocket broadcast, and -- most
+    importantly -- that a broadcast failure still saves the bid.
+    """
+
+    def setUp(self):
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        self.seller = User.objects.create_user(username="bid_seller", password="x", email="seller@example.com")
+        self.bidder = User.objects.create_user(username="bid_bidder", password="x", email="bidder@example.com")
+        self.outsider = User.objects.create_user(username="bid_outsider", password="x", email="out@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.seller,
+            title="Active bidding auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+        )
+        self.location = PickupLocation.objects.create(name="bid location", auction=self.auction, pickup_time=the_future)
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller, auction=self.auction, pickup_location=self.location
+        )
+        self.bidder_tos = AuctionTOS.objects.create(
+            user=self.bidder, auction=self.auction, pickup_location=self.location
+        )
+        self.lot = Lot.objects.create(
+            lot_name="A biddable lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=the_future,
+        )
+        # date_posted is auto_now_add, which makes the lot "too new to bid" for 20 min;
+        # backdate it (bypassing auto_now_add) so bidding is actually allowed.
+        Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
+        self.lot.refresh_from_db()
+        self.url = reverse("lot_bid", kwargs={"pk": self.lot.pk})
+
+    def _bids(self, user=None):
+        qs = Bid.objects.exclude(is_deleted=True).filter(lot_number=self.lot)
+        if user:
+            qs = qs.filter(user=user)
+        return qs
+
+    @patch("auctions.consumers.broadcast_bid_result")
+    def test_api_bid_persists_bid(self, mock_broadcast):
+        """A valid bid is saved and the result is broadcast to other viewers."""
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "NEW_HIGH_BIDDER")
+        bid = self._bids(self.bidder).first()
+        self.assertIsNotNone(bid)
+        self.assertEqual(bid.amount, 15)
+        self.assertTrue(mock_broadcast.called)
+
+    @patch("auctions.consumers.broadcast_bid_result")
+    def test_api_bid_requires_login(self, mock_broadcast):
+        """Anonymous users can't bid and nothing is saved."""
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertIn(response.status_code, (401, 403))
+        self.assertFalse(self._bids().exists())
+
+    @patch("auctions.consumers.broadcast_bid_result")
+    def test_api_bid_rejects_user_not_in_auction(self, mock_broadcast):
+        """A user who hasn't joined the auction gets an error and no bid is saved."""
+        self.client.force_login(self.outsider)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertFalse(self._bids(self.outsider).exists())
+
+    @patch("auctions.consumers.broadcast_bid_result")
+    def test_api_bid_missing_lot_returns_404(self, mock_broadcast):
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": 99999999}), {"bid": "15"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_bid_saved_even_when_broadcast_fails(self):
+        """The whole point of moving bids to HTTP: a websocket/channel-layer failure
+        must NOT lose the bid. The broadcast raises, yet the bid is still persisted."""
+        from auctions.consumers import place_bid_and_broadcast
+
+        with patch("auctions.consumers.broadcast_bid_result", side_effect=Exception("redis down")):
+            result = place_bid_and_broadcast(self.lot, self.bidder, "15")
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+        self.assertEqual(self._bids(self.bidder).count(), 1)
+
+    def test_broadcast_targets_lot_group(self):
+        """A normal bid is broadcast to the whole-lot group so every viewer updates."""
+        from auctions.consumers import place_bid_and_broadcast
+
+        sent = {}
+
+        async def fake_group_send(group, message):
+            sent["group"] = group
+            sent["message"] = message
+
+        with patch("auctions.consumers.get_channel_layer") as mock_get_layer:
+            mock_get_layer.return_value.group_send = fake_group_send
+            place_bid_and_broadcast(self.lot, self.bidder, "15")
+
+        self.assertEqual(sent["group"], f"lot_{self.lot.pk}")
+        self.assertEqual(sent["message"]["info"], "NEW_HIGH_BIDDER")

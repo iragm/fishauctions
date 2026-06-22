@@ -104,6 +104,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
+from .consumers import place_bid_and_broadcast
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
@@ -1315,6 +1316,43 @@ class WatchOrUnwatch(APIView):
             return HttpResponse("Success")
         else:
             return HttpResponse("Failure")
+
+
+class PlaceBid(APIView):
+    """Place a bid over HTTP - POST only.
+
+    Bidding used to happen entirely over the lot websocket, which meant a dropped
+    or stalled socket could silently lose a bid. This endpoint persists the bid via
+    a normal request and then broadcasts the result over the websocket as before, so
+    the user experience is unchanged but the bid no longer depends on the socket.
+
+    The client does not need to parse this response -- it keeps listening on the
+    websocket for the broadcast -- but we return the result for robustness/tests.
+    """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
+        if not lot:
+            return JsonResponse({"type": "ERROR", "message": "Lot not found"}, status=404)
+        # Persist the bid first (best-effort websocket broadcast happens inside).
+        result = place_bid_and_broadcast(lot, request.user, request.POST.get("bid"))
+        high_bid = result.get("current_high_bid")
+        if isinstance(high_bid, Decimal):
+            high_bid = float(high_bid)
+        # Always 200 for a processed bid (including validation errors like "bid too
+        # low"): those are surfaced to the user via the websocket broadcast, so a
+        # non-2xx here would make the client show a second, generic error toast.
+        return JsonResponse(
+            {
+                "type": result["type"],
+                "message": result["message"],
+                "current_high_bid": high_bid,
+                "high_bidder_pk": result["high_bidder_pk"],
+            }
+        )
 
 
 class LotNotifications(APIView):

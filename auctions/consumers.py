@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
+from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.db.models import Q
@@ -421,6 +422,100 @@ def bid_on_lot(lot, user, amount):
         logger.exception(e)
 
 
+def _bid_error_result(message):
+    """An error result shaped exactly like bid_on_lot()'s return, sent to one user."""
+    return {
+        "type": "ERROR",
+        "message": message,
+        "send_to": "user",
+        "high_bidder_pk": None,
+        "high_bidder_name": None,
+        "current_high_bid": None,
+        "winner": None,
+        "date_end": None,
+    }
+
+
+def broadcast_bid_result(lot, user, result):
+    """Push the outcome of a bid to the connected lot-page websockets.
+
+    This is the *broadcast* half of placing a bid, kept separate from persistence
+    on purpose: callers must treat it as best-effort (see place_bid_and_broadcast)
+    so a channel-layer outage can never lose a bid that was already saved. The
+    message shapes here match what LotConsumer.receive() historically sent.
+    """
+    channel_layer = get_channel_layer()
+    room_group_name = f"lot_{lot.pk}"
+    user_room_name = f"private_user_{user.pk}_lot_{lot.pk}"
+    current_high_bid = result["current_high_bid"]
+    if isinstance(current_high_bid, Decimal):
+        current_high_bid = float(current_high_bid)
+    if result["send_to"] == "user":
+        if result["type"] == "ERROR":
+            async_to_sync(channel_layer.group_send)(
+                user_room_name,
+                {"type": "error_message", "error": result["message"]},
+            )
+        else:
+            # sealed-bid success and "you raised your own proxy bid" land here
+            async_to_sync(channel_layer.group_send)(
+                user_room_name,
+                {
+                    "type": "chat_message",
+                    "info": result["type"],
+                    "message": result["message"],
+                    "high_bidder_pk": result["high_bidder_pk"],
+                    "high_bidder_name": result["high_bidder_name"],
+                    "current_high_bid": current_high_bid,
+                },
+            )
+    else:
+        async_to_sync(channel_layer.group_send)(
+            room_group_name,
+            {
+                "type": "chat_message",
+                "info": result["type"],
+                "message": result["message"],
+                "high_bidder_pk": result["high_bidder_pk"],
+                "high_bidder_name": result["high_bidder_name"],
+                "current_high_bid": current_high_bid,
+                "date_end": result["date_end"],
+            },
+        )
+
+
+def place_bid_and_broadcast(lot, user, amount):
+    """Place a bid and notify connected clients.
+
+    Persistence (permission checks + bid_on_lot) runs FIRST and is never gated on
+    the websocket. The broadcast is best-effort: if the channel layer is down or
+    slow, the bid is still saved and we only log the broadcast failure -- so a
+    websocket problem can no longer silently drop a bid (the failure mode behind
+    branch fix-lot-websocket-reconnect). Returns the bid_on_lot()-shaped result.
+
+    Safe to call from any sync context (HTTP view or websocket consumer).
+    """
+    if not getattr(user, "is_authenticated", False):
+        return _bid_error_result("You must be logged in to bid")
+    error = check_all_permissions(lot, user) or check_bidding_permissions(lot, user)
+    if error:
+        result = _bid_error_result(error)
+    else:
+        result = bid_on_lot(lot, user, amount)
+        if result is None:
+            # bid_on_lot swallows unexpected errors and returns None; surface as an error
+            result = _bid_error_result("Something went wrong placing your bid")
+    try:
+        broadcast_bid_result(lot, user, result)
+    except Exception:
+        logger.exception(
+            "Bid broadcast failed but the bid was still saved (lot=%s user=%s)",
+            getattr(lot, "pk", None),
+            getattr(user, "pk", None),
+        )
+    return result
+
+
 class LotConsumer(WebsocketConsumer):
     def connect(self):
         try:
@@ -596,60 +691,12 @@ class LotConsumer(WebsocketConsumer):
                             )
                     except (KeyError, ValueError):
                         pass
-                    try:
-                        # handle bids
-                        amount = text_data_json["bid"]
-                        error = check_bidding_permissions(self.lot, self.user)
-                        if error:
-                            async_to_sync(self.channel_layer.group_send)(
-                                self.user_room_name,
-                                {"type": "error_message", "error": error},
-                            )
-                        else:
-                            result = bid_on_lot(self.lot, self.user, amount)
-                            if result["send_to"] == "user":
-                                if result["type"] == "ERROR":
-                                    async_to_sync(self.channel_layer.group_send)(
-                                        self.user_room_name,
-                                        {
-                                            "type": "error_message",
-                                            "error": result["message"],
-                                        },
-                                    )
-                                else:
-                                    # I think just the sealed bid success and upping your own bids go here
-                                    current_high_bid = result["current_high_bid"]
-                                    async_to_sync(self.channel_layer.group_send)(
-                                        self.user_room_name,
-                                        {
-                                            "type": "chat_message",
-                                            "info": result["type"],
-                                            "message": result["message"],
-                                            "high_bidder_pk": result["high_bidder_pk"],
-                                            "high_bidder_name": result["high_bidder_name"],
-                                            "current_high_bid": float(current_high_bid)
-                                            if isinstance(current_high_bid, Decimal)
-                                            else current_high_bid,
-                                        },
-                                    )
-                            else:
-                                current_high_bid = result["current_high_bid"]
-                                async_to_sync(self.channel_layer.group_send)(
-                                    self.room_group_name,
-                                    {
-                                        "type": "chat_message",
-                                        "info": result["type"],
-                                        "message": result["message"],
-                                        "high_bidder_pk": result["high_bidder_pk"],
-                                        "high_bidder_name": result["high_bidder_name"],
-                                        "current_high_bid": float(current_high_bid)
-                                        if isinstance(current_high_bid, Decimal)
-                                        else current_high_bid,
-                                        "date_end": result["date_end"],
-                                    },
-                                )
-                    except (KeyError, ValueError, TypeError):
-                        pass
+                    # Bids now go through the /api/lots/<pk>/bid/ HTTP endpoint so they
+                    # persist even when the websocket is down. This branch is kept only
+                    # for older clients still sending bids over the socket; it shares the
+                    # exact same persist-then-broadcast path.
+                    if "bid" in text_data_json:
+                        place_bid_and_broadcast(self.lot, self.user, text_data_json["bid"])
             except Exception as e:
                 logger.exception(e)
         else:

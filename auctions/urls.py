@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/watchitem/<int:pk>/", views.WatchOrUnwatch.as_view()),
     path("api/clubs/", views.GetClubs.as_view()),
     path("api/lots/deactivate/<int:pk>/", views.LotDeactivate.as_view()),
+    path("api/lots/<int:pk>/bid/", views.PlaceBid.as_view(), name="lot_bid"),
     path("api/images/rotate/", views.ImagesRotate.as_view()),
     path("api/images/primary/", views.ImagesPrimary.as_view()),
     path("api/lots/get_recommended/", views.RecommendedLots.as_view()),

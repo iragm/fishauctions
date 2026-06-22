@@ -137,15 +137,30 @@ LOGGING = {
             "level": "ERROR",
             "propagate": False,
         },
+        # Consumer/websocket errors are otherwise invisible (console/file only, which
+        # nobody watches). Route ERROR+ to mail_admins so a broken consumer pages us the
+        # same way an unhandled 500 does. INFO/WARNING (e.g. WS lifecycle logs) still
+        # only go to console/file because mail_admins is level ERROR.
+        "auctions.consumers": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        # Unhandled exceptions escaping the websocket ASGI app (see asgi.py middleware).
+        "auctions.websocket": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
     },
 }
 
 if DEBUG:
-    # Remove admin email handler if it exists
-    django_logger = LOGGING.get("loggers", {}).get("django.request")
-    if django_logger:
-        handlers = django_logger.get("handlers", [])
-        LOGGING["loggers"]["django.request"]["handlers"] = [h for h in handlers if h != "mail_admins"]
+    # Never email admins in development: strip the mail_admins handler from every logger.
+    for _logger_config in LOGGING.get("loggers", {}).values():
+        handlers = _logger_config.get("handlers")
+        if handlers and "mail_admins" in handlers:
+            _logger_config["handlers"] = [h for h in handlers if h != "mail_admins"]
 
 # Channels
 CHANNEL_LAYERS = {
