@@ -150,7 +150,12 @@ if DEBUG:
 # Channels
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        # Use the pub/sub layer, NOT the BRPOP-based RedisChannelLayer.  The BRPOP layer's
+        # background receive task blocks on bzpopmin(timeout=brpop_timeout=5s); with redis-py
+        # 7.x that blocking read dies at the 5s mark and crashes the consumer with no graceful
+        # disconnect, so lot-page sockets dropped/reconnected every ~6s and in-person online
+        # bids vanished silently.  Pub/sub uses SUBSCRIBE and has no such blocking loop.
+        "BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer",
         "CONFIG": {
             "hosts": [
                 (
@@ -162,8 +167,6 @@ CHANNEL_LAYERS = {
                 )
             ],
             # "hosts": [('127.0.0.1', 6379)],
-            "capacity": 2000,  # default 100
-            "expiry": 20,  # default 60
         },
     },
 }
