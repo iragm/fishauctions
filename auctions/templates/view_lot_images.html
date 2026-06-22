@@ -861,6 +861,11 @@ function deactivate_lot() {
             showLatestChat();
         }
         function connectLotWebSocket() {
+            // Don't stack duplicate sockets: a close can trigger both a scheduled reconnect
+            // and an on-demand reconnect from lotWebSocketSend().  Bail if one is already live.
+            if (lotWebSocket && (lotWebSocket.readyState === WebSocket.CONNECTING || lotWebSocket.readyState === WebSocket.OPEN)) {
+                return;
+            }
             lotWebSocket = new WebSocket(lotWebSocketUrl);
             lotWebSocket.onmessage = handleLotSocketMessage;
             lotWebSocket.onopen = function() {
