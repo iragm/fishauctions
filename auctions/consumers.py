@@ -431,7 +431,7 @@ class LotConsumer(WebsocketConsumer):
             self.lot = Lot.objects.get(pk=self.lot_number)
 
             # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
-            logger.info(
+            logger.warning(
                 "WS connect lot=%s user_pk=%s authed=%s",
                 self.lot_number,
                 self.user.pk,
@@ -444,7 +444,7 @@ class LotConsumer(WebsocketConsumer):
             # Join private room for notifications only to this user
             async_to_sync(self.channel_layer.group_add)(self.user_room_name, self.channel_name)
             self.accept()
-            logger.info("WS accepted lot=%s user_pk=%s", self.lot_number, self.user.pk)
+            logger.warning("WS accepted lot=%s user_pk=%s", self.lot_number, self.user.pk)
             # send the most recent history
             allHistory = LotHistory.objects.filter(lot=self.lot, removed=False).order_by("-timestamp")[:200]
             # send oldest first
@@ -520,7 +520,7 @@ class LotConsumer(WebsocketConsumer):
 
     def disconnect(self, close_code):
         # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
-        logger.info(
+        logger.warning(
             "WS disconnect lot=%s user_pk=%s close_code=%s",
             getattr(self, "lot_number", "?"),
             getattr(getattr(self, "user", None), "pk", None),
@@ -551,7 +551,7 @@ class LotConsumer(WebsocketConsumer):
         text_data_json = json.loads(text_data)
         # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
         if "bid" in text_data_json:
-            logger.info(
+            logger.warning(
                 "WS bid received lot=%s user_pk=%s authed=%s amount=%s",
                 getattr(self, "lot_number", "?"),
                 getattr(getattr(self, "user", None), "pk", None),
@@ -655,7 +655,7 @@ class LotConsumer(WebsocketConsumer):
         else:
             # TEMP lifecycle logging (remove once resolved): the socket authed as anonymous,
             # so anything sent here (including bids) is silently discarded.
-            logger.info(
+            logger.warning(
                 "WS message from UNAUTHENTICATED socket dropped lot=%s keys=%s",
                 getattr(self, "lot_number", "?"),
                 list(text_data_json.keys()),
