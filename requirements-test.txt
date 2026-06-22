@@ -8,7 +8,7 @@ attrs==26.1.0
     # via
     #   outcome
     #   trio
-certifi==2026.5.20
+certifi==2026.6.17
     # via selenium
 cfgv==3.5.0
     # via pre-commit
@@ -42,9 +42,9 @@ python-discovery==1.4.2
     # via virtualenv
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.15.17
+ruff==0.15.18
     # via -r requirements-test.in
-selenium==4.44.0
+selenium==4.45.0
     # via -r requirements-test.in
 sniffio==1.3.1
     # via trio
@@ -60,7 +60,7 @@ typing-extensions==4.15.0
     # via selenium
 urllib3[socks]==2.7.0
     # via selenium
-virtualenv==21.5.0
+virtualenv==21.5.1
     # via pre-commit
 websocket-client==1.9.0
     # via selenium
