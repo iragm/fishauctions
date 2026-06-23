@@ -9329,7 +9329,12 @@ class SingleLotLabelView(LotLabelView):
                     dpi=request.GET.get("dpi"),
                 )
             except ValueError as exc:
-                return HttpResponseBadRequest(str(exc))
+                logging.getLogger(__name__).warning(
+                    "Invalid label rendering parameters for lot %s",
+                    self.lot.pk,
+                    exc_info=True,
+                )
+                return HttpResponseBadRequest("Invalid label rendering parameters.")
             return HttpResponse(content, content_type=content_type)
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
