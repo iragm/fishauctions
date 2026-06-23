@@ -6,11 +6,7 @@ from auctions.models import Bid, PageView, UserInterestCategory
 
 
 def updateInterest(category, user, weight):
-    interest, created = UserInterestCategory.objects.get_or_create(
-        category=category, user=user, defaults={"interest": 0}
-    )
-    interest.interest += weight
-    interest.save()
+    UserInterestCategory.add_interest(user, category, weight)
     return
 
 

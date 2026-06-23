@@ -39,6 +39,7 @@ class Command(BaseCommand):
                 "set_user_location",
                 "remove_duplicate_views",
                 "webpush_notifications_deduplicate",
+                "deduplicate_user_interest",
                 "cleanup_old_invoice_notification_tasks",
                 "update_auction_stats",
             ]

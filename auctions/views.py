@@ -1835,14 +1835,8 @@ class PageViewCreate(APIView):
                 if user:
                     UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:
-                # create interest in this category if this is a new view for this category
-                interest, created = UserInterestCategory.objects.get_or_create(
-                    category=lot_number.species_category,
-                    user=user,
-                    defaults={"interest": 0},
-                )
-                interest.interest += settings.VIEW_WEIGHT
-                interest.save()
+                # create/increment interest in this category for this view
+                UserInterestCategory.add_interest(user, lot_number.species_category, settings.VIEW_WEIGHT)
             if auction and user:
                 if not source:
                     source = referrer

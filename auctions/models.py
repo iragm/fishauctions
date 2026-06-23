@@ -8247,6 +8247,25 @@ class UserInterestCategory(models.Model):
     def __str__(self):
         return f"{self.user} interest level in {self.category} is {self.as_percent}"
 
+    @classmethod
+    def add_interest(cls, user, category, weight):
+        """Increment a user's interest in a category, creating the row if it doesn't exist.
+
+        Deliberately uses filter().first() instead of get_or_create: there is no
+        unique constraint on (user, category) (duplicates are tolerated here and
+        reconciled by the deduplicate_user_interest task), so get_or_create's get()
+        would raise MultipleObjectsReturned the moment a duplicate exists. A double
+        click might briefly create a second row; that's harmless soft data and gets
+        merged on the next dedupe pass.
+        """
+        interest = cls.objects.filter(user=user, category=category).first()
+        if interest is None:
+            interest = cls(user=user, category=category, interest=weight)
+        else:
+            interest.interest += weight
+        interest.save()
+        return interest
+
     def save(self, *args, **kwargs):
         """
         Normalize the user's interest in a category relative to all of this user's interests
