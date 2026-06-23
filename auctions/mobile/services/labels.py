@@ -15,7 +15,7 @@ MAX_DIMENSION = 4000
 MIN_DPI = 36
 MAX_DPI = 1200
 
-_RESOLUTION_RE = re.compile(r"\s*(\d{1,5})\s*[xX×]\s*(\d{1,5})\s*\Z")
+_RESOLUTION_RE = re.compile(r"(\d{1,5})\s*[xX×]\s*(\d{1,5})\Z")
 
 
 class LabelService:
@@ -55,7 +55,7 @@ class LabelService:
         """
         width, height = DEFAULT_WIDTH, DEFAULT_HEIGHT
         if resolution:
-            match = _RESOLUTION_RE.match(resolution)
+            match = _RESOLUTION_RE.match(resolution.strip())
             if not match:
                 msg = f"Invalid resolution {resolution!r}; expected WIDTHxHEIGHT, e.g. 600x400."
                 raise ValueError(msg)
