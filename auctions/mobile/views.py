@@ -463,7 +463,7 @@ class MobileLotLabelView(APIView):
         except ValueError as exc:
             logger.warning("Invalid label request.", exc_info=True)
             return Response(
-                {"detail": str(exc)},
+                {"detail": "Invalid label request."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
