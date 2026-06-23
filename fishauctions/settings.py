@@ -14,6 +14,7 @@ import datetime
 import os
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
@@ -233,11 +234,13 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "rest_framework",
     "rest_framework.authtoken",
+    "rest_framework_simplejwt.token_blacklist",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -382,6 +385,16 @@ ACCOUNT_CHANGE_EMAIL = True
 
 SESSION_COOKIE_AGE = 1209600 * 100
 
+# The mobile WebView handoff relies on the session cookie being server-set with these flags so the
+# native app never has to read or reconstruct it. HttpOnly/SameSite=Lax are Django defaults, set
+# explicitly here; Secure is enabled whenever we're not in local dev (production is HTTPS-only behind
+# nginx — see SECURE_PROXY_SSL_HEADER). Dev runs over plain http on port 80, so Secure would drop the
+# cookie there; gating on DEBUG keeps local login working.
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
 if DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 else:
@@ -389,11 +402,24 @@ else:
 
 # EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
+POST_OFFICE_EMAIL_BACKEND = os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend")
+_site_domain_raw = os.environ.get("SITE_DOMAIN", "127.0.0.1").strip()
+_parsed_site_domain = urlsplit(_site_domain_raw if "://" in _site_domain_raw else f"//{_site_domain_raw}")
+EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or _site_domain_raw).strip().lower()
+SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
+INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
+DEFAULT_FROM_EMAIL = (
+    f"info@{EMAIL_ROUTING_DOMAIN}"
+    if SES_ROUTE_EMAILS_ENABLED
+    else os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
+)
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
 POST_OFFICE = {
     "MAX_RETRIES": 4,
     "RETRY_INTERVAL": datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
     "BACKENDS": {
-        "default": os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend"),
+        "default": POST_OFFICE_EMAIL_BACKEND,
     },
     "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
@@ -404,17 +430,16 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 # https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-files.html
 # AWS_SESSION_PROFILE = os.environ.get('AWS_SESSION_PROFILE', 'default')
 AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
-AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", 'email.us-east-1.amazonaws.com"')
+AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
-AWS_SES_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
+AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
 
 EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = os.environ.get("EMAIL_PORT", 587)
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "user@example.com")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "unsecure")
-DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
 EMAIL_SUBJECT_PREFIX = ""
 
 RECAPTCHA_PUBLIC_KEY = os.environ.get("RECAPTCHA_PUBLIC_KEY", "unsecure")
@@ -509,6 +534,8 @@ LOCATION_FIELD = {
         "js": (LOCATION_FIELD_PATH + "/js/form.js",),
     },
 }
+
+GOOGLE_MAPS_SERVER_API_KEY = os.environ.get("GOOGLE_MAPS_SERVER_API_KEY", "")
 
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
@@ -727,6 +754,17 @@ PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": "redis://:"
+        + os.environ.get("REDIS_PASSWORD", "unsecure")
+        + "@"
+        + os.environ.get("REDIS_HOST", "redis")
+        + ":6379/3",
+    }
+}
+
 # Celery Configuration
 # https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
 
@@ -793,6 +831,12 @@ if not _encryption_key:
     raise ImproperlyConfigured(msg)
 FIELD_ENCRYPTION_KEY = _encryption_key
 
+# Mailchimp OAuth integration settings (one global app; each club authorizes it)
+MAILCHIMP_CLIENT_ID = os.environ.get("MAILCHIMP_CLIENT_ID", "")
+MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
+
+# Brevo integration: each club connects with its own API key (no site-level config needed).
+
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -841,7 +885,30 @@ APPLE_WALLET_TEAM_IDENTIFIER = os.environ.get("APPLE_WALLET_TEAM_IDENTIFIER", ""
 APPLE_WALLET_ORGANIZATION_NAME = os.environ.get("APPLE_WALLET_ORGANIZATION_NAME", "")
 
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
-    }
+        "mobile_auth": "10/min",
+        # Catch-all for mobile reads/writes. Sized for admin bulk workflows that live here — checkout
+        # is 2 calls/buyer (create+confirm) and labels are 1 call/lot, so a busy auction hour is
+        # several hundred calls; 200/hour blocked that mid-checkout.
+        "mobile_api": "1000/hour",
+        # Search-as-you-type: each query fires a search + a log call on a ~300ms debounce, so a fast
+        # typer briefly peaks ~6 req/sec. 120/min tolerates that burst while capping sustained abuse.
+        "mobile_search": "120/min",
+    },
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": datetime.timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": datetime.timedelta(days=30),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
 }

@@ -31,6 +31,11 @@ urlpatterns = [
         views.ClubMemberMergeAutocomplete.as_view(),
         name="club-member-merge-autocomplete",
     ),
+    path(
+        "api/category-autocomplete/",
+        views.CategoryAutocomplete.as_view(),
+        name="category-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
@@ -90,6 +95,11 @@ urlpatterns = [
         name="auction_check_in",
     ),
     path(
+        "api/auctiontos/<int:pk>/add-to-club/",
+        views.AddSingleAuctionTOSToClub.as_view(),
+        name="add_single_auctiontos_to_club",
+    ),
+    path(
         "api/userignorecategory/create/<int:pk>/",
         views.CreateUserIgnoreCategory.as_view(),
     ),
@@ -113,6 +123,11 @@ urlpatterns = [
     path("clubs/", views.ClubMap.as_view(), name="clubs"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
+    path(
+        "admin-dashboard/command-palette/",
+        views.CommandPaletteAnalyticsView.as_view(),
+        name="command_palette_analytics",
+    ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(
@@ -121,6 +136,7 @@ urlpatterns = [
         name="admin_traffic_time_of_day_json",
     ),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
+    path("admin-user-flow/", views.AdminUserFlow.as_view(), name="admin_user_flow"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
     path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
@@ -157,6 +173,8 @@ urlpatterns = [
     path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view(), name="lot_by_pk_and_slug"),
     path("bids/", login_required(views.MyBids.as_view()), name="my_bids"),
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
+    path("command-palette/", login_required(views.CommandPaletteView.as_view()), name="command_palette"),
+    path("command-palette/log/", login_required(views.CommandPaletteLogView.as_view()), name="command_palette_log"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
@@ -186,6 +204,18 @@ urlpatterns = [
     path("paypal/onboard/success/", views.PayPalCallbackView.as_view(), name="paypal_callback"),
     path("square/connect/", views.SquareConnectView.as_view(), name="square_connect"),
     path("square/onboard/success/", views.SquareCallbackView.as_view(), name="square_callback"),
+    path("mailchimp/connect/<slug:slug>/", views.MailchimpConnectView.as_view(), name="mailchimp_connect"),
+    path("mailchimp/callback/", views.MailchimpCallbackView.as_view(), name="mailchimp_callback"),
+    path(
+        "mailchimp/webhook/<slug:slug>/<str:secret>/",
+        views.MailchimpWebhookView.as_view(),
+        name="mailchimp_webhook",
+    ),
+    path(
+        "brevo/webhook/<slug:slug>/<str:secret>/",
+        views.BrevoWebhookView.as_view(),
+        name="brevo_webhook",
+    ),
     path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
     path(
         "api/invoices/<uuid:uuid>/square/",
@@ -604,6 +634,11 @@ urlpatterns = [
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
+    re_path(
+        r"^clubs/(?P<slug>[-\w]+)/(?P<tab>bap|hap|culture|my-points)$",
+        views.ClubDetailView.as_view(),
+        name="club_detail_tab",
+    ),
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
     path(
         "clubs/<slug:slug>/member/<uuid:uuid>/",
@@ -616,18 +651,110 @@ urlpatterns = [
         name="club_member_by_number",
     ),
     path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
+    path("clubs/<slug:slug>/mailchimp/", views.ClubMailchimpConfigView.as_view(), name="club_mailchimp_config"),
+    path(
+        "clubs/<slug:slug>/mailchimp/select-audience/",
+        views.MailchimpAudienceSelectView.as_view(),
+        name="mailchimp_select_audience",
+    ),
+    path("clubs/<slug:slug>/mailchimp/sync/", views.MailchimpSyncNowView.as_view(), name="mailchimp_sync_now"),
+    path(
+        "clubs/<slug:slug>/mailchimp/disconnect/",
+        views.MailchimpDisconnectView.as_view(),
+        name="mailchimp_disconnect",
+    ),
+    path("clubs/<slug:slug>/brevo/", views.ClubBrevoConfigView.as_view(), name="club_brevo_config"),
+    path("clubs/<slug:slug>/brevo/connect/", views.BrevoConnectView.as_view(), name="brevo_connect"),
+    path(
+        "clubs/<slug:slug>/brevo/select-list/",
+        views.BrevoListSelectView.as_view(),
+        name="brevo_select_list",
+    ),
+    path("clubs/<slug:slug>/brevo/sync/", views.BrevoSyncNowView.as_view(), name="brevo_sync_now"),
+    path(
+        "clubs/<slug:slug>/brevo/disconnect/",
+        views.BrevoDisconnectView.as_view(),
+        name="brevo_disconnect",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/unsubscribe/",
+        views.ClubMemberSelfServiceView.as_view(action="unsubscribe"),
+        name="club_member_unsubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/resubscribe/",
+        views.ClubMemberSelfServiceView.as_view(action="resubscribe"),
+        name="club_member_resubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/no-contact/",
+        views.ClubMemberSelfServiceView.as_view(action="nocomm"),
+        name="club_member_nocomm",
+    ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
+    path("clubs/<slug:slug>/setup/", views.ClubSetupView.as_view(), name="club_setup"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
         "clubs/<slug:slug>/membership-settings/",
         views.ClubMembershipSettingsView.as_view(),
         name="club_membership_settings",
     ),
+    path(
+        "clubs/<slug:slug>/link-payment/",
+        views.ClubLinkPaymentAccountView.as_view(),
+        name="club_link_payment_account",
+    ),
+    path(
+        "clubs/<slug:slug>/paypal-credentials/",
+        views.ClubPayPalCredentialsView.as_view(),
+        name="club_paypal_credentials",
+    ),
+    path("clubs/<slug:slug>/email-settings/", views.ClubEmailSettingsView.as_view(), name="club_email_settings"),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
-    path("clubs/<slug:slug>/bap/", views.ClubBapView.as_view(), name="club_bap"),
-    path("clubs/<slug:slug>/bap/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
-    path("clubs/<slug:slug>/bap/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
+    path(
+        "clubs/<slug:slug>/bap-settings/category-overrides/save/",
+        views.ClubBapCategoryOverrideSaveView.as_view(),
+        name="club_bap_category_override_save",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-settings/category-overrides/<int:pk>/delete/",
+        views.ClubBapCategoryOverrideDeleteView.as_view(),
+        name="club_bap_category_override_delete",
+    ),
+    path("clubs/<slug:slug>/bap-admin/", views.ClubBapView.as_view(), name="club_bap"),
+    path("clubs/<slug:slug>/bap-admin/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
+    path(
+        "clubs/bap-admin/lots/<int:pk>/category/", views.ClubBapLotCategoryView.as_view(), name="club_bap_lot_category"
+    ),
+    path("clubs/<slug:slug>/bap-admin/import/", views.BapAwardCSVImportView.as_view(), name="club_bap_import"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
+    path("clubs/<slug:slug>/admin/stats/", views.ClubStatsView.as_view(), name="club_stats"),
+    path("clubs/<slug:slug>/admin/map/", views.ClubMemberMapView.as_view(), name="club_member_map"),
+    path(
+        "clubs/<slug:slug>/member/<uuid:uuid>/contact/<str:level>/",
+        views.SelfServeContactLinkView.as_view(),
+        name="club_member_contact_pref",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/",
+        views.ClubTreasurerReportView.as_view(),
+        name="club_treasurer_report",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/export/",
+        views.ClubTreasurerReportExportView.as_view(),
+        name="club_treasurer_report_export",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/add/",
+        views.ClubMoneyCreateView.as_view(),
+        name="club_money_add",
+    ),
+    path(
+        "clubs/<slug:slug>/admin/treasurer-report/balance/",
+        views.ClubMoneyBalanceView.as_view(),
+        name="club_money_balance",
+    ),
     # API key management (login-required UI)
     path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
     path("clubs/<slug:slug>/api-keys/create/", views.ClubAPIKeyCreateView.as_view(), name="club_api_key_create"),
@@ -655,6 +782,7 @@ urlpatterns = [
     path(
         "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
     ),
+    path("api/clubmember/<int:pk>/discord/", views.ClubMemberDiscordAdminView.as_view(), name="clubmember_discord"),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path(
         "api/clubmember/<int:pk>/membership-number/",
@@ -670,6 +798,26 @@ urlpatterns = [
         "clubs/<slug:slug>/member/<uuid:uuid>/apple-wallet.pkpass",
         views.ClubMemberAppleWalletByUUIDView.as_view(),
         name="club_member_apple_wallet_by_uuid",
+    ),
+    path(
+        "clubs/<slug:slug>/print-barcodes/",
+        views.ClubBarcodeLabelsView.as_view(),
+        name="club_barcode_labels",
+    ),
+    path(
+        "clubs/<slug:slug>/print-barcodes/pdf/",
+        views.ClubBarcodeLabelsViewPDF.as_view(),
+        name="club_barcode_labels_pdf",
+    ),
+    path(
+        "clubs/<slug:slug>/barcode/<int:value>/",
+        views.ClubBarcodeView.as_view(),
+        name="club_barcode",
+    ),
+    path(
+        "clubs/<slug:slug>/barcode-png/<int:value>/",
+        views.ClubBarcodePNGView.as_view(),
+        name="club_barcode_png",
     ),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
@@ -709,6 +857,7 @@ urlpatterns = [
         views.ClubMemberBapAwardAPIView.as_view(),
         name="api_club_member_bap_awards",
     ),
+    path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),

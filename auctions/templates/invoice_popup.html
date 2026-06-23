@@ -1,6 +1,6 @@
 {% extends 'invoice.html' %}
 {% block extra_content %}
-<div id="modals-container">
+<div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
 <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
 	<div class="modal-dialog modal-dialog-centered">
@@ -12,7 +12,7 @@
       <p>Create an account now to manage your invoices, connect with hundreds of other hobbyists near you, and get notified about future auctions. All completely free!
         <br>
       <div class="modal-footer">
-        <button onclick="closeModal()" class="btn btn-secondary">No thanks, just view invoice</button>
+        <button data-modal-close-action="none" class="btn btn-secondary">No thanks, just view invoice</button>
         <a href="{{view.button_link}}" class="btn btn-primary">Create account</a>
     </div>
 	  </div>
@@ -20,16 +20,5 @@
   </div>
 </div>
 </div>
-<script>function closeModal() {
-	var container = document.getElementById("modals-container")
-	var backdrop = document.getElementById("modal-backdrop")
-	var modal = document.getElementById("modal")
-	modal.classList.remove("show")
-	backdrop.classList.remove("show")
-	setTimeout(function() {
-		container.removeChild(backdrop)
-		container.removeChild(modal)
-	}, 200)
-}
-</script>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
 {% endblock %}

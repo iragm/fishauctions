@@ -1,0 +1,44 @@
+{% comment %}Club navigation links. Included by club_sidebar.html for both the desktop column and the mobile offcanvas. Context comes from the club_sidebar tag.{% endcomment %}
+{% load thumbnail %}
+<nav class="nav flex-column">
+  <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
+
+  {% if not members_through_auction and can_access_admin %}
+  <a class="nav-link {% if active_tab == 'members' %}active{% endif %}" href="{% url 'club_admin' club.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
+  {% endif %}
+
+  {% if sidebar_auction %}
+  <hr class="my-2">
+  <h6 class="px-3 text-muted text-truncate mb-1" title="{{ sidebar_auction.title }}">{{ sidebar_auction.title }}</h6>
+  {% if members_through_auction %}
+  <a class="nav-link {% if active_tab == 'users' %}active{% endif %}" href="{% url 'auction_tos_list' slug=sidebar_auction.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
+  {% endif %}
+  <a class="nav-link" href="{% url 'auction_main' slug=sidebar_auction.slug %}"><i class="bi bi-file-text me-1"></i> Rules</a>
+  <a class="nav-link" href="{{ sidebar_auction.view_lot_link }}"><i class="bi bi-grid me-1"></i> Lots</a>
+  <a class="nav-link" href="{{ sidebar_auction.set_lot_winners_link }}"><i class="bi bi-calendar-check me-1"></i> Set lot winners</a>
+  <a class="nav-link d-lg-none" href="{% url 'auction_quick_check_in' slug=sidebar_auction.slug %}"><i class="bi bi-upc-scan me-1"></i> Checkin</a>
+  <a class="nav-link" href="{% url 'auction_quick_checkout' slug=sidebar_auction.slug %}"><i class="bi bi-bag-heart me-1"></i> Checkout</a>
+  <a class="nav-link" href="{% url 'auction_printing' slug=sidebar_auction.slug %}"><i class="bi bi-printer me-1"></i> Print labels</a>
+  {% endif %}
+
+  {% if can_manage_bap and club.enable_breeder_award_program %}
+  <hr class="my-2">
+  <a class="nav-link {% if active_tab == 'bap_lots' %}active{% endif %}" href="{{ bap_url }}"><i class="bi bi-award me-1"></i> BAP</a>
+  {% endif %}
+
+  {% if can_edit_settings %}
+  <a class="nav-link {% if setup_active %}active{% endif %}" href="{% url 'club_setup' club.slug %}"><i class="bi bi-gear me-1"></i> Setup</a>
+  {% endif %}
+
+  {% if can_manage_money %}
+  <a class="nav-link {% if active_tab == 'treasurer_report' %}active{% endif %}" href="{% url 'club_treasurer_report' club.slug %}"><i class="bi bi-cash-coin me-1"></i> Treasurer's Report</a>
+  {% endif %}
+
+  <a class="nav-link {% if active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map me-1"></i> Map</a>
+
+  {% if can_access_admin %}
+  <a class="nav-link {% if active_tab == 'barcode_labels' %}active{% endif %}" href="{% url 'club_barcode_labels' club.slug %}"><i class="bi bi-upc-scan me-1"></i> Print Barcodes</a>
+  <a class="nav-link {% if active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up me-1"></i> Club stats</a>
+  <a class="nav-link {% if active_tab == 'history' %}active{% endif %}" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history me-1"></i> Club history</a>
+  {% endif %}
+</nav>

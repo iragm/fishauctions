@@ -1,0 +1,127 @@
+{% if auction.is_club_managed %}
+  <small class="d-none d-md-inline">This auction's users are managed through <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a>. Edits sync to the club member record.<br /></small>
+  <div class="btn-group d-none d-md-inline-flex">
+    {% if auction.manage_users_through_club == 'checkin' %}
+      <a class="btn btn-sm btn-info" href="{% url 'clubmember_create' slug=auction.club.slug %}?auction={{ auction.slug }}"
+         hx-get="{% url 'clubmember_create' slug=auction.club.slug %}?auction={{ auction.slug }}"
+         hx-target="#modals-here"
+         hx-trigger="click"
+         _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add member</a>
+    {% else %}
+      <a class="btn btn-sm btn-info" href="{% url 'clubmember_create' slug=auction.club.slug %}"
+         hx-get="{% url 'clubmember_create' slug=auction.club.slug %}"
+         hx-target="#modals-here"
+         hx-trigger="click"
+         _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add member</a>
+    {% endif %}
+  </div>
+{% else %}
+  <small>This is a list of people in your auction. Click on a name to edit that user.<br /></small>
+  <div class="btn-group d-none d-md-inline-flex">
+    <button class="btn btn-sm btn-info"
+            hx-get="/api/auctiontos/{{ auction.slug }}/"
+            hx-target="#modals-here"
+            hx-trigger="click"
+            _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add user</button>
+    <button type="button" class="btn btn-sm btn-info dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+      <span class="visually-hidden">Toggle Dropdown</span>
+    </button>
+    <ul class="dropdown-menu">
+      <li><a href="{% url 'bulk_add_users' auction.slug %}" class="dropdown-item"><i class="bi bi-node-plus"></i> Bulk add users</a></li>
+      <li><hr class="dropdown-divider"></li>
+      <li>
+        <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv"
+               hx-encoding="multipart/form-data"
+               hx-post="{% url 'bulk_add_users' auction.slug %}"
+               hx-swap="outerHTML"
+               hx-target="body"
+               style="display: none;">
+        <a href="#" class="dropdown-item" onclick="document.getElementById('csv_file_quick').click(); return false;">
+          <i class="bi bi-person-fill-up"></i> Import from CSV
+        </a>
+      </li>
+      <li><hr class="dropdown-divider"></li>
+      <li>
+        <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-gear"></i> {% if auction.google_drive_link %}Manage{% else %}Set up{% endif %} Google Drive sync</a>
+      </li>
+      {% if auction.google_drive_link %}
+        <li>
+          <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="margin: 0;">
+            {% csrf_token %}
+            <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive now</button>
+          </form>
+        </li>
+        {% if auction.last_sync_time %}
+          <li><span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span></li>
+        {% endif %}
+      {% endif %}
+    </ul>
+  </div>
+{% endif %}
+
+<span class="dropdown d-none d-md-inline-block">
+  <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+    <i class="bi bi-download"></i> Export
+  </button>
+  <div class="dropdown-menu">
+    <a href="{% url 'user_list' slug=auction.slug %}"
+       id="user_csv_export"
+       data-query-sync-url="{% url 'user_list' slug=auction.slug %}"
+       data-bs-title="This export uses your current filter"
+       class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
+    {% if auction.club and not auction.is_club_managed %}
+      <form method="POST" action="{% url 'auction_add_users_to_club' slug=auction.slug %}" style="margin: 0;">
+        {% csrf_token %}
+        <button type="submit" class="dropdown-item"><i class="bi bi-person-fill-add"></i> Add all users to {{ auction.club }}</button>
+      </form>
+    {% endif %}
+
+    <span
+      hx-get="{% url 'compose_email_to_users' slug=auction.slug %}"
+      hx-trigger="load, keyup from:#id_query delay:300ms, change from:#id_query delay:300ms"
+      hx-swap="innerHTML"
+      id="email_all_users_container"
+      hx-include="#id_query">
+      <a href="#" id="email_all_users" class="dropdown-item">
+        <i class="bi bi-envelope-fill"></i> Email all users
+      </a>
+    </span>
+
+    {% if auction.show_paypal_csv_link %}
+      {% if auction.paypal_payments_enabled %}
+        <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
+      {% else %}
+        {% for chunk in auction.paypal_invoice_chunks %}
+          <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{ chunk }}{% endif %}</a>
+        {% endfor %}
+        {% if not auction.paypal_invoice_chunks|length %}
+          <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>
+        {% else %}
+          <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Batch Invoice Upload</a>
+        {% endif %}
+        <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
+      {% endif %}
+    {% endif %}
+  </div>
+</span>
+
+{% if auction.use_check_in_mode and can_manage_check_in %}
+  <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
+{% endif %}
+{% if can_scan_club_barcodes %}
+  <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> {% if auction.use_check_in_mode %}Check in{% else %}Scan club cards{% endif %}</a>
+{% endif %}
+{% if not auction.is_online %}<a class="btn btn-sm btn-primary" href="{% url 'auction_quick_checkout' slug=auction.slug %}"><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
+{% if not auction.is_online %}<a class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
+{% if auction.show_invoice_ready_button %}
+  <a href="#" class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block"
+     hx-get="{% url 'auction_invoices_ready' auction.slug %}"
+     hx-target="#modals-here"
+     hx-trigger="click"
+     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-bag-check"></i> Set open invoices to ready</a>
+  <a href="#" class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block"
+     hx-get="{% url 'auction_invoices_paid' auction.slug %}"
+     hx-target="#modals-here"
+     hx-trigger="click"
+     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-bag-heart"></i> Set ready invoices to paid</a>
+{% endif %}

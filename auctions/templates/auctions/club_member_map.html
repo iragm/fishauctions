@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Member Map - {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<div class="card">
+  <div class="card-body p-0">
+    <div id="club-member-map" style="height: 600px; width: 100%;"></div>
+  </div>
+</div>
+{% if not club.latitude or not club.longitude %}
+<div class="alert alert-warning mt-3">
+  The club location has no coordinates set. <a href="{% url 'club_edit' club.slug %}">Set the club address</a> to show the club marker.
+</div>
+{% endif %}
+
+<script>
+var MEMBERS = {{ members_json }};
+var CLUB = {
+  name: "{{ club.name|escapejs }}",
+  lat: {{ club.latitude|default:"null" }},
+  lng: {{ club.longitude|default:"null" }},
+};
+var CLUBMEMBER_ADMIN_BASE = "{% url 'clubmember_admin' pk=0 %}".replace("/0/", "/");
+
+function initMap() {
+  var center = (CLUB.lat && CLUB.lng)
+    ? {lat: CLUB.lat, lng: CLUB.lng}
+    : (MEMBERS.length ? {lat: MEMBERS[0].lat, lng: MEMBERS[0].lng} : {lat: 0, lng: 0});
+
+  var map = new google.maps.Map(document.getElementById("club-member-map"), {
+    zoom: 9,
+    center: center,
+  });
+
+  // Club marker (blue)
+  if (CLUB.lat && CLUB.lng) {
+    new google.maps.Marker({
+      position: {lat: CLUB.lat, lng: CLUB.lng},
+      map: map,
+      title: CLUB.name,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 10,
+        fillColor: "#0d6efd",
+        fillOpacity: 1,
+        strokeColor: "#fff",
+        strokeWeight: 2,
+      },
+    });
+  }
+
+  // Member markers (green = active, red = expired)
+  MEMBERS.forEach(function(m) {
+    var pinColor = m.is_expired ? "#dc3545" : "#198754";
+    var marker = new google.maps.Marker({
+      position: {lat: m.lat, lng: m.lng},
+      map: map,
+      title: m.name || m.email || "Member",
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: pinColor,
+        fillOpacity: 1,
+        strokeColor: "#fff",
+        strokeWeight: 2,
+      },
+    });
+    marker.addListener("click", function() {
+      var url = CLUBMEMBER_ADMIN_BASE + m.pk + "/";
+      htmx.ajax("GET", url, {target: "#modals-here", swap: "innerHTML"}).then(function() {
+        setTimeout(function() {
+          var modal = document.getElementById("modal");
+          var backdrop = document.getElementById("modal-backdrop");
+          if (modal) modal.classList.add("show");
+          if (backdrop) backdrop.classList.add("show");
+        }, 10);
+      });
+    });
+  });
+}
+</script>
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap"></script>
+{% endblock %}

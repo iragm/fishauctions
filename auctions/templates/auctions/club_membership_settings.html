@@ -2,39 +2,123 @@
 {% load crispy_forms_tags %}
 {% block title %}Membership Settings &mdash; {{ club.name }}{% endblock %}
 
-{% block extra_js %}
-<script type="text/javascript">
-$(document).ready(function() {
-    function togglePaymentFields() {
-        const integrated = document.getElementById('id_allow_integrated_payments');
-        const paymentUser = document.getElementById('div_id_payment_user');
-        const reminders = document.getElementById('div_id_send_membership_expiration_reminders');
-        if (!integrated) return;
-        const show = integrated.checked;
-        if (paymentUser) paymentUser.style.display = show ? '' : 'none';
-        if (reminders) reminders.style.display = show ? '' : 'none';
-        toggleContactEmail();
-    }
-
-    function toggleContactEmail() {
-        const remindersToggle = document.getElementById('id_send_membership_expiration_reminders');
-        const contactEmailField = document.getElementById('div_id_contact_email');
-        if (!remindersToggle || !contactEmailField) return;
-        contactEmailField.style.display = remindersToggle.checked ? '' : 'none';
-    }
-
-    togglePaymentFields();
-    $('#id_allow_integrated_payments').on('change', togglePaymentFields);
-    $('#id_send_membership_expiration_reminders').on('change', toggleContactEmail);
-});
-</script>
-{% endblock %}
-
 {% block content %}
 {{ form.media }}
 {% include "club_ribbon.html" %}
 
 {% crispy form %}
 
+<hr>
+
+<h2 class="h4 mt-4">Payments</h2>
+<p class="text-muted small">
+  Connect a PayPal or Square account so members can pay dues directly on this site,
+  and so auctions tied to this club can accept payments.
+</p>
+
+{# ---- PayPal ---- #}
+<div class="mb-4">
+  <h3 class="h5">PayPal</h3>
+  {% if club.allow_non_oauth_paypal %}
+    {# Non-OAuth mode: this club uses its own PayPal app credentials instead of OAuth. #}
+    {% if club.uses_own_paypal_credentials %}
+      <div class="alert alert-success py-2" role="alert">PayPal credentials are saved and active.</div>
+    {% else %}
+      <div class="alert alert-warning py-2 text-dark" role="alert">
+        Enter your PayPal REST API client ID and secret below to start accepting payments.
+      </div>
+    {% endif %}
+    <form action="{% url 'club_paypal_credentials' slug=club.slug %}" method="post">
+      {% csrf_token %}
+      {% crispy paypal_credentials_form %}
+    </form>
+  {% else %}
+  {% if uses_site_paypal %}
+    <div class="alert alert-info" role="alert">
+      This club is configured to use the <strong>site's PayPal merchant account</strong>
+      (set by a site administrator). Any linked PayPal Seller below is ignored while this
+      is in effect.
+    </div>
+  {% endif %}
+  {% if paypal_seller %}
+    {% url 'club_link_payment_account' slug=club.slug as detach_paypal_url %}
+    {% include "auctions/_payment_seller_card.html" with provider_label="PayPal" merchant_id=paypal_seller.paypal_merchant_id seller=paypal_seller disconnect_url=detach_paypal_url disconnect_method="POST" disconnect_form_extra="<input type='hidden' name='provider' value='paypal'><input type='hidden' name='action' value='detach'>" warning="Connecting a different PayPal account will replace this one." %}
+    <p class="small text-muted">OAuth account is linked from <strong>{{ paypal_seller.user.username }}</strong>.</p>
+  {% elif not paypal_configured %}
+    <p class="text-muted">PayPal isn't configured on this site.</p>
+  {% elif user_paypal_seller %}
+    <form action="{% url 'club_link_payment_account' slug=club.slug %}" method="post" class="d-inline">
+      {% csrf_token %}
+      <input type="hidden" name="provider" value="paypal">
+      <input type="hidden" name="action" value="attach">
+      <button type="submit" class="btn btn-primary btn-sm">
+        <i class="bi bi-paypal"></i> Use my connected PayPal account
+      </button>
+    </form>
+    <p class="small text-muted mt-1">
+      Your account <em>{{ user_paypal_seller.payer_email|default:user_paypal_seller.user.username }}</em>
+      will be used for this club's payments. Auctions you've created personally will continue to use the same account.
+    </p>
+  {% else %}
+    <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}?club={{ club.slug }}">
+      <i class="bi bi-paypal"></i> Connect a PayPal account for this club
+    </a>
+    <p class="small text-muted mt-1">
+      You'll be sent to PayPal to authorize, and then back here.
+    </p>
+  {% endif %}
+  {% endif %}{# /allow_non_oauth_paypal #}
+</div>
+
+{# ---- Square ---- #}
+<div class="mb-4">
+  <h3 class="h5">Square</h3>
+  {% if square_seller %}
+    {% url 'club_link_payment_account' slug=club.slug as detach_square_url %}
+    {% include "auctions/_payment_seller_card.html" with provider_label="Square" merchant_id=square_seller.square_merchant_id seller=square_seller disconnect_url=detach_square_url disconnect_method="POST" disconnect_form_extra="<input type='hidden' name='provider' value='square'><input type='hidden' name='action' value='detach'>" warning="Connecting a different Square account will replace this one." %}
+    <p class="small text-muted">OAuth account is linked from <strong>{{ square_seller.user.username }}</strong>.</p>
+  {% elif not square_configured %}
+    <p class="text-muted">Square isn't configured on this site.</p>
+  {% elif user_square_seller %}
+    <form action="{% url 'club_link_payment_account' slug=club.slug %}" method="post" class="d-inline">
+      {% csrf_token %}
+      <input type="hidden" name="provider" value="square">
+      <input type="hidden" name="action" value="attach">
+      <button type="submit" class="btn btn-primary btn-sm">
+        <i class="bi bi-credit-card"></i> Use my connected Square account
+      </button>
+    </form>
+    <p class="small text-muted mt-1">
+      Your account <em>{{ user_square_seller.payer_email|default:user_square_seller.user.username }}</em>
+      will be used for this club's payments.
+    </p>
+  {% else %}
+    <a class="btn btn-primary btn-sm" href="{% url 'square_connect' %}?club={{ club.slug }}">
+      <i class="bi bi-credit-card"></i> Connect a Square account for this club
+    </a>
+    <p class="small text-muted mt-1">
+      You'll be sent to Square to authorize, and then back here.
+    </p>
+  {% endif %}
+</div>
+
 <div id="modals-here"></div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function () {
+  // Hide the annual fee field when "No membership fees" is selected. Server-side
+  // validation (ClubMembershipSettingsForm.clean) enforces this regardless of JS.
+  const systemSelect = document.getElementById("id_membership_system");
+  const feeWrapper = document.getElementById("div_id_membership_annual_fee");
+  if (!systemSelect || !feeWrapper) return;
+  function toggleFee() {
+    feeWrapper.style.display = systemSelect.value === "none" ? "none" : "";
+  }
+  systemSelect.addEventListener("change", toggleFee);
+  toggleFee();
+})();
+</script>
 {% endblock %}

@@ -1,0 +1,61 @@
+{% comment %}
+Command palette modal. Included from base.html for authenticated users only.
+Opened by clicking the navbar brand or pressing Ctrl/Cmd+K (see command_palette.js).
+Most-of-the-page on desktop; fullscreen on mobile.
+{% endcomment %}
+<style>
+  #command-palette-modal .command-palette-dialog {
+    margin-top: 6vh;
+  }
+  @media (min-width: 768px) {
+    #command-palette-modal .command-palette-dialog {
+      width: min(1000px, 92vw);
+      max-width: 92vw;
+    }
+    #command-palette-modal .command-palette-dialog .modal-content {
+      height: 84vh;
+    }
+  }
+  #command-palette-results .cp-group-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  #command-palette-results .cp-item {
+    cursor: pointer;
+  }
+  #command-palette-results .cp-item.active,
+  #command-palette-results .cp-item:hover {
+    background-color: var(--bs-primary-bg-subtle, rgba(13, 110, 253, 0.25));
+  }
+  #command-palette-results .cp-item .cp-item-title {
+    font-weight: 500;
+  }
+</style>
+<div class="modal fade" id="command-palette-modal" tabindex="-1" aria-labelledby="command-palette-input"
+     aria-hidden="true"
+     data-search-url="{% url 'command_palette' %}"
+     data-log-url="{% url 'command_palette_log' %}"
+     data-csrf="{{ csrf_token }}">
+  <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down command-palette-dialog">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <div class="input-group flex-grow-1">
+          <span class="input-group-text bg-body border-0"><i class="bi bi-search"></i></span>
+          <input type="text" id="command-palette-input"
+                 class="form-control form-control-lg border-0 shadow-none"
+                 placeholder="Search for anything…"
+                 autocomplete="off" spellcheck="false"
+                 aria-label="Search" aria-controls="command-palette-results">
+        </div>
+        <button type="button" class="btn-close ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body pt-2" id="command-palette-results" aria-live="polite"></div>
+      <div class="modal-footer py-1 justify-content-start d-none d-md-flex">
+        <small class="text-muted">
+          <kbd>↑</kbd> <kbd>↓</kbd> to navigate · <kbd>Enter</kbd> to open · <kbd>Esc</kbd> to close
+        </small>
+      </div>
+    </div>
+  </div>
+</div>

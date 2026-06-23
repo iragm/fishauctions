@@ -1,0 +1,43 @@
+{% comment %}
+Reusable card for displaying a connected PayPal or Square seller.
+
+Context:
+  seller            — PayPalSeller or SquareSeller instance (required)
+  provider_label    — "PayPal" or "Square" (required)
+  merchant_id       — the merchant id string to display (required)
+  disconnect_url    — full URL for the disconnect button (optional)
+  disconnect_method — "POST" to render a form, otherwise GET (default GET)
+  disconnect_form_extra — extra hidden inputs as HTML (optional)
+  warning           — short help string shown above the card (optional)
+{% endcomment %}
+{% if warning %}
+  <small class="text-muted d-block mb-2">{{ warning }}</small>
+{% endif %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title mb-3">Currently connected {{ provider_label }} account</h5>
+    <dl class="row mb-0">
+      <dt class="col-sm-4">Merchant ID</dt>
+      <dd class="col-sm-8">{{ merchant_id|default:"—" }}</dd>
+
+      <dt class="col-sm-4">Payer email</dt>
+      <dd class="col-sm-8">{{ seller.payer_email|default:"—" }}</dd>
+
+      <dt class="col-sm-4">Currency</dt>
+      <dd class="col-sm-8">{{ seller.currency|default:"USD" }}</dd>
+    </dl>
+  </div>
+  {% if disconnect_url %}
+  <div class="card-footer d-flex gap-2">
+    {% if disconnect_method == "POST" %}
+      <form action="{{ disconnect_url }}" method="post" class="d-inline">
+        {% csrf_token %}
+        {{ disconnect_form_extra|safe }}
+        <button type="submit" class="btn btn-danger btn-sm">Disconnect {{ provider_label }}</button>
+      </form>
+    {% else %}
+      <a href="{{ disconnect_url }}" class="btn btn-danger btn-sm">Disconnect {{ provider_label }}</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

@@ -1,5 +1,6 @@
 import datetime
 import re
+import shlex
 
 import django_filters
 from crispy_forms.helper import FormHelper
@@ -1023,7 +1024,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated...",
+                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated, nonmailchimp, nonbrevo...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1047,22 +1048,18 @@ class ClubMemberFilter(django_filters.FilterSet):
         super().__init__(data, *args, **kwargs)
 
     def filter_queryset(self, queryset):
-        """Apply is_deleted default before delegating to field-level filters.
+        """Hide deactivated members unless the user explicitly types 'deactivated'.
 
-        Deactivated members are hidden unless the user explicitly types 'deactivated',
-        or there is a search query that returns no active members — in which case the
-        search expands to include deactivated members so renames/leftovers stay findable.
+        The view layer surfaces a "Show deactivated" link in the no-results UI when a
+        strict search returns nothing but deactivated members would match — that keeps the
+        toggle visible to users instead of silently mixing in deactivated rows.
         """
         query_value = (self.data.get("query") or "").lower()
         show_deactivated = "deactivated" in query_value.split()
-        search_tokens = [t for t in query_value.split() if t != "deactivated"]
         filtered = super().filter_queryset(queryset)
         if show_deactivated:
             return filtered.filter(is_deleted=True)
-        active_filtered = filtered.filter(is_deleted=False)
-        if search_tokens:
-            return filtered.filter(Q(is_deleted=False) | ~Exists(active_filtered.values("pk")))
-        return active_filtered
+        return filtered.filter(is_deleted=False)
 
     def clubmember_search(self, queryset, name, value):
         """Support text search including special tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
@@ -1074,6 +1071,8 @@ class ClubMemberFilter(django_filters.FilterSet):
         source_filter = None
         status_filter = None
         duplicate_filter = False
+        nonmailchimp_filter = False
+        nonbrevo_filter = False
         remaining = []
         for token in tokens:
             if token == "discord":
@@ -1092,6 +1091,10 @@ class ClubMemberFilter(django_filters.FilterSet):
                 source_filter = "manually_added"
             elif token == "duplicate":
                 duplicate_filter = True
+            elif token in ("nonmailchimp", "notsynced", "not_synced"):
+                nonmailchimp_filter = True
+            elif token == "nonbrevo":
+                nonbrevo_filter = True
             elif token == "deactivated":
                 pass  # handled in filter_queryset
             else:
@@ -1101,6 +1104,10 @@ class ClubMemberFilter(django_filters.FilterSet):
             queryset = queryset.filter(source=source_filter)
         if duplicate_filter:
             queryset = queryset.filter(possible_duplicate__isnull=False)
+        if nonmailchimp_filter:
+            queryset = queryset.filter(mailchimp_last_synced__isnull=True)
+        if nonbrevo_filter:
+            queryset = queryset.filter(brevo_last_synced__isnull=True)
         if status_filter:
             today = timezone.now().date()
             if status_filter == "current":
@@ -1245,21 +1252,86 @@ class ClubBapLotFilter(django_filters.FilterSet):
         return self._apply_query(queryset, value)
 
     def _apply_query(self, queryset, value):
-        tokens = value.lower().split()
-        status_keywords = {"pending", "approved", "rejected"}
-        status = next((t for t in tokens if t in status_keywords), None)
-        search_tokens = [t for t in tokens if t not in status_keywords]
+        try:
+            tokens = shlex.split(value or "")
+        except ValueError:
+            tokens = (value or "").split()
+        status_keywords = {"pending", "approved", "rejected", "non_bap"}
+        status = None
+        search_tokens = []
+        user_filters = []
+        category_filters = []
+        auction_filters = []
+
+        for token in tokens:
+            lowered = token.lower()
+            if lowered in status_keywords:
+                status = lowered
+                continue
+            if ":" in token:
+                key, raw_value = token.split(":", 1)
+                key = key.lower()
+                raw_value = raw_value.strip()
+                if key == "user" and raw_value:
+                    user_filters.append(raw_value)
+                    continue
+                if key == "category" and raw_value:
+                    category_filters.append(raw_value)
+                    continue
+                if key == "auction" and raw_value:
+                    auction_filters.append(raw_value)
+                    continue
+            search_tokens.append(token)
+
         search = " ".join(search_tokens)
 
         if status == "pending":
-            # Not yet reviewed: no BapAward and not manually dismissed
-            queryset = queryset.filter(bap_award__isnull=True, manually_approved=False)
+            # Not yet reviewed: breeder checkbox checked, no BapAward, not manually dismissed
+            queryset = queryset.filter(i_bred_this_fish=True, bap_award__isnull=True, manually_approved=False)
         elif status == "approved":
             queryset = queryset.filter(bap_award__isnull=False)
         elif status == "rejected":
             # Manually dismissed with no BapAward
             queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
-        # no status keyword = show all sold lots (no extra filter)
+        elif status == "non_bap":
+            # Breeder checkbox NOT checked — seller may have forgotten; can be manually approved
+            queryset = queryset.filter(i_bred_this_fish=False, bap_award__isnull=True, manually_approved=False)
+        else:
+            # no status keyword = show all BAP-eligible lots (exclude non-BAP unless explicitly requested)
+            queryset = queryset.filter(i_bred_this_fish=True)
+
+        for user_filter in user_filters:
+            name_parts = user_filter.split()
+            user_query = (
+                Q(auctiontos_seller__name__icontains=user_filter)
+                | Q(auctiontos_seller__email__icontains=user_filter)
+                | Q(auctiontos_seller__user__username__icontains=user_filter)
+                | Q(user__username__icontains=user_filter)
+                | Q(auctiontos_seller__user__first_name__icontains=user_filter)
+                | Q(auctiontos_seller__user__last_name__icontains=user_filter)
+                | Q(user__first_name__icontains=user_filter)
+                | Q(user__last_name__icontains=user_filter)
+            )
+            if len(name_parts) > 1:
+                user_query |= Q(
+                    auctiontos_seller__user__first_name__icontains=name_parts[0],
+                    auctiontos_seller__user__last_name__icontains=name_parts[-1],
+                ) | Q(
+                    user__first_name__icontains=name_parts[0],
+                    user__last_name__icontains=name_parts[-1],
+                )
+            queryset = queryset.filter(user_query)
+
+        for category_filter in category_filters:
+            # Support slug-style filters like category:foo-bar for categories named "Foo Bar".
+            category_search = category_filter.replace("-", " ")
+            queryset = queryset.filter(
+                Q(species_category__name__icontains=category_filter)
+                | Q(species_category__name__icontains=category_search)
+            )
+
+        for auction_filter in auction_filters:
+            queryset = queryset.filter(auction__slug__iexact=auction_filter)
 
         if search:
             queryset = queryset.filter(

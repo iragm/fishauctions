@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}User Flow Analysis{% endblock %}
+{% load static %}
+{% block content %}
+
+<h3>User Flow Analysis</h3>
+<p class="text-muted">Navigation patterns for logged-in users. Use this to inform Command Palette suggestions.</p>
+
+<div class="d-flex align-items-start gap-3 mb-4 flex-wrap">
+  <form method="get" style="max-width: 500px; flex: 1 1 300px;">
+    <div class="input-group">
+      <select name="auction" class="form-select" onchange="this.form.submit()">
+        <option value="">— Select an auction —</option>
+        <option value="__all__" {% if is_all_auctions %}selected{% endif %}>
+          All auctions combined{% if all_flow_cached_at %} (cached){% endif %}
+        </option>
+        {% for a in auctions %}
+          <option value="{{ a.slug }}" {% if selected_auction.slug == a.slug %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-secondary">Load</button>
+    </div>
+  </form>
+
+  <form method="post" style="flex: 0 0 auto;">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline-primary" title="Processes every auction in the background (2 s sleep between each). Results are cached indefinitely in Redis.">
+      Compute all in background
+    </button>
+  </form>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
+      {{ message }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+{% if is_all_auctions and flow_not_cached %}
+  <div class="alert alert-info">
+    Combined data hasn't been computed yet. Click <strong>Compute all in background</strong> and come back in a few minutes (or hours for large sites).
+  </div>
+{% endif %}
+
+{% if selected_auction or is_all_auctions %}
+
+{% if is_all_auctions %}
+  <h5>All auctions combined</h5>
+{% else %}
+  <h5>Auction: {{ selected_auction }}</h5>
+{% endif %}
+
+{% if flow_cached_at %}
+  <p class="text-muted small">Cached result from {{ flow_cached_at }}. Click <em>Compute all in background</em> to refresh.</p>
+{% else %}
+  <p class="text-muted small">Live result. Sessions split on 30-minute idle gaps. Consecutive views of the same section are collapsed to one step.</p>
+{% endif %}
+
+{% if frequency_table or transition_table %}
+<div class="row g-4 mb-5">
+  <div class="col-lg-5">
+    <h6>Page section frequency</h6>
+    <table class="table table-sm table-hover">
+      <thead>
+        <tr>
+          <th>Section</th>
+          <th class="text-end">Views</th>
+          <th class="text-end">Unique users</th>
+          <th class="text-end">Avg time (s)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in frequency_table %}
+        <tr>
+          <td>{{ row.section }}</td>
+          <td class="text-end">{{ row.views }}</td>
+          <td class="text-end">{{ row.unique_users }}</td>
+          <td class="text-end">{{ row.avg_time }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-muted">No page views found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col-lg-7">
+    <h6>Typical next step (transition matrix)</h6>
+    <p class="text-muted small">For each section, where do users go next in the same session?</p>
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th>From</th>
+          <th>Top next steps (% of transitions)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in transition_table %}
+        <tr>
+          <td class="text-nowrap"><strong>{{ row.from }}</strong><br><span class="text-muted small">{{ row.total_transitions }} transitions</span></td>
+          <td>
+            {% for next in row.nexts %}
+            <span class="badge bg-secondary me-1 mb-1" title="{{ next.count }} times">{{ next.section }} {{ next.pct }}%</span>
+            {% endfor %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="2" class="text-muted">No session transitions found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% elif auction %}
+<div class="alert alert-warning">Auction not found.</div>
+{% endif %}
+
+{% endblock %}

@@ -1,10 +1,94 @@
-{% extends "base.html" %}
-{% load render_table from django_tables2 %}
+{% extends "auctions/htmx_table_view.html" %}
 {% load crispy_forms_tags %}
+{% load render_table from django_tables2 %}
+
 {% block title %}Pending BAP — {{ club.name }}{% endblock %}
 
-{% block content %}
-{% include "club_ribbon.html" %}
-{% include "auctions/club_bap_lots_fragment.html" %}
-<div id="modals-here"></div>
+{% block htmx_table_ribbon %}
+  {% include "club_ribbon.html" %}
+{% endblock %}
+
+{% block htmx_table_filter_form %}
+<div class="d-flex align-items-start gap-2 mt-2 mb-2 flex-wrap">
+  <form id="lots-filter-form" class="flex-grow-1" method="get">
+    {% crispy filter.form %}
+  </form>
+  <span class="dropdown mt-1">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-filter"></i> Filters
+    </button>
+    <div class="dropdown-menu dropdown-menu-end" style="min-width:12rem">
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_pending"> Pending
+      </label>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_approved"> Approved
+      </label>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_rejected"> Rejected
+      </label>
+      <label class="dropdown-item">
+        <input type="checkbox" class="bap_filter" id="checkbox_non_bap"> Non-BAP (no checkbox)
+      </label>
+    </div>
+  </span>
+</div>
+{% endblock %}
+
+{% block htmx_table %}
+<div id="lots-table-container"
+     class="table-container"
+     hx-get="{% url 'club_bap_lots' club.slug %}"
+     hx-trigger="bapLotListChanged from:body"
+     hx-swap="innerHTML">
+  {% render_table table %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script>
+    (function () {
+      var STATUS_KEYWORDS = ['pending', 'approved', 'rejected', 'non_bap'];
+
+      function syncCheckboxesFromQuery() {
+        var queryInput = document.getElementById('id_query');
+        var val = queryInput ? queryInput.value : '';
+        var tokens = val.toLowerCase().split(/\s+/);
+        STATUS_KEYWORDS.forEach(function (kw) {
+          var cb = document.getElementById('checkbox_' + kw);
+          if (cb) cb.checked = tokens.indexOf(kw) !== -1;
+        });
+      }
+
+      function updateQueryKeyword(keyword, add) {
+        var el = document.getElementById('id_query');
+        if (!el) return;
+        var val = el.value;
+        // Status filters are mutually exclusive — remove every status before optionally adding one.
+        STATUS_KEYWORDS.forEach(function (kw) {
+          val = val.replace(new RegExp('(^|\\s)' + kw + '(?=\\s|$)', 'g'), ' ');
+        });
+        val = val.trim();
+        if (add) val = (val ? val + ' ' : '') + keyword;
+        el.value = val.trim();
+        el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      var qInput = document.getElementById('id_query');
+      if (qInput) {
+        qInput.addEventListener('blur', syncCheckboxesFromQuery);
+        syncCheckboxesFromQuery();
+      }
+
+      STATUS_KEYWORDS.forEach(function (kw) {
+        var cb = document.getElementById('checkbox_' + kw);
+        if (!cb) return;
+        cb.addEventListener('change', function () {
+          updateQueryKeyword(kw, this.checked);
+        });
+      });
+    })();
+  </script>
 {% endblock %}

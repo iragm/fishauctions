@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags bap_filters membership_tags qr_code %}
+{% load crispy_forms_tags bap_filters membership_tags static %}
 {% block title %}{{ club.name }}{% endblock %}
 
 {% block content %}
@@ -9,13 +9,29 @@
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if club.homepage or club.facebook_page %}
+{% if member or club.allow_joining or club.homepage or club.facebook_page or club.discord_invite_link or has_club_contact %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if member %}
+  <button type="button" class="btn btn-sm btn-success" data-club-panel-toggle="membership-panel">
+    <i class="bi bi-person-badge"></i> Membership
+  </button>
+  {% elif club.allow_joining %}
+  <form method="post" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-person-fill-add"></i> Join</button>
+  </form>
+  {% endif %}
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
   {% endif %}
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
+  {% endif %}
+  {% if club.discord_invite_link %}
+  <a href="{% if club.discord_invite_link|slice:':4' != 'http' %}https://{% endif %}{{ club.discord_invite_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
+  {% endif %}
+  {% if has_club_contact and request.user.is_authenticated %}
+  <a href="mailto:{{ club_contact_email }}" class="btn btn-sm btn-primary"><i class="bi bi-envelope"></i> Email</a>
   {% endif %}
 </div>
 {% endif %}
@@ -25,31 +41,17 @@
 {% endif %}
 
 {% if member %}
-  <div class="card mb-3">
+  <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">
-      <h5 class="card-title">Your membership</h5>
       {% include "partials/club_member_uuid_card.html" %}
-      <div class="mt-3 text-center">
-        {% if is_membership_owner %}
-        <a class="btn btn-link btn-sm" href="{% url 'club_member_by_number' slug=club.slug number=member.membership_number %}">View membership details</a>
-        {% endif %}
-      </div>
-
-      {% if show_membership_payment_button %}
-      <div class="mt-3">
-        <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
-          <i class="bi bi-credit-card"></i> Renew Membership
-        </a>
-      </div>
+      {% if membership_invoice %}
+        {% include "partials/membership_payment_inline.html" %}
+      {% elif club.membership_annual_fee and membership_is_paid_member and not membership_is_expired and not membership_expiring_soon %}
+        <p class="text-muted small text-center mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
       {% endif %}
     </div>
   </div>
-{% elif club.allow_joining %}
-  <form method="post">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-success mb-3"><i class="bi bi-person-fill-add"></i> Join {{ club.name }}</button>
-  </form>
-{% else %}
+{% elif not club.allow_joining %}
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
 {% endif %}
 
@@ -57,24 +59,24 @@
 {# ── Tabbed layout when BAP is enabled ─────────────────────────────── #}
 <ul class="nav nav-tabs mb-3" id="clubTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link active" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" type="button" role="tab">Auctions</button>
+    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" data-tab-url="{% url 'club_detail' club.slug %}" type="button" role="tab">Auctions</button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" type="button" role="tab">BAP</button>
+    <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'bap' %}" type="button" role="tab">BAP</button>
   </li>
   {% if club.separate_hap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" type="button" role="tab">HAP</button>
+    <button class="nav-link {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'hap' %}" type="button" role="tab">HAP</button>
   </li>
   {% endif %}
   {% if club.separate_cap %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
+    <button class="nav-link {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'culture' %}" type="button" role="tab">Culture</button>
   </li>
   {% endif %}
   {% if my_bap_awards is not None %}
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" type="button" role="tab">My Points</button>
+    <button class="nav-link {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'my-points' %}" type="button" role="tab">My Points</button>
   </li>
   {% endif %}
 </ul>
@@ -82,7 +84,7 @@
 <div class="tab-content" id="clubTabContent">
 
   {# Auctions tab #}
-  <div class="tab-pane fade show active" id="auctions-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'auctions' %}show active{% endif %}" id="auctions-tab" role="tabpanel">
     {% if club_auctions %}
     <ul class="list-group">
       {% for auction in club_auctions %}
@@ -91,9 +93,21 @@
           <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
           <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
         </span>
+        <span class="d-flex align-items-center gap-2">
         {% if can_manage_auctions and not auction.promote_this_auction %}
-        <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+        <span class="badge bg-secondary rounded-pill">Not promoted</span>
         {% endif %}
+        {% if auction.pk == current_auction_id %}
+        <span class="badge bg-success rounded-pill">Current</span>
+        {% elif can_manage_auctions and auction.date_start > now %}
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="make_current">
+          <input type="hidden" name="auction" value="{{ auction.pk }}">
+          <button type="submit" class="btn btn-sm btn-outline-secondary text-light py-0">Make current</button>
+        </form>
+        {% endif %}
+        </span>
       </li>
       {% endfor %}
     </ul>
@@ -103,30 +117,50 @@
   </div>
 
   {# BAP leaderboard tab #}
-  <div class="tab-pane fade" id="bap-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'bap' %}show active{% endif %}" id="bap-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle" checked>
       <label class="form-check-label" for="ytd-toggle">Year to date only</label>
     </div>
     <div id="bap-ytd">
+      {% if bap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="bap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart_ytd|json_script:"bap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard_ytd points_attr="bap_points_ytd" %}
     </div>
     <div id="bap-alltime" style="display:none">
+      {% if bap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="bap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ bap_top10_chart|json_script:"bap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard points_attr="bap_points" %}
     </div>
   </div>
 
   {% if club.separate_hap %}
   {# HAP leaderboard tab #}
-  <div class="tab-pane fade" id="hap-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'hap' %}show active{% endif %}" id="hap-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle-hap" checked>
       <label class="form-check-label" for="ytd-toggle-hap">Year to date only</label>
     </div>
     <div id="hap-ytd">
+      {% if hap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="hap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart_ytd|json_script:"hap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard_ytd points_attr="hap_points_ytd" %}
     </div>
     <div id="hap-alltime" style="display:none">
+      {% if hap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="hap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ hap_top10_chart|json_script:"hap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard points_attr="hap_points" %}
     </div>
   </div>
@@ -134,15 +168,25 @@
 
   {% if club.separate_cap %}
   {# Culture leaderboard tab #}
-  <div class="tab-pane fade" id="culture-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'culture' %}show active{% endif %}" id="culture-tab" role="tabpanel">
     <div class="form-check form-switch mb-3 mt-2">
       <input class="form-check-input" type="checkbox" id="ytd-toggle-culture" checked>
       <label class="form-check-label" for="ytd-toggle-culture">Year to date only</label>
     </div>
     <div id="culture-ytd">
+      {% if cap_top10_chart_ytd %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="cap-top10-chart-ytd" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart_ytd|json_script:"cap-top10-chart-ytd-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard_ytd points_attr="culture_points_ytd" %}
     </div>
     <div id="culture-alltime" style="display:none">
+      {% if cap_top10_chart %}
+      <h6 class="text-muted">Top 10 &mdash; points over time</h6>
+      <canvas id="cap-top10-chart" height="120" class="mb-3"></canvas>
+      {{ cap_top10_chart|json_script:"cap-top10-chart-data" }}
+      {% endif %}
       {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
     </div>
   </div>
@@ -150,7 +194,14 @@
 
   {% if my_bap_awards is not None %}
   {# My Points tab #}
-  <div class="tab-pane fade" id="my-points-tab" role="tabpanel">
+  <div class="tab-pane fade {% if active_club_tab == 'my-points' %}show active{% endif %}" id="my-points-tab" role="tabpanel">
+    {% if my_points_chart_data %}
+    <div class="mt-3 mb-4">
+      <h5>Cumulative points over time</h5>
+      <canvas id="my-points-chart" height="110"></canvas>
+    </div>
+    {{ my_points_chart_data|json_script:"my-points-chart-data" }}
+    {% endif %}
     {% if my_bap_awards %}
     <ul class="list-group list-group-flush mt-2">
       {% for award in my_bap_awards %}
@@ -160,7 +211,7 @@
       </li>
       {% endfor %}
     </ul>
-    <p class="text-muted mt-2 mb-0"><small>This page shows only your most recent BAP points. To see all lots you've gotten BAP points for, <a href="{% url 'selling' %}?filter=bap">visit your selling dashboard and filter for BAP</a>.</small></p>
+    <p class="text-muted mt-2 mb-0"><small>This page shows only your 25 most recent BAP points. To see all lots you've gotten BAP points for, <a href="{% url 'selling' %}?query=bap">visit your selling dashboard and filter for BAP</a>.</small></p>
     {% else %}
     <p class="text-muted mt-3">No points recorded yet.</p>
     {% endif %}
@@ -206,9 +257,21 @@
       <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
       <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
     </span>
+    <span class="d-flex align-items-center gap-2">
     {% if can_manage_auctions and not auction.promote_this_auction %}
-    <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+    <span class="badge bg-secondary rounded-pill">Not promoted</span>
     {% endif %}
+    {% if auction.pk == current_auction_id %}
+    <span class="badge bg-success rounded-pill">Current</span>
+    {% elif can_manage_auctions and auction.date_start > now %}
+    <form method="post" class="d-inline">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="make_current">
+      <input type="hidden" name="auction" value="{{ auction.pk }}">
+      <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+    </form>
+    {% endif %}
+    </span>
   </li>
   {% endfor %}
 </ul>
@@ -221,20 +284,108 @@
 
 {% block extra_js %}
 {% if show_bap_tabs %}
+<script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>
 (function () {
+  var chartIds = [
+    'my-points-chart',
+    'bap-top10-chart-ytd', 'bap-top10-chart',
+    'hap-top10-chart-ytd', 'hap-top10-chart',
+    'cap-top10-chart-ytd', 'cap-top10-chart',
+  ];
+
+  // Chart.js v2 cannot size a canvas that lives inside a display:none ancestor —
+  // an inactive tab pane, or the hidden side of the YTD/all-time toggle. Building a
+  // chart there yields a 0x0, permanently-blank canvas (the markup is present but
+  // nothing is drawn). So build each chart lazily, the first time its canvas is
+  // actually on-screen, and (re)build on tab show / toggle change.
+  function buildChart(canvas) {
+    var dataEl = document.getElementById(canvas.id + '-data');
+    if (!dataEl || typeof Chart === 'undefined') return;
+    canvas.dataset.chartReady = '1';
+    new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: JSON.parse(dataEl.textContent),
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        legend: { position: 'bottom', labels: { boxWidth: 12 } },
+        scales: {
+          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 } }],
+          yAxes: [{ ticks: { beginAtZero: true } }],
+        },
+      },
+    });
+  }
+
+  function renderVisibleCharts() {
+    chartIds.forEach(function (id) {
+      var canvas = document.getElementById(id);
+      // offsetParent is null while the canvas (or an ancestor) is display:none.
+      if (canvas && !canvas.dataset.chartReady && canvas.offsetParent !== null) {
+        buildChart(canvas);
+      }
+    });
+  }
+
   function wireToggle(toggleId, ytdId, alltimeId) {
     const toggle = document.getElementById(toggleId);
     if (!toggle) return;
     toggle.addEventListener('change', function () {
       document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
       document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
+      renderVisibleCharts();
     });
   }
   wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
   wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
   wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+
+  // Render charts visible on first paint (the active tab), then again whenever a
+  // tab becomes visible.
+  renderVisibleCharts();
+  document.querySelectorAll('#clubTabs button[data-bs-toggle="tab"]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', renderVisibleCharts);
+  });
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+  var panelToggleButtons = Array.from(document.querySelectorAll('[data-club-panel-toggle]'));
+  var togglablePanelIds = panelToggleButtons
+    .map(function (button) {
+      return button.getAttribute('data-club-panel-toggle');
+    })
+    .filter(function (panelId) {
+      return !!panelId;
+    });
+
+  function hidePanels(exceptId) {
+    togglablePanelIds.forEach(function (panelId) {
+      var panel = document.getElementById(panelId);
+      if (panel && panel.id !== exceptId && panel.classList.contains('card')) {
+        panel.classList.add('d-none');
+      }
+    });
+  }
+
+  panelToggleButtons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      var panel = document.getElementById(this.getAttribute('data-club-panel-toggle'));
+      if (!panel) return;
+      var shouldHide = !panel.classList.contains('d-none');
+      hidePanels(panel.id);
+      panel.classList.toggle('d-none', shouldHide);
+    });
+  });
+
+  document.querySelectorAll('#clubTabs [data-tab-url]').forEach(function (btn) {
+    btn.addEventListener('shown.bs.tab', function () {
+      var url = this.getAttribute('data-tab-url');
+      if (url) history.pushState({}, '', url);
+    });
+  });
+})();
+</script>
 {% endblock %}

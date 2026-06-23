@@ -24,12 +24,15 @@ from .models import (
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
+    CommandPalettePage,
+    CommandPaletteSearch,
     GeneralInterest,
     Invoice,
     InvoicePayment,
     Location,
     Lot,
     LotHistory,
+    MobileDevice,
     PageView,
     PickupLocation,
     Product,
@@ -82,6 +85,22 @@ class SearchHistoryAdmin(admin.ModelAdmin):
     model = SearchHistory
     list_display = ("user", "search")
     search_fields = ()
+
+
+class CommandPalettePageAdmin(admin.ModelAdmin):
+    model = CommandPalettePage
+    list_display = ("search_term", "synonyms", "target", "url", "title", "hits", "is_active")
+    list_editable = ("synonyms", "is_active")
+    list_filter = ("is_active", "target")
+    search_fields = ("search_term", "synonyms", "title", "url", "target")
+
+
+class CommandPaletteSearchAdmin(admin.ModelAdmin):
+    model = CommandPaletteSearch
+    list_display = ("user", "search", "result", "result_type", "createdon")
+    list_filter = ("result", "result_type")
+    search_fields = ("search",)
+    readonly_fields = ("createdon", "updatedon")
 
 
 class AdCampaignResponseInline(admin.TabularInline):
@@ -254,6 +273,41 @@ class UserLabelPrefsInline(admin.StackedInline):
     verbose_name_plural = "User Label Preferences"
 
 
+class MobileDeviceInline(admin.TabularInline):
+    """Read-only view of a user's registered mobile devices. Devices are created by the app, not the admin."""
+
+    model = MobileDevice
+    extra = 0
+    fields = ("platform", "app_version", "device_name", "device_uuid", "created_at", "last_seen")
+    readonly_fields = ("platform", "app_version", "device_name", "device_uuid", "created_at", "last_seen")
+    verbose_name = "Mobile device"
+    verbose_name_plural = "Mobile devices"
+    show_change_link = True
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class HasMobileAppFilter(admin.SimpleListFilter):
+    """Filter users by whether they have registered at least one mobile device (i.e. installed the app)."""
+
+    title = "mobile app installed"
+    parameter_name = "has_mobile_app"
+
+    def lookups(self, request, model_admin):
+        return [
+            ("yes", "Yes"),
+            ("no", "No"),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(mobile_devices__isnull=False).distinct()
+        if self.value() == "no":
+            return queryset.filter(mobile_devices__isnull=True)
+        return queryset
+
+
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
     list_display = [
@@ -264,9 +318,11 @@ class UserAdmin(BaseUserAdmin):
         "last_activity",
         "date_joined",
     ]
+    list_filter = (HasMobileAppFilter, "is_staff", "is_superuser", "is_active", "groups")
     inlines = [
         UserdataInline,
         UserLabelPrefsInline,
+        MobileDeviceInline,
         # AuctionTOSInline,  # too much noise, but important to have
         # InterestInline,  # too much noise
     ]
@@ -300,6 +356,23 @@ class UserAdmin(BaseUserAdmin):
     last_activity.short_description = "Last activity"
 
 
+@admin.register(MobileDevice)
+class MobileDeviceAdmin(admin.ModelAdmin):
+    list_display = ("user", "platform", "app_version", "device_name", "last_seen", "created_at")
+    list_filter = ("platform", "app_version")
+    search_fields = (
+        "user__username",
+        "user__email",
+        "user__first_name",
+        "user__last_name",
+        "device_uuid",
+        "device_name",
+    )
+    readonly_fields = ("created_at", "last_seen")
+    raw_id_fields = ("user",)
+    date_hierarchy = "last_seen"
+
+
 class GeneralInterestAdmin(admin.ModelAdmin):
     model = GeneralInterest
 
@@ -313,7 +386,8 @@ class UserInline(admin.TabularInline):
     ]
     verbose_name = "Club member"
     verbose_name_plural = "Club members"
-    # fk_name = 'userdata'
+    # UserData has two FKs to Club (club + last_club_used); this inline is the user's club affiliation.
+    fk_name = "club"
     model = UserData
     extra = 0
 
@@ -352,6 +426,8 @@ class ClubAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "active",
+        "use_site_paypal_account",
+        "allow_non_oauth_paypal",
         ("date_contacted", admin.EmptyFieldListFilter),
         ("date_contacted_for_in_person_auctions", admin.EmptyFieldListFilter),
         ("contact_email", admin.EmptyFieldListFilter),
@@ -359,12 +435,27 @@ class ClubAdmin(admin.ModelAdmin):
         ("latitude", admin.EmptyFieldListFilter),
         "interests",
     )
+    readonly_fields = ("connected_paypal_seller", "connected_square_seller")
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
         ClubAPIKeyInline,
     ]
     actions = [export_to_csv]
+
+    @admin.display(description="Connected PayPal seller")
+    def connected_paypal_seller(self, obj):
+        seller = getattr(obj, "paypal_seller", None)
+        if not seller:
+            return "—"
+        return f"{seller} (user: {seller.user})"
+
+    @admin.display(description="Connected Square seller")
+    def connected_square_seller(self, obj):
+        seller = getattr(obj, "square_seller", None)
+        if not seller:
+            return "—"
+        return f"{seller} (user: {seller.user})"
 
 
 class LocationAdmin(admin.ModelAdmin):
@@ -792,6 +883,8 @@ admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(AdCampaign, AdCampaignAdmin)
 admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
+admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
+admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)

@@ -93,6 +93,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
+    "flush_expired_tokens": {
+        "task": "auctions.tasks.flush_expired_tokens",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.

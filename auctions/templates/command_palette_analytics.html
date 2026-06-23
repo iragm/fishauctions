@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Command palette searches{% endblock %}
+{% block content %}
+<h2 class="mb-3">Command palette searches</h2>
+<p class="text-muted">
+  {{ total_searches }} searches logged · {{ total_bounces }} with no results.
+  Add common bounce terms as <code>synonyms</code> on an existing
+  <a href="/admin/auctions/commandpalettepage/">command palette page</a>, or create a new page for them.
+</p>
+<div class="row">
+  <div class="col-lg-6 mb-4">
+    <h5>Top searches</h5>
+    <table class="table table-sm table-striped">
+      <thead><tr><th>Search</th><th class="text-end">Count</th><th class="text-end">Clicks</th></tr></thead>
+      <tbody>
+        {% for row in top_searches %}
+        <tr><td>{{ row.search }}</td><td class="text-end">{{ row.count }}</td><td class="text-end">{{ row.clicks }}</td></tr>
+        {% empty %}
+        <tr><td colspan="3" class="text-muted">No searches yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="col-lg-6 mb-4">
+    <h5>Top bounces <small class="text-muted">(no results — candidates for new shortcuts/synonyms)</small></h5>
+    <table class="table table-sm table-striped">
+      <thead><tr><th>Search</th><th class="text-end">Count</th></tr></thead>
+      <tbody>
+        {% for row in top_bounces %}
+        <tr><td>{{ row.search }}</td><td class="text-end">{{ row.count }}</td></tr>
+        {% empty %}
+        <tr><td colspan="2" class="text-muted">No bounces yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

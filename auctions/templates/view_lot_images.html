@@ -290,7 +290,7 @@ function deactivate_lot() {
                     </div>
                     {% else %}
                         {% if lot.auto_image %}
-                            <br><img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+                            <br><img src="{{ lot.auto_image.display_url }}" class="img-fluid"><br>
                             <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
                             <br>
                             {% if lot.user == request.user %}
@@ -975,9 +975,9 @@ function deactivate_lot() {
 </div>
 
 {% if show_feedback_dialog %}
-<div id="feedback-modals-container">
-<div id="feedback-modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
-<div id="feedback-modal" class="modal fade show" tabindex="-1" style="display:block;">
+<div data-htmx-modal-root>
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
 	<div class="modal-dialog modal-dialog-centered">
 	  <div class="modal-content">
 		<div class="modal-header">
@@ -1003,24 +1003,15 @@ function deactivate_lot() {
         <br>
         <span class="text-muted"><a href="{% url 'feedback' %}">Leave feedback on all lots you've won here.</a></span>
       <div class="modal-footer">
-        <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+        <button data-modal-close-action="none" class="btn btn-secondary">Close</button>
     </div>
 	  </div>
 	</div>
   </div>
 </div>
 </div>
-<script>function closeModal() {
-	var container = document.getElementById("feedback-modals-container")
-	var backdrop = document.getElementById("feedback-modal-backdrop")
-	var modal = document.getElementById("feedback-modal")
-	modal.classList.remove("show")
-	backdrop.classList.remove("show")
-	setTimeout(function() {
-		container.removeChild(backdrop)
-		container.removeChild(modal)
-	}, 200)
-}
+<script>
+window.mountHtmxModal(document.currentScript.previousElementSibling);
 function feedback(pk, leave_as, rating, text) {
   data = {};
   if (rating !== null) {

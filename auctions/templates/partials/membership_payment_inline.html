@@ -1,0 +1,24 @@
+{# Inline membership renewal fee + payment buttons. Requires: membership_invoice, member, club. #}
+{% if membership_invoice and membership_invoice.show_payment_button %}
+<div class="mt-3 d-flex flex-column flex-md-row align-items-center justify-content-center gap-2">
+  <strong class="me-md-2">Membership Fee: {{ membership_invoice.currency_symbol }}{{ club.membership_annual_fee|floatformat:"-2" }}</strong>
+  {% if membership_invoice.show_paypal_button %}
+  <form action="{% url 'create_paypal_order' uuid=membership_invoice.no_login_link %}" method="post" class="d-inline">
+    {% csrf_token %}
+    <input type="hidden" name="member_pk" value="{{ member.pk }}">
+    <button type="submit" class="btn btn-success btn-sm">
+      <i class="bi bi-paypal"></i> PayPal
+    </button>
+  </form>
+  {% endif %}
+  {% if membership_invoice.show_square_button %}
+  <form action="{% url 'create_square_payment_link' uuid=membership_invoice.no_login_link %}" method="post" class="d-inline">
+    {% csrf_token %}
+    <input type="hidden" name="member_pk" value="{{ member.pk }}">
+    <button type="submit" class="btn btn-success btn-sm">
+      <i class="bi bi-credit-card"></i> Square
+    </button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}

@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from post_office import mail
 
+from auctions.email_routing import email_routing_enabled
 from auctions.models import (
     Auction,
     AuctionCampaign,
@@ -16,17 +17,20 @@ from auctions.models import (
 
 def send_tos_notification(template, tos):
     current_site = Site.objects.get_current()
-    mail.send(
-        tos.user.email,
-        template=template,
-        headers={"Reply-to": tos.auction.created_by.email},
-        context={
-            "domain": current_site.domain,
-            "tos": tos,
-            "website_focus": settings.WEBSITE_FOCUS,
-            "reply_to_email": tos.auction.created_by.email,
-        },
-    )
+    ctx = {
+        "domain": current_site.domain,
+        "tos": tos,
+        "website_focus": settings.WEBSITE_FOCUS,
+    }
+    send_kwargs = {
+        "sender": tos.auction.sender_email,
+        "template": template,
+        "context": ctx,
+    }
+    if not email_routing_enabled():
+        send_kwargs["headers"] = {"Reply-to": tos.auction.created_by.email}
+        ctx["reply_to_email"] = tos.auction.created_by.email
+    mail.send(tos.user.email, **send_kwargs)
 
 
 class Command(BaseCommand):
@@ -165,18 +169,21 @@ class Command(BaseCommand):
                 campaign.save()
             else:
                 current_site = Site.objects.get_current()
-                mail.send(
-                    email,
-                    template="join_auction_reminder",
-                    headers={"Reply-to": campaign.auction.created_by.email},
-                    context={
-                        "domain": current_site.domain,
-                        "auction": campaign.auction,
-                        "uuid": campaign.uuid,
-                        "lots": lots,
-                        "user": campaign.user,
-                        "unsubscribe": userData.unsubscribe_link,
-                        "mailing_address": settings.MAILING_ADDRESS,
-                        "reply_to_email": campaign.auction.created_by.email,
-                    },
-                )
+                ctx = {
+                    "domain": current_site.domain,
+                    "auction": campaign.auction,
+                    "uuid": campaign.uuid,
+                    "lots": lots,
+                    "user": campaign.user,
+                    "unsubscribe": userData.unsubscribe_link,
+                    "mailing_address": settings.MAILING_ADDRESS,
+                }
+                campaign_kwargs = {
+                    "sender": campaign.auction.sender_email,
+                    "template": "join_auction_reminder",
+                    "context": ctx,
+                }
+                if not email_routing_enabled():
+                    campaign_kwargs["headers"] = {"Reply-to": campaign.auction.created_by.email}
+                    ctx["reply_to_email"] = campaign.auction.created_by.email
+                mail.send(email, **campaign_kwargs)

@@ -8,7 +8,7 @@ import io
 import json
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django import forms
 from django.contrib.auth.models import User
@@ -22,12 +22,17 @@ from django.utils import timezone
 
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
+from . import brevo
+from . import mailchimp as mc
+from .email_routing import resolve_routed_recipient
 from .filters import LotAdminFilter
-from .forms import AuctionEditForm, ChangeUsernameForm, ClubMembershipSettingsForm, CreateLotForm
+from .forms import AuctionEditForm, ChangeUsernameForm, ClubEmailSettingsForm, ClubMembershipSettingsForm, CreateLotForm
 from .models import (
     Auction,
+    AuctionCampaign,
     AuctionDropdown,
     AuctionHistory,
+    AuctionIgnore,
     AuctionTOS,
     BapAward,
     Bid,
@@ -36,8 +41,12 @@ from .models import (
     Club,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
+    ClubBapCategoryOverride,
     ClubHistory,
     ClubMember,
+    ClubMoney,
+    CommandPalettePage,
+    CommandPaletteSearch,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -47,7 +56,11 @@ from .models import (
     PageView,
     PayPalSeller,
     PickupLocation,
+    SearchHistory,
+    SquareSeller,
     UserData,
+    UserIgnoreCategory,
+    UserInterestCategory,
     UserLabelPrefs,
     Watch,
     add_price_info,
@@ -1964,7 +1977,9 @@ class LotRefundDialogTests(TestCase):
         data = {"partial_refund_percent": 50, "banned": False}
         response = self.client.post(self.lot_url, data)
         assert response.status_code == 200
-        self.assertContains(response, "<script>location.reload();</script>")
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
 
         # Check if the lot was updated
         updated_lot = Lot.objects.get(pk=self.lot.pk)
@@ -4172,6 +4187,242 @@ class UserDataPropertyTests(StandardTestCase):
         assert user_data.unnotified_subscriptions_count == 0
 
 
+class UserDataMergeIntoTests(TestCase):
+    def setUp(self):
+        self.source_user = User.objects.create_user(
+            username="merge_source", password="testpass", email="merge_source@example.com"
+        )
+        self.target_user = User.objects.create_user(
+            username="merge_target", password="testpass", email="merge_target@example.com"
+        )
+
+        now = timezone.now()
+        self.now = now
+        self.club = Club.objects.create(name="Merge Club")
+        self.auction = Auction.objects.create(
+            created_by=self.source_user,
+            club=self.club,
+            title="Merge Auction",
+            is_online=False,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=1),
+        )
+        self.location = PickupLocation.objects.create(
+            name="Merge Location",
+            auction=self.auction,
+            pickup_time=now + datetime.timedelta(days=2),
+        )
+        self.source_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.source_user,
+            name="Source Member",
+            email="source.member@example.com",
+            phone_number="555-1111",
+            membership_last_paid=now.date(),
+            permission_manage_bap=True,
+        )
+        self.target_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.target_user,
+            name="Target Member",
+            email="",
+        )
+        self.source_tos = AuctionTOS.objects.create(
+            user=self.source_user,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=self.source_member,
+            name="Source TOS",
+            email="source.tos@example.com",
+        )
+        self.target_tos = AuctionTOS.objects.create(
+            user=self.target_user,
+            auction=self.auction,
+            pickup_location=self.location,
+            clubmember=self.target_member,
+            name="Target TOS",
+            email="target.tos@example.com",
+        )
+        self.target_invoice = Invoice.objects.get_or_create(auctiontos_user=self.target_tos, auction=self.auction)[0]
+        self.source_invoice = Invoice.objects.get_or_create(auctiontos_user=self.source_tos, auction=self.auction)[0]
+        InvoiceAdjustment.objects.create(invoice=self.source_invoice, adjustment_type="ADD", amount=5, notes="move me")
+        self.source_payment = InvoicePayment.objects.create(
+            club_member=self.source_member,
+            payment_target="CLUB_MEMBER",
+            amount=Decimal("15.00"),
+        )
+        self.source_award = BapAward.objects.create(
+            club_member=self.source_member,
+            date=now.date(),
+            points=7,
+            notes="move me too",
+        )
+        self.seller_lot = Lot.objects.create(
+            lot_name="Seller Lot",
+            auction=self.auction,
+            auctiontos_seller=self.source_tos,
+            user=self.source_user,
+            quantity=1,
+        )
+        self.winner_lot = Lot.objects.create(
+            lot_name="Winner Lot",
+            auction=self.auction,
+            auctiontos_seller=self.target_tos,
+            auctiontos_winner=self.source_tos,
+            winner=self.source_user,
+            winning_price=Decimal("10.00"),
+            active=False,
+            quantity=1,
+        )
+        self.membership_invoice = Invoice.objects.create(
+            club=self.club,
+            buyer=self.source_user,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+        self.bid = Bid.objects.create(user=self.source_user, lot_number=self.seller_lot, amount=Decimal("12.00"))
+        Watch.objects.create(user=self.target_user, lot_number=self.seller_lot)
+        self.source_watch = Watch.objects.create(user=self.source_user, lot_number=self.seller_lot)
+        self.page_view = PageView.objects.create(user=self.source_user, lot_number=self.seller_lot)
+        self.auction_ignore = AuctionIgnore.objects.create(user=self.source_user, auction=self.auction)
+        self.user_ignore_category = UserIgnoreCategory.objects.create(
+            user=self.source_user, category=Category.objects.create(name="Killifish")
+        )
+        self.user_interest = UserInterestCategory.objects.create(
+            user=self.source_user,
+            category=Category.objects.create(name="Cichlids"),
+            interest=4,
+        )
+        self.search_history = SearchHistory.objects.create(user=self.source_user, search="killifish")
+        self.auction_campaign = AuctionCampaign.objects.create(auction=self.auction, user=self.source_user)
+        self.target_chat = ChatSubscription.objects.create(
+            user=self.target_user,
+            lot=self.seller_lot,
+        )
+        self.target_chat.last_seen = now - datetime.timedelta(days=2)
+        self.target_chat.last_notification_sent = now - datetime.timedelta(days=2)
+        self.target_chat.save(update_fields=["last_seen", "last_notification_sent"])
+        self.source_chat = ChatSubscription.objects.create(
+            user=self.source_user,
+            lot=self.seller_lot,
+        )
+        self.source_chat.last_seen = now - datetime.timedelta(days=1)
+        self.source_chat.last_notification_sent = now - datetime.timedelta(days=1)
+        self.source_chat.unsubscribed = True
+        self.source_chat.save(update_fields=["last_seen", "last_notification_sent", "unsubscribed"])
+        PayPalSeller.objects.create(user=self.source_user, paypal_merchant_id="paypal_123", payer_email="paypal@test")
+        SquareSeller.objects.create(
+            user=self.source_user,
+            square_merchant_id="square_123",
+            access_token="token",
+            refresh_token="refresh",
+            payer_email="square@test",
+        )
+
+        self.target_user.userdata.credit = Decimal("1.50")
+        self.target_user.userdata.save(update_fields=["credit"])
+        self.source_user.userdata.phone_number = "555-0000"
+        self.source_user.userdata.address = "123 Source St"
+        self.source_user.userdata.credit = Decimal("8.50")
+        self.source_user.userdata.is_trusted = True
+        self.source_user.userdata.paypal_enabled = True
+        self.source_user.userdata.square_enabled = True
+        self.source_user.userdata.save(
+            update_fields=["phone_number", "address", "credit", "is_trusted", "paypal_enabled", "square_enabled"]
+        )
+
+    def test_merge_into_moves_domain_data_and_empties_source_userdata(self):
+        self.source_user.userdata.merge_into(self.target_user)
+
+        self.auction.refresh_from_db()
+        self.club.refresh_from_db()
+        self.target_user.userdata.refresh_from_db()
+        self.source_user.userdata.refresh_from_db()
+        self.seller_lot.refresh_from_db()
+        self.winner_lot.refresh_from_db()
+        self.membership_invoice.refresh_from_db()
+        self.bid.refresh_from_db()
+        self.page_view.refresh_from_db()
+        self.search_history.refresh_from_db()
+        self.auction_campaign.refresh_from_db()
+        self.source_payment.refresh_from_db()
+        self.source_award.refresh_from_db()
+        self.target_member.refresh_from_db()
+        self.source_member.refresh_from_db()
+        self.target_chat.refresh_from_db()
+
+        self.assertEqual(self.auction.created_by, self.target_user)
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+        self.assertTrue(
+            InvoiceAdjustment.objects.filter(invoice__auctiontos_user=self.target_tos, notes="move me").exists()
+        )
+        self.assertFalse(Invoice.objects.filter(pk=self.source_invoice.pk).exists())
+        self.assertEqual(self.seller_lot.auctiontos_seller, self.target_tos)
+        self.assertEqual(self.seller_lot.user, self.target_user)
+        self.assertEqual(self.winner_lot.auctiontos_winner, self.target_tos)
+        self.assertEqual(self.winner_lot.winner, self.target_user)
+        self.assertEqual(self.membership_invoice.buyer, self.target_user)
+        self.assertEqual(self.bid.user, self.target_user)
+        self.assertEqual(self.page_view.user, self.target_user)
+        self.assertEqual(self.source_payment.club_member, self.target_member)
+        self.assertEqual(self.source_award.club_member, self.target_member)
+        self.assertEqual(self.target_member.email, "source.member@example.com")
+        self.assertEqual(self.target_member.phone_number, "555-1111")
+        self.assertTrue(self.target_member.permission_manage_bap)
+        self.assertEqual(self.target_member.membership_last_paid, self.now.date())
+        self.assertTrue(self.source_member.is_deleted)
+        self.assertIsNone(self.source_member.user)
+        self.assertEqual(Watch.objects.filter(user=self.target_user, lot_number=self.seller_lot).count(), 1)
+        self.assertEqual(ChatSubscription.objects.filter(user=self.target_user, lot=self.seller_lot).count(), 1)
+        self.assertGreaterEqual(self.target_chat.last_seen, self.source_chat.last_seen)
+        self.assertGreaterEqual(self.target_chat.last_notification_sent, self.source_chat.last_notification_sent)
+        self.assertTrue(self.target_chat.unsubscribed)
+        self.assertTrue(AuctionIgnore.objects.filter(user=self.target_user, auction=self.auction).exists())
+        self.assertTrue(
+            UserIgnoreCategory.objects.filter(
+                user=self.target_user, category=self.user_ignore_category.category
+            ).exists()
+        )
+        self.assertTrue(
+            UserInterestCategory.objects.filter(user=self.target_user, category=self.user_interest.category).exists()
+        )
+        self.assertEqual(self.search_history.user, self.target_user)
+        self.assertEqual(self.auction_campaign.user, self.target_user)
+        self.assertEqual(self.target_user.userdata.credit, Decimal("10.00"))
+        self.assertEqual(self.target_user.userdata.phone_number, "555-0000")
+        self.assertEqual(self.target_user.userdata.address, "123 Source St")
+        self.assertTrue(self.target_user.userdata.is_trusted)
+        self.assertTrue(self.target_user.userdata.paypal_enabled)
+        self.assertTrue(self.target_user.userdata.square_enabled)
+        self.assertIsNone(self.source_user.userdata.phone_number)
+        self.assertIsNone(self.source_user.userdata.address)
+        self.assertEqual(self.source_user.userdata.credit, 0)
+        self.assertFalse(PayPalSeller.objects.filter(user=self.source_user).exists())
+        self.assertFalse(SquareSeller.objects.filter(user=self.source_user).exists())
+        self.assertTrue(PayPalSeller.objects.filter(user=self.target_user, paypal_merchant_id="paypal_123").exists())
+        self.assertTrue(SquareSeller.objects.filter(user=self.target_user, square_merchant_id="square_123").exists())
+
+    def test_management_command_calls_merge_into(self):
+        out = io.StringIO()
+
+        call_command(
+            "empty_account_and_move_data",
+            self.source_user.username,
+            self.target_user.username,
+            stdout=out,
+        )
+
+        self.membership_invoice.refresh_from_db()
+        self.target_user.userdata.refresh_from_db()
+        self.assertIn(
+            f"Moved data from {self.source_user.username} to {self.target_user.username}.",
+            out.getvalue(),
+        )
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+        self.assertEqual(self.membership_invoice.buyer, self.target_user)
+        self.assertEqual(self.target_user.userdata.phone_number, "555-0000")
+
+
 class AuctionViewPermissionTests(StandardTestCase):
     """Test view permissions for different user types"""
 
@@ -4503,18 +4754,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Field should NOT be hidden for superuser (site-wide PayPal fallback)
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
-    def test_membership_fields_hidden_without_club(self):
-        self.online_auction.club = None
-        self.online_auction.save()
-        form = AuctionEditForm(
-            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
-        )
-        # These fields are now shown/hidden via JavaScript; real widgets are always rendered
-        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        self.assertNotIsInstance(
-            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
-        )
-
     def test_manage_users_through_club_field_shown_without_club(self):
         self.online_auction.club = None
         self.online_auction.save()
@@ -4523,19 +4762,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         )
         # manage_users_through_club is always rendered so JS can toggle it based on club selection
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
-
-    def test_membership_fee_field_hidden_for_free_club(self):
-        free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
-        self.online_auction.club = free_club
-        self.online_auction.save()
-        form = AuctionEditForm(
-            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
-        )
-        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
-        # add_membership_fee field is now shown/hidden via JS, not server-side HiddenInput
-        self.assertNotIsInstance(
-            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
-        )
 
     def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
         paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
@@ -4662,6 +4888,26 @@ class LotListViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, ", Habitat")
 
+    def test_auction_lot_admin_uses_shared_query_sync_for_export_and_bulk_actions(self):
+        self.online_auction.is_online = False
+        self.online_auction.save(update_fields=["is_online"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(
+            reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}),
+            {"query": f"seller:{self.online_tos.bidder_number}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["htmx_table_header_template"],
+            "auctions/partials/auction_lots_table_header.html",
+        )
+        self.assertContains(
+            response,
+            f'href="{reverse("lot_list", kwargs={"slug": self.online_auction.slug})}?query=seller%3A{self.online_tos.bidder_number}"',
+        )
+        self.assertContains(response, 'data-query-sync-hx-vals="query"')
+        self.assertContains(response, f'"query": "seller:{self.online_tos.bidder_number}"')
+
 
 class MyLotsViewTests(StandardTestCase):
     """Test my lots view with different user types"""
@@ -4711,17 +4957,30 @@ class AuctionUsersViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
-    def test_auction_users_query_sync_script_handles_checkbox_filters(self):
-        """User filter page keeps query URL/export sync for checkbox-driven updates"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
+    def test_auction_users_context_configures_shared_htmx_filter_ui(self):
+        """Auction users view defines placeholder text and filter choices for the shared HTMX template."""
+        self.client.force_login(self.admin_user)
         url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
+        assert response.context["filter_placeholder_text"] == "Filter by bidder number, name, email..."
+        assert ("<i class='bi bi-exclamation-octagon-fill'></i> Can't sell", "no_sell") in response.context[
+            "possible_filters"
+        ]
         content = response.content.decode(response.charset or "utf-8")
-        assert "syncQueryUrlAndExport" in content
-        assert "queryInput.addEventListener('input', syncQueryUrlAndExport);" in content
-        assert "syncQueryUrlAndExport({ target: queryInput });" in content
-        assert '$("#id_query").trigger("blur");' in content
+        assert 'data-filter-key="no_sell"' in content
+        assert "syncQueryUrlAndLinks" in content
+        assert 'data-query-sync-url="' in content
+
+    def test_auction_users_context_omits_bidding_filters_when_online_bidding_disabled(self):
+        self.online_auction.online_bidding = "disable"
+        self.online_auction.save(update_fields=["online_bidding"])
+        self.client.force_login(self.admin_user)
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid") not in response.context["possible_filters"]
+        assert ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid") not in response.context["possible_filters"]
 
 
 class LotCreateViewTests(StandardTestCase):
@@ -5271,11 +5530,15 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
             enable_club_page=True,
-            allow_integrated_payments=True,
             send_membership_expiration_reminders=True,
         )
+        self.payment_user = User.objects.create_user(
+            username="renewal_payment_user",
+            password="testpass",
+            email="renewal_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_renewal")
         self.online_auction.club = self.club
-        self.online_auction.add_people_from_auction_to_club = True
         self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
         self.online_auction.save()
         self.member = ClubMember.objects.create(
@@ -5292,14 +5555,6 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
-
-    def test_club_managed_auction_can_mark_membership_renewal_needed(self):
-        from auctions.views import _should_mark_invoice_renewal_needed
-
-        self.online_auction.add_people_from_auction_to_club = False
-        self.online_auction.manage_users_through_club = "all"
-        self.online_auction.save(update_fields=["add_people_from_auction_to_club", "manage_users_through_club"])
-        self.assertTrue(_should_mark_invoice_renewal_needed(self.invoice))
 
     def test_membership_reminder_due_not_set_for_free_membership(self):
         self.club.membership_annual_fee = None
@@ -5345,6 +5600,20 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
         self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
 
+    @patch("auctions.views.maybe_send_membership_renewal_confirmation")
+    def test_marking_invoice_paid_sends_membership_renewal_confirmation(self, mock_send):
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save(update_fields=["send_membership_renewal_confirmation"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+
+        self.assertEqual(response.status_code, 200)
+        mock_send.assert_called_once()
+
     def test_invoice_membership_block_hidden_for_free_membership(self):
         self.club.membership_annual_fee = None
         self.club.save(update_fields=["membership_annual_fee"])
@@ -5352,6 +5621,243 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         response = self.client.get(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Apply Renewal Club membership fee")
+
+
+class ClubMoneyRenewalConsistencyTests(StandardTestCase):
+    """Guard the ClubMoney bookkeeping around membership renewals and invoices.
+
+    These cover paths that previously lacked assertions on the ClubMoney that gets
+    created, where the brittle behavior lives:
+    - a membership renewal must book exactly ONE membership ClubMoney entry, never two
+      (auction invoices book it via Invoice.sync_club_money; club-only
+      invoices book it via _process_invoice_membership_renewal -- never both).
+    - flipping an auction invoice PAID -> UNPAID -> PAID must not drift the club balance.
+    - the self-service renewal invoice lookup must be idempotent (no invoice proliferation).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Money Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            enable_club_page=True,
+        )
+        self.payment_user = User.objects.create_user(
+            username="money_payment_user", password="testpass", email="money_payment_user@example.com"
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_money")
+        self.online_auction.club = self.club
+        self.online_auction.manage_users_through_club = True
+        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+        self.online_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            user=self.online_tos.user,
+            name="Renew Me",
+            email=self.online_tos.email,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+        )
+        self.invoice.refresh_from_db()
+
+    def _membership_entries(self):
+        return ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_MEMBERSHIP)
+
+    def _balance(self):
+        from django.db.models import Sum
+
+        return ClubMoney.objects.filter(club=self.club).aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+
+    def _membership_total(self):
+        from django.db.models import Sum
+
+        return self._membership_entries().aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+
+    def test_auction_invoice_paid_books_single_membership_clubmoney(self):
+        """Marking an auction renewal invoice PAID books exactly one membership ClubMoney.
+
+        Regression test: a stray commit re-added the membership entry to
+        _add_paid_entries without restoring the guard in
+        _process_invoice_membership_renewal, so the fee was counted twice.
+        """
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+
+        entries = self._membership_entries()
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+    def test_auction_invoice_paid_unpaid_paid_is_balance_neutral(self):
+        """Toggling an auction renewal invoice PAID -> UNPAID -> PAID must not drift the balance."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        balance_after_first_paid = self._balance()
+
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/UNPAID")
+        self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        balance_after_second_paid = self._balance()
+
+        self.assertEqual(balance_after_first_paid, balance_after_second_paid)
+        # The membership grant is permanent, so the net membership revenue is one fee.
+        self.assertEqual(self._membership_total(), Decimal("25.00"))
+
+    def test_club_only_membership_invoice_books_single_membership_clubmoney(self):
+        """A club-only (no auction) membership invoice books exactly one membership ClubMoney."""
+        admin_member = ClubMember.objects.create(
+            club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True
+        )
+        invoice = Invoice.objects.create(
+            club=self.club,
+            club_member=admin_member,
+            buyer=self.admin_user,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(f"/api/payinvoice/{invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+
+        entries = self._membership_entries().filter(invoice=invoice)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+    def test_get_or_create_membership_invoice_idempotent_for_email_only_member(self):
+        """Repeated lookups for an email-only member reuse one invoice (no proliferation)."""
+        from auctions.views import _get_or_create_membership_invoice
+
+        email_member = ClubMember.objects.create(
+            club=self.club,
+            user=None,
+            name="Email Only",
+            email="email_only_member@example.com",
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=400),
+        )
+        first = _get_or_create_membership_invoice(self.club, email_member)
+        second = _get_or_create_membership_invoice(self.club, email_member)
+        third = _get_or_create_membership_invoice(self.club, email_member)
+
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(first.pk, third.pk)
+        self.assertEqual(Invoice.objects.filter(club=self.club, auction=None, club_member=email_member).count(), 1)
+
+    def test_manual_renew_books_membership_clubmoney(self):
+        """The manual 'renew' admin action books a membership ClubMoney for paid clubs."""
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True)
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.member.pk}))
+        self.assertEqual(response.status_code, 200)
+        entries = self._membership_entries()
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().amount, Decimal("25.00"))
+
+
+class ClubMembershipEmailTaskTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Club Email Task Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_membership_expiration_reminders=True,
+            send_membership_expiration_reminders_30_days=True,
+            send_welcome_email_to_new_members=True,
+        )
+        self.payment_user = User.objects.create_user(
+            username="club_email_task_payment_user",
+            password="testpass",
+            email="club_email_task_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_task")
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            name="Email Member",
+            email="member@example.com",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+            membership_last_paid=timezone.now().date(),
+        )
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_welcome_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.welcome_email_sent)
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Welcome to the {self.club.name}!")
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_30_day_expiration_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        self.member.welcome_email_sent = True
+        self.member.membership_expiration_reminder_30_days_due = timezone.now() - datetime.timedelta(minutes=1)
+        self.member.save(update_fields=["welcome_email_sent", "membership_expiration_reminder_30_days_due"])
+
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires in 30 days")
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(
+            welcome_email_sent=True,
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=1),
+            membership_expiration_reminder_due=timezone.now() - datetime.timedelta(minutes=1),
+        )
+
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_due)
+        self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires tomorrow")
+
+    @patch("auctions.tasks.mail.send")
+    def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):
+        from auctions.tasks import send_club_member_email
+
+        nameless = ClubMember.objects.create(
+            club=self.club,
+            name="",
+            email="nameless@example.com",
+        )
+        send_club_member_email(nameless, "Subject", "Body")
+        self.assertTrue(mock_send.called)
+        kwargs = mock_send.call_args.kwargs
+        self.assertIn("Dear Member,", kwargs["message"])
+        self.assertIn("Dear Member,", kwargs["html_message"])
+
+
+class ClubBarcodeViewTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(name="Barcode Club")
+
+    def test_barcode_view_returns_svg(self):
+        url = reverse("club_barcode", kwargs={"slug": self.club.slug, "value": 1234567890})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/svg+xml")
+        self.assertIn(b"<svg", response.content)
+
+    def test_member_barcode_image_link_property(self):
+        member = ClubMember.objects.create(club=self.club, name="Barcode Tester", email="b@example.com")
+        # membership_number is auto-generated as a 10-digit string
+        self.assertTrue(member.membership_number)
+        link = member.barcode_image_link
+        self.assertIn(f"/clubs/{self.club.slug}/barcode/{int(member.membership_number)}/", link)
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -8076,7 +8582,7 @@ class LotsByUserViewTest(StandardTestCase):
 
         # Context should have the correct user
         self.assertEqual(response.context["user"], self.user)
-        self.assertEqual(response.context["view"], "user")
+        self.assertEqual(response.context["lot_view_type"], "user")
 
     def test_lots_by_user_with_invalid_user_parameter(self):
         """Test that the view handles non-existent username gracefully"""
@@ -8436,6 +8942,44 @@ class SquarePaymentTests(StandardTestCase):
         self.square_seller.token_expires_at = timezone.now() - datetime.timedelta(hours=1)
         self.square_seller.save()
         self.assertTrue(self.square_seller.is_token_expired())
+
+    def test_supports_tap_to_pay_reflects_scopes(self):
+        """supports_tap_to_pay is True only when the in-person scope was granted."""
+        from .models import SQUARE_OAUTH_SCOPES
+
+        # The seller was created without scopes (legacy connection) → must reconnect.
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+        # A full reconnect records the requested scopes, which include the in-person scope.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        self.assertTrue(self.square_seller.supports_tap_to_pay)
+        # A non-empty grant that still lacks the in-person scope is not enough (no substring match).
+        self.square_seller.scopes = "PAYMENTS_WRITE PAYMENTS_READ"
+        self.square_seller.save()
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+
+    def test_find_square_reconnects_command(self):
+        """The audit command lists legacy sellers and drops them once they have the scope."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from .models import SQUARE_OAUTH_SCOPES
+
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 1", output)
+        self.assertIn(self.admin_user.username, output)
+
+        # Once the scope is recorded (reconnected), the seller drops off the list.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 0", output)
+        self.assertNotIn(self.admin_user.username, output)
 
     def test_winner_invoice_property(self):
         """Test Lot.winner_invoice property"""
@@ -12812,6 +13356,32 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "function setFieldNote(fieldId, message)")
         self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+        self.assertContains(response, "data-htmx-modal-root")
+        self.assertContains(response, "window.mountHtmxModal(")
+
+    def test_add_user_modal_save_uses_modal_close_action(self):
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.post(
+            url,
+            {
+                "name": "Brand New User",
+                "email": "brand-new@example.com",
+                "pickup_location": self.location.pk,
+                "bidder_number": "",
+                "phone_number": "",
+                "address": "",
+                "is_admin": False,
+                "bidding_allowed": True,
+                "selling_allowed": True,
+                "is_club_member": False,
+                "memo": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
 
 
 class AuctionTOSMergeViewTests(StandardTestCase):
@@ -13127,6 +13697,74 @@ class LotImageManagementTests(StandardTestCase):
         # delegating_lot has no direct images, but should show image_lot's images
         self.assertEqual(list(delegating_lot.images), [self.url_image])
         self.assertEqual(delegating_lot.thumbnail, self.url_image)
+
+    def test_lot_detail_renders_auto_image_from_url(self):
+        """Lot detail should render URL-only auto images without trying to access an uploaded file"""
+        self.user.userdata.auto_add_images = True
+        self.user.userdata.save(update_fields=["auto_add_images"])
+        self.online_auction.auto_add_images = True
+        self.online_auction.save(update_fields=["auto_add_images"])
+
+        source_lot = Lot.objects.create(
+            lot_name="Auto image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        LotImage.objects.create(
+            lot_number=source_lot,
+            url="https://example.com/auto-image.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+        target_lot = Lot.objects.create(
+            lot_name="Auto image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+        )
+
+        response = self.client.get(target_lot.lot_link)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "https://example.com/auto-image.jpg")
+
+    def test_htmx_lot_renders_auto_image_from_url(self):
+        """HTMX lot view should render URL-only auto images without trying to access an uploaded file"""
+        self.client.force_login(self.admin_user)
+        self.user.userdata.auto_add_images = True
+        self.user.userdata.save(update_fields=["auto_add_images"])
+        self.online_auction.auto_add_images = True
+        self.online_auction.save(update_fields=["auto_add_images"])
+
+        source_lot = Lot.objects.create(
+            lot_name="Auto image lot simple",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        LotImage.objects.create(
+            lot_number=source_lot,
+            url="https://example.com/auto-image-simple.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+        target_lot = Lot.objects.create(
+            lot_name="Auto image lot simple",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+        )
+
+        response = self.client.get(
+            reverse(
+                "htmx_lot",
+                kwargs={"slug": self.online_auction.slug, "custom_lot_number": target_lot.lot_number_display},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "https://example.com/auto-image-simple.jpg")
 
     def test_image_url_form_integration(self):
         """Submitting a lot edit form with image_url set should create a LotImage"""
@@ -13857,6 +14495,64 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertEqual(payment.payment_method, "PayPal")
         self.assertEqual(payment.amount, Decimal("37.50"))
 
+    def test_rounded_paypal_payment_marks_invoice_paid_and_zeroes_balance(self):
+        """With invoice rounding on, paying the rounded balance must settle to PAID / $0.00.
+
+        A fractional balance paid at the rounded amount leaves a sub-dollar residual on
+        net_after_payments; the PAID check must use the rounded balance so the invoice still settles.
+        This would fail under the old `net_after_payments >= 0` check (it would stay UNPAID).
+        """
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundpaypal", "rp@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance → rounds to $19.00.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        self.assertNotEqual(rounded, unrounded)  # rounding actually applies here
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        event = {
+            "id": "WH-ORDER-ROUNDED",
+            "event_type": "CHECKOUT.ORDER.COMPLETED",
+            "resource": {
+                "id": "ORDER-ROUNDED-1",
+                "status": "COMPLETED",
+                "purchase_units": [
+                    {
+                        "reference_id": str(invoice.pk),
+                        "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                        "payments": {
+                            "captures": [
+                                {
+                                    "id": "CAPTURE-ROUNDED-1",
+                                    "status": "COMPLETED",
+                                    "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        self.assertEqual(invoice.rounded_net_after_payments, Decimal("0.00"))  # balance due shows 0.00
+
     def test_checkout_order_completed_non_completed_status_is_ignored(self):
         """CHECKOUT.ORDER.COMPLETED with non-COMPLETED status does not create a payment"""
         from auctions.models import InvoicePayment
@@ -14058,6 +14754,7 @@ class ClubModelTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -14101,8 +14798,9 @@ class ClubViewTests(TestCase):
         )
 
     def test_club_detail_requires_login(self):
-        """Anonymous user gets 404 when enable_club_page=False (default)"""
-        self.assertFalse(self.club.enable_club_page)
+        """Anonymous user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
@@ -14128,6 +14826,81 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_viewing_club_page_records_last_club_used_for_member(self):
+        """A member viewing a club page has it recorded as their last club used (for the palette)."""
+        self.owner.userdata.refresh_from_db()
+        self.assertIsNone(self.owner.userdata.last_club_used)
+        self.client.login(username="club_owner2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.owner.userdata.refresh_from_db()
+        self.assertEqual(self.owner.userdata.last_club_used, self.club)
+
+    def test_viewing_club_page_does_not_record_for_non_member(self):
+        """A non-member viewing a public club page does not get it recorded as their last club used."""
+        self.club.enable_club_page = True
+        self.club.save()
+        self.client.login(username="other2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.other_user.userdata.refresh_from_db()
+        self.assertIsNone(self.other_user.userdata.last_club_used)
+
+    def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
+        self.club.enable_club_page = True
+        self.club.enable_breeder_award_program = True
+        self.club.homepage = "https://example.com"
+        self.club.facebook_page = "https://facebook.com/view-test-club"
+        self.club.discord_invite_link = "https://discord.gg/viewclub"
+        self.club.location = "123 Club St"
+        self.club.latitude = 39.5
+        self.club.longitude = -96.5
+        self.club.save()
+        BapAward.objects.create(club_member=self.owner_member, date=timezone.now().date(), points=4)
+        start = timezone.now() - datetime.timedelta(days=20)
+        end = timezone.now() - datetime.timedelta(days=10)
+        for i in range(11):
+            Auction.objects.create(
+                created_by=self.owner,
+                club=self.club,
+                title=f"Club Auction {i}",
+                date_start=start + datetime.timedelta(days=i),
+                date_end=end + datetime.timedelta(days=i),
+                winning_bid_percent_to_club=25,
+                lot_entry_fee=0,
+                unsold_lot_fee=0,
+                tax=0,
+            )
+        self.client.login(username="club_owner2", password="testpass")
+        response = self.client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "my-points"}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="my-points-tab-btn"')
+        self.assertContains(response, 'id="my-points-chart"')
+        self.assertContains(response, "Membership")
+        self.assertContains(response, "Discord")
+        self.assertContains(response, "Map")
+        self.assertNotContains(response, "View membership details")
+        self.assertContains(response, "Club Auction 10")
+        self.assertNotContains(response, "Club Auction 0")
+
+    def test_club_detail_shows_join_button_for_non_member(self):
+        self.club.enable_club_page = True
+        self.club.homepage = "https://example.com"
+        self.club.facebook_page = "https://facebook.com/view-test-club"
+        self.club.discord_invite_link = "https://discord.gg/viewclub"
+        self.club.save()
+        self.client.login(username="other2", password="testpass")
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Join")
+        self.assertContains(
+            response,
+            '<button type="submit" class="btn btn-sm btn-success">',
+            html=False,
+        )
+        self.assertNotContains(response, 'data-club-panel-toggle="join-panel"')
+        self.assertContains(response, "Website")
+        self.assertContains(response, "Facebook")
+        self.assertContains(response, "Discord")
+
     def test_club_admin_owner_can_access(self):
         """Club owner with admin role can access admin page"""
         self.client.login(username="club_owner2", password="testpass")
@@ -14150,14 +14923,15 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
-    def test_club_edit_shows_membership_email_field_and_js_toggle(self):
+    def test_club_membership_settings_no_longer_shows_contact_email(self):
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Membership email address")
-        self.assertContains(response, "Replies to membership inquiries will be sent to this email")
-        self.assertContains(response, "id_send_membership_expiration_reminders")
+        # contact_email moved to the email settings page; membership settings only
+        # carries pure membership / payment configuration.
+        self.assertNotContains(response, "id_contact_email")
+        self.assertNotContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
         """Club owner with admin permission can view history"""
@@ -14165,6 +14939,117 @@ class ClubViewTests(TestCase):
         url = reverse("club_history", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_club_stats_owner_can_access(self):
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("club_stats", kwargs={"slug": self.club.slug}))
+
+    def test_club_stats_chart_data_uses_checkins_and_membership_growth(self):
+        self.client.login(username="club_owner2", password="testpass")
+        now = timezone.now()
+        normal_auction = Auction.objects.create(
+            title="Normal club auction",
+            date_start=now - datetime.timedelta(days=60),
+            date_end=now - datetime.timedelta(days=59),
+            created_by=self.owner,
+            club=self.club,
+        )
+        normal_location = PickupLocation.objects.create(
+            name="Normal pickup",
+            auction=normal_auction,
+            pickup_time=now + datetime.timedelta(days=1),
+        )
+        normal_tos = AuctionTOS.objects.create(
+            auction=normal_auction, pickup_location=normal_location, name="Normal bidder"
+        )
+        Lot.objects.create(
+            lot_name="Normal lot",
+            auction=normal_auction,
+            auctiontos_seller=normal_tos,
+            quantity=1,
+            winning_price=10,
+        )
+        Invoice.objects.create(auction=normal_auction, auctiontos_user=normal_tos)
+
+        checkin_auction = Auction.objects.create(
+            title="Check-in club auction",
+            date_start=now - datetime.timedelta(days=30),
+            date_end=now - datetime.timedelta(days=29),
+            created_by=self.owner,
+            club=self.club,
+            manage_users_through_club="checkin",
+        )
+        checkin_location = PickupLocation.objects.create(
+            name="Check-in pickup",
+            auction=checkin_auction,
+            pickup_time=now + datetime.timedelta(days=2),
+        )
+        checked_in_tos = AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Checked in bidder",
+            checked_in=now,
+        )
+        AuctionTOS.objects.create(
+            auction=checkin_auction,
+            pickup_location=checkin_location,
+            name="Not checked in bidder",
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 1",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=5,
+        )
+        Lot.objects.create(
+            lot_name="Check-in lot 2",
+            auction=checkin_auction,
+            auctiontos_seller=checked_in_tos,
+            quantity=1,
+            winning_price=15,
+        )
+        # Club stats charts read from cached auction stats, so populate caches for these test auctions.
+        normal_auction.recalculate_stats()
+        checkin_auction.recalculate_stats()
+
+        old_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="Old paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 11))
+        new_paid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New paid member",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        ClubMember.objects.filter(pk=new_paid_member.pk).update(createdon=now - datetime.timedelta(days=20))
+        new_unpaid_member = ClubMember.objects.create(
+            club=self.club,
+            name="New unpaid member",
+            membership_expiration_date=timezone.now().date() - datetime.timedelta(days=1),
+        )
+        ClubMember.objects.filter(pk=new_unpaid_member.pk).update(createdon=now - datetime.timedelta(days=10))
+
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+        auction_chart = response.context["club_auction_stats"]
+        auction_datasets = {dataset["label"]: dataset["data"] for dataset in auction_chart["datasets"]}
+        self.assertEqual(auction_datasets["Gross"], [10.0, 20.0])
+        self.assertEqual(auction_datasets["Lots"], [1, 2])
+        self.assertEqual(auction_datasets["Checked in"], [1, 1])
+
+        membership_chart = response.context["club_membership_growth"]
+        membership_datasets = {dataset["label"]: dataset["data"] for dataset in membership_chart["datasets"]}
+        self.assertEqual(membership_datasets["Members"][0], 1)
+        self.assertEqual(membership_datasets["Paid members"][0], 1)
+        self.assertEqual(membership_datasets["Members"][-1], 4)
+        self.assertEqual(membership_datasets["Paid members"][-1], 2)
 
     def test_club_404_for_invalid_slug(self):
         """Non-existent club slug returns 404"""
@@ -14190,6 +15075,12 @@ class ClubViewTests(TestCase):
     def test_club_history_anonymous_redirects_to_login(self):
         """Anonymous user accessing club_history should be redirected to login"""
         url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_stats_anonymous_redirects_to_login(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
@@ -14225,16 +15116,18 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_club_detail_disabled_returns_404(self):
-        """Non-admin user gets 404 when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Non-admin user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="other2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
     def test_club_detail_disabled_admin_can_view(self):
-        """Club admin can always view the club page even when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Club admin can always view the club page even when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -14253,7 +15146,7 @@ class ClubViewTests(TestCase):
         """Superuser can access all club views"""
         User.objects.create_superuser(username="su_test", password="testpass", email="su@example.com")
         self.client.login(username="su_test", password="testpass")
-        for url_name in ["club_admin", "club_edit", "club_history"]:
+        for url_name in ["club_admin", "club_edit", "club_history", "club_stats"]:
             url = reverse(url_name, kwargs={"slug": self.club.slug})
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
@@ -14291,6 +15184,9 @@ class ClubPermissionTests(TestCase):
         self.edit_club_user = User.objects.create_user(
             username="perm_edit_club", password="testpass", email="perm_edit_club@example.com"
         )
+        self.money_user = User.objects.create_user(
+            username="perm_money", password="testpass", email="perm_money@example.com"
+        )
         self.bap_user = User.objects.create_user(username="perm_bap", password="testpass", email="perm_bap@example.com")
         self.admin_user = User.objects.create_user(
             username="perm_admin", password="testpass", email="perm_admin@example.com"
@@ -14299,6 +15195,7 @@ class ClubPermissionTests(TestCase):
         ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
         ClubMember.objects.create(club=self.club, user=self.export_user, name="Export", permission_export=True)
         ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.money_user, name="Money", permission_money=True)
         ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
         ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
         self.target_member = ClubMember.objects.create(club=self.club, name="Target Member", email="target@example.com")
@@ -14322,6 +15219,12 @@ class ClubPermissionTests(TestCase):
 
     def test_anonymous_redirected_from_club_history(self):
         url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_anonymous_redirected_from_club_stats(self):
+        url = reverse("club_stats", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
@@ -14361,6 +15264,11 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
+    def test_non_member_blocked_from_club_stats(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
     def test_non_member_blocked_from_renew_page(self):
         self._login(self.non_member)
         url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
@@ -14392,6 +15300,11 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
+    def test_non_member_blocked_from_treasurer_report(self):
+        self._login(self.non_member)
+        response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
     # --- permission_view ---
 
     def test_view_only_can_access_admin_panel(self):
@@ -14400,12 +15313,20 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
-    def test_club_admin_search_falls_back_to_deactivated_when_active_empty(self):
+    def test_club_admin_search_hides_deactivated_by_default(self):
+        from .filters import ClubMemberFilter
+
+        ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
+        qs = ClubMember.objects.filter(club=self.club)
+        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        self.assertEqual(filtered.count(), 0)
+
+    def test_club_admin_search_includes_deactivated_when_token_present(self):
         from .filters import ClubMemberFilter
 
         deactivated = ClubMember.objects.create(club=self.club, name="Retired Search Member", is_deleted=True)
         qs = ClubMember.objects.filter(club=self.club)
-        filtered = ClubMemberFilter({"query": "Retired Search"}, queryset=qs).qs
+        filtered = ClubMemberFilter({"query": "Retired Search deactivated"}, queryset=qs).qs
         self.assertEqual(list(filtered.values_list("pk", flat=True)), [deactivated.pk])
 
     def test_club_admin_search_prefers_active_results(self):
@@ -14420,6 +15341,11 @@ class ClubPermissionTests(TestCase):
     def test_view_only_can_access_history(self):
         self._login(self.view_user)
         response = self.client.get(reverse("club_history", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_view_only_can_access_stats(self):
+        self._login(self.view_user)
+        response = self.client.get(reverse("club_stats", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
     def test_view_only_blocked_from_club_edit(self):
@@ -14533,6 +15459,23 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
         self.assertEqual(response.status_code, 403)
 
+    # --- permission_money ---
+
+    def test_money_user_can_access_membership_settings(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_money_user_can_access_treasurer_report(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_money_user_blocked_from_member_list(self):
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
     # --- permission_manage_bap ---
 
     def test_bap_user_can_access_bap_lots(self):
@@ -14575,6 +15518,7 @@ class ClubPermissionTests(TestCase):
             ("club_admin", {"slug": self.club.slug}),
             ("club_edit", {"slug": self.club.slug}),
             ("club_history", {"slug": self.club.slug}),
+            ("club_stats", {"slug": self.club.slug}),
             ("club_membership_settings", {"slug": self.club.slug}),
             ("club_bap_settings", {"slug": self.club.slug}),
             ("club_bap", {"slug": self.club.slug}),
@@ -14603,6 +15547,29 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.target_member.refresh_from_db()
         self.assertEqual(str(self.target_member.membership_expiration_date), "2026-01-15")
+
+    def test_renew_page_records_old_and_new_date_in_history(self):
+        """ClubMemberRenewPageView history entry shows both old and new expiration dates."""
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.target_member.membership_expiration_date = datetime.date(2025, 6, 1)
+        self.target_member.save(update_fields=["membership_expiration_date"])
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        self.client.post(url, {"membership_expiration_date": "2026-06-01"})
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").order_by("-pk").first()
+        self.assertIsNotNone(history)
+        self.assertIn("6/1/2025", history.action)
+        self.assertIn("6/1/2026", history.action)
+
+    def test_renew_page_does_not_create_clubmoney(self):
+        """ClubMemberRenewPageView is a record correction — it must not book a ClubMoney entry."""
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self._login(self.admin_user)
+        url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.target_member.pk})
+        self.client.post(url, {"membership_expiration_date": "2026-06-01"})
+        self.assertFalse(ClubMoney.objects.filter(club=self.club).exists())
 
     def test_renew_page_post_non_member_gets_403(self):
         """Non-member cannot POST to the renew page"""
@@ -14669,6 +15636,9 @@ class ClubMemberUpdateTests(TestCase):
         response = self.client.post(url, {"csv_file": csv_file})
         self.assertEqual(response.status_code, 302)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
+        imported = ClubMember.objects.get(club=self.club, email="newmember@example.com")
+        self.assertFalse(imported.send_welcome_email)
+        self.assertTrue(imported.welcome_email_sent)
 
     def test_csv_import_skips_rows_without_email(self):
         """CSV import skips rows with no email"""
@@ -14763,7 +15733,8 @@ class ClubMemberUpdateTests(TestCase):
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("closeModal", response.content.decode("utf-8"))
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
 
@@ -14930,6 +15901,28 @@ class ClubAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreaterEqual(len(data), 1)
+
+    def test_api_does_not_expose_lat_lng(self):
+        """lat/lng coordinates must never appear in the API response to protect member location privacy."""
+        from rest_framework.authtoken.models import Token  # noqa: PLC0415
+
+        token = Token.objects.create(user=self.owner)
+        ClubMember.objects.create(club=self.club, user=self.owner, permission_view=True)
+        member = ClubMember.objects.create(
+            club=self.club, name="Located Member", email="loc@example.com", lat=40.7128, lng=-74.0060
+        )
+        url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        for record in data:
+            self.assertNotIn("lat", record, "lat must not be exposed in the API for member privacy")
+            self.assertNotIn("lng", record, "lng must not be exposed in the API for member privacy")
+        # distance_to is allowed (rounded) but raw coordinates must be absent
+        detail_url = reverse("api_club_member_detail", kwargs={"slug": self.club.slug, "pk": member.pk})
+        detail = self.client.get(detail_url, HTTP_AUTHORIZATION=f"Token {token.key}").json()
+        self.assertNotIn("lat", detail)
+        self.assertNotIn("lng", detail)
 
 
 class ClubAPIKeyMemberPermissionTests(TestCase):
@@ -15401,12 +16394,13 @@ class ClubBapSettingsViewTests(TestCase):
         response = self.client.post(
             self.url,
             {
-                "enable_breeder_award_program": True,
                 "auto_add_points": True,
                 "points_per_lot": 0,
+                "points_for_custom_checkbox": 0,
                 "min_quantity": 3,
                 "days_between_same_name_lots": 0,
                 "only_active_members_can_participate": False,
+                "only_donation_lots": False,
                 "separate_hap": False,
                 "separate_cap": False,
             },
@@ -15420,12 +16414,13 @@ class ClubBapSettingsViewTests(TestCase):
         self.client.post(
             self.url,
             {
-                "enable_breeder_award_program": True,
                 "auto_add_points": True,
                 "points_per_lot": 0,
+                "points_for_custom_checkbox": 0,
                 "min_quantity": 5,
                 "days_between_same_name_lots": 0,
                 "only_active_members_can_participate": False,
+                "only_donation_lots": False,
                 "separate_hap": False,
                 "separate_cap": False,
             },
@@ -15444,20 +16439,87 @@ class ClubBapSettingsViewTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 403)
 
+    # --- category override save/delete ---
+
+    def test_bap_admin_can_save_category_override(self):
+        category = Category.objects.create(name="Cichlids", bap_points=5)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"category": category.pk, "points": 10})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(club=self.club, category=category, points=10).exists())
+
+    def test_plain_member_cannot_save_category_override(self):
+        category = Category.objects.create(name="Tetras", bap_points=5)
+        self.client.login(username="plain_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"category": category.pk, "points": 10})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClubBapCategoryOverride.objects.filter(club=self.club, category=category).exists())
+
+    def test_bap_admin_can_delete_category_override(self):
+        category = Category.objects.create(name="Barbs", bap_points=5)
+        override = ClubBapCategoryOverride.objects.create(club=self.club, category=category, points=8)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": override.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ClubBapCategoryOverride.objects.filter(pk=override.pk).exists())
+
+    def test_plain_member_cannot_delete_category_override(self):
+        category = Category.objects.create(name="Danios", bap_points=5)
+        override = ClubBapCategoryOverride.objects.create(club=self.club, category=category, points=8)
+        self.client.login(username="plain_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": override.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(pk=override.pk).exists())
+
+    def test_save_override_is_idempotent_upsert(self):
+        """Saving the same category twice updates points rather than creating a duplicate."""
+        category = Category.objects.create(name="Livebearers", bap_points=5)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
+        self.client.post(url, {"category": category.pk, "points": 10})
+        self.client.post(url, {"category": category.pk, "points": 15})
+        self.assertEqual(ClubBapCategoryOverride.objects.filter(club=self.club, category=category).count(), 1)
+        self.assertEqual(ClubBapCategoryOverride.objects.get(club=self.club, category=category).points, 15)
+
+    def test_delete_override_from_other_club_does_nothing(self):
+        """A BAP admin cannot delete an override belonging to a different club."""
+        other_club = Club.objects.create(name="Other Club")
+        category = Category.objects.create(name="Goldfish", bap_points=5)
+        other_override = ClubBapCategoryOverride.objects.create(club=other_club, category=category, points=3)
+        self.client.login(username="bap_user", password="testpass")
+        url = reverse("club_bap_category_override_delete", kwargs={"slug": self.club.slug, "pk": other_override.pk})
+        self.client.post(url)
+        self.assertTrue(ClubBapCategoryOverride.objects.filter(pk=other_override.pk).exists())
+
 
 class ClubSettingsViewTests(TestCase):
     def setUp(self):
         self.editor = User.objects.create_user(
             username="club_settings_editor", password="testpass", email="club_settings_editor@example.com"
         )
+        self.auction_manager = User.objects.create_user(
+            username="club_settings_auction_manager",
+            password="testpass",
+            email="club_settings_auction_manager@example.com",
+        )
         self.plain = User.objects.create_user(
             username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
         )
         self.club = Club.objects.create(name="Settings Club", enable_membership=True)
-        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True, permission_add_edit=True)
+        self.auction_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.auction_manager,
+            permission_manage_auctions=True,
+        )
         ClubMember.objects.create(club=self.club, user=self.plain)
         self.edit_url = reverse("club_edit", kwargs={"slug": self.club.slug})
         self.membership_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        self.email_url = reverse("club_email_settings", kwargs={"slug": self.club.slug})
 
     def test_edit_view_rejects_external_next_redirect(self):
         self.client.login(username="club_settings_editor", password="testpass")
@@ -15467,6 +16529,7 @@ class ClubSettingsViewTests(TestCase):
                 "name": "Updated Settings Club",
                 "homepage": "https://example.com",
                 "facebook_page": "https://facebook.com/settingsclub",
+                "discord_invite_link": "https://discord.gg/settingsclub",
                 "enable_club_page": "on",
                 "allow_joining": "on",
                 "enable_breeder_award_program": "on",
@@ -15479,6 +16542,7 @@ class ClubSettingsViewTests(TestCase):
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": "updated-settings-club"}))
         self.club.refresh_from_db()
         self.assertEqual(self.club.name, "Updated Settings Club")
+        self.assertEqual(self.club.discord_invite_link, "https://discord.gg/settingsclub")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated club settings").exists())
 
     def test_membership_settings_save_updates_fields_and_creates_history(self):
@@ -15486,34 +16550,342 @@ class ClubSettingsViewTests(TestCase):
         response = self.client.post(
             self.membership_url,
             {
-                "contact_email": "membership@example.com",
                 "membership_system": "rolling",
                 "membership_annual_fee": "20.00",
-                "membership_number_mode": "disabled",
-                "payment_user": "",
-                "send_membership_expiration_reminders": "on",
+                # show_member_barcode omitted → False (unchecked checkbox)
             },
         )
         self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
-        self.assertEqual(self.club.contact_email, "membership@example.com")
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
-        self.assertTrue(self.club.send_membership_expiration_reminders)
-        self.assertFalse(self.club.allow_integrated_payments)
+        self.assertFalse(self.club.send_membership_expiration_reminders)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+
+    def test_membership_settings_none_system_forces_zero_fee(self):
+        """Selecting 'No membership fees' zeroes the fee even if one was submitted."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "none",
+                "membership_annual_fee": "20.00",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
+        self.assertEqual(self.club.membership_annual_fee, Decimal(0))
+
+    def test_membership_settings_paid_system_rejects_zero_fee(self):
+        """A paid membership system requires a fee greater than 0."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "rolling",
+                "membership_annual_fee": "0",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(
+            response.context["form"],
+            "membership_annual_fee",
+            [
+                'Enter a fee greater than 0, or choose "No membership fees" above.',
+            ],
+        )
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
         self.client.login(username="club_settings_editor", password="testpass")
-        response = self.client.get(self.membership_url)
+        with override_settings(PAYPAL_CLIENT_ID="test_id", PAYPAL_SECRET="test_secret"):
+            response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Allow integrated payments")
-        self.assertContains(response, "Payments are not enabled for your account.")
+        # The Payments section is always rendered; without a connected account or site PayPal,
+        # the user is prompted to connect.
+        self.assertContains(response, "Payments")
+        self.assertContains(response, "Connect a PayPal account for this club")
 
     def test_plain_member_cannot_access_membership_settings(self):
         self.client.login(username="club_settings_plain", password="testpass")
         response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 403)
+
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=False)
+    def test_email_settings_available_without_ses(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.get(self.email_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Send welcome letter to new club members")
+        self.assertNotContains(response, "forwarding addresses")
+
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
+    def test_email_settings_page_shows_when_using_ses(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.get(self.email_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"{self.club.slug}-auctions@auction.fish")
+        self.assertContains(response, f"{self.club.slug}-contact@auction.fish")
+        self.assertContains(response, "Send expiration reminder 30 days before membership expires")
+
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
+    def test_email_settings_save_updates_fields_and_creates_history(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        editor_member = ClubMember.objects.get(club=self.club, user=self.editor)
+        self.club.membership_annual_fee = Decimal("20.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        payment_user = User.objects.create_user(
+            username="club_settings_payment_user",
+            password="testpass",
+            email="club_settings_payment_user@example.com",
+        )
+        PayPalSeller.objects.create(user=payment_user, club=self.club, paypal_merchant_id="merchant_123")
+        response = self.client.post(
+            self.email_url,
+            {
+                "auction_email_member": str(self.auction_member.pk),
+                "contact_email_member": str(editor_member.pk),
+                "send_welcome_email_to_new_members": "on",
+                "send_membership_expiration_reminders_30_days": "on",
+                "send_membership_expiration_reminders": "on",
+                "send_membership_renewal_confirmation": "on",
+                "welcome_opening": "Welcome to the club!",
+                "welcome_closing": "See you at the next meeting.",
+                "renewal_opening": "Your membership has been renewed!",
+                "renewal_closing": "Thanks for staying with us.",
+                "expiring_soon_opening": "Your membership expires soon.",
+                "expiring_soon_closing": "Renew today to stay connected.",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.auction_email_member, self.auction_member)
+        self.assertEqual(self.club.contact_email_member, editor_member)
+        self.assertTrue(self.club.send_welcome_email_to_new_members)
+        self.assertTrue(self.club.send_membership_expiration_reminders_30_days)
+        self.assertTrue(self.club.send_membership_expiration_reminders)
+        self.assertTrue(self.club.send_membership_renewal_confirmation)
+        self.assertEqual(self.club.welcome_opening, "Welcome to the club!")
+        self.assertEqual(self.club.welcome_closing, "See you at the next meeting.")
+        self.assertEqual(self.club.renewal_opening, "Your membership has been renewed!")
+        self.assertEqual(self.club.renewal_closing, "Thanks for staying with us.")
+        self.assertEqual(self.club.expiring_soon_opening, "Your membership expires soon.")
+        self.assertEqual(self.club.expiring_soon_closing, "Renew today to stay connected.")
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
+
+
+class ClubEmailRoutingTests(TestCase):
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")], SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish"
+    )
+    def test_resolve_routed_recipient_uses_configured_members_and_auction_creator(self):
+        club = Club.objects.create(name="Routing Club")
+        membership_user = User.objects.create_user("membership_route", email="membership@example.com", password="pw")
+        auction_user = User.objects.create_user("auction_route", email="auction@example.com", password="pw")
+        creator = User.objects.create_user("auction_creator", email="creator@example.com", password="pw")
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
+        auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
+        club.contact_email_member = membership_member
+        club.auction_email_member = auction_member
+        club.save(update_fields=["contact_email_member", "auction_email_member"])
+        auction = Auction.objects.create(
+            title="Routing Auction",
+            created_by=creator,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        self.assertEqual(resolve_routed_recipient("info"), "admin@example.com")
+        self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "auction@example.com")
+        self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "membership@example.com")
+        self.assertEqual(resolve_routed_recipient(auction.slug), "creator@example.com")
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")], SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish"
+    )
+    def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
+        """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
+        club = Club.objects.create(name="Fallback Club")
+        # Club exists but no members configured → auctions falls back to site admin, contact is dropped
+        self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
+        self.assertIsNone(resolve_routed_recipient(f"{club.slug}-contact"))
+        # No club with this slug → None (drop)
+        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-auctions"))
+        self.assertIsNone(resolve_routed_recipient("nonexistent-slug-contact"))
+        # Completely unrecognized pattern → None (drop)
+        self.assertIsNone(resolve_routed_recipient("random-unknown-alias"))
+        self.assertIsNone(resolve_routed_recipient("relay"))
+
+
+class InboundEmailRoutingAPITests(TestCase):
+    """Tests for the InboundEmailRoutingView API endpoint."""
+
+    url = "/api/v1/email-routing/resolve/"
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_resolves_info_to_admin(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "admin@example.com")
+        self.assertIn("display_name", response.json())
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_accepts_full_email_address(self):
+        response = self.client.get(self.url, {"address": "info@auction.fish"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "admin@example.com")
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_resolves_club_auction_alias(self):
+        club = Club.objects.create(name="API Routing Club")
+        user = User.objects.create_user("api_route_user", "api_auction@example.com", "pw")
+        member = ClubMember.objects.create(club=club, user=user, permission_manage_auctions=True)
+        club.auction_email_member = member
+        club.save(update_fields=["auction_email_member"])
+        response = self.client.get(self.url, {"address": f"{club.slug}-auctions"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recipient"], "api_auction@example.com")
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_401_for_wrong_secret(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="wrong-secret")
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_401_for_missing_secret(self):
+        response = self.client.get(self.url, {"address": "info"})
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_400_for_missing_address(self):
+        response = self.client.get(self.url, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=False,
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_503_when_routing_disabled(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 503)
+
+    @override_settings(
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="",
+    )
+    def test_returns_401_when_no_secret_configured(self):
+        response = self.client.get(self.url, {"address": "info"}, HTTP_X_ROUTING_SECRET="anything")
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(
+        ADMINS=[("Admin", "admin@example.com")],
+        SES_ROUTE_EMAILS_ENABLED=True,
+        EMAIL_ROUTING_DOMAIN="auction.fish",
+        INBOUND_ROUTING_SECRET="test-secret",
+    )
+    def test_returns_404_for_unknown_alias(self):
+        """Completely unknown aliases should return 404 so the Lambda can drop them."""
+        response = self.client.get(self.url, {"address": "relay"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 404)
+        response = self.client.get(
+            self.url, {"address": "nonexistent-unknown-alias"}, HTTP_X_ROUTING_SECRET="test-secret"
+        )
+        self.assertEqual(response.status_code, 404)
+
+
+class AuctionSlugSanitizationTests(TestCase):
+    """Auction slugs must not end in -auctions or -contact (email routing collision)."""
+
+    def _make_auction(self, title):
+        user = User.objects.create_user(username=f"slug_test_{title[:8]}", password="pw")
+        return Auction.objects.create(
+            title=title,
+            created_by=user,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+    def test_slug_strips_auctions_suffix(self):
+        auction = self._make_auction("Spring Auctions")
+        self.assertFalse(auction.slug.endswith("-auctions"), f"slug was {auction.slug!r}")
+
+    def test_slug_strips_contact_suffix(self):
+        auction = self._make_auction("Club Contact")
+        self.assertFalse(auction.slug.endswith("-contact"), f"slug was {auction.slug!r}")
+
+    def test_slug_unaffected_when_no_reserved_suffix(self):
+        auction = self._make_auction("Spring Auction 2024")
+        self.assertIn("spring", auction.slug)
+
+
+class AuctionEmailSenderTests(StandardTestCase):
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
+    def test_send_tos_notification_uses_auction_slug_sender(self):
+        from auctions.management.commands.auctiontos_notifications import send_tos_notification
+
+        with patch("auctions.management.commands.auctiontos_notifications.mail.send") as mock_send:
+            send_tos_notification("online_auction_welcome", self.online_tos)
+
+        self.assertEqual(mock_send.call_args.kwargs["sender"], f"{self.online_auction.slug}@auction.fish")
+
+
+class ClubEmailSettingsFormTests(TestCase):
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
+    def test_form_limits_choices_by_permission(self):
+        club = Club.objects.create(name="Email Form Club")
+        membership_user = User.objects.create_user(
+            "email_form_membership", email="membership@example.com", password="pw"
+        )
+        auction_user = User.objects.create_user("email_form_auction", email="auction@example.com", password="pw")
+        membership_member = ClubMember.objects.create(club=club, user=membership_user, permission_add_edit=True)
+        auction_member = ClubMember.objects.create(club=club, user=auction_user, permission_manage_auctions=True)
+
+        form = ClubEmailSettingsForm(instance=club)
+
+        self.assertEqual(
+            set(form.fields["auction_email_member"].queryset.values_list("pk", flat=True)), {auction_member.pk}
+        )
+        self.assertEqual(
+            set(form.fields["contact_email_member"].queryset.values_list("pk", flat=True)),
+            {membership_member.pk},
+        )
+
+    def test_expiration_reminder_fields_are_disabled_without_membership_payments(self):
+        club = Club.objects.create(name="No Payments Club", membership_annual_fee=Decimal("20.00"))
+        form = ClubEmailSettingsForm(instance=club)
+
+        self.assertTrue(form.fields["send_membership_expiration_reminders_30_days"].disabled)
+        self.assertTrue(form.fields["send_membership_expiration_reminders"].disabled)
 
 
 class LotBapEligibilityTests(TestCase):
@@ -15526,6 +16898,7 @@ class LotBapEligibilityTests(TestCase):
             enable_breeder_award_program=True,
             auto_add_points=True,
             min_quantity=1,
+            points_per_lot=5,
         )
         self.category = Category.objects.create(name="Livebearers", bap_points=5)
         self.auction = Auction.objects.create(
@@ -15615,9 +16988,35 @@ class LotBapEligibilityTests(TestCase):
         )
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
+    def test_same_name_rule_uses_prior_lot_user_email(self):
+        self.club.days_between_same_name_lots = 30
+        self.club.save(update_fields=["days_between_same_name_lots"])
+        prior_user = User.objects.create_user(username="other_email_match", password="testpass", email=self.user.email)
+        prior_tos = AuctionTOS.objects.create(user=prior_user, auction=self.auction, pickup_location=self.location)
+        prior_tos.email = "different@example.com"
+        prior_tos.save(update_fields=["email"])
+        self._make_lot(
+            lot_name="Repeat Name",
+            user=prior_user,
+            auctiontos_seller=prior_tos,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(
+            lot_name="Repeat Name",
+            date_end=timezone.now(),
+        )
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
     def test_sold_lot_no_bap_reason_not_sold(self):
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
         lot = self._make_lot(winning_price=None, auctiontos_winner=None)
         self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_sold_lot_no_bap_reason_unsold_eligible_when_only_sold_lots_off(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertIsNone(lot.sold_lot_no_bap_reason)
 
     def test_auto_award_bap_points_awards_category_points(self):
         lot = self._make_lot()
@@ -15667,6 +17066,164 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(sold_ineligible.bap_auto_reason, "not_bred")
         self.assertEqual(unsold.bap_auto_reason, "")
 
+    def test_not_donation_when_only_donation_lots_required(self):
+        self.club.only_donation_lots = True
+        self.club.save()
+        lot = self._make_lot(donation=False)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_donation")
+
+    def test_donation_lot_passes_only_donation_check(self):
+        self.club.only_donation_lots = True
+        self.club.save()
+        lot = self._make_lot(donation=True)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_live_food_cultures_ineligible_when_cap_disabled(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = False
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "category_not_eligible")
+
+    def test_live_food_cultures_eligible_when_cap_enabled(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = True
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_hap_category_bypasses_min_quantity(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=5)
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat, quantity=1)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_snails_bypass_min_quantity(self):
+        snail_cat = Category.objects.create(name="Snails and other inverts", bap_points=5)
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(species_category=snail_cat, quantity=1)
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_not_active_member_when_membership_expired(self):
+        self.club.only_active_members_can_participate = True
+        self.club.save()
+        self.member.membership_expiration_date = timezone.now().date() - datetime.timedelta(days=1)
+        self.member.save()
+        lot = self._make_lot()
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_active_member")
+
+    def test_active_member_passes_membership_check(self):
+        self.club.only_active_members_can_participate = True
+        self.club.save()
+        self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=30)
+        self.member.save()
+        lot = self._make_lot()
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_bap_placeholder_returns_hap_for_aquatic_plants(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=5)
+        self.club.separate_hap = True
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat)
+        self.assertEqual(lot.bap_placeholder, "HAP")
+
+    def test_bap_placeholder_returns_culture_for_live_food(self):
+        culture_cat = Category.objects.create(name="Live food cultures", bap_points=5)
+        self.club.separate_cap = True
+        self.club.save()
+        lot = self._make_lot(species_category=culture_cat)
+        self.assertEqual(lot.bap_placeholder, "Culture")
+
+    def test_bap_placeholder_returns_bap_by_default(self):
+        lot = self._make_lot()
+        self.assertEqual(lot.bap_placeholder, "BAP")
+
+    def test_auto_award_uses_category_override_points(self):
+        ClubBapCategoryOverride.objects.create(club=self.club, category=self.category, points=20)
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 20)
+
+    def test_auto_award_adds_bonus_points_when_custom_checkbox_set(self):
+        self.club.points_for_custom_checkbox = 3
+        self.club.save()
+        lot = self._make_lot(custom_checkbox=True)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points + 3)
+
+    def test_auto_award_no_bonus_when_custom_checkbox_not_set(self):
+        self.club.points_for_custom_checkbox = 3
+        self.club.save()
+        lot = self._make_lot(custom_checkbox=False)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+
+    def test_auto_award_skipped_when_award_already_exists(self):
+        lot = self._make_lot()
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), lot=lot, points=99)
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 0)
+
+    def test_auto_award_no_award_created_when_manual_approval_required(self):
+        self.club.auto_add_points = False
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertFalse(BapAward.objects.filter(lot=lot).exists())
+        self.assertEqual(lot.bap_auto_reason, "")
+
+    def test_auto_award_routes_hap_points_for_plant_category(self):
+        plant_cat = Category.objects.create(name="Aquatic plants", bap_points=7)
+        self.club.separate_hap = True
+        self.club.points_per_lot = 7
+        self.club.save()
+        lot = self._make_lot(species_category=plant_cat)
+        lot.auto_award_bap_points()
+        award = BapAward.objects.get(lot=lot)
+        self.assertEqual(award.hap_points, 7)
+        self.assertEqual(award.points, 0)
+        self.assertEqual(award.cap_points, 0)
+
+
+class BapAwardRecalculateTests(TestCase):
+    """Tests for BapAward.recalculate_member_points and its save/delete hooks."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="recalc_user", password="testpass", email="recalc@example.com")
+        self.club = Club.objects.create(name="Recalc Club", enable_breeder_award_program=True)
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+
+    def test_save_updates_member_bap_points(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 10)
+
+    def test_delete_resets_member_bap_points(self):
+        award = BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        award.delete()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 0)
+
+    def test_ytd_points_counted_for_current_year_only(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=5)
+        BapAward.objects.create(club_member=self.member, date=datetime.date(2019, 1, 1), points=3)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.bap_points, 8)
+        self.assertEqual(self.member.bap_points_ytd, 5)
+
+    def test_hap_points_tracked_separately_from_bap(self):
+        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=0, hap_points=4)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.hap_points, 4)
+        self.assertEqual(self.member.bap_points, 0)
+
 
 class BapBackfillMigrationTests(TestCase):
     def test_0273_migration_has_no_operations(self):
@@ -15691,6 +17248,104 @@ class ClubBapLotsViewTests(TestCase):
             username="bap_lots_plain", password="testpass", email="bap_lots_plain@example.com"
         )
         ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.seller_user = User.objects.create_user(
+            username="mike_seller",
+            password="testpass",
+            email="mike@example.com",
+            first_name="Mike",
+            last_name="Smith",
+        )
+        self.buyer_user = User.objects.create_user(username="bap_lots_buyer", password="testpass")
+        self.seller_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.seller_user,
+            name="Mike Smith",
+            email="mike@example.com",
+        )
+        self.category = Category.objects.create(name="Foo Bar", bap_points=5)
+        self.other_category = Category.objects.create(name="Egglayers", bap_points=4)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            club=self.club,
+            title="Spring Auction",
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            tax=0,
+        )
+        self.other_auction = Auction.objects.create(
+            created_by=self.owner,
+            club=self.club,
+            title="Summer Auction",
+            date_start=timezone.now() - datetime.timedelta(days=6),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="Club Hall",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        other_location = PickupLocation.objects.create(
+            name="Club Hall 2",
+            auction=self.other_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=2),
+        )
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller_user, auction=self.auction, pickup_location=location
+        )
+        self.other_seller_tos = AuctionTOS.objects.create(
+            user=self.seller_user, auction=self.other_auction, pickup_location=other_location
+        )
+        self.buyer_tos = AuctionTOS.objects.create(user=self.buyer_user, auction=self.auction, pickup_location=location)
+        self.other_buyer_tos = AuctionTOS.objects.create(
+            user=self.buyer_user, auction=self.other_auction, pickup_location=other_location
+        )
+        self.pending_lot = Lot.objects.create(
+            lot_name="Pending Foo Lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            auctiontos_winner=self.buyer_tos,
+            active=False,
+            winning_price=Decimal("12.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.category,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.approved_lot = Lot.objects.create(
+            lot_name="Approved Egg Lot",
+            auction=self.other_auction,
+            auctiontos_seller=self.other_seller_tos,
+            auctiontos_winner=self.other_buyer_tos,
+            active=False,
+            winning_price=Decimal("15.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.other_category,
+            date_end=timezone.now() - datetime.timedelta(days=2),
+        )
+        self.rejected_lot = Lot.objects.create(
+            lot_name="Rejected Lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            auctiontos_winner=self.buyer_tos,
+            active=False,
+            winning_price=Decimal("10.00"),
+            quantity=1,
+            i_bred_this_fish=True,
+            species_category=self.other_category,
+            manually_approved=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        BapAward.objects.create(
+            club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5
+        )
         self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
 
     def test_anon_redirected_to_login(self):
@@ -15720,17 +17375,45 @@ class ClubBapLotsViewTests(TestCase):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url, {"query": "pending"})
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
 
     def test_query_approved_filter(self):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url, {"query": "approved"})
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Approved Egg Lot")
+        self.assertNotContains(response, "Pending Foo Lot")
 
     def test_default_shows_pending_without_query(self):
         """No query param should still return 200 (defaults to pending filter)."""
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
+
+    def test_query_supports_user_category_and_auction_keywords(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(
+            self.url, {"query": 'pending user:"Mike Smith" category:"Foo Bar" auction:spring-auction'}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertNotContains(response, "Approved Egg Lot")
+        self.assertNotContains(response, "Rejected Lot")
+
+    def test_category_badge_modal_updates_lot_category(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        url = reverse("club_bap_lot_category", kwargs={"pk": self.pending_lot.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Set category")
+        response = self.client.post(url, {"species_category": self.other_category.pk})
+        self.assertEqual(response.status_code, 200)
+        self.pending_lot.refresh_from_db()
+        self.assertEqual(self.pending_lot.species_category, self.other_category)
+        self.assertContains(response, "bapLotListChanged")
 
 
 class ClubAPIKeyModelTests(TestCase):
@@ -16121,6 +17804,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export": False,
             "permission_add_edit": False,
             "permission_edit_club": False,
+            "permission_money": False,
             "permission_manage_auctions": False,
             "permission_manage_bap": False,
         }
@@ -16136,6 +17820,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -16149,6 +17834,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -16161,6 +17847,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]
@@ -16192,6 +17879,7 @@ class ClubPermissionWildcardTests(TestCase):
             "permission_export",
             "permission_add_edit",
             "permission_edit_club",
+            "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
         ]:
@@ -16264,6 +17952,118 @@ class ClubPermissionsDialogTests(TestCase):
         self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
 
 
+class ClubMemberDiscordAdminViewTests(TestCase):
+    """Tests for ClubMemberDiscordAdminView — permission gating and basic functionality."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Discord Test Club", discord_server_id="111222333")
+        self.admin_user = User.objects.create_user(
+            username="discord_admin", password="testpass", email="discord_admin@example.com"
+        )
+        self.edit_club_user = User.objects.create_user(
+            username="discord_editclub", password="testpass", email="discord_editclub@example.com"
+        )
+        self.add_edit_user = User.objects.create_user(
+            username="discord_addedit", password="testpass", email="discord_addedit@example.com"
+        )
+        self.view_user = User.objects.create_user(
+            username="discord_view", password="testpass", email="discord_view@example.com"
+        )
+        self.non_member = User.objects.create_user(
+            username="discord_nonmember", password="testpass", email="discord_nonmember@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.admin_user, name="Admin", permission_admin=True)
+        ClubMember.objects.create(club=self.club, user=self.edit_club_user, name="EditClub", permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.add_edit_user, name="AddEdit", permission_add_edit=True)
+        ClubMember.objects.create(club=self.club, user=self.view_user, name="View", permission_view=True)
+        self.target_member = ClubMember.objects.create(
+            club=self.club, name="Target", email="target_discord@example.com"
+        )
+        self.url = reverse("clubmember_discord", kwargs={"pk": self.target_member.pk})
+
+    # --- Access control ---
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_non_member_gets_403(self):
+        self.client.login(username="discord_nonmember", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_view_only_gets_403(self):
+        self.client.login(username="discord_view", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_edit_gets_403(self):
+        self.client.login(username="discord_addedit", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_permission_edit_club_can_access(self):
+        self.client.login(username="discord_editclub", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_permission_admin_can_access(self):
+        self.client.login(username="discord_admin", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_cross_club_user_gets_403(self):
+        other_club = Club.objects.create(name="Other Club")
+        other_admin = User.objects.create_user(
+            username="discord_other_admin", password="testpass", email="discord_other_admin@example.com"
+        )
+        ClubMember.objects.create(club=other_club, user=other_admin, name="OtherAdmin", permission_admin=True)
+        self.client.login(username="discord_other_admin", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    # --- POST saves discord_id ---
+
+    def test_admin_can_set_discord_id(self):
+        self.client.login(username="discord_admin", password="testpass")
+        response = self.client.post(
+            self.url,
+            {
+                "discord_id": "987654321098765432",
+                "discord_role_auto_managed": "on",
+            },
+        )
+        self.assertIn(response.status_code, [200, 302])
+        self.target_member.refresh_from_db()
+        self.assertEqual(self.target_member.discord_id, "987654321098765432")
+
+    def test_admin_can_clear_discord_id(self):
+        self.target_member.discord_id = "999888777666555444"
+        self.target_member.save()
+        self.client.login(username="discord_admin", password="testpass")
+        self.client.post(
+            self.url,
+            {
+                "discord_id": "",
+                "discord_role_auto_managed": "on",
+            },
+        )
+        self.target_member.refresh_from_db()
+        self.assertIsNone(self.target_member.discord_id)
+
+    def test_save_creates_club_history(self):
+        self.client.login(username="discord_admin", password="testpass")
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self.client.post(self.url, {"discord_id": "111222333444555666", "discord_role_auto_managed": "on"})
+        self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
+
+    def test_view_only_post_gets_403(self):
+        self.client.login(username="discord_view", password="testpass")
+        response = self.client.post(self.url, {"discord_id": "123"})
+        self.assertEqual(response.status_code, 403)
+
+
 class ClubMemberManagementViewTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(name="Managed Club", enable_membership=True)
@@ -16309,6 +18109,7 @@ class ClubMemberManagementViewTests(TestCase):
                 "phone_number": "",
                 "address": "",
                 "contact_status": "contact",
+                "send_welcome_email": "on",
                 "discord_role_auto_managed": "on",
                 "discord_role_override": "",
             },
@@ -16317,8 +18118,28 @@ class ClubMemberManagementViewTests(TestCase):
         created = ClubMember.objects.get(club=self.club, email="newmember@example.com")
         self.assertEqual(created.source, "manually_added")
         self.assertEqual(created.added_by, self.editor_user)
-        self.assertIn("location.reload", response.content.decode("utf-8"))
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("reload-page", body)
+        self.assertTrue(created.send_welcome_email)
+        self.assertFalse(created.welcome_email_sent)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
+
+    def test_unsent_welcome_checkbox_shows_on_member_edit_modal(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.target_member.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "id_send_welcome_email")
+
+    def test_sent_welcome_checkbox_hidden_on_member_edit_modal(self):
+        self.target_member.welcome_email_sent = True
+        self.target_member.save(update_fields=["welcome_email_sent"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.target_member.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'type="checkbox" name="send_welcome_email"')
 
     def test_viewer_cannot_create_member(self):
         self.client.login(username="club_viewer", password="testpass")
@@ -16358,6 +18179,13 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertTrue(
             ClubHistory.objects.filter(club=self.club, action__contains="Renewed membership for Source Member").exists()
         )
+
+    @patch("auctions.models.ClubMember.maybe_assign_discord_role")
+    def test_renew_endpoint_defers_discord_role_sync_to_daily_job(self, maybe_assign):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 200)
+        maybe_assign.assert_not_called()
 
     def test_renew_rolling_extends_from_current_expiration_if_future(self):
         """Rolling: if current expiration is in future, extend from that date."""
@@ -16441,7 +18269,10 @@ class ClubMemberManagementViewTests(TestCase):
     def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_delete", kwargs={"pk": self.source_member.pk}))
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8")
+        self.assertIn("closeModal", body)
+        self.assertIn("clubMemberListChanged", response.get("HX-Trigger", ""))
         self.source_member.refresh_from_db()
         self.assertTrue(self.source_member.is_deleted)
         self.assertTrue(
@@ -16548,10 +18379,8 @@ class ClubMembershipInvoiceTests(TestCase):
         self.club = Club.objects.create(
             name="Pay Club",
             enable_club_page=True,
-            allow_integrated_payments=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
-            payment_user=self.payment_user,
         )
         self.club_member = ClubMember.objects.create(
             club=self.club,
@@ -16572,6 +18401,10 @@ class ClubMembershipInvoiceTests(TestCase):
 
     def test_currency_uses_payment_user_currency(self):
         invoice = self._make_club_invoice()
+        # When no seller is linked, the invoice currency falls back to USD.
+        self.assertEqual(invoice.currency, "USD")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
+        invoice = self._make_club_invoice()
         self.assertEqual(invoice.currency, self.payment_user.userdata.currency)
 
     def test_membership_fee_amount_from_club(self):
@@ -16588,28 +18421,30 @@ class ClubMembershipInvoiceTests(TestCase):
 
     def test_show_paypal_button_true_for_trusted_paypal_user(self):
         invoice = self._make_club_invoice()
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.assertTrue(invoice.show_paypal_button)
 
     def test_show_paypal_button_false_for_untrusted_payment_user(self):
         self.payment_user.userdata.is_trusted = False
         self.payment_user.userdata.save()
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         invoice = self._make_club_invoice()
         self.assertFalse(invoice.show_paypal_button)
 
-    def test_show_paypal_button_true_for_superuser_payment_user(self):
-        self.payment_user.is_superuser = True
-        self.payment_user.save()
+    def test_show_paypal_button_true_when_use_site_paypal_account(self):
+        # Equivalent to the old "superuser payment_user" behaviour: site PayPal is used.
+        self.club.use_site_paypal_account = True
+        self.club.save()
         invoice = self._make_club_invoice()
         self.assertTrue(invoice.show_paypal_button)
 
     def test_show_paypal_button_false_when_already_paid(self):
         invoice = self._make_club_invoice(status="PAID")
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.assertFalse(invoice.show_paypal_button)
 
     def test_show_payment_button_true_when_paypal_available(self):
-        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         invoice = self._make_club_invoice()
         self.assertTrue(invoice.show_payment_button)
 
@@ -16670,32 +18505,71 @@ class ClubMembershipInvoiceTests(TestCase):
         _process_invoice_membership_renewal(invoice, payment_method="PayPal")
         self.assertIsNone(self.club_member.membership_last_paid)
 
+    def test_process_renewal_via_club_member_link_no_user(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        member_no_user = ClubMember.objects.create(
+            club=self.club,
+            user=None,
+            name="Bob Import",
+            email="bob@example.com",
+        )
+        invoice = Invoice.objects.create(
+            club=self.club,
+            club_member=member_no_user,
+            buyer=None,
+            status="UNPAID",
+            renewal_needed=True,
+        )
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        member_no_user.refresh_from_db()
+        self.assertIsNotNone(member_no_user.membership_last_paid)
+        self.assertIsNotNone(member_no_user.membership_expiration_date)
+        invoice.refresh_from_db()
+        self.assertTrue(invoice.renewal_processed)
+
     # -- ClubMembershipPaymentView ---------------------------------------------
 
     def test_payment_view_404_when_not_configured(self):
-        self.club.allow_integrated_payments = False
-        self.club.save()
+        # No PayPalSeller, no SquareSeller, no use_site_paypal_account => not configured.
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 404)
 
     def test_payment_view_requires_login(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 302)
 
     def test_payment_view_accessible_for_member(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "30")
 
     def test_payment_view_creates_unpaid_invoice(self):
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
         self.client.login(username="club_member_u", password="testpass")
         self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertTrue(
             Invoice.objects.filter(
                 club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True
             ).exists()
+        )
+
+    def test_payment_view_redirects_member_not_due_to_card(self):
+        """A member whose dues are current is bounced back to their membership card."""
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
+        self.club_member.membership_last_paid = timezone.now().date()
+        self.club_member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=200)
+        self.club_member.save()
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertRedirects(
+            response,
+            reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.club_member.uuid}),
+            fetch_redirect_response=False,
         )
 
     # -- CreatePayPalOrderView redirects for club invoices ---------------------
@@ -16712,6 +18586,29 @@ class ClubMembershipInvoiceTests(TestCase):
             fetch_redirect_response=False,
         )
 
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y", SQUARE_APPLICATION_ID="sq", SQUARE_CLIENT_SECRET="sc")
+    def test_paypal_order_view_blocked_when_only_square_configured(self):
+        """show_payment_button=True (Square) but show_paypal_button=False should still block the PayPal endpoint."""
+        # Give the club a Square seller but no PayPal seller.
+        self.payment_user.userdata.square_enabled = True
+        self.payment_user.userdata.save()
+        SquareSeller.objects.create(user=self.payment_user, club=self.club, square_merchant_id="sq_merchant_only")
+        invoice = self._make_club_invoice()
+        # show_payment_button is True because Square is available.
+        self.assertTrue(invoice.show_payment_button)
+        # show_paypal_button must be False (no PayPal seller, not using site PayPal).
+        self.assertFalse(invoice.show_paypal_button)
+
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("create_paypal_order", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.post(url)
+        # Should redirect back to club payment page, not proceed to PayPal.
+        self.assertRedirects(
+            response,
+            reverse("club_membership_pay", kwargs={"slug": self.club.slug}),
+            fetch_redirect_response=False,
+        )
+
     def test_invoice_no_login_view_accessible_for_club_invoice(self):
         """Visiting a club invoice via no-login link should not crash (no auctiontos_user, no auction)."""
         invoice = self._make_club_invoice()
@@ -16721,45 +18618,1021 @@ class ClubMembershipInvoiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class ClubMembershipSettingsFormPaymentUserTests(TestCase):
-    """Confirm that the payment_user dropdown only includes members with admin or edit_club permission."""
+class ClubMembershipSettingsFormFieldsTests(TestCase):
+    """The form no longer exposes payment_user or allow_integrated_payments —
+    those are managed via the per-provider seller links (PayPalSeller.club /
+    SquareSeller.club) and Club.use_site_paypal_account in the Django admin.
+    """
 
     def setUp(self):
-        from .models import SquareSeller
-
         self.club = Club.objects.create(name="Test Club", enable_membership=True)
 
-        # Helper to create a User + ClubMember with specified permissions
-        def _make_member(username, **perms):
-            user = User.objects.create_user(username=username, password="pw")
-            ClubMember.objects.create(club=self.club, user=user, **perms)
-            return user
-
-        self.admin_user = _make_member("admin_u", permission_admin=True)
-        self.edit_club_user = _make_member("edit_club_u", permission_edit_club=True)
-        self.manage_auctions_user = _make_member("manage_auctions_u", permission_manage_auctions=True)
-        self.plain_member = _make_member("plain_u")
-
-        # Give each user a Square account so they are payment-eligible
-        for user in [self.admin_user, self.edit_club_user, self.manage_auctions_user, self.plain_member]:
-            SquareSeller.objects.create(user=user, square_merchant_id=f"merchant_{user.pk}")
-
-    def _get_payment_user_ids(self):
+    def test_payment_user_not_in_form(self):
         form = ClubMembershipSettingsForm(instance=self.club)
-        return set(form.fields["payment_user"].queryset.values_list("id", flat=True))
+        self.assertNotIn("payment_user", form.fields)
 
-    def test_admin_user_included(self):
-        self.assertIn(self.admin_user.pk, self._get_payment_user_ids())
+    def test_allow_integrated_payments_not_in_form(self):
+        form = ClubMembershipSettingsForm(instance=self.club)
+        self.assertNotIn("allow_integrated_payments", form.fields)
 
-    def test_edit_club_user_included(self):
-        self.assertIn(self.edit_club_user.pk, self._get_payment_user_ids())
 
-    def test_manage_auctions_only_user_excluded(self):
-        """A member with only permission_manage_auctions should not appear in the payment_user choices."""
-        self.assertNotIn(self.manage_auctions_user.pk, self._get_payment_user_ids())
+class PaymentSellerClubLinkTests(TestCase):
+    """Behavioural tests for the new PayPalSeller.club / SquareSeller.club routing."""
 
-    def test_plain_member_excluded(self):
-        self.assertNotIn(self.plain_member.pk, self._get_payment_user_ids())
+    def setUp(self):
+        self.creator = User.objects.create_user(username="creator", password="pw", email="creator@example.com")
+        self.creator.userdata.is_trusted = True
+        self.creator.userdata.paypal_enabled = True
+        self.creator.userdata.save()
+
+        self.club_payer = User.objects.create_user(username="cpayer", password="pw", email="cpayer@example.com")
+        self.club_payer.userdata.is_trusted = True
+        self.club_payer.userdata.paypal_enabled = True
+        self.club_payer.userdata.save()
+
+        self.club = Club.objects.create(name="Routing Club")
+
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y")
+    def test_club_paypal_seller_takes_precedence_over_creator(self):
+        """A club auction routes through the club's PayPalSeller, not the auction creator's."""
+        PayPalSeller.objects.create(user=self.creator, paypal_merchant_id="creator_id")
+        PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="club_id")
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Club Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.assertEqual(auction.paypal_information, "club_id")
+
+    @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y")
+    def test_use_site_paypal_account_returns_admin(self):
+        """When the club is flagged for site PayPal, paypal_information is the 'admin' sentinel."""
+        self.club.use_site_paypal_account = True
+        self.club.save()
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Site PayPal Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.assertEqual(auction.paypal_information, "admin")
+
+    def test_link_existing_seller_via_view(self):
+        """POSTing to club_link_payment_account attaches the user's seller to the club."""
+        admin_member = ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        self.assertIsNotNone(admin_member)
+        seller = PayPalSeller.objects.create(user=self.club_payer, paypal_merchant_id="cp_id")
+        self.client.login(username="cpayer", password="pw")
+        url = reverse("club_link_payment_account", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"provider": "paypal", "action": "attach"})
+        self.assertEqual(response.status_code, 302)
+        seller.refresh_from_db()
+        self.assertEqual(seller.club_id, self.club.pk)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+    def test_detach_seller_via_view(self):
+        ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="cp_id")
+        self.client.login(username="cpayer", password="pw")
+        url = reverse("club_link_payment_account", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"provider": "paypal", "action": "detach"})
+        self.assertEqual(response.status_code, 302)
+        seller = PayPalSeller.objects.get(user=self.club_payer)
+        self.assertIsNone(seller.club_id)
+
+    def test_disconnecting_seller_flips_club_auction_payments(self):
+        ClubMember.objects.create(club=self.club, user=self.club_payer, permission_admin=True)
+        seller = PayPalSeller.objects.create(user=self.club_payer, club=self.club, paypal_merchant_id="cp_id")
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            club=self.club,
+            title="Disconnect Test Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+            enable_online_payments=True,
+        )
+        seller.delete()
+        auction.refresh_from_db()
+        self.assertFalse(auction.enable_online_payments)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+
+class NonOAuthPayPalTests(TestCase):
+    """Club-supplied (non-OAuth) PayPal credentials.
+
+    When an admin sets ``Club.allow_non_oauth_paypal``, the club enters its own PayPal REST
+    API client ID/secret and they're used exactly like the site's PAYPAL_CLIENT_ID/SECRET:
+    payments go straight to that PayPal account with no payee override or platform fee.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.member_user = User.objects.create_user(username="nonoauth_member", password="pw", email="m@example.com")
+        self.money_user = User.objects.create_user(username="nonoauth_money", password="pw", email="money@example.com")
+        self.club = Club.objects.create(
+            name="BYO PayPal Club",
+            enable_club_page=True,
+            enable_membership=True,
+            membership_annual_fee=Decimal("30.00"),
+            membership_system="rolling",
+        )
+        ClubMember.objects.create(club=self.club, user=self.member_user, name="M", email="m@example.com")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+
+    def _enable_credentials(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "club-client-id"
+        self.club.paypal_secret = "club-secret"
+        self.club.save()
+
+    def _make_club_invoice(self):
+        return Invoice.objects.create(club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True)
+
+    # -- model properties ------------------------------------------------------
+
+    def test_uses_own_credentials_requires_flag_and_both_values(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)  # flag still off
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertEqual(self.club.paypal_credentials, ("c", "s"))
+
+    def test_uses_own_credentials_false_when_value_missing(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = ""
+        self.club.save()
+        self.assertFalse(self.club.uses_own_paypal_credentials)
+        self.assertIsNone(self.club.paypal_credentials)
+
+    def test_can_accept_paypal_via_own_credentials(self):
+        self.assertFalse(self.club.can_accept_paypal)
+        self._enable_credentials()
+        self.assertTrue(self.club.can_accept_paypal)
+
+    # -- invoice credential resolution + buttons -------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_membership_invoice_button_without_site_keys(self):
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertTrue(invoice.show_payment_button)
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_SECRET="")
+    def test_no_button_when_flag_off(self):
+        self.club.paypal_client_id = "c"
+        self.club.paypal_secret = "s"  # flag still off => credentials not active
+        self.club.save()
+        invoice = self._make_club_invoice()
+        self.assertIsNone(invoice.paypal_credentials)
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_auction_invoice_resolves_club_credentials_with_no_payee(self):
+        self._enable_credentials()
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        invoice = Invoice(auction=auction)
+        self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
+        # No linked seller and not the site account => no payee merchant id, so the money
+        # goes straight to the club's own PayPal account (same as the site keys do).
+        self.assertIsNone(auction.paypal_information)
+
+    # -- mixin auth resolution -------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_paypal_auth_prefers_club_credentials(self):
+        from auctions.views import PayPalAPIMixin
+
+        mixin = PayPalAPIMixin()
+        self.assertEqual(mixin._paypal_auth(), ("site-id", "site-secret"))
+        mixin.club_paypal_credentials = ("club-client-id", "club-secret")
+        self.assertEqual(mixin._paypal_auth(), ("club-client-id", "club-secret"))
+
+    # -- credentials view ------------------------------------------------------
+
+    def test_credentials_view_requires_flag(self):
+        self.client.login(username="nonoauth_money", password="pw")  # has permission_money
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_requires_permission(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_member", password="pw")  # no money permission
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "x", "paypal_secret": "y"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_credentials_view_saves(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "abc", "paypal_secret": "shh"})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "abc")
+        self.assertEqual(self.club.paypal_secret, "shh")
+        self.assertTrue(self.club.uses_own_paypal_credentials)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="SETTINGS").exists())
+
+    def test_credentials_view_blank_secret_keeps_existing(self):
+        self._enable_credentials()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_paypal_credentials", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"paypal_client_id": "new-client", "paypal_secret": ""})
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_client_id, "new-client")
+        self.assertEqual(self.club.paypal_secret, "club-secret")  # secret unchanged
+
+    # -- settings page UI ------------------------------------------------------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_hides_oauth_shows_credentials_form(self):
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertNotIn("Connect a PayPal account for this club", content)
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_settings_page_shows_oauth_when_flag_off(self):
+        self.client.login(username="nonoauth_money", password="pw")
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn(reverse("club_paypal_credentials", kwargs={"slug": self.club.slug}), content)
+        self.assertIn("Connect a PayPal account for this club", content)
+
+    # -- refunds (forced manual for non-OAuth clubs) ---------------------------
+
+    def test_refund_invoice_refuses_for_non_oauth_club(self):
+        from auctions.views import PayPalAPIMixin
+
+        self._enable_credentials()
+        invoice = self._make_club_invoice()
+        mixin = PayPalAPIMixin()
+        # Returns a manual-refund message and never touches the PayPal API (no webhook
+        # means an automated refund would go unrecorded).
+        result = mixin.refund_invoice(invoice, Decimal("5.00"))
+        self.assertIn("manually", result.lower())
+
+    # -- in-person quick checkout (PayPal QR disabled for non-OAuth) -----------
+
+    @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
+    def test_quick_checkout_suppresses_paypal_qr_for_non_oauth_club(self):
+        self._enable_credentials()
+        admin = User.objects.create_user(username="nonoauth_admin", password="pw", email="a@example.com")
+        ClubMember.objects.create(club=self.club, user=admin, permission_admin=True)
+        auction = Auction.objects.create(
+            created_by=admin,
+            club=self.club,
+            title="In-person BYO Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        seller_tos = AuctionTOS.objects.create(
+            user=admin, auction=auction, pickup_location=location, bidder_number="100", is_admin=True
+        )
+        buyer_tos = AuctionTOS.objects.create(
+            user=self.member_user, auction=auction, pickup_location=location, bidder_number="777"
+        )
+        Lot.objects.create(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            auctiontos_winner=buyer_tos,
+            winning_price=10,
+            quantity=1,
+            active=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer_tos)
+        # The button itself is available and the club's own credentials resolve -- so the QR is
+        # suppressed by the non-OAuth gate, not because PayPal is unavailable.
+        self.assertTrue(invoice.show_paypal_button)
+        self.assertIsNotNone(invoice.paypal_credentials)
+
+        self.client.force_login(admin)
+        url = reverse("auction_quick_checkout_htmx", kwargs={"slug": auction.slug, "filter": "777"})
+        content = self.client.get(url).content.decode()
+        self.assertNotIn("Scan this code to pay with PayPal", content)
+
+    # -- PayPal bulk-invoice CSV export disabled when PayPal payments are live --
+
+    def test_paypal_payments_enabled_for_non_oauth_club_auction(self):
+        auction = Auction.objects.create(
+            created_by=self.money_user,
+            club=self.club,
+            title="CSV Gate Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            enable_online_payments=False,  # club config supersedes this for club auctions
+        )
+        # Off by default => the per-auction flag (False) decides, so the CSV export stays available.
+        self.assertFalse(auction.paypal_payments_enabled)
+        # Turning on non-OAuth PayPal means buyers can pay directly => hide the manual CSV export.
+        self._enable_credentials()
+        auction.refresh_from_db()
+        self.assertTrue(auction.paypal_payments_enabled)
+
+
+class ClubMoneyInvoiceHistoryTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Ledger Club", enable_membership=True, membership_annual_fee=Decimal("15.00")
+        )
+        self.online_auction.club = self.club
+        self.online_auction.save(update_fields=["club"])
+        ClubMoney.objects.all().delete()
+
+    def test_marking_seller_invoice_paid_books_payout_not_receivables(self):
+        # self.invoice's user sold lots, so paying it books a seller payout. The old
+        # receivable/profit categories are gone (commission is computed, not stored).
+        self.invoice.status = "PAID"
+        self.invoice.save(update_fields=["status"])
+        categories = set(ClubMoney.objects.filter(invoice=self.invoice).values_list("category", flat=True))
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT, categories)
+        self.assertNotIn("unpaid_invoices", categories)
+        self.assertNotIn("auction_profit", categories)
+
+    def test_paid_unpaid_paid_nets_to_zero(self):
+        self.invoice.status = "PAID"
+        self.invoice.save(update_fields=["status"])
+        self.invoice.status = "DRAFT"
+        self.invoice.save(update_fields=["status"])
+        total = sum(ClubMoney.objects.filter(invoice=self.invoice).values_list("amount", flat=True), Decimal("0.00"))
+        self.assertEqual(total, Decimal("0.00"))
+
+    def test_paid_buyer_invoice_books_sale_tax_and_membership(self):
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save(update_fields=["status"])
+        categories = set(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("category", flat=True))
+        # tosB bought lots in a 25%-tax auction and needs to renew.
+        self.assertIn(ClubMoney.CATEGORY_AUCTION_SALE, categories)
+        self.assertIn(ClubMoney.CATEGORY_TAX, categories)
+        self.assertIn(ClubMoney.CATEGORY_MEMBERSHIP, categories)
+
+    def test_setting_auction_club_backfills_paid_invoice_history(self):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=self.admin_in_person_tos)[0]
+        self.in_person_lot.winning_price = Decimal("20.00")
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.active = False
+        self.in_person_lot.save(update_fields=["winning_price", "auctiontos_winner", "active"])
+        invoice.status = "PAID"
+        invoice.save(update_fields=["status"])
+        ClubMoney.objects.all().delete()
+        self.in_person_auction.club = self.club
+        self.in_person_auction.save(update_fields=["club"])
+        self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
+
+
+class ClubMoneyLedgerCashBasisTests(TestCase):
+    """The cash-basis club ledger booked from invoices (Invoice.sync_club_money).
+
+    A PAID invoice books one entry per component (buyer payment, seller payout, tax,
+    membership, adjustment, first-bid payout, rounding); they sum to the cash that moves
+    and the club's auction commission is sales minus payouts. Booking is reversible.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("ledger_creator", "lc@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Ledger Cash Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self._n = 0
+
+    def _auction(self, tax=0, rounding=False, club_pct=20):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Ledger Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            tax=tax,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            invoice_rounding=rounding,
+        )
+        PickupLocation.objects.create(name="Ledger Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+
+    def _paid_invoice(self, tos):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=tos)[0]
+        invoice.status = "PAID"
+        invoice.save()
+        return invoice
+
+    def _by_category(self, invoice):
+        result = {}
+        for entry in ClubMoney.objects.filter(invoice=invoice):
+            result[entry.category] = result.get(entry.category, Decimal("0.00")) + entry.amount
+        return result
+
+    def _ledger_total(self, **filters):
+        return sum((entry.amount for entry in ClubMoney.objects.filter(**filters)), Decimal("0.00"))
+
+    def test_sale_and_payout_are_separate_and_imply_commission(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        seller_invoice = self._paid_invoice(seller)
+        buyer_invoice = self._paid_invoice(buyer)
+
+        self.assertEqual(self._by_category(seller_invoice)[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-80.00"))
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        # Commission (club cut) = sales - payouts = 100 - 80 = 20, which is the club's balance.
+        self.assertEqual(self._ledger_total(club=self.club), Decimal("20.00"))
+
+    def test_tax_is_broken_out(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        entries = self._by_category(buyer_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_TAX], Decimal("10.00"))
+
+    def test_adjustment_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        InvoiceAdjustment.objects.create(invoice=buyer_invoice, adjustment_type="ADD", amount=5, notes="late fee")
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("5.00"))
+
+    def test_membership_is_its_own_category(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.renewal_needed = True
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+
+    def test_rounding_is_broken_out(self):
+        # club_pct=15 on a $10 lot -> seller cut 8.50; rounding (in the seller's favor) pays 9.
+        auction = self._auction(club_pct=15, rounding=True)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        seller_invoice = self._paid_invoice(seller)
+        entries = self._by_category(seller_invoice)
+        self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-8.50"))
+        self.assertEqual(entries[ClubMoney.CATEGORY_ROUNDING], Decimal("-0.50"))
+        # The entries still sum to the cash that actually changed hands (a whole 9 dollars out).
+        self.assertEqual(self._ledger_total(invoice=seller_invoice), Decimal("-9.00"))
+
+    def test_entries_sum_to_rounded_invoice_total(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        buyer_invoice.refresh_from_db()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), -Decimal(buyer_invoice.rounded_net))
+
+    def test_unpaid_to_paid_changes_balance_by_invoice_total(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        before = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        after = self._ledger_total(invoice=buyer_invoice)
+        self.assertEqual(before, Decimal("0.00"))
+        self.assertEqual(after, Decimal("100.00"))  # the buyer paid the club 100
+
+    def test_paid_unpaid_paid_is_neutral(self):
+        auction = self._auction(tax=10, club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        first = self._ledger_total(invoice=buyer_invoice)
+        buyer_invoice.status = "UNPAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), Decimal("0.00"))
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), first)
+
+    def test_report_commission_is_sales_minus_payouts(self):
+        from .views import ClubTreasurerReportView
+
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._paid_invoice(seller)
+        self._paid_invoice(buyer)
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        entries = ClubMoney.objects.filter(club=self.club)
+        summary = view._report_summary(entries, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        self.assertEqual(summary["auction_sales"], Decimal("100.00"))
+        self.assertEqual(summary["seller_payouts"], Decimal("80.00"))
+        self.assertEqual(summary["auction_commission"], Decimal("20.00"))
+
+    def test_legacy_category_rows_are_not_perpetuated(self):
+        # A database carried over from the old ledger may hold rows in retired categories.
+        # Reconciling an invoice must not write new rows in those dead categories.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        ClubMoney.objects.create(
+            club=self.club,
+            invoice=buyer_invoice,
+            date=datetime.date(2026, 3, 15),
+            amount=Decimal("20.00"),
+            category="auction_profit",  # retired category
+        )
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # The seeded legacy row is left as-is (count stays 1) and current categories are booked.
+        self.assertEqual(ClubMoney.objects.filter(invoice=buyer_invoice, category="auction_profit").count(), 1)
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+
+class MakeClubAdminAssignsAuctionsTests(TestCase):
+    """The superuser "make {creator} admin of {club}" button assigns the creator's clubless
+    auctions to their club and books the club ledger for them, but never reassigns auctions
+    that already belong to a club."""
+
+    def setUp(self):
+        self.creator = User.objects.create_superuser("mca_creator", "mca@example.com", "pw")
+        self.club = Club.objects.create(name="MCA Club")
+        self.creator.userdata.club = self.club
+        self.creator.userdata.save()
+        self.other_club = Club.objects.create(name="MCA Other Club")
+
+    def _auction(self, club=None, title="MCA Auction"):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title=title,
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=club,
+            winning_bid_percent_to_club=20,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+        )
+        PickupLocation.objects.create(name="MCA Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _make_club_admin(self, auction):
+        client = Client()
+        client.force_login(self.creator)
+        return client.get(reverse("auction_main", kwargs={"slug": auction.slug}) + "?make_club_admin=true")
+
+    def test_assigns_clubless_auction_and_books_ledger(self):
+        auction = self._auction(club=None)
+        pickup = PickupLocation.objects.filter(auction=auction).first()
+        seller = AuctionTOS.objects.create(name="Seller", auction=auction, pickup_location=pickup)
+        buyer = AuctionTOS.objects.create(name="Buyer", auction=auction, pickup_location=pickup)
+        Lot.objects.create(
+            lot_name="L",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(100),
+            active=False,
+            quantity=1,
+        )
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        # No club yet, so nothing is in the ledger.
+        self.assertFalse(ClubMoney.objects.filter(invoice=buyer_invoice).exists())
+
+        response = self._make_club_admin(auction)
+        self.assertEqual(response.status_code, 200)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.club)
+        # The bulk assignment bypassed Auction.save(), but the ledger is still booked.
+        self.assertTrue(
+            ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
+        )
+
+    def test_does_not_reassign_auction_already_in_a_club(self):
+        auction = self._auction(club=self.other_club)
+        self._make_club_admin(auction)
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.other_club)
+
+
+class BapTop10ChartTests(TestCase):
+    """Cumulative points-over-time chart for the top 10 club members.
+
+    Green = current user, red = current first place, blue = everyone else; the chart
+    mirrors the data behind the "my points" chart but for the leaderboard's top 10,
+    and respects the year-to-date toggle.
+    """
+
+    GREEN = "#198754"
+    RED = "#dc3545"
+    BLUE = "#0d6efd"
+
+    def setUp(self):
+        from .views import _club_top10_chart_data, _last_n_month_starts, _ytd_month_starts
+
+        self._chart = _club_top10_chart_data
+        self._all_months = _last_n_month_starts(60)
+        self._ytd_months = _ytd_month_starts()
+        self.club = Club.objects.create(
+            name="Chart Club", slug="chartclub", enable_breeder_award_program=True, enable_club_page=True
+        )
+        self.this_year = timezone.now().year
+        # Three members so we can see all three colors at once.
+        self.first = self._member("First Place", user_name="firstplace")
+        self.current = self._member("Current User", user_name="currentuser")
+        self.third = self._member("Third Member", user_name="thirdmember")
+        # First place: most points. Current user: middle. Third: least.
+        self._award(self.first, points=30, month_offset=2)
+        self._award(self.first, points=20, month_offset=1)
+        self._award(self.current, points=15, month_offset=2)
+        self._award(self.current, points=10, month_offset=0)
+        self._award(self.third, points=5, month_offset=1)
+
+    def _member(self, name, user_name):
+        user = User.objects.create_user(user_name, f"{user_name}@example.com", "pw")
+        return ClubMember.objects.create(club=self.club, user=user, name=name)
+
+    def _award(self, member, points, month_offset=0, year=None, lot=None):
+        today = timezone.now().date().replace(day=1)
+        month = today.month - month_offset
+        year = year or self.this_year
+        while month <= 0:
+            month += 12
+            year -= 1
+        return BapAward.objects.create(club_member=member, date=datetime.date(year, month, 1), points=points, lot=lot)
+
+    def _chart_data(self, current_member=None, is_ytd=False):
+        months = self._ytd_months if is_ytd else self._all_months
+        return self._chart(self.club, "bap_points", "points", current_member, months, is_ytd=is_ytd)
+
+    def test_color_scheme(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.RED)
+        self.assertEqual(by_label["Current User"]["borderColor"], self.GREEN)
+        self.assertEqual(by_label["Third Member"]["borderColor"], self.BLUE)
+
+    def test_current_user_wins_when_also_first_place(self):
+        # If the viewer is the leader, the current-user color (green) takes precedence.
+        data = self._chart_data(current_member=self.first)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["First Place"]["borderColor"], self.GREEN)
+
+    def test_first_place_dataset_is_ordered_first(self):
+        data = self._chart_data()
+        self.assertEqual(data["datasets"][0]["label"], "First Place")
+
+    def test_cumulative_running_totals(self):
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # First place ends at 30 + 20 = 50, monotonic non-decreasing.
+        first_series = by_label["First Place"]["data"]
+        self.assertEqual(first_series[-1], 50)
+        self.assertEqual(first_series, sorted(first_series))
+
+    def test_limited_to_ten_members(self):
+        for i in range(12):
+            m = self._member(f"Filler {i}", user_name=f"filler{i}")
+            self._award(m, points=1, month_offset=1)
+        data = self._chart_data()
+        self.assertEqual(len(data["datasets"]), 10)
+
+    def test_returns_none_without_points(self):
+        empty = Club.objects.create(name="Empty", slug="emptyclub", enable_breeder_award_program=True)
+        self.assertIsNone(self._chart(empty, "bap_points", "points", None, self._all_months, is_ytd=False))
+
+    def test_ytd_excludes_prior_years(self):
+        # An award from a prior year must not appear in the YTD running total.
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current, is_ytd=True)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        # YTD total for current user is 15 + 10 = 25, not 125.
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_all_time_includes_prior_years(self):
+        self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
+        data = self._chart_data(current_member=self.current, is_ytd=False)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], 125)
+
+    def test_deleted_lot_award_excluded_to_match_leaderboard(self):
+        # Awards tied to a deleted lot are dropped from the leaderboard totals, so the
+        # chart must drop them too (otherwise the line ends above the leaderboard number).
+        auction = Auction.objects.create(
+            created_by=self.current.user,
+            title="Chart Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            club=self.club,
+        )
+        lot = Lot.objects.create(lot_name="Deleted lot", auction=auction, quantity=1, is_deleted=True)
+        self._award(self.current, points=99, month_offset=0, lot=lot)
+        self.current.refresh_from_db()
+        data = self._chart_data(current_member=self.current)
+        by_label = {d["label"]: d for d in data["datasets"]}
+        self.assertEqual(by_label["Current User"]["data"][-1], self.current.bap_points)
+        self.assertEqual(by_label["Current User"]["data"][-1], 25)
+
+    def test_hap_and_cap_use_their_own_fields(self):
+        BapAward.objects.create(
+            club_member=self.first, date=timezone.now().date().replace(day=1), hap_points=7, cap_points=3
+        )
+        self.first.refresh_from_db()
+        hap = self._chart(self.club, "hap_points", "hap_points", None, self._all_months)
+        cap = self._chart(self.club, "culture_points", "cap_points", None, self._all_months)
+        self.assertEqual(hap["datasets"][0]["data"][-1], 7)
+        self.assertEqual(cap["datasets"][0]["data"][-1], 3)
+
+    def test_chart_markup_renders_in_bap_tab(self):
+        client = Client()
+        client.force_login(self.current.user)
+        response = client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "bap"}))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        # Both the canvas and its json_script payload must be present for the chart to draw.
+        self.assertIn('id="bap-top10-chart-ytd"', html)
+        self.assertIn('id="bap-top10-chart-ytd-data"', html)
+        self.assertIsNotNone(response.context.get("bap_top10_chart_ytd"))
+
+
+class ClubTreasurerReportViewTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="treasury_owner", password="testpass", email="owner@example.com")
+        self.money_user = User.objects.create_user(
+            username="treasury_user", password="testpass", email="money@example.com"
+        )
+        self.club = Club.objects.create(name="Treasury Club", enable_membership=True)
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+        ClubMember.objects.create(
+            club=self.club, name="Renewed Member", membership_last_paid=datetime.date(2026, 5, 10), is_deleted=False
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 5),
+            amount=Decimal("12.00"),
+            description="In range",
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 4, 5),
+            amount=Decimal("8.00"),
+            description="Out of range",
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Treasury Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+            club=self.club,
+        )
+        pickup = PickupLocation.objects.create(name="Treasury Pickup", auction=auction, pickup_time=timezone.now())
+        tos = AuctionTOS.objects.create(user=self.owner, auction=auction, pickup_location=pickup)
+        Invoice.objects.create(auctiontos_user=tos, status="DRAFT")
+        self.client.force_login(self.money_user)
+
+    def test_treasurer_report_page_loads(self):
+        response = self.client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Treasurer's Report")
+        self.assertContains(response, "In range")
+
+    def test_treasurer_report_export_respects_date_filters(self):
+        response = self.client.get(
+            reverse("club_treasurer_report_export", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn("In range", content)
+        self.assertNotIn("Out of range", content)
+
+    def test_treasurer_report_add_record_returns_json(self):
+        response = self.client.post(
+            reverse("club_money_add", kwargs={"slug": self.club.slug}),
+            {
+                "date": "2026-05-20",
+                "amount": "-4.00",
+                "description": "Room rental",
+                "category": ClubMoney.CATEGORY_MEETING_LOCATION_COST,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(ClubMoney.objects.filter(club=self.club, description="Room rental").exists())
+
+    def test_treasurer_report_balance_books_creates_adjustment(self):
+        response = self.client.post(
+            reverse("club_money_balance", kwargs={"slug": self.club.slug}),
+            {"account_balance": "25.00"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_ADJUSTMENT).exists())
+
+
+class ClubTreasurerOutstandingInvoiceTests(TestCase):
+    """The treasurer report's "outstanding invoices" figure.
+
+    An invoice is outstanding only when, after payments, the member still owes the club.
+    Regression guard for invoices being reported as outstanding when they had actually
+    been paid (the old code looked at the invoice total before payments).
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="oi_owner", password="pw", email="oi_owner@example.com")
+        self.money_user = User.objects.create_user(username="oi_money", password="pw", email="oi_money@example.com")
+        self.club = Club.objects.create(name="Outstanding Club")
+        ClubMember.objects.create(club=self.club, user=self.money_user, permission_money=True)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Outstanding Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 5, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 5, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        self.pickup = PickupLocation.objects.create(name="OI Pickup", auction=self.auction, pickup_time=timezone.now())
+        self.start = datetime.date(2026, 5, 1)
+        self.end = datetime.date(2026, 5, 31)
+        self._tos_count = 0
+
+    def _invoice(self, calculated_total, status="UNPAID", payment=None, auction=None):
+        auction = auction or self.auction
+        self._tos_count += 1
+        tos = AuctionTOS.objects.create(
+            name=f"Member {self._tos_count}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+        invoice = Invoice.objects.create(auctiontos_user=tos, status=status)
+        Invoice.objects.filter(pk=invoice.pk).update(calculated_total=calculated_total)
+        if payment is not None:
+            InvoicePayment.objects.create(invoice=invoice, amount=Decimal(str(payment)))
+        return invoice
+
+    def _summary(self):
+        from .views import ClubTreasurerReportView
+
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        return view._outstanding_invoices(self.start, self.end)
+
+    def test_unpaid_invoice_with_balance_is_outstanding(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("50.00"))
+
+    def test_fully_paid_invoice_is_not_outstanding(self):
+        # Paid in full but still UNPAID (admin hasn't flipped status) — must NOT be counted.
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)
+        result = self._summary()
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["amount"], Decimal("0.00"))
+
+    def test_partial_payment_counts_only_remaining_balance(self):
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("6.00"))
+
+    def test_paid_status_invoice_is_not_outstanding(self):
+        self._invoice(calculated_total=-25, status="PAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_seller_invoice_owed_by_club_is_not_outstanding(self):
+        # Positive total == the club owes the seller; that is a payout, not an outstanding receivable.
+        self._invoice(calculated_total=40, status="UNPAID")
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_counts_and_amounts_aggregate(self):
+        self._invoice(calculated_total=-50, status="UNPAID")  # owes 50
+        self._invoice(calculated_total=-30, status="UNPAID", payment=30)  # settled
+        self._invoice(calculated_total=-10, status="UNPAID", payment=4)  # owes 6
+        self._invoice(calculated_total=40, status="UNPAID")  # club owes seller
+        self._invoice(calculated_total=-20, status="PAID")  # paid
+        result = self._summary()
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["amount"], Decimal("56.00"))
+
+    def test_auction_outside_date_range_is_excluded(self):
+        other = Auction.objects.create(
+            created_by=self.owner,
+            title="Old Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 1, 10, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 1, 11, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Old Pickup", auction=other, pickup_time=timezone.now())
+        self._invoice(calculated_total=-99, status="UNPAID", auction=other)
+        self.assertEqual(self._summary()["count"], 0)
+
+    def test_report_page_shows_outstanding_amount(self):
+        self._invoice(calculated_total=-50, status="UNPAID")
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["outstanding_invoices"], 1)
+        self.assertEqual(summary["outstanding_invoices_amount"], Decimal("50.00"))
+        self.assertContains(response, "still owed to the club")
+
+    def test_summary_reports_money_in_out_and_net(self):
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 10),
+            amount=Decimal("100.00"),
+            category=ClubMoney.CATEGORY_DONATION,
+        )
+        ClubMoney.objects.create(
+            club=self.club,
+            date=datetime.date(2026, 5, 11),
+            amount=Decimal("-40.00"),
+            category=ClubMoney.CATEGORY_SPEAKER_COSTS,
+        )
+        client = Client()
+        client.force_login(self.money_user)
+        response = client.get(
+            reverse("club_treasurer_report", kwargs={"slug": self.club.slug}),
+            {"start_date": "2026-05-01", "end_date": "2026-05-31"},
+        )
+        summary = response.context["report_summary"]
+        self.assertEqual(summary["money_in"], Decimal("100.00"))
+        self.assertEqual(summary["money_out"], Decimal("40.00"))
+        self.assertEqual(summary["net"], Decimal("60.00"))
 
 
 class DiscordJoinModalNameTests(TestCase):
@@ -16800,6 +19673,71 @@ class DiscordJoinModalNameTests(TestCase):
         )
         m = ClubMember.objects.get(club=self.club, email="first@example.com")
         self.assertEqual(m.name, "First")
+
+
+class DiscordJoinButtonTests(TestCase):
+    """The join button and the /membership command must behave identically:
+    not joined -> show the join modal; joined -> show membership info + link."""
+
+    def setUp(self):
+        from .views import DiscordInteractionsView
+
+        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222", enable_club_page=True)
+        self.view = DiscordInteractionsView()
+
+    def _interaction(self, discord_id="42", interaction_type=3, custom_id="join_button"):
+        return {
+            "type": interaction_type,
+            "guild_id": self.club.discord_server_id,
+            "data": {"custom_id": custom_id, "name": "membership"},
+            "member": {"user": {"id": discord_id, "username": "buttonuser"}},
+        }
+
+    def _payload(self, response):
+        return json.loads(response.content)
+
+    def test_button_shows_join_modal_when_not_joined(self):
+        from .views import _DISCORD_TYPE_MODAL
+
+        response = self.view._handle_membership_command(self._interaction())
+        payload = self._payload(response)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_MODAL)
+        self.assertEqual(payload["data"]["custom_id"], "join_modal")
+
+    def test_button_shows_membership_info_when_joined(self):
+        from .views import _DISCORD_TYPE_CHANNEL_MESSAGE
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Joined User",
+            discord_id="42",
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+        )
+        response = self.view._handle_membership_command(self._interaction())
+        payload = self._payload(response)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_CHANNEL_MESSAGE)
+        content = payload["data"]["content"]
+        self.assertIn("Your membership", content)
+        self.assertIn(member.simple_membership_link, content)
+
+    @patch("auctions.views.verify_discord_signature", return_value=True)
+    @override_settings(DISCORD_PUBLIC_KEY="aa" * 32)
+    def test_post_routes_join_button_through_membership(self, mock_verify):
+        from .views import _DISCORD_TYPE_MODAL
+
+        ClubMember.objects.filter(club=self.club).delete()
+        body = json.dumps(self._interaction()).encode()
+        response = self.client.post(
+            reverse("discord_interactions"),
+            data=body,
+            content_type="application/json",
+            HTTP_X_SIGNATURE_ED25519="00",
+            HTTP_X_SIGNATURE_TIMESTAMP=str(int(timezone.now().timestamp())),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.content)
+        self.assertEqual(payload["type"], _DISCORD_TYPE_MODAL)
+        self.assertEqual(payload["data"]["custom_id"], "join_modal")
 
 
 class ClubMemberNameModelTests(TestCase):
@@ -17159,7 +20097,7 @@ class AppleWalletPassTests(TestCase):
 
 
 class MembershipNumberModeTests(TestCase):
-    """Visibility gating + revocation triggers for Club.membership_number_mode."""
+    """Visibility gating + revocation triggers for Club.show_member_barcode."""
 
     def setUp(self):
         import datetime as _dt
@@ -17184,34 +20122,25 @@ class MembershipNumberModeTests(TestCase):
         self.assertTrue(self.paid.is_paid_member)
         self.assertFalse(self.unpaid.is_paid_member)
 
-    def test_visibility_all_members(self):
-        self.club.membership_number_mode = "all_members"
+    def test_visibility_enabled(self):
+        self.club.show_member_barcode = True
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertTrue(self.unpaid.membership_number_visible)
-
-    def test_visibility_paid_only(self):
-        self.club.membership_number_mode = "paid_only"
-        self.club.save()
-        self.paid.refresh_from_db()
-        self.unpaid.refresh_from_db()
-        self.assertTrue(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertTrue(self.paid.club.show_member_barcode)
+        self.assertTrue(self.unpaid.club.show_member_barcode)
 
     def test_visibility_disabled(self):
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
         self.unpaid.refresh_from_db()
-        self.assertFalse(self.paid.membership_number_visible)
-        self.assertFalse(self.unpaid.membership_number_visible)
+        self.assertFalse(self.paid.club.show_member_barcode)
+        self.assertFalse(self.unpaid.club.show_member_barcode)
 
-    def test_pkpass_404_when_unpaid_in_paid_only_mode(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_pkpass_404_when_barcode_disabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
-        # Unpaid user logged in as themselves → 404 (number isn't visible).
         unpaid_user = User.objects.create_user(username="unpaid_owner", password="x", email="u@b.c")
         self.unpaid.user = unpaid_user
         self.unpaid.save()
@@ -17227,48 +20156,39 @@ class MembershipNumberModeTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
 
-    def test_google_wallet_url_empty_when_number_hidden(self):
+    def test_google_wallet_url_empty_when_barcode_disabled(self):
         from .templatetags.membership_tags import google_wallet_save_url
 
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.paid.refresh_from_db()
-        # Should bail out before ever touching settings/JWT.
         self.assertEqual(google_wallet_save_url(self.paid), "")
 
     def test_admin_membership_number_view_404_when_disabled(self):
         from .models import ClubMember
 
-        # Give the user admin permissions on the club so the perm check passes.
         admin = User.objects.create_user(username="admin_for_mode", password="x", email="adm@b.c")
         ClubMember.objects.create(club=self.club, name="Admin", user=admin, permission_add_edit=True)
-        self.club.membership_number_mode = "disabled"
+        self.club.show_member_barcode = False
         self.club.save()
         self.client.force_login(admin)
         url = reverse("club_member_membership_number", kwargs={"pk": self.paid.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
-    def test_signal_revokes_all_passes_when_mode_set_to_disabled(self):
+    def test_signal_revokes_all_passes_when_barcode_disabled(self):
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "disabled"
+                self.club.show_member_barcode = False
                 self.club.save()
             delay.assert_called_once_with(self.club.pk)
 
-    def test_signal_revokes_unpaid_passes_when_mode_set_to_paid_only(self):
-        with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "paid_only"
-                self.club.save()
-            delay.assert_called_once_with(self.club.pk, unpaid_only=True)
-
-    def test_signal_no_revoke_when_loosening_to_all_members(self):
-        self.club.membership_number_mode = "paid_only"
+    def test_signal_no_revoke_when_barcode_enabled(self):
+        self.club.show_member_barcode = False
         self.club.save()
         with patch("auctions.tasks.expire_google_wallet_objects_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
-                self.club.membership_number_mode = "all_members"
+                self.club.show_member_barcode = True
                 self.club.save()
             delay.assert_not_called()
 
@@ -17635,6 +20555,12 @@ class ManageUsersThroughClubTests(TestCase):
         self.joiner.userdata.preferred_bidder_number = "246"
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
+        # Pre-assign distinct bidder numbers to the other setUp club members so that
+        # _rebuild_auctiontos_from_club cannot randomly consume "246" when generating
+        # numbers for them (they have no preferred_bidder_number, so randint(1,999) is
+        # used, which has a ~0.3% chance of picking 246 and making this test flaky).
+        for idx, m in enumerate(ClubMember.objects.filter(club=self.club).exclude(pk=member.pk), start=1):
+            ClubMember.objects.filter(pk=m.pk).update(bidder_number=str(idx))
         form = AuctionEditForm(
             data={**self._auction_form_data(), "manage_users_through_club": "all"},
             instance=self.auction,
@@ -17665,6 +20591,45 @@ class ManageUsersThroughClubTests(TestCase):
         )
         form.is_valid()
         self.assertNotIn("add_membership_fee_to_invoices_for_expired_members", form.errors)
+
+    def _online_club_auction(self):
+        online = Auction.objects.create(
+            created_by=self.creator,
+            title="Online Club Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            club=self.club,
+        )
+        PickupLocation.objects.create(
+            name="online loc", auction=online, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        return online
+
+    def test_checkin_choice_hidden_for_online_auction(self):
+        """Check-in mode is in-person only, so the option is dropped for online auctions."""
+        form = AuctionEditForm(
+            instance=self._online_club_auction(), user=self.creator, cloned_from=None, user_timezone="UTC"
+        )
+        choice_values = [c[0] for c in form.fields["manage_users_through_club"].choices]
+        self.assertNotIn("checkin", choice_values)
+        self.assertIn("all", choice_values)
+
+    def test_checkin_mode_rejected_for_online_auction(self):
+        """Even if check-in is forced past the UI, the validator rejects it for online auctions."""
+        online = self._online_club_auction()
+        form = AuctionEditForm(
+            data={"manage_users_through_club": "checkin", "club": str(self.club.pk)},
+            instance=online,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Restore the full choice set so the field accepts "checkin" and our custom validator runs.
+        form.fields["manage_users_through_club"].choices = Auction.MANAGE_USERS_CHOICES
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+        self.assertIn("in-person", " ".join(form.errors["manage_users_through_club"]).lower())
 
     def test_permission_check_grants_club_admin_and_manage_auctions(self):
         self._enable_club_managed()
@@ -18118,3 +21083,1810 @@ class PlaceBidApiTests(TestCase):
         self.assertEqual(response.json()["type"], "ERROR")
         self.assertIn("sold", response.json()["message"].lower())
         self.assertFalse(self._bids(self.bidder).exists())
+
+
+class MailchimpHelperTests(TestCase):
+    """Pure-logic tests for tag computation, merge fields, status mapping and hashing."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Test Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Jane Q Public", email="jane@example.com")
+
+    def test_subscriber_hash_lowercases_and_trims(self):
+        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())
+
+    def test_name_split(self):
+        self.assertEqual(self.member.first_name, "Jane")
+        self.assertEqual(self.member.last_name, "Q Public")
+        solo = ClubMember.objects.create(club=self.club, name="Cher", email="cher@example.com")
+        self.assertEqual(solo.first_name, "Cher")
+        self.assertEqual(solo.last_name, "")
+
+    def test_desired_status_mapping(self):
+        self.member.contact_status = "contact"
+        self.assertEqual(mc._desired_status(self.member), "subscribed")
+        self.member.contact_status = "non_essential"
+        self.assertEqual(mc._desired_status(self.member), "unsubscribed")
+        self.member.contact_status = "do_not_contact"
+        self.assertEqual(mc._desired_status(self.member), "archived")
+        self.member.contact_status = "contact"
+        self.member.email_address_status = "BAD"
+        self.assertEqual(mc._desired_status(self.member), "archived")
+
+    def test_lifecycle_tags(self):
+        today = timezone.now().date()
+        self.member.membership_expiration_date = today + datetime.timedelta(days=10)
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["expiring-soon"])
+        self.assertFalse(tags["expired"])
+        self.assertTrue(tags["new-member"])
+        self.assertFalse(tags["long-term-member"])
+
+        self.member.membership_expiration_date = today - datetime.timedelta(days=1)
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["expired"])
+        self.assertFalse(tags["expiring-soon"])
+
+    def test_value_and_connection_tags(self):
+        self.member.cached_total_sold = Decimal(1500)
+        self.member.cached_total_bought = Decimal(50)
+        self.member.discord_id = "discord-123"
+        self.member.permission_add_edit = True
+        tags = self.member.compute_mailchimp_tags()
+        self.assertTrue(tags["power-seller"])
+        self.assertFalse(tags["power-buyer"])
+        self.assertTrue(tags["discord-connected"])
+        self.assertTrue(tags["admin"])
+
+    def test_compute_tags_covers_full_vocabulary(self):
+        tags = self.member.compute_mailchimp_tags()
+        self.assertEqual(set(tags.keys()), set(ClubMember.MAILCHIMP_TAGS))
+
+    def test_merge_fields_include_links_and_split_name(self):
+        self.member.membership_expiration_date = datetime.date(2030, 1, 2)
+        fields = mc.member_merge_fields(self.member)
+        self.assertEqual(fields["FNAME"], "Jane")
+        self.assertEqual(fields["LNAME"], "Q Public")
+        self.assertEqual(fields["EXPIRES"], "2030-01-02")
+        self.assertIn("/member/", fields["RENEW"])
+        self.assertTrue(fields["CLUBUNSUB"].endswith("/unsubscribe/"))
+        self.assertTrue(fields["RESUB"].endswith("/resubscribe/"))
+        self.assertTrue(fields["NOCOMM"].endswith("/no-contact/"))
+
+
+class MailchimpCategoryTagTests(TestCase):
+    """Tests for _top_category_names() and category tag integration in _sync_tags / ensure_segments."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Cat Club")
+        self.user = User.objects.create_user(username="catuser", email="cat@example.com")
+        self.member = ClubMember.objects.create(
+            club=self.club, name="Cat User", email="cat@example.com", user=self.user
+        )
+        self.cat_a = Category.objects.create(name="Cichlids")
+        self.cat_b = Category.objects.create(name="Tetras")
+        self.cat_c = Category.objects.create(name="Corydoras")
+        self.cat_uncat = Category.objects.get_or_create(name="Uncategorized")[0]
+
+    # --- _top_category_names: UserInterestCategory path ---
+
+    def test_top_cats_uses_user_interest_when_present(self):
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=10)
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_b, interest=5)
+        names = mc._top_category_names(self.member)
+        self.assertEqual(names, {"Cichlids", "Tetras"})
+
+    def test_top_cats_excludes_uncategorized_from_interests(self):
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_uncat, interest=100)
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=5)
+        names = mc._top_category_names(self.member)
+        self.assertNotIn("Uncategorized", names)
+        self.assertIn("Cichlids", names)
+
+    def test_top_cats_capped_at_5_from_interests(self):
+        cats = [Category.objects.create(name=f"Fish-{i}") for i in range(8)]
+        for i, cat in enumerate(cats):
+            UserInterestCategory.objects.create(user=self.user, category=cat, interest=10 - i)
+        names = mc._top_category_names(self.member)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Fish-0", names)
+        self.assertNotIn("Fish-7", names)
+
+    # --- _top_category_names: lot-history fallback ---
+
+    def _make_lot_setup(self):
+        """Return (auction, location, seller_tos, winner_tos) for the club's auction."""
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Club auction",
+            club=self.club,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+        )
+        location = PickupLocation.objects.create(name="loc", auction=auction, pickup_time=the_future)
+        seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=auction, pickup_location=location, email="cat@example.com"
+        )
+        winner_tos = AuctionTOS.objects.create(auction=auction, pickup_location=location, email="buyer@example.com")
+        return auction, location, seller_tos, winner_tos
+
+    def test_top_cats_falls_back_to_lot_history_when_no_interests(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        Lot.objects.create(lot_name="L1", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        Lot.objects.create(lot_name="L2", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        Lot.objects.create(lot_name="L3", auctiontos_seller=seller_tos, species_category=self.cat_b, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertIn("Cichlids", names)
+        self.assertIn("Tetras", names)
+
+    def test_top_cats_counts_won_lots_in_fallback(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        # seller_tos already has email="cat@example.com"; reuse it as winner to avoid duplicate-merge
+        Lot.objects.create(lot_name="Won1", auctiontos_winner=seller_tos, species_category=self.cat_c, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertIn("Corydoras", names)
+
+    def test_top_cats_fallback_excludes_uncategorized(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        Lot.objects.create(
+            lot_name="U1", auctiontos_seller=seller_tos, species_category=self.cat_uncat, auction=auction
+        )
+        Lot.objects.create(lot_name="A1", auctiontos_seller=seller_tos, species_category=self.cat_a, auction=auction)
+        names = mc._top_category_names(self.member)
+        self.assertNotIn("Uncategorized", names)
+
+    def test_top_cats_fallback_capped_at_5(self):
+        auction, location, seller_tos, winner_tos = self._make_lot_setup()
+        cats = [Category.objects.create(name=f"Species-{i}") for i in range(7)]
+        for i, cat in enumerate(cats):
+            for _ in range(7 - i):
+                Lot.objects.create(
+                    lot_name=f"L-{cat.name}", auctiontos_seller=seller_tos, species_category=cat, auction=auction
+                )
+        names = mc._top_category_names(self.member)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Species-0", names)
+        self.assertNotIn("Species-6", names)
+
+    def test_top_cats_no_email_returns_empty(self):
+        member = ClubMember.objects.create(club=self.club, name="No Email")
+        self.assertEqual(mc._top_category_names(member), set())
+
+    # --- _sync_tags sends category tags ---
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_tags_includes_category_tags(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "subscribed"}
+        mock_get_client.return_value = client
+        self.club.mailchimp_access_token = "tok"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "listXYZ"
+        self.club.mailchimp_webhook_secret = "sec"
+        self.club.save()
+
+        UserInterestCategory.objects.create(user=self.user, category=self.cat_a, interest=10)
+        mc.sync_member(self.member)
+
+        _, _, payload = client.lists.update_list_member_tags.call_args.args
+        sent_tags = {t["name"]: t["status"] for t in payload["tags"]}
+        self.assertEqual(sent_tags.get("Cichlids"), "active")
+        self.assertEqual(sent_tags.get("Tetras"), "inactive")
+        self.assertNotIn("Uncategorized", sent_tags)
+
+    # --- ensure_segments creates category segments ---
+
+    def test_ensure_segments_includes_categories(self):
+        self.club.mailchimp_access_token = "tok"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "listXYZ"
+        self.club.save()
+        client = MagicMock()
+        client.lists.list_segments.return_value = {"segments": []}
+        with patch("auctions.mailchimp.get_client", return_value=client):
+            mc.ensure_segments(self.club)
+        created = {call.args[1]["name"] for call in client.lists.create_segment.call_args_list}
+        self.assertIn("Cichlids", created)
+        self.assertIn("Tetras", created)
+        self.assertNotIn("Uncategorized", created)
+
+
+class MailchimpSyncTests(TestCase):
+    """sync_member / change_member_email against a mocked Mailchimp client."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Sync Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self._connect_club()
+
+    def _connect_club(self):
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.mailchimp_webhook_secret = "secret123"
+        self.club.save()
+
+    def test_no_op_when_not_connected(self):
+        self.club.mailchimp_audience_id = ""
+        self.club.save()
+        with patch("auctions.mailchimp.get_client") as gc:
+            self.assertFalse(mc.sync_member(self.member))
+            gc.assert_not_called()
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_member_upserts_and_tags(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 42, "status": "subscribed"}
+        mock_get_client.return_value = client
+
+        self.assertTrue(mc.sync_member(self.member))
+
+        client.lists.set_list_member.assert_called_once()
+        list_id, sub_hash, body = client.lists.set_list_member.call_args.args
+        self.assertEqual(list_id, "list123")
+        self.assertEqual(sub_hash, mc.subscriber_hash("joe@example.com"))
+        self.assertEqual(body["status"], "subscribed")
+        self.assertEqual(body["merge_fields"]["FNAME"], "Joe")
+        client.lists.update_list_member_tags.assert_called_once()
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "subscribed")
+        self.assertEqual(self.member.mailchimp_web_id, "42")
+        self.assertIsNotNone(self.member.mailchimp_last_synced)
+
+    @patch("auctions.mailchimp.get_client")
+    def test_sync_respects_remote_unsubscribe(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "unsubscribed"}
+        mock_get_client.return_value = client
+
+        self.member.mailchimp_status = "unsubscribed"
+        self.member.save()
+        mc.sync_member(self.member)
+
+        body = client.lists.set_list_member.call_args.args[2]
+        # We must not force them back to subscribed.
+        self.assertNotIn("status", body)
+        self.assertEqual(body["status_if_new"], "subscribed")
+
+    @patch("auctions.mailchimp.get_client")
+    def test_do_not_contact_archives(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        self.member.contact_status = "do_not_contact"
+        self.member.save()
+
+        mc.sync_member(self.member)
+        client.lists.delete_list_member.assert_called_once()
+        client.lists.set_list_member.assert_not_called()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "archived")
+
+    @patch("auctions.mailchimp.get_client")
+    def test_change_member_email(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        mc.change_member_email(self.member, "old@example.com")
+        client.lists.update_list_member.assert_called_once_with(
+            "list123",
+            mc.subscriber_hash("old@example.com"),
+            {"email_address": "joe@example.com"},
+        )
+
+    def test_in_scope_members_excludes_deleted_and_emailless(self):
+        ClubMember.objects.create(club=self.club, name="No Email", email="")
+        deleted = ClubMember.objects.create(club=self.club, name="Gone", email="gone@example.com")
+        deleted.is_deleted = True
+        deleted.save()
+        emails = set(mc.in_scope_members(self.club).values_list("email", flat=True))
+        self.assertIn("joe@example.com", emails)
+        self.assertNotIn("", emails)
+        self.assertNotIn("gone@example.com", emails)
+
+
+class MailchimpWebhookTests(TestCase):
+    """Inbound webhook only records Mailchimp status; never touches the site account."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Hook Club")
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.mailchimp_webhook_secret = "secret123"
+        self.club.save()
+        self.user = User.objects.create_user(username="hookuser", password="pw", email="hook@example.com")
+        UserData.objects.get_or_create(user=self.user)
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.user, name="Hook Member", email="hook@example.com", mailchimp_status="subscribed"
+        )
+
+    def _url(self, secret="secret123"):
+        return reverse("mailchimp_webhook", kwargs={"slug": self.club.slug, "secret": secret})
+
+    def test_get_verification_ok(self):
+        self.assertEqual(self.client_http.get(self._url()).status_code, 200)
+
+    def test_bad_secret_forbidden(self):
+        self.assertEqual(self.client_http.get(self._url(secret="wrong")).status_code, 403)
+        resp = self.client_http.post(
+            self._url(secret="wrong"), {"type": "unsubscribe", "data[email]": "hook@example.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_unsubscribe_sets_status_without_touching_account(self):
+        resp = self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "hook@example.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "unsubscribed")
+        # The site-wide account preference must be untouched.
+        self.assertFalse(self.user.userdata.has_unsubscribed)
+
+    def test_cleaned_marks_member(self):
+        self.client_http.post(self._url(), {"type": "cleaned", "data[email]": "hook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.mailchimp_status, "cleaned")
+
+    def test_upemail_updates_local_email(self):
+        self.client_http.post(
+            self._url(),
+            {"type": "upemail", "data[old_email]": "hook@example.com", "data[new_email]": "new@example.com"},
+        )
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, "new@example.com")
+
+
+class MailchimpSelfServiceTests(TestCase):
+    """The UUID merge-field links change only the club contact status."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Self Serve Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Sam", email="sam@example.com")
+
+    def test_unsubscribe_link(self):
+        url = reverse("club_member_unsubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "non_essential")
+
+    def test_resubscribe_clears_status(self):
+        self.member.contact_status = "non_essential"
+        self.member.mailchimp_status = "unsubscribed"
+        self.member.save()
+        url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "contact")
+        self.assertEqual(self.member.mailchimp_status, "")
+
+    def test_nocomm_link(self):
+        url = reverse("club_member_nocomm", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "do_not_contact")
+
+
+class BrevoSyncTests(TestCase):
+    """sync_member / change_member_email against a mocked Brevo client (mirrors MailchimpSyncTests)."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Brevo Sync Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self._connect_club()
+
+    def _connect_club(self):
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.brevo_webhook_secret = "secret123"
+        self.club.save()
+
+    @staticmethod
+    def _resp(status_code=201, body=None):
+        resp = MagicMock(status_code=status_code, content=json.dumps(body or {}).encode())
+        resp.json.return_value = body or {}
+        return resp
+
+    def test_no_op_when_not_connected(self):
+        self.club.brevo_list_id = ""
+        self.club.save()
+        with patch("auctions.brevo.get_client") as gc:
+            self.assertFalse(brevo.sync_member(self.member))
+            gc.assert_not_called()
+
+    @patch("auctions.brevo.get_client")
+    def test_sync_member_upserts(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(201, {"id": 99})
+        mock_get_client.return_value = client
+
+        self.assertTrue(brevo.sync_member(self.member))
+
+        client.request.assert_called_once()
+        method, path = client.request.call_args.args
+        self.assertEqual((method, path), ("POST", "/contacts"))
+        body = client.request.call_args.kwargs["json_body"]
+        self.assertEqual(body["email"], "joe@example.com")
+        self.assertEqual(body["listIds"], [7])
+        self.assertFalse(body["emailBlacklisted"])
+        self.assertTrue(body["updateEnabled"])
+        self.assertEqual(body["attributes"]["FIRSTNAME"], "Joe")
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "subscribed")
+        self.assertEqual(self.member.brevo_contact_id, "99")
+        self.assertIsNotNone(self.member.brevo_last_synced)
+
+    @patch("auctions.brevo.get_client")
+    def test_sync_respects_remote_unsubscribe(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(201, {"id": 1})
+        mock_get_client.return_value = client
+
+        self.member.brevo_status = "unsubscribed"
+        self.member.save()
+        brevo.sync_member(self.member)
+
+        body = client.request.call_args.kwargs["json_body"]
+        # We must not resubscribe someone Brevo told us opted out.
+        self.assertTrue(body["emailBlacklisted"])
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "unsubscribed")
+
+    @patch("auctions.brevo.get_client")
+    def test_do_not_contact_deletes(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(204)
+        mock_get_client.return_value = client
+        self.member.contact_status = "do_not_contact"
+        self.member.save()
+
+        brevo.sync_member(self.member)
+        method, path = client.request.call_args.args
+        self.assertEqual(method, "DELETE")
+        self.assertTrue(path.startswith("/contacts/"))
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "archived")
+
+    @patch("auctions.brevo.get_client")
+    def test_change_member_email_deletes_old_contact(self, mock_get_client):
+        client = MagicMock()
+        client.request.return_value = self._resp(204)
+        mock_get_client.return_value = client
+        brevo.change_member_email(self.member, "old@example.com")
+        self.assertEqual(client.request.call_args.args, ("DELETE", "/contacts/old%40example.com"))
+
+
+class BrevoWebhookTests(TestCase):
+    """Inbound webhook only records Brevo status; never touches the site account."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Hook Club")
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.brevo_webhook_secret = "secret123"
+        self.club.save()
+        self.user = User.objects.create_user(username="brevohook", password="pw", email="bhook@example.com")
+        UserData.objects.get_or_create(user=self.user)
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.user, name="Hook Member", email="bhook@example.com", brevo_status="subscribed"
+        )
+
+    def _url(self, secret="secret123"):
+        return reverse("brevo_webhook", kwargs={"slug": self.club.slug, "secret": secret})
+
+    def _post(self, payload, secret="secret123"):
+        return self.client_http.post(self._url(secret), data=json.dumps(payload), content_type="application/json")
+
+    def test_get_verification_ok(self):
+        self.assertEqual(self.client_http.get(self._url()).status_code, 200)
+
+    def test_bad_secret_forbidden(self):
+        self.assertEqual(self.client_http.get(self._url(secret="wrong")).status_code, 403)
+        resp = self._post({"event": "unsubscribe", "email": "bhook@example.com"}, secret="wrong")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_unsubscribe_sets_status_without_touching_account(self):
+        resp = self._post({"event": "unsubscribe", "email": "bhook@example.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "unsubscribed")
+        # The site-wide account preference must be untouched.
+        self.assertFalse(self.user.userdata.has_unsubscribed)
+
+    def test_hard_bounce_marks_cleaned(self):
+        self._post({"event": "hard_bounce", "email": "bhook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "cleaned")
+
+    def test_spam_marks_cleaned(self):
+        self._post({"event": "spam", "email": "bhook@example.com"})
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.brevo_status, "cleaned")
+
+
+class BrevoSelfServiceTests(TestCase):
+    """The shared self-service links also clear the remembered Brevo opt-out on resubscribe."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Self Serve Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Sam", email="sam2@example.com")
+
+    def test_resubscribe_clears_brevo_status(self):
+        self.member.contact_status = "non_essential"
+        self.member.brevo_status = "unsubscribed"
+        self.member.save()
+        url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        self.client_http.get(url)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "contact")
+        self.assertEqual(self.member.brevo_status, "")
+
+
+class BrevoConnectViewTests(TestCase):
+    """Pasting an API key validates it against Brevo, then stores it encrypted at rest."""
+
+    def setUp(self):
+        self.client_http = Client()
+        self.club = Club.objects.create(name="Brevo Connect Club")
+        self.admin = User.objects.create_superuser("brevoadmin", "ba@example.com", "pw")
+        UserData.objects.get_or_create(user=self.admin)
+        self.client_http.force_login(self.admin)
+
+    def _url(self):
+        return reverse("brevo_connect", kwargs={"slug": self.club.slug})
+
+    def test_valid_key_is_stored(self):
+        with patch("auctions.brevo.list_contact_lists", return_value=[]):
+            resp = self.client_http.post(self._url(), {"api_key": "xkeysib-good"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.brevo_api_key, "xkeysib-good")
+        self.assertTrue(self.club.brevo_webhook_secret)
+        self.assertIsNotNone(self.club.brevo_connected_on)
+
+    def test_invalid_key_is_rejected(self):
+        with patch("auctions.brevo.list_contact_lists", side_effect=brevo.BrevoApiError(401, "unauthorized")):
+            resp = self.client_http.post(self._url(), {"api_key": "bad"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+
+    def test_empty_key_rejected(self):
+        self.client_http.post(self._url(), {"api_key": ""})
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+
+    def test_ip_block_reports_ip_and_does_not_store_key(self):
+        from django.contrib.messages import get_messages
+
+        err = brevo.BrevoApiError(401, "API Key used from an IP address (203.0.113.9) that is not authorized")
+        with patch("auctions.brevo.list_contact_lists", side_effect=err):
+            resp = self.client_http.post(self._url(), {"api_key": "xkeysib-ip-blocked"})
+        self.assertEqual(resp.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.brevo_api_key)
+        msgs = [m.message for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("203.0.113.9" in m for m in msgs))
+
+
+class BrevoErrorClassificationTests(TestCase):
+    """Telling Brevo's blocked-IP 401 apart from a bad-key 401 (both share code 'unauthorized')."""
+
+    def test_ip_block_returns_ip(self):
+        exc = brevo.BrevoApiError(401, "Using this API Key from an IP address (1.2.3.4) that is not authorized")
+        self.assertEqual(brevo.blocked_ip_from_error(exc), "1.2.3.4")
+
+    def test_ip_block_without_parseable_ip_returns_empty(self):
+        exc = brevo.BrevoApiError(401, "This IP address is not in your authorized IPs list")
+        self.assertEqual(brevo.blocked_ip_from_error(exc), "")
+
+    def test_bad_key_returns_none(self):
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(401, "Key not found")))
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(401, "unauthorized")))
+
+    def test_non_401_returns_none(self):
+        self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(400, "bad request from 1.2.3.4")))
+
+
+class CommandPaletteTests(StandardTestCase):
+    """Tests for the command palette: search scoping, default items, search logging, and routing."""
+
+    def _login(self, user):
+        self.client.force_login(user)
+
+    def _all_item_titles(self, response):
+        titles = []
+        for group in response.json()["groups"]:
+            for item in group["items"]:
+                titles.append(item["title"])
+        return titles
+
+    def _group_labels(self, response):
+        return [group["label"] for group in response.json()["groups"]]
+
+    def test_endpoints_require_login(self):
+        client = Client()
+        resp = client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("login", resp.url.lower())  # redirected to authenticate
+        resp = client.post(reverse("command_palette_log"), {"search": "x"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_default_items_for_admin(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 200)
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("View lots" in t for t in titles))
+        self.assertTrue(any("View users" in t for t in titles))  # admin-only
+        self.assertTrue(any("Quick checkout" in t for t in titles))  # admin-only
+
+    def test_default_items_for_non_admin_shows_invoice(self):
+        self.invoiceB.status = "UNPAID"
+        self.invoiceB.save()
+        self.userB.userdata.last_auction_used = self.online_auction
+        self.userB.userdata.save()
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"))
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("invoice" in t.lower() for t in titles))
+        self.assertFalse(any("View users" in t for t in titles))  # not an admin
+
+    def test_search_returns_auctions_and_lots(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("Auctions", self._group_labels(resp))
+        resp = self.client.get(reverse("command_palette"), {"q": "test lot"})
+        self.assertIn("Lots", self._group_labels(resp))
+
+    def test_search_hides_unlisted_auction_and_lots(self):
+        self.online_auction.title = "Visible Scope Auction"
+        self.online_auction.save()
+        self.lot.lot_name = "Visible Scope Lot"
+        self.lot.save()
+        hidden_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Visible Scope Auction Hidden",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=False,
+        )
+        hidden_location = PickupLocation.objects.create(
+            name="hidden location",
+            auction=hidden_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        hidden_tos = AuctionTOS.objects.create(
+            user=self.admin_user,
+            auction=hidden_auction,
+            pickup_location=hidden_location,
+        )
+        Lot.objects.create(
+            lot_name="Visible Scope Lot Hidden",
+            auction=hidden_auction,
+            auctiontos_seller=hidden_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Auction"})
+        auction_titles = [i["title"] for g in resp.json()["groups"] if g["label"] == "Auctions" for i in g["items"]]
+        self.assertIn(self.online_auction.title, auction_titles)
+        self.assertNotIn(hidden_auction.title, auction_titles)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Lot"})
+        lot_subtitles = [i["subtitle"] for g in resp.json()["groups"] if g["label"] == "Lots" for i in g["items"]]
+        self.assertIn(self.online_auction.title, lot_subtitles)
+        self.assertNotIn(hidden_auction.title, lot_subtitles)
+
+    def test_lot_search_excludes_deleted_parent_auction(self):
+        deleted_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Deleted Parent Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            is_deleted=True,
+        )
+        deleted_location = PickupLocation.objects.create(
+            name="deleted location",
+            auction=deleted_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        deleted_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=deleted_auction,
+            pickup_location=deleted_location,
+        )
+        Lot.objects.create(
+            lot_name="Deleted Parent Lot",
+            auction=deleted_auction,
+            auctiontos_seller=deleted_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Deleted Parent Lot"})
+        self.assertNotIn("Lots", self._group_labels(resp))
+
+    def test_search_matches_page_shortcuts(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "preferences"})
+        self.assertIn("Go to", self._group_labels(resp))
+
+    def test_club_member_search_scoped_to_admins(self):
+        club = Club.objects.create(name="Test Aquarium Club")
+        ClubMember.objects.create(club=club, name="Secret Member", email="secret@example.com")
+        # An admin of the club can find members.
+        ClubMember.objects.create(club=club, user=self.user, name="Admin Member", permission_view=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertIn("Club members", self._group_labels(resp))
+        # A user with no admin rights to the club cannot.
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertNotIn("Club members", self._group_labels(resp))
+
+    def test_log_upsert_keeps_one_row_and_records_click(self):
+        self._login(self.user)
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(reverse("command_palette_log"), {"search": "pref", "result": "pending"})
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row rather than creating a new one.
+        resp = self.client.post(
+            reverse("command_palette_log"), {"id": search_id, "search": "preferences", "result": "pending"}
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        # Clicking a page result finalizes the row and bumps that page's hit counter.
+        self.client.post(
+            reverse("command_palette_log"),
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        row = CommandPaletteSearch.objects.get(pk=search_id)
+        self.assertEqual(row.search, "preferences")
+        self.assertEqual(row.result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)
+
+    def test_recent_searches_appear_in_defaults(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="angelfish", result="abandoned")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
+
+    def test_landing_page_in_person_admin_redirects_to_users(self):
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
+
+    def test_email_search_is_exact_and_includes_auctiontos(self):
+        # online_auction is created by self.user, so they administer it.
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="findme@example.com",
+            name="Find Me",
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@example.com"})
+        labels = self._group_labels(resp)
+        self.assertIn("Auction users", labels)
+        # the link pre-populates ?query= so the record surfaces on the destination page
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Auction users" for i in g["items"]]
+        self.assertTrue(any("query=" in u for u in urls))
+        # exact match only: a partial email should not match
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@exa"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_auctiontos_tied_to_club_member_is_excluded(self):
+        club = Club.objects.create(name="Linked Club")
+        member = ClubMember.objects.create(club=club, email="linked@example.com", name="Linked Person")
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="linked@example.com",
+            name="Linked Person",
+            clubmember=member,
+        )
+        self._login(self.user)  # admin of online_auction, not of Linked Club
+        resp = self.client.get(reverse("command_palette"), {"q": "linked@example.com"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_multi_club_member_results_include_all_admin_clubs(self):
+        for name in ["Club Alpha", "Club Beta"]:
+            club = Club.objects.create(name=name)
+            ClubMember.objects.create(club=club, user=self.user, name=f"admin {name}", permission_view=True)
+            ClubMember.objects.create(club=club, name="Zelda Tester", email=f"zelda-{club.pk}@example.com")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Zelda"})
+        member_items = [i for g in resp.json()["groups"] if g["label"] == "Club members" for i in g["items"]]
+        self.assertEqual(len(member_items), 2)
+
+    def test_synonym_matches_page_shortcut(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "update email"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("account_email"), urls)
+
+    def test_auction_field_name_matches_settings_page(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "tax"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}), urls)
+
+    def test_auction_field_search_only_includes_editable_form_fields(self):
+        # paypal_email_address is a model field that lives on no form, so "paypal" must not be
+        # advertised as a configurable auction setting ("configure paypal email address").
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "paypal"})
+        edit_url = reverse("edit_auction", kwargs={"slug": self.online_auction.slug})
+        settings_items = [
+            i for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"] if i["url"] == edit_url
+        ]
+        # The editable "PayPal payments" toggle (enable_online_payments) still surfaces...
+        self.assertTrue(settings_items)
+        for item in settings_items:
+            self.assertIn("PayPal payments", item["subtitle"])
+            # ...but the un-editable paypal_email_address field never does.
+            self.assertNotIn("email address", item["subtitle"].lower())
+
+    def test_set_winners_excluded_for_online_auction(self):
+        # Online auctions pick winners from bids; the set-lot-winners shortcut must not appear.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertNotIn(self.online_auction.set_lot_winners_link, urls)
+
+    def test_set_winners_shown_for_open_in_person_auction(self):
+        self.in_person_auction.date_start = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
+
+    def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug}), urls)
+        self.assertNotIn(self.in_person_auction.add_lot_link, urls)
+
+        self.in_person_auction.allow_bulk_adding_lots = False
+        self.in_person_auction.save()
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.add_lot_link, urls)
+
+    def test_command_palette_response_is_not_cached(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("private", resp["Cache-Control"])
+        self.assertIn("no-store", resp["Cache-Control"])
+
+    def test_print_and_label_shortcuts(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        print_labels_url = reverse("print_my_labels", kwargs={"slug": self.online_auction.slug})
+        for q in ["print", "label"]:
+            urls = [
+                i["url"]
+                for g in self.client.get(reverse("command_palette"), {"q": q}).json()["groups"]
+                for i in g["items"]
+            ]
+            self.assertIn(print_labels_url, urls, f"print labels shortcut missing for '{q}'")
+            self.assertIn(reverse("printing"), urls, f"printing preferences shortcut missing for '{q}'")
+        # The per-auction label setup is admin-only and keyed off "label", not "print".
+        label_urls = [
+            i["url"]
+            for g in self.client.get(reverse("command_palette"), {"q": "label"}).json()["groups"]
+            for i in g["items"]
+        ]
+        self.assertIn(reverse("auction_label_config", kwargs={"slug": self.online_auction.slug}), label_urls)
+
+    def test_bounce_is_recorded(self):
+        self._login(self.user)
+        resp = self.client.post(reverse("command_palette_log"), {"search": "zzzznotathing", "result": "bounce"})
+        row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
+        self.assertEqual(row.result, "bounce")
+
+    def test_ready_invoice_is_top_default_result(self):
+        self.invoice.status = "UNPAID"
+        self.invoice.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        first = resp.json()["groups"][0]["items"][0]
+        self.assertEqual(first["type"], "invoice")
+
+    def _all_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+
+    def _go_to_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+
+    def _make_palette_club(self, user, **permissions):
+        """Create a club, make ``user`` a member with the given permissions, and record it as the
+        user's last club used so the palette's club shortcuts target it."""
+        club = Club.objects.create(name="Palette Club", enable_club_page=True)
+        ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
+        user.userdata.last_club_used = club
+        user.userdata.save()
+        return club
+
+    def test_api_search_returns_club_api_keys_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "api"})
+        self.assertIn(reverse("club_api_keys", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_username_search_returns_preferences_and_change_username(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "username"})
+        urls = self._go_to_urls(resp)
+        self.assertIn(reverse("change_username"), urls)
+        self.assertIn(reverse("preferences"), urls)
+        # The preferences hit names the specific field it would change.
+        pref_items = [
+            i
+            for g in resp.json()["groups"]
+            if g["label"] == "Go to"
+            for i in g["items"]
+            if i["url"] == reverse("preferences")
+        ]
+        self.assertTrue(any("username" in i["subtitle"].lower() for i in pref_items))
+
+    def test_club_settings_field_search_returns_settings_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "facebook"})
+        self.assertIn(reverse("club_edit", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_club_shortcuts_scoped_to_last_club_used(self):
+        club_a = Club.objects.create(name="Club A Palette")
+        club_b = Club.objects.create(name="Club B Palette")
+        ClubMember.objects.create(club=club_a, user=self.user, name="A", permission_view=True)
+        ClubMember.objects.create(club=club_b, user=self.user, name="B", permission_view=True)
+        self.user.userdata.last_club_used = club_a
+        self.user.userdata.save()
+        self._login(self.user)
+        urls = self._go_to_urls(self.client.get(reverse("command_palette"), {"q": "members"}))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club_a.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club_b.slug}), urls)
+
+    def test_lot_search_excludes_promoted_auction_user_has_not_joined(self):
+        promoted = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Promoted Palette Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=True,
+        )
+        loc = PickupLocation.objects.create(
+            name="promoted loc", auction=promoted, pickup_time=timezone.now() + datetime.timedelta(days=6)
+        )
+        seller = AuctionTOS.objects.create(user=self.admin_user, auction=promoted, pickup_location=loc)
+        Lot.objects.create(lot_name="Promoted Palette Lot", auction=promoted, auctiontos_seller=seller, quantity=1)
+        self._login(self.user)  # self.user has not joined the promoted auction
+        resp = self.client.get(reverse("command_palette"), {"q": "Promoted Palette"})
+        # The auction itself is visible (promoted), but its lots are not searchable by a non-participant.
+        self.assertIn("Auctions", self._group_labels(resp))
+        self.assertNotIn("Lots", self._group_labels(resp))
+
+    def test_checkin_membership_card_shown_for_unchecked_in_member(self):
+        club = Club.objects.create(name="Check-in Palette Club")
+        member_user = User.objects.create_user(username="cm_palette", password="testpassword", email="cm@example.com")
+        member = ClubMember.objects.create(club=club, user=member_user, name="CM Palette")
+        auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Check-in Palette Auction",
+            is_online=False,
+            date_start=timezone.now() + datetime.timedelta(days=2),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            club=club,
+            manage_users_through_club="checkin",
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.assertTrue(auction.use_check_in_mode)
+        member_user.userdata.last_auction_used = auction
+        member_user.userdata.save()
+        self._login(member_user)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}), urls)
+
+    def test_club_default_falls_back_to_home_without_manage_permissions(self):
+        club = Club.objects.create(name="Home Fallback Club")
+        ClubMember.objects.create(club=club, user=self.userB, name="Plain Member")
+        self.userB.userdata.last_club_used = club
+        self.userB.userdata.save()
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_detail", kwargs={"slug": club.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_club_default_shows_members_with_manage_permission(self):
+        club = self._make_palette_club(self.userB, permission_view=True)
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_membership_card_search_terms_return_uuid_card(self):
+        club = self._make_palette_club(self.user)
+        member = ClubMember.objects.get(club=club, user=self.user)
+        card_url = reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid})
+        self._login(self.user)
+        for term in ["card", "membership", "member", club.name]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertIn(card_url, urls, f"membership card missing for query '{term}'")
+
+    def test_membership_pay_page_not_in_palette(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        pay_url = reverse("club_membership_pay", kwargs={"slug": club.slug})
+        self._login(self.user)
+        for term in ["renew", "membership", "pay dues", "dues"]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertNotIn(pay_url, urls, f"pay page should not appear for '{term}'")
+
+    def test_analytics_view_is_admin_only(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="needle", result="bounce")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 302)  # non-superuser redirected
+        superuser = User.objects.create_superuser("cp_super", "cp_super@example.com", "testpassword")
+        self.client.force_login(superuser)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "needle")
+
+
+class MobileCommandPaletteTests(StandardTestCase):
+    """The /api/mobile/ command-palette endpoints reuse the shared command_palette module, so this
+    only covers what differs from the web: JWT (not session) auth, the JSON contract the app reads,
+    and that search-logging is wired through the same log_search upsert."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
+        self.search_url = reverse("mobile-command-palette")
+        self.log_url = reverse("mobile-command-palette-log")
+
+    def _labels(self, resp):
+        return [g["label"] for g in resp.json()["groups"]]
+
+    def test_requires_jwt_not_session(self):
+        # No token at all is rejected (DRF answers 401/403 depending on the auth header).
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+        # A web session must NOT grant access to the mobile endpoints (IsMobileAuthenticated only
+        # accepts JWT), so a session-authenticated request is still denied.
+        self.client.force_login(self.user)
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+
+    def test_search_returns_grouped_results(self):
+        resp = self.client.get(self.search_url, {"q": "online"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Auctions", self._labels(resp))
+        resp = self.client.get(self.search_url, {"q": "test lot"}, **self.bearer)
+        self.assertIn("Lots", self._labels(resp))
+
+    def test_item_shape_and_default_items(self):
+        resp = self.client.get(self.search_url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Cache-Control"], "private, no-store")
+        items = [i for g in resp.json()["groups"] for i in g["items"]]
+        self.assertTrue(items)
+        # Admin of the most recent auction sees the "View lots" default; every item carries the
+        # full contract the mobile client renders.
+        self.assertTrue(any("View lots" in i["title"] for i in items))
+        for key in ("type", "title", "subtitle", "url", "icon", "id"):
+            self.assertIn(key, items[0])
+
+    def test_log_upsert_and_click_bumps_page_hits(self):
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(self.log_url, {"search": "pref", "result": "pending"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row (one row per session).
+        resp = self.client.post(
+            self.log_url, {"id": search_id, "search": "preferences", "result": "pending"}, **self.bearer
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        self.client.post(
+            self.log_url,
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+            **self.bearer,
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(CommandPaletteSearch.objects.get(pk=search_id).result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)
+
+
+class MobileLabelTests(StandardTestCase):
+    """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.url = reverse("mobile-label-lot", kwargs={"pk": self.lot.pk})  # self.lot is sold by self.user
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def test_returns_png_for_lot_seller(self):
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_auction_admin_can_print_other_sellers_lot(self):
+        resp = self.client.get(self.url, **self._bearer(self.admin_user))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_forbidden_for_non_owner_non_admin(self):
+        resp = self.client.get(self.url, **self._bearer(self.userB))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_missing_lot_is_404(self):
+        url = reverse("mobile-label-lot", kwargs={"pk": 99999999})
+        self.assertEqual(self.client.get(url, **self._bearer(self.user)).status_code, 404)
+
+    def test_unsupported_format_is_400(self):
+        resp = self.client.get(self.url, {"fmt": "zpl"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_default_resolution_is_600x400(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (600, 400))
+
+    def test_resolution_param_sizes_the_png(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"resolution": "96x64", "dpi": "203"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        img = Image.open(BytesIO(resp.content))
+        self.assertEqual(img.size, (96, 64))
+        # PIL round-trips DPI through the PNG pixels-per-meter chunk, so it comes back ~203.0.
+        dpi_x, dpi_y = img.info.get("dpi")
+        self.assertEqual((round(dpi_x), round(dpi_y)), (203, 203))
+
+    def test_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "not-a-size"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_out_of_range_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "99999x99999"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_jwt(self):
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+class SingleLotLabelPngTests(StandardTestCase):
+    """The web single-lot label endpoint can also emit a PNG (?format=png) via the shared renderer,
+    with the same ?resolution / ?dpi controls as the mobile endpoint; default stays the PDF sheet."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("single_lot_label", kwargs={"pk": self.lot.pk})  # self.lot's seller is self.user
+        self.client.login(username="my_lot", password="testpassword")
+
+    def test_default_is_pdf(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotEqual(resp["Content-Type"], "image/png")
+
+    def test_format_png_returns_png(self):
+        resp = self.client.get(self.url, {"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_png_honors_resolution(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"format": "png", "resolution": "96x64"})
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (96, 64))
+
+    def test_png_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"format": "png", "resolution": "garbage"})
+        self.assertEqual(resp.status_code, 400)
+
+
+class MobileEmailLoginTests(TestCase):
+    """MobileAuthService email fallback must work even when multiple users share an email, and it
+    must honour allauth's mandatory email-verification policy (no weaker side door than the web)."""
+
+    def setUp(self):
+        from allauth.account.models import EmailAddress
+
+        self.alice = User.objects.create_user("alice", "dup@example.com", "pw-alice")
+        self.bob = User.objects.create_user("bob", "dup@example.com", "pw-bob")
+        # ACCOUNT_EMAIL_VERIFICATION is mandatory, so these must have a verified email to log in.
+        for user in (self.alice, self.bob):
+            EmailAddress.objects.create(user=user, email=user.email, verified=True, primary=True)
+
+    def test_login_by_username_still_works(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("alice", "pw-alice"), self.alice)
+
+    def test_duplicate_email_resolves_to_password_owner(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-bob"), self.bob)
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-alice"), self.alice)
+
+    def test_wrong_password_returns_none(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertIsNone(MobileAuthService.authenticate("dup@example.com", "nope"))
+
+    def test_unverified_email_blocked_when_verification_mandatory(self):
+        """A correct password is not enough when the email is unverified — matches web login."""
+        from auctions.mobile.services.auth import MobileAuthService
+
+        # No verified EmailAddress for carol.
+        User.objects.create_user("carol", "carol@example.com", "pw-carol")
+        self.assertIsNone(MobileAuthService.authenticate("carol", "pw-carol"))
+        self.assertIsNone(MobileAuthService.authenticate("carol@example.com", "pw-carol"))
+
+    def test_inactive_user_blocked(self):
+        from allauth.account.models import EmailAddress
+
+        from auctions.mobile.services.auth import MobileAuthService
+
+        dave = User.objects.create_user("dave", "dave@example.com", "pw-dave", is_active=False)
+        EmailAddress.objects.create(user=dave, email=dave.email, verified=True, primary=True)
+        self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
+
+
+class MobileWebSessionTests(TestCase):
+    """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
+    WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
+    must never be established by the mint call and must carry HttpOnly/Secure flags from the consume
+    redirect; the token must be single-use and fail closed (redirect to login, no session)."""
+
+    SESSION_COOKIE = "sessionid"
+
+    def setUp(self):
+        from django.conf import settings
+        from django.core.cache import cache
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        # Random-token TTL keys can't collide between tests, but clear to keep the cache deterministic.
+        cache.clear()
+        self.user = User.objects.create_user("websession", "ws@example.com", "pw")
+        self.access = str(RefreshToken.for_user(self.user).access_token)
+        self.mint_url = reverse("mobile-auth-web-session")
+        self.consume_url = reverse("mobile-auth-web-session-consume")
+        self.login_url = reverse("account_login")
+        self.home_url = settings.LOGIN_REDIRECT_URL
+
+    def _bearer(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+
+    def _mint_token(self):
+        from auctions.mobile.services.web_session import WebSessionService
+
+        return WebSessionService.create_handoff_token(self.user)
+
+    def _logged_in_user_id(self):
+        from django.contrib.auth import SESSION_KEY
+
+        return self.client.session.get(SESSION_KEY)
+
+    def test_mint_requires_jwt(self):
+        self.assertIn(self.client.post(self.mint_url).status_code, (401, 403))
+
+    def test_mint_returns_consume_url_without_establishing_a_session(self):
+        resp = self.client.post(self.mint_url, **self._bearer())
+        self.assertEqual(resp.status_code, 200)
+        handoff_url = resp.json()["handoff_url"]
+        self.assertIn(self.consume_url, handoff_url)
+        self.assertIn("t=", handoff_url)
+        # The mint call must NOT log anyone in: no session cookie, the token is the only credential.
+        self.assertNotIn(self.SESSION_COOKIE, resp.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_logs_in_and_sets_session_cookie(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.home_url)
+        self.assertIn(self.SESSION_COOKIE, resp.cookies)
+        # The follow-up request carries the cookie, so the WebView is now authenticated as the user.
+        self.assertEqual(self._logged_in_user_id(), str(self.user.pk))
+
+    @override_settings(SESSION_COOKIE_SECURE=True)
+    def test_session_cookie_carries_httponly_and_secure(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        morsel = resp.cookies[self.SESSION_COOKIE]
+        self.assertTrue(morsel["httponly"])
+        self.assertTrue(morsel["secure"])
+
+    def test_token_is_single_use(self):
+        token = self._mint_token()
+        first = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(first.url, self.home_url)
+
+        # Replaying the same token must not mint a second session.
+        self.client.logout()
+        second = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(second.url, self.login_url)
+        self.assertNotIn(self.SESSION_COOKIE, second.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_missing_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_invalid_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url, {"t": "not-a-real-token"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_inactive_user_cannot_consume(self):
+        token = self._mint_token()
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        resp = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_honours_safe_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "/lots/"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/lots/")
+
+    def test_consume_rejects_offsite_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "https://evil.example.com/"})
+        self.assertEqual(resp.status_code, 302)
+        # Open-redirect attempt falls back to the safe default rather than the attacker's host.
+        self.assertEqual(resp.url, self.home_url)
+
+
+class MobilePaymentConfirmTests(StandardTestCase):
+    """confirm_mobile_payment verifies an on-device Tap to Pay charge + idempotent recording.
+
+    The Mobile Payments SDK charges the card on-device and returns a completed payment_id; the
+    server re-fetches it via GetPayment (client.payments.get) and verifies it before recording.
+
+    Tap to Pay is operated by the merchant (auction admin), so the service is driven here as
+    ``self.admin_user`` (an is_admin TOS on the auction); the buyer is never authorized.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A fresh buyer with no lots + one ADD adjustment owes a deterministic $20.
+        self.buyer = User.objects.create_user("mobilebuyer", "mb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+    def _mock_seller(self, get_return=None, get_side_effect=None):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        client = MagicMock()
+        if get_side_effect is not None:
+            client.payments.get.side_effect = get_side_effect
+        else:
+            client.payments.get.return_value = get_return
+        seller.get_square_client.return_value = client
+        return seller, client
+
+    def _payment_response(
+        self,
+        pid="PAY1",
+        status_="COMPLETED",
+        receipt="RC123",
+        amount=2000,
+        currency=None,
+        location_id="LOC1",
+        reference_id=None,
+    ):
+        from types import SimpleNamespace
+
+        # Mirror the squareup 44.x typed GetPaymentResponse: .errors, .payment, and a nested Money
+        # object (attributes, not a dict) on .amount_money.
+        currency = currency if currency is not None else self.pay_invoice.currency
+        reference_id = reference_id if reference_id is not None else str(self.pay_invoice.pk)
+        payment = SimpleNamespace(
+            id=pid,
+            status=status_,
+            receipt_number=receipt,
+            amount_money=SimpleNamespace(amount=amount, currency=currency),
+            location_id=location_id,
+            reference_id=reference_id,
+        )
+        return SimpleNamespace(errors=None, payment=payment)
+
+    def test_confirm_verifies_payment_records_and_marks_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            result = PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="idem-1", user=self.admin_user
+            )
+        self.assertTrue(client.payments.get.called)  # GetPayment, not payments.create
+        self.assertFalse(client.payments.create.called)  # the server must NOT charge anything
+        self.assertEqual(client.payments.get.call_args.kwargs["payment_id"], "PAY1")
+        self.assertEqual(result["payment_id"], "PAY1")
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+
+    def test_create_and_confirm_use_rounded_amount(self):
+        """With invoice rounding on, Tap to Pay charges/verifies the rounded balance, not the cents.
+
+        A fractional residual ($19.60 owed) is charged at the rounded $19.00 (customer's favour);
+        confirm must accept the $19.00 (1900c) Square charge and mark the invoice PAID even though a
+        fractional residual remains on net_after_payments.
+        """
+        from decimal import Decimal
+
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default; the fix is a no-op without it
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundbuyer", "rb@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        # Rounding must actually change the amount for this test to be meaningful.
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        self.assertNotEqual(rounded, unrounded)
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        amount_cents = int(rounded * 100)
+        seller, _ = self._mock_seller(
+            get_return=self._payment_response(amount=amount_cents, reference_id=str(invoice.pk))
+        )
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            create_result = PaymentService.create_mobile_payment(invoice_pk=invoice.pk, user=self.admin_user)
+            self.assertEqual(create_result["amount"], str(rounded))  # rounded, not the fractional balance
+
+            confirm_result = PaymentService.confirm_mobile_payment(
+                invoice_pk=invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+            )
+        self.assertEqual(confirm_result["payment_id"], "PAY1")
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        payment = InvoicePayment.objects.get(invoice=invoice, external_id="PAY1")
+        self.assertEqual(payment.amount, rounded)  # recorded the verified (rounded) Square amount
+
+    def _assert_rejected_and_unrecorded(self, payment_response):
+        """A verification failure must raise ValueError and record / mark nothing."""
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(get_return=payment_response)
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+        self.pay_invoice.refresh_from_db()
+        self.assertNotEqual(self.pay_invoice.status, "PAID")
+        ensure.assert_not_called()
+        renew.assert_not_called()
+
+    def test_confirm_rejects_wrong_amount(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(amount=1999))
+
+    def test_confirm_rejects_wrong_currency(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(currency="EUR"))
+
+    def test_confirm_rejects_non_completed_status(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(status_="PENDING"))
+
+    def test_confirm_rejects_wrong_location(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(location_id="LOC_OTHER"))
+
+    def test_confirm_rejects_wrong_reference_id(self):
+        # A payment bound to a different invoice's reference (its pk) must not pay this one.
+        self._assert_rejected_and_unrecorded(self._payment_response(reference_id=str(self.pay_invoice.pk + 99999)))
+
+    def test_confirm_rejects_already_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        self.pay_invoice.status = "PAID"
+        self.pay_invoice.save(update_fields=["status"])
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        self.assertFalse(client.payments.get.called)
+
+    def test_confirm_is_idempotent_on_external_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        # Owe more than the pre-existing payment so a balance remains (a payment that covers the
+        # whole invoice would trip the "no amount due" guard before the dedup path is reached).
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=40, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+        # Simulate the Square webhook (or a prior retry) already recording this payment.
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        # $60 owed, $20 already recorded → $40 (4000 cents) due at confirm time; the verification
+        # recomputes amount_due net of the existing payment, so the fetched payment must match it.
+        seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=4000))
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+            )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+        ensure.assert_not_called()  # didn't create the record → must not re-run renewal side effects
+        renew.assert_not_called()
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+
+    def test_confirm_square_error_raises_valueerror(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(get_side_effect=Exception("payment not found"))
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+
+    def test_create_returns_access_token_not_application_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+        self.assertEqual(result["access_token"], "tok")
+        self.assertNotIn("square_application_id", result)
+        self.assertEqual(result["location_id"], "LOC1")
+        self.assertEqual(result["amount"], "20.00")
+        # The client must charge with this reference_id; it matches the web convention (str(pk)).
+        self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+
+    def test_create_blocks_seller_without_tap_to_pay_scope(self):
+        # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device
+        # is handed a token, with a distinguishable error so the app can prompt a reconnect.
+        from auctions.mobile.services.payments import PaymentService, SquareReconnectRequired
+
+        seller, _ = self._mock_seller()
+        seller.supports_tap_to_pay = False
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(SquareReconnectRequired):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+
+    def test_create_denies_buyer(self):
+        # The buyer must NOT be able to create a payment — that would leak the seller's Square token.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+
+    def test_create_denies_non_admin_other_user(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.userB)
+
+    def test_create_allows_is_admin_tos_on_square_auction_without_club(self):
+        # A Square auction with no club: anyone with an is_admin AuctionTOS (not just the creator)
+        # can take payment. online_auction has no club, and this fresh admin isn't its creator.
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertIsNone(self.online_auction.club_id)  # no club on this auction
+        tos_admin = User.objects.create_user("tos_admin", "ta@example.com", "pw")
+        AuctionTOS.objects.create(
+            user=tos_admin, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=tos_admin)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_allows_club_manage_auctions_permission(self):
+        # A club member with "manage auctions" can take payment for that club's auction invoice —
+        # even when the auction is not manage_users_through_club (so Auction.permission_check alone,
+        # which gates the club branch on is_club_managed, would not grant it).
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Mgr Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        manager = User.objects.create_user("club_mgr", "mgr@example.com", "pw")
+        ClubMember.objects.create(club=club, user=manager, name="Mgr", permission_manage_auctions=True)
+        self.assertFalse(self.online_auction.permission_check(manager))  # not granted by the auction alone
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=manager)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_denies_club_member_without_payment_permission(self):
+        # A plain club member (no money / manage-auctions / admin permission) is still denied.
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Plain Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        member = User.objects.create_user("plain_member", "pm@example.com", "pw")
+        ClubMember.objects.create(club=club, user=member, name="Plain")
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=member)
+
+    def test_confirm_denies_buyer_before_charging(self):
+        # Buyer is rejected before any Square call and nothing is recorded.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                )
+        self.assertFalse(client.payments.get.called)
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+
+
+class MobilePaymentEndpointTests(StandardTestCase):
+    """The /api/mobile/payments/ HTTP layer: JWT auth, the PermissionError->403 mapping, and that
+    only the merchant (auction admin) — not the buyer — can reach create/confirm."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.buyer = User.objects.create_user("endpointbuyer", "eb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+        self.create_url = reverse("mobile-payment-create")
+        self.confirm_url = reverse("mobile-payment-confirm")
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def _mock_seller(self):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        return seller
+
+    def test_create_requires_jwt(self):
+        self.assertIn(self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}).status_code, (401, 403))
+
+    def test_admin_can_create_and_gets_reference_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(
+                self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.admin_user)
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["access_token"], "tok")
+        self.assertEqual(body["reference_id"], str(self.pay_invoice.pk))
+
+    def test_buyer_create_is_403(self):
+        # Even with Square configured, the buyer must get 403 and never see the access token.
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.buyer))
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("access_token", resp.json())
+
+    def test_buyer_confirm_is_403(self):
+        resp = self.client.post(
+            self.confirm_url,
+            {"invoice_pk": self.pay_invoice.pk, "payment_id": "PAY1", "idempotency_key": "i"},
+            **self._bearer(self.buyer),
+        )
+        self.assertEqual(resp.status_code, 403)

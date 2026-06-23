@@ -6,7 +6,6 @@ from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.db.models import Q
-from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
 
@@ -168,7 +167,7 @@ class Command(BaseCommand):
                 continue
 
             channel_id = club.auction_channel_id
-            auction_url = f"https://{domain}{reverse('auction_main', kwargs={'slug': auction.slug})}"
+            auction_url = f"https://{domain}/?{auction.slug}"
 
             if not auction.is_online:
                 self._notify_inperson(auction, channel_id, auction_url, now)
@@ -183,7 +182,9 @@ class Command(BaseCommand):
             and auction.lot_submission_start_date <= now
         ):
             lines = [f"**{auction.title}** lot submission is now open!"]
-            if auction.lot_submission_end_date:
+            if auction.lot_submission_end_date and (
+                not auction.date_start or auction.lot_submission_end_date < auction.date_start
+            ):
                 lines.append(f"Submit lots before <t:{int(auction.lot_submission_end_date.timestamp())}:f>")
             if auction.date_start:
                 lines.append(f"Auction starts <t:{int(auction.date_start.timestamp())}:f>")
@@ -207,7 +208,7 @@ class Command(BaseCommand):
             and auction.date_start - timedelta(hours=24) <= now < auction.date_start
         ):
             lines = [
-                f"**{auction.title}** starts in <t:{int(auction.date_start.timestamp())}:f>",
+                f"**{auction.title}** starts <t:{int(auction.date_start.timestamp())}:R>",
                 auction_url,
             ]
             ok = _send_discord_channel_message(channel_id, "\n".join(lines))
@@ -290,7 +291,7 @@ class Command(BaseCommand):
                 auction.save(update_fields=["discord_event_created"])
                 continue
 
-            auction_url = f"https://{domain}{reverse('auction_main', kwargs={'slug': auction.slug})}"
+            auction_url = f"https://{domain}/?{auction.slug}"
 
             if auction.is_online:
                 start_time = auction.date_start
