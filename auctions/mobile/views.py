@@ -460,7 +460,7 @@ class MobileLotLabelView(APIView):
                 resolution=request.GET.get("resolution"),
                 dpi=request.GET.get("dpi"),
             )
-        except ValueError as exc:
+        except ValueError:
             logger.warning("Invalid label request.", exc_info=True)
             return Response(
                 {"detail": "Invalid label request."},

@@ -9328,7 +9328,7 @@ class SingleLotLabelView(LotLabelView):
                     resolution=request.GET.get("resolution"),
                     dpi=request.GET.get("dpi"),
                 )
-            except ValueError as exc:
+            except ValueError:
                 logging.getLogger(__name__).warning(
                     "Invalid label rendering parameters for lot %s",
                     self.lot.pk,
