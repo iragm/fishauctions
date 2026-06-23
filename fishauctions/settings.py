@@ -146,6 +146,12 @@ LOGGING = {
             "level": os.getenv("LOG_LEVEL", "INFO"),
             "propagate": False,
         },
+        # Bidding logic: a swallowed error here means a bid may have failed, so page us.
+        "auctions.bidding": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
         # Unhandled exceptions escaping the websocket ASGI app (see asgi.py middleware).
         "auctions.websocket": {
             "handlers": ["console", "root_file", "mail_admins"],

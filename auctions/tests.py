@@ -543,7 +543,7 @@ class LotModelTests(TestCase):
 
     def test_bid_on_lot_creates_new_record_not_update(self):
         """bid_on_lot should create a new bid record when a user raises their proxy bid, not update the old one"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
@@ -579,7 +579,7 @@ class LotModelTests(TestCase):
 
     def test_sealed_bid_creates_exactly_one_record_per_bid(self):
         """For sealed bids, each call to bid_on_lot should create exactly one bid record (no duplicates)"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         timeStart = timezone.now() - datetime.timedelta(days=1)
@@ -612,7 +612,7 @@ class LotModelTests(TestCase):
     def test_user_cannot_bid_against_themselves(self):
         """A user who is already the high bidder should raise their proxy bid silently (INFO),
         not generate a NEW_HIGH_BIDDER event — i.e., they cannot bid against themselves."""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
@@ -1635,7 +1635,7 @@ class DecimalBidValidationTests(TestCase):
 
     def test_fractional_bid_rejected_on_whole_dollar_auction(self):
         """A bid with cents is rejected when only_whole_dollar_bids=True"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.whole_dollar_lot, self.userA, 10.50)
         self.assertEqual(result["type"], "ERROR")
@@ -1643,21 +1643,21 @@ class DecimalBidValidationTests(TestCase):
 
     def test_whole_dollar_bid_accepted_on_whole_dollar_auction(self):
         """A whole-dollar bid is accepted when only_whole_dollar_bids=True"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.whole_dollar_lot, self.userA, 10)
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
 
     def test_decimal_bid_accepted_on_decimal_auction(self):
         """A bid with cents is accepted when only_whole_dollar_bids=False"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.decimal_lot, self.userA, Decimal("5.50"))
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
 
     def test_more_than_two_decimal_places_rejected(self):
         """A bid with more than 2 decimal places is always rejected"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.decimal_lot, self.userA, "10.555")
         self.assertEqual(result["type"], "ERROR")
@@ -1669,7 +1669,7 @@ class DecimalBidValidationTests(TestCase):
         With one bidder present, lot.high_bid equals the reserve_price.
         The 5% increment applies to that reserve_price.
         """
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         # Use a lot with reserve=$10.00 so the math is clean
         time = timezone.now() + datetime.timedelta(days=30)
@@ -1697,7 +1697,7 @@ class DecimalBidValidationTests(TestCase):
 
     def test_whole_dollar_bid_increment_minimum(self):
         """Whole-dollar auction: minimum increment is $1 even when 5% < $1"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         # Use a lot with reserve=$5 (5% = $0.25, rounded down = $0, min=1 → increment is $1)
         time = timezone.now() + datetime.timedelta(days=30)
@@ -6931,322 +6931,6 @@ class WebSocketConsumerTests(TransactionTestCase):
 
             # Anonymous users should not get a response for their message
             # The consumer just passes without doing anything
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_authenticated_with_tos(self):
-        """Test placing a bid as authenticated user who has joined auction"""
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive a response about the bid (either success or error message)
-            found_bid_response = False
-            for _ in range(5):  # Reduced from 10 to 5
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    # Accept any bid-related response: success info types or error
-                    if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
-                        found_bid_response = True
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_bid_response, "Did not receive expected bid response")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_user_not_joined_auction(self):
-        """Test that users who haven't joined auction cannot bid"""
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_who_does_not_join
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error
-            found_error = False
-            for _ in range(5):  # Reduced from 10 to 5
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("joined", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error message")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_anonymous_user(self):
-        """Test that anonymous users cannot bid"""
-        from channels.testing import WebsocketCommunicator
-        from django.contrib.auth.models import AnonymousUser
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = AnonymousUser()
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Anonymous users should not get a response for their bid
-            # The consumer just passes without doing anything
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_before_online_bidding_starts(self):
-        """Test that bids cannot be placed before online bidding starts for in-person auctions"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create an in-person auction with online bidding that hasn't started yet
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        online_bidding_start = timezone.now() + datetime.timedelta(hours=2)
-        online_bidding_end = timezone.now() + datetime.timedelta(days=2)
-
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="In-person auction with future online bidding",
-            is_online=False,
-            date_start=timezone.now(),
-            date_end=theFuture,
-            date_online_bidding_starts=online_bidding_start,
-            date_online_bidding_ends=online_bidding_end,
-            online_bidding="allow",
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Test lot before online bidding",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error about online bidding not started
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("hasn't started", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about online bidding not started")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_after_online_bidding_ends(self):
-        """Test that bids cannot be placed after online bidding ends for in-person auctions"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create an in-person auction with online bidding that has ended
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        online_bidding_start = timezone.now() - datetime.timedelta(days=2)
-        online_bidding_end = timezone.now() - datetime.timedelta(hours=1)
-
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="In-person auction with ended online bidding",
-            is_online=False,
-            date_start=timezone.now() - datetime.timedelta(days=3),
-            date_end=theFuture,
-            date_online_bidding_starts=online_bidding_start,
-            date_online_bidding_ends=online_bidding_end,
-            online_bidding="allow",
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Test lot after online bidding",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error about online bidding ended
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("ended", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about online bidding ended")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_on_sold_lot(self):
-        """Test that bids cannot be placed on lots that have already been sold"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create a sold lot
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="Auction with sold lot",
-            is_online=True,
-            date_start=timezone.now(),
-            date_end=theFuture,
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        winner_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Sold lot",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-            winner=self.user_with_no_lots,
-            auctiontos_winner=winner_tos,
-            winning_price=20,
-        )
-
-        # Try to bid as another user
-        another_user = await database_sync_to_async(User.objects.create_user)(
-            username="another_bidder", password="testpassword", email="another@example.com"
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=another_user, auction=auction, pickup_location=location
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = another_user
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 25})
-
-            # Should receive an error about lot being sold
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("sold", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about lot being sold")
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
@@ -18293,7 +17977,7 @@ class PlaceBidApiTests(TestCase):
             qs = qs.filter(user=user)
         return qs
 
-    @patch("auctions.consumers.broadcast_bid_result")
+    @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_persists_bid(self, mock_broadcast):
         """A valid bid is saved and the result is broadcast to other viewers."""
         self.client.force_login(self.bidder)
@@ -18305,14 +17989,14 @@ class PlaceBidApiTests(TestCase):
         self.assertEqual(bid.amount, 15)
         self.assertTrue(mock_broadcast.called)
 
-    @patch("auctions.consumers.broadcast_bid_result")
+    @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_requires_login(self, mock_broadcast):
         """Anonymous users can't bid and nothing is saved."""
         response = self.client.post(self.url, {"bid": "15"})
         self.assertIn(response.status_code, (401, 403))
         self.assertFalse(self._bids().exists())
 
-    @patch("auctions.consumers.broadcast_bid_result")
+    @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_rejects_user_not_in_auction(self, mock_broadcast):
         """A user who hasn't joined the auction gets an error and no bid is saved."""
         self.client.force_login(self.outsider)
@@ -18321,7 +18005,7 @@ class PlaceBidApiTests(TestCase):
         self.assertEqual(response.json()["type"], "ERROR")
         self.assertFalse(self._bids(self.outsider).exists())
 
-    @patch("auctions.consumers.broadcast_bid_result")
+    @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_missing_lot_returns_404(self, mock_broadcast):
         self.client.force_login(self.bidder)
         response = self.client.post(reverse("lot_bid", kwargs={"pk": 99999999}), {"bid": "15"})
@@ -18330,16 +18014,16 @@ class PlaceBidApiTests(TestCase):
     def test_bid_saved_even_when_broadcast_fails(self):
         """The whole point of moving bids to HTTP: a websocket/channel-layer failure
         must NOT lose the bid. The broadcast raises, yet the bid is still persisted."""
-        from auctions.consumers import place_bid_and_broadcast
+        from auctions.bidding import place_bid_and_broadcast
 
-        with patch("auctions.consumers.broadcast_bid_result", side_effect=Exception("redis down")):
+        with patch("auctions.bidding.broadcast_bid_result", side_effect=Exception("redis down")):
             result = place_bid_and_broadcast(self.lot, self.bidder, "15")
         self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
         self.assertEqual(self._bids(self.bidder).count(), 1)
 
     def test_broadcast_targets_lot_group(self):
         """A normal bid is broadcast to the whole-lot group so every viewer updates."""
-        from auctions.consumers import place_bid_and_broadcast
+        from auctions.bidding import place_bid_and_broadcast
 
         sent = {}
 
@@ -18353,3 +18037,72 @@ class PlaceBidApiTests(TestCase):
 
         self.assertEqual(sent["group"], f"lot_{self.lot.pk}")
         self.assertEqual(sent["message"]["info"], "NEW_HIGH_BIDDER")
+
+    def _in_person_lot(self, **auction_kwargs):
+        """An in-person auction + a lot in it, with the bidder joined. Permission-case
+        helper ported from the old websocket bid tests."""
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(
+            created_by=self.seller,
+            title="In-person auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+            online_bidding="allow",
+            **auction_kwargs,
+        )
+        location = PickupLocation.objects.create(name="ip loc", auction=auction, pickup_time=the_future)
+        seller_tos = AuctionTOS.objects.create(user=self.seller, auction=auction, pickup_location=location)
+        AuctionTOS.objects.create(user=self.bidder, auction=auction, pickup_location=location)
+        lot = Lot.objects.create(
+            lot_name="in person lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=the_future,
+        )
+        Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
+        return lot
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_before_online_bidding_starts(self, mock_broadcast):
+        """In-person auction: bids are rejected before the online bidding window opens."""
+        lot = self._in_person_lot(
+            date_online_bidding_starts=timezone.now() + datetime.timedelta(hours=2),
+            date_online_bidding_ends=timezone.now() + datetime.timedelta(days=2),
+        )
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": lot.pk}), {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("hasn't started", response.json()["message"].lower())
+        self.assertFalse(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_after_online_bidding_ends(self, mock_broadcast):
+        """In-person auction: bids are rejected after the online bidding window closes."""
+        lot = self._in_person_lot(
+            date_online_bidding_starts=timezone.now() - datetime.timedelta(days=2),
+            date_online_bidding_ends=timezone.now() - datetime.timedelta(hours=1),
+        )
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": lot.pk}), {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("ended", response.json()["message"].lower())
+        self.assertFalse(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_on_sold_lot(self, mock_broadcast):
+        """A lot with a winner already assigned can't be bid on.
+        (No winning_price set, so it isn't `ended`; this exercises the winner check.)"""
+        self.lot.winner = self.seller
+        self.lot.auctiontos_winner = self.bidder_tos
+        self.lot.save()
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "25"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("sold", response.json()["message"].lower())
+        self.assertFalse(self._bids(self.bidder).exists())

@@ -5593,7 +5593,7 @@ class Lot(models.Model):
         if self.auction:
             return self.auction.dynamic_end
         # there is currently no hard endings on lots not associated with an auction
-        # as soon as the lot is saved, date_end will be set to dynamic_end (by consumers.reset_lot_end_time)
+        # as soon as the lot is saved, date_end will be set to dynamic_end (by bidding.reset_lot_end_time)
         # a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point
         # collect stats from a couple auctions with dynamic endings and re-assess
         return self.date_end + dynamic_end

@@ -104,7 +104,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
-from .consumers import place_bid_and_broadcast
+from .bidding import place_bid_and_broadcast
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
