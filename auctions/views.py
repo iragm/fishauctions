@@ -5713,6 +5713,10 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             return JsonResponse({"success": False, "error": "Unable to save lot."})
 
     def dispatch(self, request, *args, **kwargs):
+        # Let DRF's IsAuthenticated permission return a clean 401/403 instead of crashing
+        # on request.user.email below when an unauthenticated (e.g. expired session) request comes in
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
         self.get_auction(kwargs.pop("slug", ""))
 
         # Get bidder_number from POST data if present (for admin adding lots for specific user)
