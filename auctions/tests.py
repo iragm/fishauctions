@@ -7887,6 +7887,17 @@ class BulkAddLotsAutoTests(StandardTestCase):
         messages = list(response.context["messages"])
         self.assertTrue(any("admin" in str(m).lower() for m in messages))
 
+    def test_save_lot_ajax_anonymous_is_rejected_not_500(self):
+        """An unauthenticated POST (e.g. expired session) should be rejected cleanly by
+        DRF's IsAuthenticated, not crash with AttributeError on AnonymousUser.email"""
+        self.client.logout()
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot"}',
+            content_type="application/json",
+        )
+        self.assertIn(response.status_code, (401, 403))
+
     def test_save_lot_ajax_security(self):
         """Test that non-admin users cannot add lots for others"""
         # Login as regular user (not auction creator)
