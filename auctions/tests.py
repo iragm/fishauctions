@@ -18011,6 +18011,18 @@ class PlaceBidApiTests(TestCase):
         response = self.client.post(reverse("lot_bid", kwargs={"pk": 99999999}), {"bid": "15"})
         self.assertEqual(response.status_code, 404)
 
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_on_lot_without_category(self, mock_broadcast):
+        """A lot with no species_category must not crash bidding (the category-interest
+        update is skipped, since UserInterestCategory.category can't be null)."""
+        Lot.objects.filter(pk=self.lot.pk).update(species_category=None)
+        self.lot.refresh_from_db()
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "NEW_HIGH_BIDDER")
+        self.assertTrue(self._bids(self.bidder).exists())
+
     def test_bid_saved_even_when_broadcast_fails(self):
         """The whole point of moving bids to HTTP: a websocket/channel-layer failure
         must NOT lose the bid. The broadcast raises, yet the bid is still persisted."""

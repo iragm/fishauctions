@@ -190,12 +190,17 @@ def bid_on_lot(lot, user, amount):
         # Don't persist the bid yet; save it only when the bid is accepted.
         # For sealed bids, the sealed_bid block below creates the record.
         bid = Bid(user=user, lot_number=lot, amount=amount) if created else existing_bid
-        # also update category interest, max one per bid
-        interest, interestCreated = UserInterestCategory.objects.get_or_create(
-            category=lot.species_category,
-            user=user,
-            defaults={"interest": settings.BID_WEIGHT},
-        )
+        # also update category interest, max one per bid (skip lots with no category;
+        # UserInterestCategory.category is non-null, so get_or_create(category=None) would crash)
+        if lot.species_category:
+            interest, interestCreated = UserInterestCategory.objects.get_or_create(
+                category=lot.species_category,
+                user=user,
+                defaults={"interest": settings.BID_WEIGHT},
+            )
+            if not interestCreated:
+                interest.interest += settings.BID_WEIGHT
+                interest.save()
         userData = user.userdata
         userData.has_bid = True
         if userData.username_visible:
@@ -203,9 +208,6 @@ def bid_on_lot(lot, user, amount):
         else:
             user_string = "Anonymous"
         userData.save()
-        if not interestCreated:
-            interest.interest += settings.BID_WEIGHT
-            interest.save()
         if lot.sealed_bid:
             bid = Bid(user=user, lot_number=lot, amount=amount, was_high_bid=True)
             bid.save()
