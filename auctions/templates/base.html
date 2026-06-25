@@ -394,7 +394,7 @@ window.onload = function() {
           </script>
         {% endif %}
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
-        {% if not has_user_location and location_message %}
+        {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
           <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
         </div>

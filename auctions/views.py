@@ -107,6 +107,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
+from .bidding import place_bid_and_broadcast
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
@@ -176,6 +177,7 @@ from .helper_functions import bin_data, get_currency_symbol
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
+    SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
     Auction,
@@ -204,6 +206,7 @@ from .models import (
     Lot,
     LotHistory,
     LotImage,
+    MobileDevice,
     PageView,
     PayPalSeller,
     PickupLocation,
@@ -1707,6 +1710,43 @@ class WatchOrUnwatch(APIView):
             return HttpResponse("Failure")
 
 
+class PlaceBid(APIView):
+    """Place a bid over HTTP - POST only.
+
+    Bidding used to happen entirely over the lot websocket, which meant a dropped
+    or stalled socket could silently lose a bid. This endpoint persists the bid via
+    a normal request and then broadcasts the result over the websocket as before, so
+    the user experience is unchanged but the bid no longer depends on the socket.
+
+    The client does not need to parse this response -- it keeps listening on the
+    websocket for the broadcast -- but we return the result for robustness/tests.
+    """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
+        if not lot:
+            return JsonResponse({"type": "ERROR", "message": "Lot not found"}, status=404)
+        # Persist the bid first (best-effort websocket broadcast happens inside).
+        result = place_bid_and_broadcast(lot, request.user, request.POST.get("bid"))
+        high_bid = result.get("current_high_bid")
+        if isinstance(high_bid, Decimal):
+            high_bid = float(high_bid)
+        # Always 200 for a processed bid (including validation errors like "bid too
+        # low"): those are surfaced to the user via the websocket broadcast, so a
+        # non-2xx here would make the client show a second, generic error toast.
+        return JsonResponse(
+            {
+                "type": result["type"],
+                "message": result["message"],
+                "current_high_bid": high_bid,
+                "high_bidder_pk": result["high_bidder_pk"],
+            }
+        )
+
+
 class LotNotifications(APIView):
     """Get count of new lot notifications - POST only"""
 
@@ -2187,14 +2227,8 @@ class PageViewCreate(APIView):
                 if user:
                     UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:
-                # create interest in this category if this is a new view for this category
-                interest, created = UserInterestCategory.objects.get_or_create(
-                    category=lot_number.species_category,
-                    user=user,
-                    defaults={"interest": 0},
-                )
-                interest.interest += settings.VIEW_WEIGHT
-                interest.save()
+                # create/increment interest in this category for this view
+                UserInterestCategory.add_interest(user, lot_number.species_category, settings.VIEW_WEIGHT)
             if auction and user:
                 if not source:
                     source = referrer
@@ -3007,7 +3041,9 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
-                    if invoice.net_after_payments < 0:
+                    # Bill the rounded balance so the PayPal invoice matches the invoice total the
+                    # buyer sees (and skip anyone who only owes a rounded-away residual).
+                    if invoice.rounded_net_after_payments < 0:
                         if invoice.auctiontos_user.email:
                             name_parts = (invoice.auctiontos_user.name or "").split()
                             if len(name_parts) >= 2:
@@ -3026,7 +3062,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                                     reference,
                                     itemName,
                                     description,
-                                    abs(invoice.net_after_payments),
+                                    abs(invoice.rounded_net_after_payments),
                                     shippingAmount,
                                     discountAmount,
                                     currencyCode,
@@ -9279,6 +9315,27 @@ class SingleLotLabelView(LotLabelView):
             if self.lot.user and self.lot.user is not request.user:
                 messages.error(request, "You can only print labels for your own lots")
                 return redirect(reverse("home"))
+        # ?format=png (or ?fmt=png) returns a single rendered PNG via the shared label renderer
+        # instead of the WeasyPrint PDF sheet, so the web endpoint matches the mobile app. Honors
+        # ?resolution=WIDTHxHEIGHT&dpi=N (default 600x400 @ 203dpi).
+        if (request.GET.get("format") or request.GET.get("fmt")) == "png":
+            from .mobile.services.labels import LabelService
+
+            try:
+                content, content_type = LabelService.render_label(
+                    self.lot,
+                    "png",
+                    resolution=request.GET.get("resolution"),
+                    dpi=request.GET.get("dpi"),
+                )
+            except ValueError:
+                logging.getLogger(__name__).warning(
+                    "Invalid label rendering parameters for lot %s",
+                    self.lot.pk,
+                    exc_info=True,
+                )
+                return HttpResponseBadRequest("Invalid label rendering parameters.")
+            return HttpResponse(content, content_type=content_type)
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
 
@@ -9745,7 +9802,10 @@ class PayPalAPIMixin:
                 }
             )
 
-        target_total = (Decimal("0.00") - Decimal(invoice.net_after_payments)).quantize(Decimal("0.01"))
+        # Charge the rounded balance so the amount matches the invoice total the buyer sees; the
+        # breakdown below absorbs the rounding delta as an adjustment/discount line. Falls back to
+        # the exact amount when invoice rounding is off (rounded_net_after_payments handles that).
+        target_total = (Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)).quantize(Decimal("0.01"))
         # Base components from items
         item_total = Decimal(str(invoice.total_bought)).quantize(Decimal("0.01"))
         tax_total = Decimal(str(invoice.tax)).quantize(Decimal("0.01"))
@@ -9792,7 +9852,8 @@ class PayPalAPIMixin:
             "reference_id": str(invoice.pk),
             "amount": {
                 "currency_code": currency,
-                "value": f"{Decimal(-invoice.net_after_payments):.2f}",
+                # Must equal the breakdown sum (which is built to total target_total), or PayPal rejects it.
+                "value": f"{target_total:.2f}",
                 "breakdown": breakdown,
             },
             "items": items,
@@ -10008,8 +10069,9 @@ class PayPalAPIMixin:
                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
             except Exception:
                 logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
-        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
-        if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
+        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID. Use the rounded
+        # balance so a rounded-down charge (the amount we actually billed) still settles the invoice.
+        if invoice.rounded_net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             if not invoice.renewal_needed:
                 try:
                     _ensure_invoice_renewal_state(invoice)
@@ -10455,7 +10517,7 @@ class SquareConnectView(LoginRequiredMixin, View):
         # Build OAuth parameters
         params = {
             "client_id": settings.SQUARE_APPLICATION_ID,
-            "scope": "PAYMENTS_WRITE PAYMENTS_READ MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE",
+            "scope": " ".join(SQUARE_OAUTH_SCOPES),
             "state": state,
             # "session": "false",  # Don't require login if already logged in
             "redirect_uri": redirect_uri,
@@ -10539,6 +10601,10 @@ class SquareCallbackView(LoginRequiredMixin, View):
             seller.square_merchant_id = merchant_id
             seller.access_token = access_token
             seller.refresh_token = refresh_token
+            # Record what this token was granted. Square OAuth is all-or-nothing for the requested
+            # set, so the scopes we asked for are the scopes the merchant approved. This is what
+            # supports_tap_to_pay reads, and reconnecting an old account refreshes it here.
+            seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
             if expires_at:
                 from datetime import datetime
 
@@ -11974,6 +12040,30 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             AuctionTOS.objects.filter(user__isnull=True, email__isnull=False).values("email").distinct().count()
         )
 
+        # Mobile app adoption
+        app_devices = MobileDevice.objects.filter(user__is_active=True)
+        mobile_app_users = app_devices.values("user").distinct().count()
+        context["mobile_app_users_count"] = mobile_app_users
+        context["mobile_app_users_percent"] = int(mobile_app_users / qs.count() * 100) if qs.count() else 0
+        context["mobile_app_users_ios"] = (
+            app_devices.filter(platform=MobileDevice.PLATFORM_IOS).values("user").distinct().count()
+        )
+        context["mobile_app_users_android"] = (
+            app_devices.filter(platform=MobileDevice.PLATFORM_ANDROID).values("user").distinct().count()
+        )
+        context["mobile_app_users_active_30d"] = (
+            app_devices.filter(last_seen__gte=timezone.now() - timezone.timedelta(days=30))
+            .values("user")
+            .distinct()
+            .count()
+        )
+        context["mobile_app_versions"] = (
+            app_devices.exclude(app_version="")
+            .values("app_version")
+            .annotate(count=Count("user", distinct=True))
+            .order_by("-count")
+        )
+
         # context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
         # context["anonymous"] = (
         #     qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
@@ -13396,6 +13486,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
 
         return [
             "An account",
+            "Mobile app",
             "Search",
             "Watch",
             "Push notifications as lots sell",
@@ -13470,6 +13561,9 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                 .count()
             )
             chat_percent = int(chat / auctiontos_with_account.count() * 100)
+            mobile_app = (
+                auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
+            )
             if self.auction.is_online:
                 lot_with_buy_now = (
                     Lot.objects.filter(auction=self.auction, buy_now_used=True)
@@ -13487,9 +13581,11 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             if auctiontos.count() == 0:
                 lot_with_buy_now_percent = 0
                 account_percent = 0
+                mobile_app_percent = 0
             else:
                 account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
                 lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+                mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
             invoices = Invoice.objects.filter(auction=self.auction)
             viewed_invoices = invoices.filter(opened=True)
             if invoices.count():
@@ -13506,6 +13602,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             data = [
                 [
                     account_percent,
+                    mobile_app_percent,
                     seach_percent,
                     watch_percent,
                     notification_percent,
@@ -14457,9 +14554,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
 
-                # Only proceed if we have a reference_id to look up the invoice
+                # Only proceed if we have a reference_id to look up the invoice. reference_id is our
+                # invoice pk as a string; guard against any non-numeric value so a stray payment
+                # can't raise (Invoice.pk is an int) and 500 the webhook.
                 if reference_id:
-                    invoice = Invoice.objects.filter(pk=reference_id).first()
+                    try:
+                        invoice = Invoice.objects.filter(pk=int(reference_id)).first()
+                    except (TypeError, ValueError):
+                        invoice = None
+                        logger.warning("Square webhook: non-numeric reference_id: %s", reference_id)
                     if invoice:
                         amount_money = payment.get("amount_money", {})
                         amount_value = Decimal(amount_money.get("amount", 0)) / 100
@@ -14491,7 +14594,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                             except Exception:
                                 logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
-                        if invoice.net_after_payments >= 0:
+                        # Use the rounded balance so a rounded-down charge (the amount we billed)
+                        # still settles the invoice.
+                        if invoice.rounded_net_after_payments >= 0:
                             if not invoice.renewal_needed:
                                 try:
                                     _ensure_invoice_renewal_state(invoice)

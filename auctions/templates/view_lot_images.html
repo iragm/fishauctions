@@ -541,11 +541,23 @@ function deactivate_lot() {
                                         {% endif %}
                                         $('#confirmDialogText').html(dialogText);
                                         document.querySelector('#finalize-bid').onclick = function(e) {
-                                            if (!lotWebSocketSend({ 'bid': bid })) {
-                                                // Socket was down: don't fake a confirmation, the bid was not placed.
-                                                $('#confirmBid').modal('hide');
-                                                return;
-                                            }
+                                            // Place the bid over plain HTTP so it is saved even if the
+                                            // websocket is down. The live price / high-bidder update still
+                                            // arrives via the websocket broadcast, so the UI behaves the same.
+                                            $.post({
+                                                url: "{% url 'lot_bid' pk=lot.pk %}",
+                                                data: { 'bid': bid },
+                                                beforeSend: function (request) {
+                                                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                                                },
+                                                error: function() {
+                                                    $.toast({
+                                                        title: 'Could not place your bid -- please check your connection and try again.',
+                                                        type: 'danger',
+                                                        delay: 8000
+                                                    });
+                                                }
+                                            });
                                             var your_bid = Number($('#your_bid_price').html());
                                             var price = Number($('#price').html());
                                             if (bid > your_bid) {

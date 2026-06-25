@@ -629,6 +629,17 @@ def webpush_notifications_deduplicate(self):
     call_command("webpush_notifications_deduplicate")
 
 
+@shared_task(bind=True, ignore_result=True)
+def deduplicate_user_interest(self):
+    """
+    Merge duplicate UserInterestCategory rows created by request races.
+
+    There's no unique constraint on (user, category); the write paths tolerate
+    the occasional duplicate and this reconciles them, summing the interest.
+    """
+    call_command("deduplicate_user_interest")
+
+
 def schedule_auction_stats_update(run_at=None):
     """
     Schedule a one-off task to update auction stats.

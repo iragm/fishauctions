@@ -1,72 +1,23 @@
 # chat/consumers.py
-import datetime
 import json
 import logging
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
-from django.conf import settings
-from django.contrib.sites.models import Site
-from django.db.models import Q
+from channels.layers import get_channel_layer
 from django.utils import timezone
-from post_office import mail
 
 from .models import (
     Auction,
-    AuctionTOS,
-    Bid,
     ChatSubscription,
-    Invoice,
     Lot,
     LotHistory,
     User,
     UserBan,
-    UserInterestCategory,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def check_bidding_permissions(lot, user):
-    """
-    Returns false if everything is OK, or a string error message
-    call check_all_permissions first
-    """
-    if lot.ended:
-        return "Bidding on this lot has ended"
-    if lot.winner or lot.auctiontos_winner:
-        return "This lot has already been sold"
-    if lot.user and lot.user.pk == user.pk:
-        return "You can't bid on your own lot"
-    if lot.auction:
-        tos = (
-            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
-            .order_by("-createdon")
-            .first()
-        )
-        if not tos:
-            return "You haven't joined this auction"
-        else:
-            if not tos.bidding_allowed:
-                return "This auction requires admin approval before you can bid"
-        if not lot.auction.is_online and lot.auction.online_bidding == "disable":
-            return "This auction does not allow online bidding"
-        if (
-            not lot.auction.is_online
-            and lot.auction.online_bidding != "disable"
-            and lot.auction.date_online_bidding_ends
-            and timezone.now() > lot.auction.date_online_bidding_ends
-        ):
-            return "Online bidding has ended for this auction"
-        if (
-            not lot.auction.is_online
-            and lot.auction.online_bidding != "disable"
-            and lot.auction.date_online_bidding_starts
-            and timezone.now() < lot.auction.date_online_bidding_starts
-        ):
-            return "Online bidding hasn't started yet for this auction"
-    return False
 
 
 def check_chat_permissions(lot, user):
@@ -102,323 +53,52 @@ def check_all_permissions(lot, user):
     return False
 
 
-def reset_lot_end_time(lot):
-    """When bid are placed at the last minute on a lot, we need to bump up the end time.  Call this function any time a bid that changes the price is placed on a lot.
-    Return ms-format timestamp for use on the lot page"""
-    if lot.within_dynamic_end_time:
-        new_end_time = timezone.now() + datetime.timedelta(minutes=15)
-        if new_end_time > lot.hard_end:
-            new_end_time = lot.hard_end
-        if lot.date_end != new_end_time:
-            lot.date_end = new_end_time
-            lot.save()
-            # ms - to be parsed by js and set to local time on view_lot_images.html
-            return int(lot.date_end.timestamp() * 1000)
-    return None
+def broadcast_bid_result(lot, user, result):
+    """Push the outcome of a bid to the connected lot-page websockets.
 
-
-def bid_on_lot(lot, user, amount):
+    This is the *broadcast* half of placing a bid, kept separate from persistence
+    on purpose: callers must treat it as best-effort (see place_bid_and_broadcast)
+    so a channel-layer outage can never lose a bid that was already saved. The
+    message shapes here match what LotConsumer.receive() historically sent.
     """
-    Check permissions to make sure the user isn't banned before calling this function
-    this will return the following:
-    {
-        "type": "INFO", # ERROR, INFO, NEW_HIGH_BID, NEW_HIGH_BIDDER, LOT_END_WINNER, ENDED_NO_WINNER
-        "message": "string",
-        "send_to": 'user' or 'everyone'
-        "high_bidder_pk": 1 # pk of high bidder (or winner) or None.  Used to update DOM
-        "high_bidder_name": 'user' # name of high bidder or None.  Used to update DOM
-        "current_high_bid": 5 # current bid or None.  Can be the winning price.  Used to update DOM
-        }
-    """
-    try:
-        # if True:
-        try:
-            amount_decimal = Decimal(str(amount))
-        except (InvalidOperation, ValueError):
-            result = {
-                "type": "ERROR",
-                "message": "Invalid bid amount",
-                "send_to": "user",
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-                "winner": None,
-                "date_end": None,
-            }
-            return result
-        # Reject bids with more than 2 decimal places
-        if amount_decimal != amount_decimal.quantize(Decimal("0.01")):
-            result = {
-                "type": "ERROR",
-                "message": "Bids can have at most 2 decimal places",
-                "send_to": "user",
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-                "winner": None,
-                "date_end": None,
-            }
-            return result
-        amount = amount_decimal.quantize(Decimal("0.01"))
-        if amount <= 0:
-            result = {
-                "type": "ERROR",
-                "message": "Bid must be greater than zero",
-                "send_to": "user",
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-                "winner": None,
-                "date_end": None,
-            }
-            return result
-        if lot.auction and lot.auction.only_whole_dollar_bids:
-            if amount != amount.to_integral_value():
-                result = {
-                    "type": "ERROR",
-                    "message": "This auction only allows whole dollar bids",
-                    "send_to": "user",
-                    "high_bidder_pk": None,
-                    "high_bidder_name": None,
-                    "current_high_bid": None,
-                    "winner": None,
-                    "date_end": None,
-                }
-                return result
-        result = {
-            "type": "ERROR",
-            "message": "Override this message",
-            "send_to": "user",
-            "high_bidder_pk": None,
-            "high_bidder_name": None,
-            "current_high_bid": None,
-            "winner": None,
-            "date_end": None,
-        }
-        if lot.ended:
-            result["message"] = "Bidding has ended"
-            return result
-        if lot.bidding_error:
-            result["message"] = lot.bidding_error
-            return result
-        if lot.winner or lot.auctiontos_winner:
-            result["message"] = "This lot has already been sold"
-            return result
-        if lot.auction:
-            invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=lot.auction).first()
-            if invoice and invoice.status != "DRAFT":
-                result["message"] = (
-                    "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
-                )
-                return result
-        if (
-            lot.auction
-            and not lot.auction.is_online
-            and lot.auction.online_bidding == "buy_now_only"
-            and lot.buy_now_price
-        ):
-            if amount < lot.buy_now_price:
-                result["message"] = "This auction does not allow bids, you can only buy this lot now."
-                return result
-        originalHighBidder = lot.high_bidder
-        original_bid = lot.high_bid
-        existing_bid = (
-            Bid.objects.exclude(is_deleted=True).filter(user=user, lot_number=lot).order_by("-bid_time").first()
-        )
-        created = existing_bid is None
-        # Don't persist the bid yet; save it only when the bid is accepted.
-        # For sealed bids, the sealed_bid block below creates the record.
-        bid = Bid(user=user, lot_number=lot, amount=amount) if created else existing_bid
-        # also update category interest, max one per bid
-        interest, interestCreated = UserInterestCategory.objects.get_or_create(
-            category=lot.species_category,
-            user=user,
-            defaults={"interest": settings.BID_WEIGHT},
-        )
-        userData = user.userdata
-        userData.has_bid = True
-        if userData.username_visible:
-            user_string = str(user)
-        else:
-            user_string = "Anonymous"
-        userData.save()
-        if not interestCreated:
-            interest.interest += settings.BID_WEIGHT
-            interest.save()
-        if lot.sealed_bid:
-            bid = Bid(user=user, lot_number=lot, amount=amount, was_high_bid=True)
-            bid.save()
-            result["type"] = "INFO"
-            result["message"] = "Bid placed!  You can change your bid at any time until the auction ends"
-            result["send_to"] = "user"
-            # result["high_bidder_pk"] = user.pk
-            # result["high_bidder_name"] = str(user)
-            result["current_high_bid"] = bid.amount
-            return result
-        else:
-            if not created:
-                if amount <= bid.amount:
-                    result["message"] = f"Bid more than your current bid (${bid.amount})"
-                    logger.debug(
-                        "%s tried to bid on %s less than their original bid of $%s", user_string, lot, original_bid
-                    )
-                    return result
-                else:
-                    # Create a new bid record instead of updating the existing one,
-                    # so the old bid is preserved for history
-                    bid = Bid(user=user, lot_number=lot, amount=amount)
-            # no longer true: from here on, lot.high_bidder and lot.high_bid will include the current bid
-            if lot.buy_now_price and not originalHighBidder:
-                if bid.amount >= lot.buy_now_price:
-                    lot.winner = user
-                    if lot.auction:
-                        auctiontos_winner = (
-                            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
-                            .order_by("-createdon")
-                            .first()
-                        )
-                        if auctiontos_winner:
-                            lot.auctiontos_winner = auctiontos_winner
-                            lot.create_update_invoices()
-                    lot.winning_price = lot.buy_now_price
-                    lot.buy_now_used = True
-                    if lot.label_printed:
-                        lot.label_printed = False
-                        lot.label_needs_reprinting = True
-                    # this next line makes the lot end immediately after buy now is used
-                    # I have put it in and taken it out a few times now, it is controversial because it causes lots to "disappear" when sold
-                    # see also lot.ended - setting this is needed to make buy now lots go into invoices immediately
-                    lot.date_end = timezone.now()
-                    lot.watch_warning_email_sent = True
-                    lot.save()
-                    result["send_to"] = "everyone"
-                    result["high_bidder_pk"] = user.pk
-                    result["high_bidder_name"] = user_string
-                    result["type"] = "LOT_END_WINNER"
-                    result["message"] = f"{user_string} bought this lot now!!"
-                    result["current_high_bid"] = lot.buy_now_price
-                    bid.was_high_bid = True
-                    bid.last_bid_time = lot.date_end
-                    bid.save()
-                    LotHistory.objects.create(
-                        lot=lot,
-                        user=user,
-                        message=result["message"],
-                        changed_price=True,
-                        current_price=result["current_high_bid"],
-                        bid_amount=amount,
-                    )
-                    return result
-            if not originalHighBidder and (created or lot.high_bidder.pk == user.pk):
-                result["send_to"] = "everyone"
-                result["type"] = "NEW_HIGH_BIDDER"
-                result["message"] = f"{user_string} has placed the first bid on this lot"
-                result["current_high_bid"] = lot.reserve_price
-                result["high_bidder_pk"] = user.pk
-                result["high_bidder_name"] = user_string
-                bid.was_high_bid = True
-                LotHistory.objects.create(
-                    lot=lot,
-                    user=user,
-                    message=result["message"],
-                    changed_price=True,
-                    current_price=result["current_high_bid"],
-                    bid_amount=amount,
-                )
-                bid.last_bid_time = timezone.now()
-                bid.save()
-                return result
-            # bid increments - also set in views.py and in view_lot_images.html
-            if lot.auction and not lot.auction.only_whole_dollar_bids:
-                # 5% rounded down to nearest cent, minimum $0.01
-                min_increment = max(
-                    (original_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
-                    Decimal("0.01"),
-                )
-            else:
-                # 5% rounded down to nearest dollar, minimum $1
-                min_increment = max(
-                    (original_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
-                    Decimal(1),
-                )
-            next_allowed_amount = original_bid + min_increment
-            # if bid.amount <= original_bid:  # changing this to < would allow bumping without being the high bidder
-            if bid.amount < next_allowed_amount:
-                # there's a high bidder already
-                logger.debug("%s tried to bid on %s less than the current bid of $%s", user_string, lot, original_bid)
-                result["message"] = f"You have to bid at least ${next_allowed_amount}"
-                return result
-            if bid.amount > next_allowed_amount:
-                bid.save()
-                userData = user.userdata
-                userData.has_used_proxy_bidding = True
-                userData.save()
-            # if we get to this point, the user has bid >= the high bid
-            bid.was_high_bid = True
-            bid.last_bid_time = timezone.now()
-            bid.save()
-            if lot.high_bidder.pk == user.pk:
-                try:
-                    if originalHighBidder.pk == lot.high_bidder.pk:
-                        # user is upping their own price, don't tell other people about it
-                        result["type"] = "INFO"
-                        result["message"] = f"You've raised your proxy bid to ${bid.amount}"
-                        logger.debug("%s has raised their bid on %s to $%s", user_string, lot, bid.amount)
-                        return result
-                except AttributeError:
-                    pass
-                # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
-                result["date_end"] = reset_lot_end_time(lot)
-                result["type"] = "NEW_HIGH_BIDDER"
-                result["message"] = f"{lot.high_bidder_display} is now the high bidder at ${lot.high_bid}"
-                if result["date_end"]:
-                    result["message"] += ". End time extended!"
-                result["high_bidder_pk"] = lot.high_bidder.pk
-                result["high_bidder_name"] = str(lot.high_bidder_display)
-                result["current_high_bid"] = lot.high_bid
-                result["send_to"] = "everyone"
-                # email the old one
-                current_site = Site.objects.get_current()
-                logger.debug("%s has been outbid!", originalHighBidder.username)
-                mail.send(
-                    originalHighBidder.email,
-                    template="outbid_notification",
-                    context={
-                        "name": originalHighBidder.first_name,
-                        "domain": current_site.domain,
-                        "lot": lot,
-                    },
-                )
-                LotHistory.objects.create(
-                    lot=lot,
-                    user=user,
-                    message=result["message"],
-                    changed_price=True,
-                    current_price=result["current_high_bid"],
-                    bid_amount=amount,
-                )
-                return result
-            # bumped up against a proxy bid
-            result["date_end"] = reset_lot_end_time(lot)
-            result["type"] = "NEW_HIGH_BID"
-            result["current_high_bid"] = lot.high_bid
-            result["message"] = (
-                f"{user_string} bumped the price up to ${lot.high_bid}.  {lot.high_bidder_display} is still the high bidder."
+    channel_layer = get_channel_layer()
+    room_group_name = f"lot_{lot.pk}"
+    user_room_name = f"private_user_{user.pk}_lot_{lot.pk}"
+    current_high_bid = result["current_high_bid"]
+    if isinstance(current_high_bid, Decimal):
+        current_high_bid = float(current_high_bid)
+    if result["send_to"] == "user":
+        if result["type"] == "ERROR":
+            async_to_sync(channel_layer.group_send)(
+                user_room_name,
+                {"type": "error_message", "error": result["message"]},
             )
-            if result["date_end"]:
-                result["message"] += "  End time extended!"
-            result["send_to"] = "everyone"
-            LotHistory.objects.create(
-                lot=lot,
-                user=user,
-                message=result["message"],
-                changed_price=True,
-                current_price=result["current_high_bid"],
-                bid_amount=amount,
+        else:
+            # sealed-bid success and "you raised your own proxy bid" land here
+            async_to_sync(channel_layer.group_send)(
+                user_room_name,
+                {
+                    "type": "chat_message",
+                    "info": result["type"],
+                    "message": result["message"],
+                    "high_bidder_pk": result["high_bidder_pk"],
+                    "high_bidder_name": result["high_bidder_name"],
+                    "current_high_bid": current_high_bid,
+                },
             )
-            return result
-    except Exception as e:
-        logger.exception(e)
+    else:
+        async_to_sync(channel_layer.group_send)(
+            room_group_name,
+            {
+                "type": "chat_message",
+                "info": result["type"],
+                "message": result["message"],
+                "high_bidder_pk": result["high_bidder_pk"],
+                "high_bidder_name": result["high_bidder_name"],
+                "current_high_bid": current_high_bid,
+                "date_end": result["date_end"],
+            },
+        )
 
 
 class LotConsumer(WebsocketConsumer):
@@ -430,21 +110,12 @@ class LotConsumer(WebsocketConsumer):
             self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot_number}"
             self.lot = Lot.objects.get(pk=self.lot_number)
 
-            # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
-            logger.warning(
-                "WS connect lot=%s user_pk=%s authed=%s",
-                self.lot_number,
-                self.user.pk,
-                self.user.is_authenticated,
-            )
-
             # Join room group
             async_to_sync(self.channel_layer.group_add)(self.room_group_name, self.channel_name)
 
             # Join private room for notifications only to this user
             async_to_sync(self.channel_layer.group_add)(self.user_room_name, self.channel_name)
             self.accept()
-            logger.warning("WS accepted lot=%s user_pk=%s", self.lot_number, self.user.pk)
             # send the most recent history
             allHistory = LotHistory.objects.filter(lot=self.lot, removed=False).order_by("-timestamp")[:200]
             # send oldest first
@@ -514,18 +185,9 @@ class LotConsumer(WebsocketConsumer):
                     existing_subscription.last_notification_sent = timezone.now()
                     existing_subscription.save()
         except Exception as e:
-            # TEMP lifecycle logging (remove once resolved): a failure here may mean the socket
-            # was never accepted, so the client silently can't bid.
-            logger.exception("WS connect FAILED lot=%s: %s", getattr(self, "lot_number", "?"), e)
+            logger.exception(e)
 
     def disconnect(self, close_code):
-        # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
-        logger.warning(
-            "WS disconnect lot=%s user_pk=%s close_code=%s",
-            getattr(self, "lot_number", "?"),
-            getattr(getattr(self, "user", None), "pk", None),
-            close_code,
-        )
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
         # bit redundant, but 'seen' is used for lot notifications for the owner of a given lot
@@ -549,15 +211,9 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
-        # TEMP lifecycle logging to diagnose silently-dropped bids (remove once resolved)
-        if "bid" in text_data_json:
-            logger.warning(
-                "WS bid received lot=%s user_pk=%s authed=%s amount=%s",
-                getattr(self, "lot_number", "?"),
-                getattr(getattr(self, "user", None), "pk", None),
-                self.user.is_authenticated,
-                text_data_json.get("bid"),
-            )
+        # This websocket handles chat only. Bids go through the HTTP endpoint
+        # (views.PlaceBid -> bidding.place_bid_and_broadcast) so a down/stalled
+        # socket can never silently lose a bid.
         if self.user.is_authenticated:
             try:
                 error = check_all_permissions(self.lot, self.user)
@@ -596,70 +252,8 @@ class LotConsumer(WebsocketConsumer):
                             )
                     except (KeyError, ValueError):
                         pass
-                    try:
-                        # handle bids
-                        amount = text_data_json["bid"]
-                        error = check_bidding_permissions(self.lot, self.user)
-                        if error:
-                            async_to_sync(self.channel_layer.group_send)(
-                                self.user_room_name,
-                                {"type": "error_message", "error": error},
-                            )
-                        else:
-                            result = bid_on_lot(self.lot, self.user, amount)
-                            if result["send_to"] == "user":
-                                if result["type"] == "ERROR":
-                                    async_to_sync(self.channel_layer.group_send)(
-                                        self.user_room_name,
-                                        {
-                                            "type": "error_message",
-                                            "error": result["message"],
-                                        },
-                                    )
-                                else:
-                                    # I think just the sealed bid success and upping your own bids go here
-                                    current_high_bid = result["current_high_bid"]
-                                    async_to_sync(self.channel_layer.group_send)(
-                                        self.user_room_name,
-                                        {
-                                            "type": "chat_message",
-                                            "info": result["type"],
-                                            "message": result["message"],
-                                            "high_bidder_pk": result["high_bidder_pk"],
-                                            "high_bidder_name": result["high_bidder_name"],
-                                            "current_high_bid": float(current_high_bid)
-                                            if isinstance(current_high_bid, Decimal)
-                                            else current_high_bid,
-                                        },
-                                    )
-                            else:
-                                current_high_bid = result["current_high_bid"]
-                                async_to_sync(self.channel_layer.group_send)(
-                                    self.room_group_name,
-                                    {
-                                        "type": "chat_message",
-                                        "info": result["type"],
-                                        "message": result["message"],
-                                        "high_bidder_pk": result["high_bidder_pk"],
-                                        "high_bidder_name": result["high_bidder_name"],
-                                        "current_high_bid": float(current_high_bid)
-                                        if isinstance(current_high_bid, Decimal)
-                                        else current_high_bid,
-                                        "date_end": result["date_end"],
-                                    },
-                                )
-                    except (KeyError, ValueError, TypeError):
-                        pass
             except Exception as e:
                 logger.exception(e)
-        else:
-            # TEMP lifecycle logging (remove once resolved): the socket authed as anonymous,
-            # so anything sent here (including bids) is silently discarded.
-            logger.warning(
-                "WS message from UNAUTHENTICATED socket dropped lot=%s keys=%s",
-                getattr(self, "lot_number", "?"),
-                list(text_data_json.keys()),
-            )
 
     # Send a toast error to a single user
     def error_message(self, event):

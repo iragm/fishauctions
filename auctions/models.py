@@ -3942,6 +3942,9 @@ class Auction(models.Model):
             .count()
         )
         chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        mobile_app = (
+            auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
+        )
         if self.is_online:
             lot_with_buy_now = (
                 Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
@@ -3958,9 +3961,11 @@ class Auction(models.Model):
         if auctiontos.count() == 0:
             lot_with_buy_now_percent = 0
             account_percent = 0
+            mobile_app_percent = 0
         else:
             account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
             lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+            mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self)
         viewed_invoices = invoices.filter(opened=True)
         if invoices.count():
@@ -3977,6 +3982,7 @@ class Auction(models.Model):
         return {
             "labels": [
                 "An account",
+                "Mobile app",
                 "Search",
                 "Watch",
                 "Push notifications as lots sell",
@@ -3990,6 +3996,7 @@ class Auction(models.Model):
             "data": [
                 [
                     account_percent,
+                    mobile_app_percent,
                     seach_percent,
                     watch_percent,
                     notification_percent,
@@ -6328,7 +6335,7 @@ class Lot(models.Model):
         if self.auction:
             return self.auction.dynamic_end
         # there is currently no hard endings on lots not associated with an auction
-        # as soon as the lot is saved, date_end will be set to dynamic_end (by consumers.reset_lot_end_time)
+        # as soon as the lot is saved, date_end will be set to dynamic_end (by bidding.reset_lot_end_time)
         # a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point
         # collect stats from a couple auctions with dynamic endings and re-assess
         return self.date_end + dynamic_end
@@ -7215,7 +7222,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             return self.show_paypal_button or self.show_square_button
@@ -7260,7 +7268,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
@@ -7298,7 +7307,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             seller = self.club.effective_square_seller
@@ -9198,6 +9208,21 @@ class PayPalSeller(models.Model):
         return super().delete()
 
 
+# Square OAuth scopes we request. PAYMENTS_WRITE_IN_PERSON powers Tap to Pay; sellers who
+# connected before it was added hold tokens without it and must reconnect (refreshing keeps the
+# original scopes). This is the single source of truth for the authorize request and for what we
+# record as granted on the seller.
+SQUARE_TAP_TO_PAY_SCOPE = "PAYMENTS_WRITE_IN_PERSON"
+SQUARE_OAUTH_SCOPES = (
+    "PAYMENTS_WRITE",
+    "PAYMENTS_READ",
+    "MERCHANT_PROFILE_READ",
+    "ORDERS_READ",
+    "ORDERS_WRITE",
+    SQUARE_TAP_TO_PAY_SCOPE,
+)
+
+
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
@@ -9217,6 +9242,12 @@ class SquareSeller(models.Model):
     access_token = EncryptedCharField(max_length=500, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
+    scopes = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Space-separated OAuth scopes granted at connect time. Empty = legacy connection (pre Tap to Pay).",
+    )
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
     connected_on = models.DateTimeField(auto_now_add=True)
@@ -9264,6 +9295,15 @@ class SquareSeller(models.Model):
                 applies_to="SETTINGS",
             )
         return super().delete()
+
+    @property
+    def supports_tap_to_pay(self):
+        """True if this seller's stored OAuth grant includes the in-person scope Tap to Pay needs.
+
+        Sellers connected before the scope was added have empty/legacy ``scopes`` and must
+        reconnect; refreshing their token keeps the original (non-in-person) scopes.
+        """
+        return SQUARE_TAP_TO_PAY_SCOPE in (self.scopes or "").split()
 
     def is_token_expired(self):
         """Check if the access token is expired or will expire soon (within 1 hour)"""
@@ -9409,7 +9449,9 @@ class SquareSeller(models.Model):
         try:
             from decimal import Decimal
 
-            amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
+            # Charge the rounded balance so the amount matches the invoice total the buyer sees
+            # (rounded_net_after_payments falls back to the exact amount when rounding is off).
+            amount_decimal = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
             amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
         except Exception:
             logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
@@ -9589,6 +9631,25 @@ class UserInterestCategory(models.Model):
 
     def __str__(self):
         return f"{self.user} interest level in {self.category} is {self.as_percent}"
+
+    @classmethod
+    def add_interest(cls, user, category, weight):
+        """Increment a user's interest in a category, creating the row if it doesn't exist.
+
+        Deliberately uses filter().first() instead of get_or_create: there is no
+        unique constraint on (user, category) (duplicates are tolerated here and
+        reconciled by the deduplicate_user_interest task), so get_or_create's get()
+        would raise MultipleObjectsReturned the moment a duplicate exists. A double
+        click might briefly create a second row; that's harmless soft data and gets
+        merged on the next dedupe pass.
+        """
+        interest = cls.objects.filter(user=user, category=category).first()
+        if interest is None:
+            interest = cls(user=user, category=category, interest=weight)
+        else:
+            interest.interest += weight
+        interest.save()
+        return interest
 
     def save(self, *args, **kwargs):
         """

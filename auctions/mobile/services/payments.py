@@ -8,21 +8,45 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 
+class PaymentVerificationError(ValueError):
+    """A Tap to Pay charge could not be verified against Square *after* the card was charged.
+
+    Distinct from a plain ``ValueError`` (bad/early input) so the view can tell the operator the
+    charge may have gone through — the Square webhook reconciles the same payment by reference_id,
+    so refreshing the invoice usually shows it as paid — rather than a flat "invalid request".
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers still catch it.
+    """
+
+
+class SquareReconnectRequired(ValueError):
+    """The seller's Square account predates Tap to Pay (token missing PAYMENTS_WRITE_IN_PERSON).
+
+    The seller must reconnect their Square account before any in-person charge will work; refreshing
+    the existing token keeps the original (non-in-person) scopes. Raised *before* the device is ever
+    handed a token, so the app can show a "Reconnect Square" prompt instead of failing mid-tap.
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers still catch it as a fallback.
+    """
+
+
 class PaymentService:
     """Mobile Square Tap-to-Pay infrastructure.
 
     Flow
     ----
     1. Mobile calls ``create_mobile_payment(invoice_pk, user)`` to receive the
-       parameters needed to initialise the Square In-Person SDK on-device.
-    2. The SDK collects the card tap and returns a ``source_id`` (nonce).
-    3. Mobile calls ``confirm_mobile_payment(invoice_pk, source_id,
-       idempotency_key, user)``; this service charges the card via the Square
-       Payments API and records the result on the invoice.
+       parameters (including the seller's access token + location) needed to
+       authorize the Square Mobile Payments SDK on-device.
+    2. The SDK collects the card tap and **charges the card on-device**,
+       returning a completed Square ``payment_id`` — there is no nonce, and the
+       server never calls ``payments.create``.
+    3. Mobile calls ``confirm_mobile_payment(invoice_pk, payment_id,
+       idempotency_key, user)``; this service re-fetches the payment from Square
+       (GetPayment), **verifies** it (status/amount/currency/location/reference),
+       and records the result on the invoice.
 
-    Square Terminal/In-Person SDK integration lives entirely in the Flutter
-    app.  This service only handles server-side payment creation and
-    confirmation.
+    Square Mobile Payments SDK (Tap to Pay) integration lives entirely in the
+    Flutter app.  This service only handles server-side payment context creation
+    and verification of the on-device charge.
     """
 
     @staticmethod
@@ -50,16 +74,49 @@ class PaymentService:
                 return errors[0].get("detail") or errors[0].get("code") or str(exc)
         return str(exc)
 
+    # Club permissions that may take a Tap to Pay payment. permission_admin is treated as a wildcard
+    # inside check_club_permission, so it is covered implicitly.
+    _CLUB_PAYMENT_PERMISSIONS = ("permission_money", "permission_manage_auctions")
+
+    @staticmethod
+    def _check_admin_access(invoice, user) -> bool:
+        """Authorize the merchant operating Tap to Pay — never the buyer.
+
+        Tap to Pay is run by the person collecting payment on a device authorized with the
+        *seller's* Square account; buyers must not reach this flow (it would hand them the
+        seller's OAuth token). Authorization mirrors the web admin checks:
+
+        * Auction invoices — the auction creator, a superuser, or anyone with an ``is_admin``
+          AuctionTOS on the auction (this is what covers a Square auction that has no club), via
+          ``Auction.permission_check``.
+        * Club auctions / membership invoices — a club admin, a money manager, or an auction
+          manager (``permission_manage_auctions``) for the invoice's club. The club path is
+          checked directly (not only via ``permission_check``) so it also applies when the
+          auction is not ``manage_users_through_club``.
+
+        Anything else is denied.
+        """
+        auction = invoice.auction
+        if auction and auction.permission_check(user):
+            return True
+        club = invoice.club or (auction.club if auction else None)
+        if club:
+            from auctions.views import check_club_permission
+
+            if any(check_club_permission(user, club, perm) for perm in PaymentService._CLUB_PAYMENT_PERMISSIONS):
+                return True
+        return False
+
     @staticmethod
     def create_mobile_payment(invoice_pk: int, user) -> dict:
         """Validate an invoice and return payment context for the mobile SDK.
 
         The returned dict contains everything the Flutter client needs to
-        initialise ``SquareInPersonSDK`` and start a Tap-to-Pay transaction.
+        authorize the Square Mobile Payments SDK and start a Tap-to-Pay charge.
 
         Raises
         ------
-        PermissionError  — user is not the invoice buyer.
+        PermissionError  — user is not an admin of the invoice's auction/club.
         ValueError       — invoice already paid, Square not configured,
                            amount is zero/negative.
         LookupError      — invoice not found.
@@ -74,10 +131,9 @@ class PaymentService:
             msg = f"Invoice {invoice_pk} not found"
             raise LookupError(msg)
 
-        # Access check: buyer or auctiontos user must match
-        invoice_user = (invoice.auctiontos_user.user if invoice.auctiontos_user else None) or invoice.buyer
-        if invoice_user and invoice_user != user:
-            msg = "You do not have access to this invoice"
+        # Only the merchant (auction/club admin) may take a Tap to Pay payment — never the buyer.
+        if not PaymentService._check_admin_access(invoice, user):
+            msg = "You do not have permission to take payment for this invoice"
             raise PermissionError(msg)
 
         if invoice.status == "PAID":
@@ -89,7 +145,14 @@ class PaymentService:
             msg = "Square payments are not configured for this invoice"
             raise ValueError(msg)
 
-        if not seller.get_valid_access_token():
+        # Block before fetching a token: a legacy account's token lacks the in-person scope, so the
+        # on-device authorize() would fail with an opaque Square error. Tell the operator to reconnect.
+        if not seller.supports_tap_to_pay:
+            msg = "This Square account must be reconnected to enable Tap to Pay."
+            raise SquareReconnectRequired(msg)
+
+        access_token = seller.get_valid_access_token()
+        if not access_token:
             msg = "Square account token is invalid; the seller must reconnect Square"
             raise ValueError(msg)
 
@@ -98,7 +161,9 @@ class PaymentService:
             msg = "No active Square location found for this seller"
             raise ValueError(msg)
 
-        amount_due = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        # Charge the rounded balance so the amount matches the invoice total shown to the buyer
+        # (rounded_net_after_payments falls back to the exact amount when invoice rounding is off).
+        amount_due = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
         if amount_due <= 0:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
@@ -108,22 +173,39 @@ class PaymentService:
             "amount": str(amount_due),
             "currency": invoice.currency,
             "location_id": location_id,
+            # The client must charge with this reference_id so confirm (and the Square webhook) can
+            # bind the payment back to this invoice. Matches the web convention: str(invoice.pk).
+            "reference_id": str(invoice_pk),
+            # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId),
+            # so this ships the seller's OAuth access token to the device by design — the SDK
+            # requires it. Prefer the shortest-lived token the seller's Square OAuth allows.
+            "access_token": access_token,
             "idempotency_key": str(uuid.uuid4()),
-            "square_application_id": settings.SQUARE_APPLICATION_ID,
             "square_environment": settings.SQUARE_ENVIRONMENT,
         }
 
     @staticmethod
-    def confirm_mobile_payment(invoice_pk: int, source_id: str, idempotency_key: str, user) -> dict:
-        """Charge the card nonce returned by the mobile SDK and record the payment.
+    def confirm_mobile_payment(invoice_pk: int, payment_id: str, idempotency_key: str, user) -> dict:
+        """Verify an on-device Tap to Pay charge and record the payment.
+
+        The Mobile Payments SDK charges the card on-device and returns a completed
+        Square ``payment_id``; this service does NOT charge anything. It re-fetches
+        the payment from Square (GetPayment) and verifies status/amount/currency/
+        location/reference before recording — because the client reports the id,
+        nothing is trusted until verified against Square. ``idempotency_key`` is
+        accepted for contract compatibility but no longer used to charge.
 
         Returns a dict with ``payment_id``, ``status``, and ``receipt_number`` from Square.
 
         Raises
         ------
-        PermissionError  — user is not the invoice buyer.
-        ValueError       — invoice already paid, Square error, zero amount.
-        LookupError      — invoice not found.
+        PermissionError           — user is not an admin of the invoice's auction/club.
+        PaymentVerificationError  — the card may have been charged but the fetched payment failed a
+                                    verification check (status/amount/currency/location/reference)
+                                    or could not be fetched from Square. Subclasses ValueError.
+        ValueError                — invoice already paid, zero amount, or Square not configured
+                                    (checked before any charge would have happened).
+        LookupError               — invoice not found.
         """
         from auctions.models import Invoice, InvoicePayment
 
@@ -135,9 +217,9 @@ class PaymentService:
             msg = f"Invoice {invoice_pk} not found"
             raise LookupError(msg)
 
-        invoice_user = (invoice.auctiontos_user.user if invoice.auctiontos_user else None) or invoice.buyer
-        if invoice_user and invoice_user != user:
-            msg = "You do not have access to this invoice"
+        # Only the merchant (auction/club admin) may confirm a Tap to Pay payment — never the buyer.
+        if not PaymentService._check_admin_access(invoice, user):
+            msg = "You do not have permission to take payment for this invoice"
             raise PermissionError(msg)
 
         if invoice.status == "PAID":
@@ -159,41 +241,75 @@ class PaymentService:
             msg = "No active Square location found"
             raise ValueError(msg)
 
-        amount_due = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        # Verify against the rounded balance — the same amount create told the SDK to charge.
+        amount_due = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
         if amount_due <= 0:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
 
         amount_cents = int(amount_due * 100)
 
-        # squareup 44.x API: named kwargs, a typed CreatePaymentResponse, and an exception on failure
-        # (not result.is_success()/.body — those belong to the legacy SDK). The client must reuse the
-        # idempotency_key from create_mobile_payment across retries so Square dedupes a double-charge.
+        # squareup 44.x API: GetPayment takes named kwargs, returns a typed GetPaymentResponse
+        # (with .payment and .errors), and raises on failure — not result.is_success()/.body, which
+        # belong to the legacy SDK. We do NOT charge here: the card was already charged on-device by
+        # the Mobile Payments SDK, so we only re-fetch the completed payment to verify it.
         try:
-            result = client.payments.create(
-                source_id=source_id,
-                idempotency_key=idempotency_key,
-                amount_money={"amount": amount_cents, "currency": invoice.currency},
-                location_id=location_id,
-                reference_id=str(invoice_pk),
-            )
+            result = client.payments.get(payment_id=payment_id)
         except Exception as exc:
             detail = PaymentService._square_error_detail(exc)
-            logger.error("Square payment failed for invoice %s: %s", invoice_pk, detail)
-            msg = f"Square payment failed: {detail}"
-            raise ValueError(msg)
+            logger.error("Square get payment failed for invoice %s: %s", invoice_pk, detail)
+            msg = f"Square payment lookup failed: {detail}"
+            raise PaymentVerificationError(msg)
 
         # Some SDK paths report errors on the response instead of raising; handle both.
         if getattr(result, "errors", None):
             detail = "; ".join(getattr(e, "detail", None) or str(e) for e in result.errors)
-            logger.error("Square payment errors for invoice %s: %s", invoice_pk, result.errors)
-            msg = f"Square payment failed: {detail}"
-            raise ValueError(msg)
+            logger.error("Square get payment errors for invoice %s: %s", invoice_pk, result.errors)
+            msg = f"Square payment lookup failed: {detail}"
+            raise PaymentVerificationError(msg)
 
         sq_payment = result.payment
-        payment_id = getattr(sq_payment, "id", "") or ""
+        fetched_payment_id = getattr(sq_payment, "id", "") or ""
         receipt_number = (getattr(sq_payment, "receipt_number", "") or "")[:10]
         payment_status = getattr(sq_payment, "status", None)
+
+        # SECURITY BOUNDARY: the card was charged on-device, so the client merely reports a
+        # payment_id. Trust nothing until the payment we fetched from Square is confirmed to be a
+        # successful charge, for the right amount/currency, taken on this seller's location, and
+        # bound to this invoice. Any mismatch is a 400 and records nothing. The web flow only treats
+        # "COMPLETED" as paid, so we match that (no auth-only acceptance).
+        amount_money = getattr(sq_payment, "amount_money", None)
+        sq_amount = getattr(amount_money, "amount", None)
+        sq_currency = getattr(amount_money, "currency", None)
+        sq_location_id = getattr(sq_payment, "location_id", None)
+        sq_reference_id = getattr(sq_payment, "reference_id", None)
+        # Match the web Square convention (create_payment_link sets reference_id = str(invoice.pk),
+        # and the webhook resolves the invoice by pk), so the webhook can also reconcile this charge.
+        expected_reference_id = str(invoice_pk)
+
+        # NOTE: we accept ONLY "COMPLETED" — not the auth-only "APPROVED" — to match the web Square
+        # webhook handler, which treats only COMPLETED as paid. This may change later: if Tap-to-Pay
+        # charges can legitimately settle as "APPROVED" for this integration, widen the check here
+        # (and keep it consistent with the web flow).
+        if payment_status != "COMPLETED":
+            msg = f"Square payment {payment_id} is not completed (status={payment_status})"
+            raise PaymentVerificationError(msg)
+        if sq_amount != amount_cents or sq_currency != invoice.currency:
+            msg = (
+                f"Square payment {payment_id} amount mismatch: "
+                f"got {sq_amount} {sq_currency}, expected {amount_cents} {invoice.currency}"
+            )
+            raise PaymentVerificationError(msg)
+        if sq_location_id != location_id:
+            msg = f"Square payment {payment_id} location mismatch: got {sq_location_id}, expected {location_id}"
+            raise PaymentVerificationError(msg)
+        if sq_reference_id != expected_reference_id:
+            msg = f"Square payment {payment_id} reference mismatch: got {sq_reference_id}, expected {expected_reference_id}"
+            raise PaymentVerificationError(msg)
+
+        # Verified — use Square's own id and amount for the record, not whatever the client claimed.
+        payment_id = fetched_payment_id or payment_id
+        verified_amount = (Decimal(sq_amount) / 100) if sq_amount is not None else amount_due
 
         # Record idempotently. The Square webhook reconciles the same payment via get_or_create on
         # (invoice, external_id), so a double-tap or a webhook landing first must not double-record or
@@ -205,8 +321,8 @@ class PaymentService:
                 external_id=payment_id,
                 defaults={
                     "payment_method": "Square",
-                    "amount": amount_due,
-                    "amount_available_to_refund": amount_due,
+                    "amount": verified_amount,
+                    "amount_available_to_refund": verified_amount,
                     "currency": invoice.currency,
                     "receipt_number": receipt_number or None,
                 },

@@ -78,6 +78,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Merge duplicate user interest categories from request races - every 24 hours
+    "deduplicate_user_interest": {
+        "task": "auctions.tasks.deduplicate_user_interest",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Clean up old invoice notification tasks - every 24 hours
     "cleanup_old_invoice_notification_tasks": {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
