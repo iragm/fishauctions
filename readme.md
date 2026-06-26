@@ -40,9 +40,9 @@ You should now be able to access a development site at 127.0.0.1 (Note: unlike m
 
 **`DEBUG` is fail-closed**: an unset `DEBUG` env var resolves to `False` (production mode). The `.env.example` sets `DEBUG='True'` so a fresh dev setup works out of the box. If you have an existing `.env` from before this change, add `DEBUG='True'` (or `DEBUG=1`) to keep dev mode; otherwise the app will start in production mode and route real email, hit the live PayPal API, etc.
 
-**Single club mode**: Fresh setups now default to a single-club configuration. `./update.sh` creates `.env` if needed, prompts for the site domain, generates missing secrets, marks setup complete, and the app creates the default club automatically on startup.
+**Single club mode**: On by default (`SINGLE_CLUB_MODE="True"`). The site runs as one club named after `NAVBAR_BRAND` (there is no separate `SINGLE_CLUB_NAME`), every user is auto-added as a member, and auctions are tied to it. `./update.sh` creates `.env` if needed, prompts for the site domain, generates missing secrets, marks setup complete, and the app creates the club automatically on startup. Set `SINGLE_CLUB_MODE="False"` only if you host multiple clubs on one install (like auction.fish).
 
-**Setup checklist**: After signing in as a superuser, open **Admin → Setup Checklist** for copy/paste `.env` snippets and status checks for email, PayPal, Google Maps, Google OAuth, reCAPTCHA, and wallet integrations.
+**Setup checklist**: After signing in as a superuser, open **Admin → Setup Checklist**. It explains where the `.env` file lives and gives copy/paste snippets, where-to-get-keys links, and live status for the site domain, branding, permissions, email (Gmail/SES), payments (PayPal/Square), Google Maps/sign-in/reCAPTCHA, Mailchimp, Discord, and digital wallet cards.
 
 **Demo data**: In development mode (DEBUG=True), demo data loads automatically only when single club mode is off and the database is empty.
 
@@ -135,29 +135,10 @@ cd fishauctions
 ```
 `./update.sh` now copies `.env.example` if needed, prompts for `SITE_DOMAIN`, generates the app/database/VAPID/encryption secrets, and refuses to let the containers start until that one-time setup has been completed.
 
-After the site starts, sign in as a superuser and open **Admin → Setup Checklist**.  That page shows which optional integrations are configured and gives copy/paste `.env` examples for Gmail, SES, PayPal, Google Maps, Google OAuth, reCAPTCHA, and digital membership cards.
+After the site starts, sign in as a superuser and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Discord, and digital membership cards.
 
-One thing to pay attention to is the email configuration.
-If you chose Gmail, configure things like this:
-```
-POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
-EMAIL_USE_TLS='True'
-EMAIL_HOST='smtp.gmail.com'
-EMAIL_PORT='587'
-EMAIL_HOST_USER='example@gmail.com'
-EMAIL_HOST_PASSWORD='your gmail app password, not your gmail password'
-```
-If you're using Amazon SES, the above settings won't be used, set these up instead:
-```
-POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"
-AWS_ACCESS_KEY_ID="secret"
-AWS_SECRET_ACCESS_KEY="secret"
-AWS_SESSION_PROFILE="default"
-AWS_SES_REGION_NAME="us-east-1"
-AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
-AWS_SES_CONFIGURATION_SET="secret"
-INBOUND_ROUTING_SECRET="change-me-to-a-long-random-secret"
-```
+One thing to pay attention to is the email configuration. The Setup Checklist has copy/paste snippets for both options (Gmail and Amazon SES) plus links to enable Gmail 2-step verification and create an app password. A few things worth knowing:
+
 With SES enabled, normal site mail is sent from `info@SITE_DOMAIN` automatically. Club and auction mail can also send from
 `club-slug-auctions@SITE_DOMAIN`, `club-slug-contact@SITE_DOMAIN`, and `auction-slug@SITE_DOMAIN`.
 Set up the matching SES DNS records for your domain (MX for inbound mail, TXT for SPF, and the DKIM records SES gives you), then in the club
@@ -179,33 +160,12 @@ Set `PAYPAL_CLIENT_ID="client-id"` and `PAYPAL_SECRET="secret"` to the values yo
 
 If payments are not working after setting this up, make sure your API keys are for live, not sandbox.  To use the sandbox for testing, add `PAYPAL_API_BASE="https://api-m.sandbox.paypal.com"` to your .env.  Note that if this isn't set, sandbox is used in dev and live is used in production.
 
-A few other settings, and what they do:
+A few other settings, and what they do. The **Admin → Setup Checklist** page (in the app) lists the branding and feature-flag settings — `NAVBAR_BRAND`, `COPYRIGHT_MESSAGE`, `MAILING_ADDRESS`, `WEBSITE_FOCUS`, `ALLOW_USERS_TO_CREATE_AUCTIONS`, `ALLOW_USERS_TO_CREATE_LOTS`, `USERS_ARE_TRUSTED_BY_DEFAULT`, `ENABLE_PROMO_PAGE`, `ENABLE_CLUB_FINDER`, and `ENABLE_HELP` — each with a one-line description and your current value. A few notes that don't fit on that page:
 
-`NAVBAR_BRAND` This is what's shown on the top of every page.
-
-`COPYRIGHT_MESSAGE` This is shown at the bottom of every page.  HTML allowed here.
-
-`MAILING_ADDRESS` Your physical mailing address, shown next to the unsubscribe link on promo emails.
-
-`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False to allow only admin users to create club auctions.  A closely related setting, `USERS_ARE_TRUSTED_BY_DEFAULT`, allows users to promote auctions, manage payments, and send invoice notifications.
-
-If you plan to allow anyone to create auctions, set `ALLOW_USERS_TO_CREATE_AUCTIONS=True` and `USERS_ARE_TRUSTED_BY_DEFAULT=False`, which will let people create test auctions any time, and promoted auctions once an admin has marked them as trusted.  Setting both settings to True will allow anyone to create a promoted auction any time and is not recommended.
-
-`ALLOW_USERS_TO_CREATE_LOTS` Set this to False to disable creating stand-alone lots not associated with any auction for newly created users.  Users will still be able to add lots to club auctions.
-
-Directly related to this is a management command `change_standalone_lots` which can be used to enable/disable this for all existing users.  Example: `docker exec -it django python3 manage.py change_standalone_lots on` will allow users to create their own lots.
-
-`ENABLE_PROMO_PAGE` This should be left at False so the main auctions list is the landing page.
-
-`ENABLE_CLUB_FINDER` This should be left at False, setting it to true will show the clubs map dropdown menu.
-
-`ENABLE_HELP` if True, will show the auction's help button and the auction.fish branded tutorial videos
-
-`I_BRED_THIS_FISH_LABEL` is what's shown to users when checking the "breeder points" checkbox
-
-`WEEKLY_PROMO_MESSAGE` is included in the weekly promotional email.  Plain text only.  Generally, leave this blank.
-
-`WEBSITE_FOCUS` Plural, all-lowercase name of whatever your website is focused around.  For example, "fish", "birds", "items"...
+- `ALLOW_USERS_TO_CREATE_AUCTIONS=True` plus `USERS_ARE_TRUSTED_BY_DEFAULT=False` lets people create test auctions any time, and promoted auctions only once an admin marks their account trusted. Setting both to True lets anyone create a promoted auction any time and is not recommended.
+- The `change_standalone_lots` management command toggles standalone-lot creation for *existing* users, e.g. `docker exec -it django python3 manage.py change_standalone_lots on` (`ALLOW_USERS_TO_CREATE_LOTS` only affects newly created users).
+- `I_BRED_THIS_FISH_LABEL` is the label shown next to the "breeder points" checkbox.
+- `WEEKLY_PROMO_MESSAGE` is included in the weekly promotional email (plain text only; generally leave blank).
 
 Most of the other options in the .env file are pretty self-explanatory.
 Save and exit nano, then type:

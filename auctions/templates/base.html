@@ -36,10 +36,9 @@ window.onload = function() {
     <head>
         <meta charset="utf-8" />
         {% block ads %}
-        {% if GOOGLE_ADSENSE_ID %}
+        {% if show_ads and GOOGLE_ADSENSE_ID %}
         <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
         {% endif %}
-        {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}
         {% endblock %}
         <title>
             {% block title %}

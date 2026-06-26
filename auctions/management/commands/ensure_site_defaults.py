@@ -4,7 +4,11 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db.models import Exists, OuterRef, Q
 
-from auctions.site_setup import ensure_single_club_membership_for_user, get_single_club, single_club_manage_mode
+from auctions.site_setup import (
+    SINGLE_CLUB_DEFAULT_MANAGE_MODE,
+    ensure_single_club_membership_for_user,
+    get_single_club,
+)
 
 
 class Command(BaseCommand):
@@ -22,7 +26,9 @@ class Command(BaseCommand):
                 defaults={"verified": True, "primary": True},
             )
             self.stdout.write(
-                self.style.WARNING("Created debug admin account username=admin ****** Change the password immediately.")
+                self.style.WARNING(
+                    "Created debug admin account username=admin password=example ****** Change the password immediately."
+                )
             )
 
         if not getattr(settings, "SINGLE_CLUB_MODE", False):
@@ -52,7 +58,7 @@ class Command(BaseCommand):
 
         updated = Auction.objects.filter(club__isnull=True, is_deleted=False).update(
             club=club,
-            manage_users_through_club=single_club_manage_mode(),
+            manage_users_through_club=SINGLE_CLUB_DEFAULT_MANAGE_MODE,
         )
         if updated:
             self.stdout.write(self.style.SUCCESS(f"Assigned {updated} auction(s) to the single club"))

@@ -24,11 +24,13 @@ def _safe_timezone(value: str | None) -> str | None:
 
 
 def google_analytics(request):
-    """Return google tracking codes from settings"""
+    """Return google tracking codes and the global ad switch from settings"""
     return {
         "GOOGLE_MEASUREMENT_ID": settings.GOOGLE_MEASUREMENT_ID,
         "GOOGLE_TAG_ID": settings.GOOGLE_TAG_ID,
         "GOOGLE_ADSENSE_ID": settings.GOOGLE_ADSENSE_ID,
+        # Master on/off switch for all ads, controlled by the SHOW_ADS env var.
+        "show_ads": settings.SHOW_ADS,
     }
 
 
@@ -41,13 +43,7 @@ def google_oauth(request):
 def theme(request):
     """return the theme from userdata"""
     theme = True  # dark
-    show_ads = True
-    if request.user.is_authenticated:
-        # UserData is auto-created when user is saved
-        show_ads = request.user.userdata.show_ads
-    # ads off for everyone!  (at least for now...we made $46 in a year from google ads, what a joke!)
-    show_ads = False
-    return {"theme": theme, "show_ads": show_ads}
+    return {"theme": theme}
 
 
 def add_tz(request):
@@ -149,6 +145,9 @@ def site_config(request):
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
         "recaptcha_enabled": getattr(settings, "RECAPTCHA_ENABLED", False),
+        # When the whole site is one club, the club name duplicates the navbar
+        # brand, so templates can hide it.
+        "single_club_mode": getattr(settings, "SINGLE_CLUB_MODE", False),
     }
 
 

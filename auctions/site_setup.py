@@ -1,25 +1,53 @@
+import ipaddress
 import logging
+import urllib.request
 
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-SINGLE_CLUB_MANAGE_MODE_CHOICES = {"all", "checkin"}
+# When an auction is tied to the single club we never allow turning participant
+# management off, so new single-club auctions start in this mode.
+SINGLE_CLUB_DEFAULT_MANAGE_MODE = "checkin"
+
+_SERVER_IP_CACHE_KEY = "site_setup_server_public_ip"
+_SERVER_IP_CACHE_SECONDS = 60 * 60 * 24  # a server's public IP rarely changes
 
 
 def single_club_mode_enabled() -> bool:
     return bool(getattr(settings, "SINGLE_CLUB_MODE", False))
 
 
-def single_club_manage_mode() -> str:
-    mode = (getattr(settings, "SINGLE_CLUB_MANAGE_MODE", "checkin") or "checkin").strip().lower()
-    if mode not in SINGLE_CLUB_MANAGE_MODE_CHOICES:
-        return "checkin"
-    return mode
+def single_club_name() -> str:
+    """The single club is named after the site's navbar brand (no separate env var)."""
+    return (getattr(settings, "NAVBAR_BRAND", "") or "Default Club").strip() or "Default Club"
 
 
 def site_paypal_configured() -> bool:
     return bool(getattr(settings, "PAYPAL_CLIENT_ID", "") and getattr(settings, "PAYPAL_SECRET", ""))
+
+
+def get_server_public_ip() -> str | None:
+    """Best-effort lookup of this server's public IP for DNS setup instructions.
+
+    Cached for a day. Returns ``None`` if it can't be determined (e.g. no
+    outbound network), in which case callers should fall back to generic text.
+    """
+    cached = cache.get(_SERVER_IP_CACHE_KEY)
+    if cached is not None:
+        # Empty string is cached as a sentinel for "looked up, couldn't find it".
+        return cached or None
+    ip = None
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=2) as response:  # noqa: S310
+            candidate = response.read().decode().strip()
+        ipaddress.ip_address(candidate)  # raises ValueError if not a valid IP
+        ip = candidate
+    except Exception:  # noqa: BLE001 - any failure just means we show generic text
+        logger.info("Could not determine server public IP for setup checklist", exc_info=True)
+    cache.set(_SERVER_IP_CACHE_KEY, ip or "", _SERVER_IP_CACHE_SECONDS)
+    return ip
 
 
 def get_single_club(*, create: bool = False):
@@ -28,7 +56,7 @@ def get_single_club(*, create: bool = False):
 
     from .models import Club
 
-    club_name = (getattr(settings, "SINGLE_CLUB_NAME", "") or "Default Club").strip() or "Default Club"
+    club_name = single_club_name()
     club = Club.objects.filter(name=club_name).order_by("pk").first()
     if not club and create:
         club = Club.objects.create(

@@ -4789,8 +4789,8 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         )
         self.assertIsInstance(form.fields["enable_square_payments"].widget, forms.HiddenInput)
 
-    @override_settings(SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Single Club", SINGLE_CLUB_MANAGE_MODE="checkin")
-    def test_single_club_mode_hides_club_fields_and_forces_single_club(self):
+    @override_settings(SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Single Club")
+    def test_single_club_mode_hides_club_picker_and_blocks_turning_off_management(self):
         Club.objects.create(name="Single Club")
         self.online_auction.club = None
         self.online_auction.manage_users_through_club = ""
@@ -4800,9 +4800,14 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
 
+        # The club picker is hidden and pinned to the single club...
         self.assertIsInstance(form.fields["club"].widget, forms.HiddenInput)
-        self.assertIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
         self.assertEqual(form.fields["club"].initial.name, "Single Club")
+        # ...but participant management stays visible with the "Off" option removed.
+        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+        choice_values = [value for value, _label in form.fields["manage_users_through_club"].choices]
+        self.assertNotIn("", choice_values)
+        self.assertEqual(set(choice_values), {"all", "checkin"})
         self.assertEqual(form.fields["manage_users_through_club"].initial, "checkin")
 
 
@@ -6446,7 +6451,6 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
             "email_visible": False,
-            "show_ads": True,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -6483,7 +6487,6 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
             "email_visible": False,
-            "show_ads": True,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -10282,7 +10285,6 @@ class CurrencyCustomizationTests(StandardTestCase):
                 "preferred_currency": "GBP",
                 "distance_unit": "mi",
                 "email_visible": False,
-                "show_ads": True,
                 "email_me_about_new_auctions": True,
                 "email_me_about_new_local_lots": True,
                 "email_me_about_new_lots_ship_to_location": True,
@@ -10707,7 +10709,7 @@ class UserLocationUpdateTests(StandardTestCase):
 class LoadDemoDataTests(TestCase):
     """Tests for the load_demo_data management command"""
 
-    @override_settings(DEBUG=True)
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=False)
     def test_load_demo_data_with_debug_true(self):
         """Test that demo data loads successfully when DEBUG=True and no auctions exist"""
         from io import StringIO
@@ -10749,7 +10751,7 @@ class LoadDemoDataTests(TestCase):
         lots_with_winners = Lot.objects.filter(lot_number__gte=90000, winner__isnull=False)
         self.assertGreater(lots_with_winners.count(), 0)
 
-    @override_settings(DEBUG=True)
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=False)
     def test_load_demo_data_skips_when_auctions_exist(self):
         """Test that demo data is not loaded when auctions already exist"""
         from io import StringIO
@@ -10815,9 +10817,7 @@ class LoadDemoDataTests(TestCase):
 
 
 class EnsureSiteDefaultsCommandTests(TestCase):
-    @override_settings(
-        DEBUG=True, SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Command Club", SINGLE_CLUB_MANAGE_MODE="checkin"
-    )
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Command Club")
     def test_command_creates_single_club_and_memberships(self):
         user = User.objects.create_user("commanduser", "command@example.com", "pw")
         auction = Auction.objects.create(
@@ -11604,6 +11604,27 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("GOOGLE_MEASUREMENT_ID", context)
         self.assertIn("GOOGLE_TAG_ID", context)
         self.assertIn("GOOGLE_ADSENSE_ID", context)
+        self.assertIn("show_ads", context)
+
+    @override_settings(SHOW_ADS=False)
+    def test_google_analytics_context_show_ads_off(self):
+        """SHOW_ADS=False disables ads globally via the context processor"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_analytics
+
+        context = google_analytics(RequestFactory().get("/"))
+        self.assertFalse(context["show_ads"])
+
+    @override_settings(SHOW_ADS=True)
+    def test_google_analytics_context_show_ads_on(self):
+        """SHOW_ADS=True enables ads globally via the context processor"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_analytics
+
+        context = google_analytics(RequestFactory().get("/"))
+        self.assertTrue(context["show_ads"])
 
     def test_google_oauth_context(self):
         """Test google_oauth context processor returns expected keys"""
@@ -11655,8 +11676,6 @@ class ContextProcessorsTestCase(TestCase):
 
         context = theme(request)
         self.assertIn("theme", context)
-        self.assertIn("show_ads", context)
-        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
 
     def test_theme_context_authenticated_user(self):
         """Test theme context processor for authenticated users"""
@@ -11671,8 +11690,6 @@ class ContextProcessorsTestCase(TestCase):
 
         context = theme(request)
         self.assertIn("theme", context)
-        self.assertIn("show_ads", context)
-        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
 
     def test_add_tz_with_cookie(self):
         """Test add_tz context processor with timezone cookie"""
@@ -11951,20 +11968,27 @@ class AdminSetupChecklistViewTests(TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser("setupadmin", "setup@example.com", "testpass")
         self.client.force_login(self.superuser)
+        # The checklist looks up the server's public IP over the network; pin it in tests.
+        ip_patcher = patch("auctions.views.get_server_public_ip", return_value="203.0.113.7")
+        ip_patcher.start()
+        self.addCleanup(ip_patcher.stop)
 
     def test_admin_menu_shows_setup_checklist_link(self):
         response = self.client.get(reverse("home"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Setup Checklist")
 
-    @override_settings(SINGLE_CLUB_MODE=True, SINGLE_CLUB_NAME="Checklist Club", SETUP_COMPLETE=True)
+    @override_settings(SINGLE_CLUB_MODE=True, SETUP_COMPLETE=True)
     def test_setup_checklist_page_renders(self):
-        Club.objects.create(name="Checklist Club")
         response = self.client.get(reverse("admin_setup_checklist"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Setup Checklist")
-        self.assertContains(response, "Checklist Club")
+        self.assertContains(response, "Single club mode")
         self.assertContains(response, "Google Maps")
+        self.assertContains(response, "Mailchimp")
+        self.assertContains(response, "Square")
+        # The server IP appears in the site-domain DNS instructions.
+        self.assertContains(response, "203.0.113.7")
 
     @override_settings(SITE_DOMAIN="127.0.0.1")
     def test_site_domain_item_treats_localhost_default_as_configured(self):

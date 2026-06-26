@@ -51,7 +51,7 @@ from .models import (
     UserLabelPrefs,
     sanitize_summernote_html,
 )
-from .site_setup import get_single_club, single_club_manage_mode
+from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
 from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
@@ -2007,13 +2007,21 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["club"].queryset = Club.objects.filter(pk__in=club_id_set).order_by("name")
         self.fields["club"].initial = self.instance.club if (self.instance and self.instance.pk) else None
         single_club = get_single_club(create=False)
-        if getattr(settings, "SINGLE_CLUB_MODE", False) and single_club:
+        self.single_club_mode = bool(getattr(settings, "SINGLE_CLUB_MODE", False) and single_club)
+        if self.single_club_mode:
+            # Only one club exists on the whole site: hide the club picker and pin
+            # this auction to it. Participants are always managed through that club,
+            # so drop the "Off" option but still let admins choose how (all/check-in).
             self.fields["club"].queryset = Club.objects.filter(pk=single_club.pk)
             self.fields["club"].initial = single_club
             self.fields["club"].widget = forms.HiddenInput()
-            self.fields["manage_users_through_club"].initial = single_club_manage_mode()
-            self.fields["manage_users_through_club"].widget = forms.HiddenInput()
             self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
+            self.fields["manage_users_through_club"].choices = [
+                choice for choice in Auction.MANAGE_USERS_CHOICES if choice[0]
+            ]
+            self.fields["manage_users_through_club"].label = "Manage participants through the club"
+            if not (self.instance.pk and self.instance.manage_users_through_club):
+                self.fields["manage_users_through_club"].initial = SINGLE_CLUB_DEFAULT_MANAGE_MODE
 
         # Resolve which payment accounts apply to this auction:
         # - club auctions: the club's linked sellers (or site PayPal if enabled).
@@ -2355,8 +2363,12 @@ class AuctionEditForm(forms.ModelForm):
         single_club = get_single_club(create=False)
         if getattr(settings, "SINGLE_CLUB_MODE", False) and single_club:
             cleaned_data["club"] = single_club
-            cleaned_data["manage_users_through_club"] = single_club_manage_mode()
             cleaned_data["copy_users_when_copying_this_auction"] = False
+            # Participant management can't be turned off in single club mode.
+            if not cleaned_data.get("manage_users_through_club"):
+                cleaned_data["manage_users_through_club"] = (
+                    self.instance.manage_users_through_club or SINGLE_CLUB_DEFAULT_MANAGE_MODE
+                )
         if cleaned_data.get("club"):
             cleaned_data["enable_online_payments"] = False
             cleaned_data["enable_square_payments"] = False
@@ -3420,7 +3432,6 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         model = UserData
         fields = (
             "email_visible",
-            "show_ads",
             "distance_unit",
             "preferred_currency",
             "email_me_about_new_auctions",
@@ -3513,7 +3524,6 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 # Div('use_list_view',css_class='col-md-4',),
                 # Div('use_dark_theme',css_class='col-md-4',),
-                # Div('show_ads',css_class='col-md-3',),
                 Div(
                     "push_notifications_when_lots_sell",
                     css_class="col-md-6",

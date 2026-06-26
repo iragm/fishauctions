@@ -286,9 +286,9 @@ AUTH_PASSWORD_VALIDATORS = [
 SITE_ID = 1
 SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "127.0.0.1")
 SETUP_COMPLETE = parse_bool_env(os.environ.get("SETUP_COMPLETE") or None, default=False)
-SINGLE_CLUB_MODE = parse_bool_env(os.environ.get("SINGLE_CLUB_MODE") or None, default=False)
-SINGLE_CLUB_NAME = (os.environ.get("SINGLE_CLUB_NAME", "Default Club") or "Default Club").strip() or "Default Club"
-SINGLE_CLUB_MANAGE_MODE = (os.environ.get("SINGLE_CLUB_MANAGE_MODE", "checkin") or "checkin").strip().lower()
+# Single club mode is on by default: most self-hosters run one club. The club is
+# named after NAVBAR_BRAND, so there's no separate SINGLE_CLUB_NAME to configure.
+SINGLE_CLUB_MODE = parse_bool_env(os.environ.get("SINGLE_CLUB_MODE") or None, default=True)
 
 
 # Static files (CSS, JavaScript, Images)
@@ -407,8 +407,8 @@ AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
 EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = os.environ.get("EMAIL_PORT", 587)
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "user@example.com")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "unsecure")
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_SUBJECT_PREFIX = ""
 
 RECAPTCHA_PUBLIC_KEY = os.environ.get("RECAPTCHA_PUBLIC_KEY", "")
@@ -482,6 +482,8 @@ WEIGHT_AGAINST_TOP_INTEREST = 20
 GOOGLE_MEASUREMENT_ID = os.environ.get("GOOGLE_MEASUREMENT_ID", "")
 GOOGLE_TAG_ID = os.environ.get("GOOGLE_TAG_ID", "")
 GOOGLE_ADSENSE_ID = os.environ.get("GOOGLE_ADSENSE_ID", "")
+# Master on/off switch for all ads (AdSense and internal campaign ads). Default on.
+SHOW_ADS = parse_bool_env(os.environ.get("SHOW_ADS") or None, default=True)
 
 GOOGLE_OAUTH_LINK = os.environ.get("GOOGLE_OAUTH_LINK", "")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"

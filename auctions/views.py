@@ -228,7 +228,7 @@ from .serializers import (
     ClubMemberSerializer,
 )
 from .services import map_fields
-from .site_setup import get_single_club, single_club_manage_mode, site_paypal_configured
+from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -11666,118 +11666,461 @@ class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
 class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
     template_name = "auctions/admin_setup_checklist.html"
 
+    @staticmethod
+    def _yes_no(value):
+        return "True" if value else "False"
+
     def get_context_data(self, **kwargs):
+        from urllib.parse import urlsplit
+
+        from fishauctions._env import env_has_real_value
+
         context = super().get_context_data(**kwargs)
-        single_club = get_single_club(create=False)
-        paypal_enabled = site_paypal_configured()
-        context["single_club"] = single_club
+
+        server_ip = get_server_public_ip()
+        if server_ip:
+            domain_help = (
+                "Register a domain name with a DNS provider, then create DNS records "
+                f"(an A record) that point to this server's IP: <code>{server_ip}</code>"
+            )
+        else:
+            domain_help = (
+                "Register a domain name with a DNS provider, then create DNS records "
+                "(an A record) that point to this server's public IP address."
+            )
+
+        # Build https://your-host from SITE_DOMAIN so the payment redirect/webhook
+        # URLs below are copy-paste ready for this install.
+        raw_domain = (settings.SITE_DOMAIN or "example.com").strip() or "example.com"
+        site_host = urlsplit(raw_domain if "://" in raw_domain else f"//{raw_domain}").hostname or raw_domain
+        base_url = f"https://{site_host}"
+
+        email_configured = (
+            settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
+            and env_has_real_value(settings.AWS_ACCESS_KEY_ID)
+            and env_has_real_value(settings.AWS_SECRET_ACCESS_KEY)
+        ) or (env_has_real_value(settings.EMAIL_HOST_USER) and env_has_real_value(settings.EMAIL_HOST_PASSWORD))
+
         context["setup_items"] = [
+            # -- Core setup -------------------------------------------------------
             {
-                "name": "Initial setup",
-                "configured": getattr(settings, "SETUP_COMPLETE", False),
-                "what_it_does": "Lets the containers start after update.sh prepares the environment.",
-                "where_to_get_it": "Run ./update.sh from the repository root.",
-                "env_snippet": 'SETUP_COMPLETE="1"',
-            },
-            {
+                "section": "Core setup",
                 "name": "Site domain",
                 "configured": bool((settings.SITE_DOMAIN or "").strip() and settings.SITE_DOMAIN != "example.com"),
-                "what_it_does": "Used in absolute URLs, routed email senders, and production nginx setup.",
-                "where_to_get_it": "Use the hostname people will type into their browser.",
-                "env_snippet": 'SITE_DOMAIN="example.com"',
+                "what_it_does": (
+                    "Used in absolute URLs, routed email senders, and the production HTTPS certificate. "
+                    "Enter just the hostname &mdash; no <code>https://</code> and no trailing slash."
+                ),
+                "where_to_get_it": domain_help,
+                "snippets": [{"code": 'SITE_DOMAIN="example.com"'}],
             },
             {
+                "section": "Core setup",
                 "name": "Single club mode",
-                "configured": bool(getattr(settings, "SINGLE_CLUB_MODE", False) and single_club),
-                "what_it_does": "Creates one default club, auto-adds every user as a member, and ties auctions to it.",
-                "where_to_get_it": "Built in; update the club name or auto-add mode in .env if needed.",
-                "env_snippet": (
-                    'SINGLE_CLUB_MODE="True"\n'
-                    f'SINGLE_CLUB_NAME="{getattr(settings, "SINGLE_CLUB_NAME", "Default Club")}"\n'
-                    f'SINGLE_CLUB_MANAGE_MODE="{single_club_manage_mode()}"'
+                # A preference, not a credential: either value is valid, so always "Done".
+                "configured": True,
+                "what_it_does": (
+                    "On by default. Runs the whole site as one club (named after your navbar brand), "
+                    "auto-adds every user as a member, and ties auctions to it. "
+                    "Turn it off only if you host multiple clubs on one install. "
+                    f"Currently <strong>{'on' if getattr(settings, 'SINGLE_CLUB_MODE', False) else 'off'}</strong>."
                 ),
+                "snippets": [
+                    {"code": f'SINGLE_CLUB_MODE="{self._yes_no(getattr(settings, "SINGLE_CLUB_MODE", False))}"'}
+                ],
             },
             {
+                "section": "Core setup",
+                "name": "Site identity & branding",
+                # A preference, not a credential: always "Done", the help text explains it.
+                "configured": True,
+                "what_it_does": (
+                    "Branding shown across the site and on emails:"
+                    "<ul class='mb-0'>"
+                    "<li><code>NAVBAR_BRAND</code> &mdash; shown at the top of every page (also the single club's name).</li>"
+                    "<li><code>COPYRIGHT_MESSAGE</code> &mdash; shown in the footer. HTML is allowed.</li>"
+                    "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, shown next to the unsubscribe link on promo emails (required by anti-spam law).</li>"
+                    "<li><code>WEBSITE_FOCUS</code> &mdash; the plural, lowercase noun your site is about, e.g. <code>fish</code>, <code>birds</code>, <code>items</code>.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            f'NAVBAR_BRAND="{settings.NAVBAR_BRAND}"\n'
+                            'COPYRIGHT_MESSAGE="Website copyright your club"\n'
+                            'MAILING_ADDRESS="123 Your Street, Anytown, USA"\n'
+                            f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"'
+                        )
+                    }
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "Who can create auctions, lots, and promotions",
+                "configured": True,
+                "what_it_does": (
+                    "Controls what regular (non-admin) users can do and which optional pages appear. "
+                    "The snippet below shows your current values."
+                    "<ul class='mb-0'>"
+                    "<li><code>ALLOW_USERS_TO_CREATE_AUCTIONS</code> &mdash; let users create club auctions. "
+                    "False = Django admins only.</li>"
+                    "<li><code>ALLOW_USERS_TO_CREATE_LOTS</code> &mdash; let newly created users create standalone lots "
+                    "(not attached to an auction). Everyone can still add lots to club auctions.</li>"
+                    "<li><code>USERS_ARE_TRUSTED_BY_DEFAULT</code> &mdash; trusted users can promote auctions, manage "
+                    "payments, and send invoice notifications. Keep this False so an admin vets accounts first. A common "
+                    "setup is <code>ALLOW_USERS_TO_CREATE_AUCTIONS=True</code> with <code>USERS_ARE_TRUSTED_BY_DEFAULT=False</code>.</li>"
+                    "<li><code>UNTRUSTED_MESSAGE</code> &mdash; the message untrusted users see when they try to promote an auction.</li>"
+                    "<li><code>ENABLE_PROMO_PAGE</code> &mdash; True shows a marketing landing page instead of the "
+                    "auctions list as the home page.</li>"
+                    "<li><code>ENABLE_CLUB_FINDER</code> &mdash; True adds the &ldquo;find a club&rdquo; map to the menu.</li>"
+                    "<li><code>ENABLE_HELP</code> &mdash; True shows the in-auction help button and auction.fish tutorial videos.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            f'ALLOW_USERS_TO_CREATE_AUCTIONS="{self._yes_no(settings.ALLOW_USERS_TO_CREATE_AUCTIONS)}"\n'
+                            f'ALLOW_USERS_TO_CREATE_LOTS="{self._yes_no(settings.ALLOW_USERS_TO_CREATE_LOTS)}"\n'
+                            f'USERS_ARE_TRUSTED_BY_DEFAULT="{self._yes_no(settings.USERS_ARE_TRUSTED_BY_DEFAULT)}"\n'
+                            'UNTRUSTED_MESSAGE="You cannot currently promote auctions. Please contact the website administrator for access."\n'
+                            f'ENABLE_PROMO_PAGE="{self._yes_no(settings.ENABLE_PROMO_PAGE)}"\n'
+                            f'ENABLE_CLUB_FINDER="{self._yes_no(settings.ENABLE_CLUB_FINDER)}"\n'
+                            f'ENABLE_HELP="{self._yes_no(settings.ENABLE_HELP)}"'
+                        )
+                    }
+                ],
+            },
+            {
+                "section": "Core setup",
                 "name": "Email delivery",
-                "configured": bool(
-                    (
-                        settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
-                        and settings.AWS_ACCESS_KEY_ID
-                        and settings.AWS_SECRET_ACCESS_KEY
-                    )
-                    or (
-                        settings.EMAIL_HOST_USER
-                        and settings.EMAIL_HOST_PASSWORD
-                        and settings.EMAIL_HOST_USER != "user@example.com"
-                        and settings.EMAIL_HOST_PASSWORD != "unsecure"
-                    )
+                "configured": email_configured,
+                "what_it_does": (
+                    "Sends sign-in, invoice, and notification emails. Pick one of the two options below. "
+                    "For Gmail, the app password is a special 16-character password (not your normal Google password) "
+                    "and only appears after you turn on 2-step verification."
                 ),
-                "what_it_does": "Sends sign-in, invoice, and notification emails.",
-                "where_to_get_it": "Use a Gmail app password or AWS SES SMTP/API credentials.",
-                "env_snippet": (
-                    'POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"\n'
-                    'EMAIL_HOST="smtp.gmail.com"\n'
-                    'EMAIL_PORT="587"\n'
-                    'EMAIL_HOST_USER="you@example.com"\n'
-                    'EMAIL_HOST_PASSWORD="gmail-app-password"'
-                ),
+                "snippets": [
+                    {
+                        "label": "Option A — Gmail (simplest). Turn on 2-step verification first, then create an app password.",
+                        "code": (
+                            'POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"\n'
+                            'EMAIL_HOST="smtp.gmail.com"\n'
+                            'EMAIL_PORT="587"\n'
+                            'EMAIL_USE_TLS="True"\n'
+                            'EMAIL_HOST_USER="you@gmail.com"\n'
+                            'EMAIL_HOST_PASSWORD="your-16-character-app-password"\n'
+                            'DEFAULT_FROM_EMAIL="Notifications <you@gmail.com>"'
+                        ),
+                    },
+                    {
+                        "label": (
+                            "Option B — Amazon SES (recommended for production; also enables reply routing). "
+                            "INBOUND_ROUTING_SECRET is a random secret you make up — it is this app's own value, not from AWS. "
+                            "With SES, mail is sent from info@your-domain automatically (DEFAULT_FROM_EMAIL is ignored)."
+                        ),
+                        "code": (
+                            'POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"\n'
+                            'AWS_ACCESS_KEY_ID="your-access-key"\n'
+                            'AWS_SECRET_ACCESS_KEY="your-secret-key"\n'
+                            'AWS_SES_REGION_NAME="us-east-1"\n'
+                            'AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"\n'
+                            'AWS_SES_CONFIGURATION_SET="your-configuration-set"\n'
+                            'INBOUND_ROUTING_SECRET="a-long-random-secret"'
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Gmail: enable 2-step verification",
+                        "url": "https://myaccount.google.com/signinoptions/two-step-verification",
+                    },
+                    {"label": "Gmail: create an app password", "url": "https://myaccount.google.com/apppasswords"},
+                    {
+                        "label": "Full SES setup guide (SES.md)",
+                        "url": "https://github.com/iragm/fishauctions/blob/master/SES.md",
+                    },
+                ],
             },
+            # -- PayPal -----------------------------------------------------------
             {
+                "section": "PayPal",
                 "name": "PayPal",
-                "configured": paypal_enabled,
-                "what_it_does": "Lets the single club collect PayPal payments with the site's own credentials.",
-                "where_to_get_it": "Create a PayPal REST app in the PayPal developer dashboard.",
-                "env_snippet": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"',
+                "hide_title": True,
+                "configured": env_has_real_value(settings.PAYPAL_CLIENT_ID)
+                and env_has_real_value(settings.PAYPAL_SECRET),
+                "what_it_does": (
+                    "Lets your club collect online payments with the site's own PayPal credentials. "
+                    "Use your <strong>Live</strong> keys, not Sandbox &mdash; sandbox keys silently fail to take real payments."
+                ),
+                "where_to_get_it": (
+                    "Create a REST app under <code>Apps &amp; Credentials</code> (Live tab), copy its client ID and "
+                    "secret, then set the return URL and subscribe a webhook to the URLs below."
+                ),
+                "snippets": [
+                    {"code": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"'},
+                    {
+                        "label": "URLs to configure in your PayPal app",
+                        "code": (
+                            f"# Return URL:\n{base_url}/paypal/onboard/success/\n"
+                            f"# Webhook URL (subscribe to order & payment events):\n{base_url}/paypal/webhook/"
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "PayPal developer dashboard (get API keys)",
+                        "url": "https://developer.paypal.com/dashboard/applications/live",
+                    },
+                ],
             },
+            # -- Square -----------------------------------------------------------
             {
+                "section": "Square",
+                "name": "Square",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.SQUARE_APPLICATION_ID)
+                and env_has_real_value(settings.SQUARE_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets sellers connect Square accounts to collect online payments. "
+                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox)."
+                ),
+                "where_to_get_it": (
+                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key. "
+                    "Set the redirect and webhook URLs below in the app's OAuth and Webhooks sections."
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'SQUARE_ENABLED_FOR_USERS="True"\n'
+                            'SQUARE_ENVIRONMENT="production"\n'
+                            'SQUARE_APPLICATION_ID="sq0idp-xxxxx"\n'
+                            'SQUARE_CLIENT_SECRET="sq0csp-xxxxx"\n'
+                            'SQUARE_WEBHOOK_SIGNATURE_KEY="your-webhook-key"'
+                        )
+                    },
+                    {
+                        "label": "URLs to configure in your Square app",
+                        "code": (
+                            f"# OAuth redirect URL:\n{base_url}/square/onboard/success/\n"
+                            f"# Webhook subscription URL:\n{base_url}/square/webhook/"
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Square developer dashboard (get API keys)",
+                        "url": "https://developer.squareup.com/apps",
+                    },
+                ],
+            },
+            # -- Google Maps ------------------------------------------------------
+            {
+                "section": "Google Maps",
                 "name": "Google Maps",
+                "hide_title": True,
                 "configured": getattr(settings, "GOOGLE_MAPS_ENABLED", False),
-                "what_it_does": "Enables maps on auction and club pages and location pickers.",
-                "where_to_get_it": "Create a Maps JavaScript API key in Google Cloud.",
-                "env_snippet": 'GOOGLE_MAPS_API_KEY="your-browser-key"\nGOOGLE_MAPS_SERVER_API_KEY="your-server-key"',
+                "what_it_does": "Enables maps on auction and club pages plus location pickers.",
+                "where_to_get_it": (
+                    "Enable the <code>Maps JavaScript API</code> in Google Cloud and create the key(s) below."
+                ),
+                "snippets": [
+                    {
+                        "label": "Browser key — shows the maps and location pickers. Restrict it to your domain (include your port if it isn't 80).",
+                        "code": 'GOOGLE_MAPS_API_KEY="your-browser-key"',
+                    },
+                    {
+                        "label": "Server key (optional) — only needed to geocode club member addresses onto the member map. Restrict it to the Geocoding API.",
+                        "code": 'GOOGLE_MAPS_SERVER_API_KEY="your-server-key"',
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Google Cloud — Maps API keys",
+                        "url": "https://console.cloud.google.com/google/maps-apis/credentials",
+                    },
+                ],
             },
+            # -- Google sign-in ---------------------------------------------------
             {
-                "name": "Google OAuth",
-                "configured": bool((settings.GOOGLE_OAUTH_LINK or "").strip()),
-                "what_it_does": "Adds one-click Google sign-in.",
-                "where_to_get_it": "Create an OAuth web application in Google Cloud.",
-                "env_snippet": 'GOOGLE_OAUTH_LINK="your-client-id.apps.googleusercontent.com"',
+                "section": "Google sign-in",
+                "name": "Google sign-in (OAuth)",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_OAUTH_LINK),
+                "what_it_does": (
+                    "Adds one-click Google sign-in. The button stays hidden until a real client ID is set, "
+                    "so a placeholder degrades gracefully."
+                ),
+                "where_to_get_it": (
+                    "Create an OAuth web application and copy its client ID (ends in "
+                    "<code>.apps.googleusercontent.com</code>). Add your site to the authorized origins."
+                ),
+                "snippets": [{"code": 'GOOGLE_OAUTH_LINK="your-client-id.apps.googleusercontent.com"'}],
+                "links": [
+                    {
+                        "label": "Google Cloud — OAuth credentials",
+                        "url": "https://console.cloud.google.com/apis/credentials",
+                    },
+                    {
+                        "label": "Setup guide (django-allauth)",
+                        "url": "https://docs.allauth.org/en/latest/socialaccount/providers/google.html",
+                    },
+                ],
             },
+            # -- reCAPTCHA --------------------------------------------------------
             {
+                "section": "reCAPTCHA",
                 "name": "reCAPTCHA",
+                "hide_title": True,
                 "configured": getattr(settings, "RECAPTCHA_ENABLED", False),
                 "what_it_does": "Protects signup and password reset forms from abuse.",
-                "where_to_get_it": "Register v2 Invisible keys in Google reCAPTCHA admin.",
-                "env_snippet": 'RECAPTCHA_PUBLIC_KEY="your-site-key"\nRECAPTCHA_PRIVATE_KEY="your-secret-key"',
+                "where_to_get_it": (
+                    "Register a site of type <strong>reCAPTCHA v2 &ldquo;Invisible&rdquo;</strong> (other types won't "
+                    "work here) and copy the site key and secret key."
+                ),
+                "snippets": [{"code": 'RECAPTCHA_PUBLIC_KEY="your-site-key"\nRECAPTCHA_PRIVATE_KEY="your-secret-key"'}],
+                "links": [
+                    {"label": "reCAPTCHA admin console (get keys)", "url": "https://www.google.com/recaptcha/admin"},
+                ],
             },
+            # -- Analytics & ads --------------------------------------------------
             {
+                "section": "Analytics & ads",
+                "name": "Analytics & ads",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_MEASUREMENT_ID)
+                or env_has_real_value(settings.GOOGLE_TAG_ID)
+                or env_has_real_value(settings.GOOGLE_ADSENSE_ID),
+                "what_it_does": (
+                    "Optional Google tracking and ads, all independent of each other:"
+                    "<ul class='mb-0'>"
+                    "<li><code>GOOGLE_MEASUREMENT_ID</code> &mdash; Google Analytics 4 (starts with <code>G-</code>).</li>"
+                    "<li><code>GOOGLE_TAG_ID</code> &mdash; Google Tag Manager container (starts with <code>GTM-</code>).</li>"
+                    "<li><code>GOOGLE_ADSENSE_ID</code> &mdash; AdSense publisher ID (starts with <code>ca-pub-</code>).</li>"
+                    "<li><code>SHOW_ADS</code> &mdash; master on/off switch for all ads (default True). "
+                    "Set it to False to remove ads site-wide regardless of the AdSense ID.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'GOOGLE_MEASUREMENT_ID="G-XXXXXXXXXX"\n'
+                            'GOOGLE_TAG_ID="GTM-XXXXXXX"\n'
+                            'GOOGLE_ADSENSE_ID="ca-pub-XXXXXXXXXXXXXXXX"\n'
+                            f'SHOW_ADS="{self._yes_no(settings.SHOW_ADS)}"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Google Analytics", "url": "https://analytics.google.com/"},
+                    {"label": "Google Tag Manager", "url": "https://tagmanager.google.com/"},
+                    {"label": "Google AdSense", "url": "https://www.google.com/adsense/"},
+                ],
+            },
+            # -- Mailchimp --------------------------------------------------------
+            {
+                "section": "Mailchimp",
+                "name": "Mailchimp",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.MAILCHIMP_CLIENT_ID)
+                and env_has_real_value(settings.MAILCHIMP_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets clubs connect a Mailchimp account to sync members to an audience. "
+                    "Each club connects its own account from its club settings page once these keys are set."
+                ),
+                "where_to_get_it": "Register an OAuth2 app and copy its client ID and secret.",
+                "snippets": [
+                    {"code": 'MAILCHIMP_CLIENT_ID="your-client-id"\nMAILCHIMP_CLIENT_SECRET="your-client-secret"'}
+                ],
+                "links": [
+                    {"label": "Register a Mailchimp OAuth app", "url": "https://admin.mailchimp.com/account/oauth2/"},
+                ],
+            },
+            # -- Discord ----------------------------------------------------------
+            {
+                "section": "Discord bot",
+                "name": "Discord bot",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.DISCORD_BOT_TOKEN)
+                and env_has_real_value(getattr(settings, "DISCORD_PUBLIC_KEY", ""))
+                and env_has_real_value(getattr(settings, "DISCORD_BOT_CLIENT_ID", "")),
+                "what_it_does": (
+                    "Lets members join a Discord server and automatically receive a role and club membership. "
+                    "The server keys are set here; each club then links its server from its Discord settings page. "
+                    "Discord needs a public HTTPS URL, so this won't work on localhost."
+                ),
+                "where_to_get_it": (
+                    "Create an application with a bot (enable the <code>Server Members Intent</code>), then copy the "
+                    "token, public key, and client ID."
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'DISCORD_PUBLIC_KEY="your-application-public-key"\n'
+                            'DISCORD_BOT_TOKEN="your-bot-token"\n'
+                            'DISCORD_BOT_CLIENT_ID="your-application-client-id"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Discord developer portal", "url": "https://discord.com/developers/applications"},
+                ],
+            },
+            # -- Google Wallet ----------------------------------------------------
+            {
+                "section": "Google Wallet membership cards",
                 "name": "Google Wallet membership cards",
+                "hide_title": True,
                 "configured": bool(
                     settings.GOOGLE_WALLET_ISSUER_ID
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
                 ),
-                "what_it_does": "Lets members save digital membership cards to Google Wallet.",
-                "where_to_get_it": "Use the Google Wallet issuer console and a Google Cloud service account key JSON file.",
-                "env_snippet": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="wallet-service-account.json"',
+                "what_it_does": "Adds an &ldquo;Add to Google Wallet&rdquo; button so members can save their membership card.",
+                "where_to_get_it": (
+                    "Apply for a Wallet issuer account for the Issuer ID, then drop the Google Cloud service-account key "
+                    "JSON file next to your <code>.env</code> (it's gitignored). <code>GOOGLE_WALLET_KEYFILE</code> is just "
+                    "the filename."
+                ),
+                "snippets": [
+                    {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'}
+                ],
+                "links": [
+                    {"label": "Google Wallet issuer console", "url": "https://pay.google.com/business/console"},
+                ],
             },
+            # -- Apple Wallet -----------------------------------------------------
             {
+                "section": "Apple Wallet membership cards",
                 "name": "Apple Wallet membership cards",
+                "hide_title": True,
                 "configured": bool(
                     settings.APPLE_WALLET_CERT_FILE
                     and settings.APPLE_WALLET_WWDR_FILE
                     and settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER
                     and settings.APPLE_WALLET_TEAM_IDENTIFIER
                 ),
-                "what_it_does": "Lets members save digital membership cards to Apple Wallet.",
-                "where_to_get_it": "Use an Apple Wallet pass certificate and WWDR certificate from Apple Developer.",
-                "env_snippet": (
-                    'APPLE_WALLET_CERT_FILE="certificate.p12"\n'
-                    'APPLE_WALLET_CERT_PASSWORD=""\n'
-                    'APPLE_WALLET_WWDR_FILE="AppleWWDRCAG4.pem"\n'
-                    'APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership"\n'
-                    'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"'
+                "what_it_does": "Adds an &ldquo;Add to Apple Wallet&rdquo; button. Requires a paid Apple Developer account.",
+                "where_to_get_it": (
+                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop both files next to "
+                    "your <code>.env</code> (they're gitignored)."
                 ),
+                "snippets": [
+                    {
+                        "code": (
+                            'APPLE_WALLET_CERT_FILE="pass-type-id.p12"\n'
+                            'APPLE_WALLET_CERT_PASSWORD="your-p12-password"\n'
+                            'APPLE_WALLET_WWDR_FILE="AppleWWDRCAG4.pem"\n'
+                            'APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership"\n'
+                            'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"'
+                        )
+                    }
+                ],
+                "links": [
+                    {
+                        "label": "Apple Developer — Pass Type IDs",
+                        "url": "https://developer.apple.com/account/resources/identifiers/list/passTypeId",
+                    },
+                ],
             },
         ]
         return context
