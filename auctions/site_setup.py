@@ -7,9 +7,11 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-# When an auction is tied to the single club we never allow turning participant
-# management off, so new single-club auctions start in this mode.
-SINGLE_CLUB_DEFAULT_MANAGE_MODE = "checkin"
+# Single-club auctions always manage participants through the club (it can't be turned off), so new
+# ones start in a club-managed mode. We default to "all" (auto-add every member with bidding enabled):
+# it's the only mode valid for online auctions, and check-in mode -- while still available as an
+# opt-in -- is an extra step that tends to confuse new admins, so it isn't the default.
+SINGLE_CLUB_DEFAULT_MANAGE_MODE = "all"
 
 _SERVER_IP_CACHE_KEY = "site_setup_server_public_ip"
 _SERVER_IP_CACHE_SECONDS = 60 * 60 * 24  # a server's public IP rarely changes

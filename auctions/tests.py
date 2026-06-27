@@ -4793,13 +4793,18 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
 
     @override_settings(SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Single Club")
     def test_single_club_mode_hides_club_picker_and_blocks_turning_off_management(self):
+        # Use an in-person auction: check-in mode is an in-person concept and is rejected for online
+        # auctions by clean_manage_users_through_club, so it only belongs in the choices here.
         Club.objects.create(name="Single Club")
-        self.online_auction.club = None
-        self.online_auction.manage_users_through_club = ""
-        self.online_auction.save()
+        self.in_person_auction.club = None
+        self.in_person_auction.manage_users_through_club = ""
+        self.in_person_auction.save()
 
         form = AuctionEditForm(
-            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+            instance=self.in_person_auction,
+            user=self.in_person_auction.created_by,
+            cloned_from=None,
+            user_timezone="UTC",
         )
 
         # The club picker is hidden and pinned to the single club...
@@ -4810,7 +4815,8 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         choice_values = [value for value, _label in form.fields["manage_users_through_club"].choices]
         self.assertNotIn("", choice_values)
         self.assertEqual(set(choice_values), {"all", "checkin"})
-        self.assertEqual(form.fields["manage_users_through_club"].initial, "checkin")
+        # New single-club auctions default to auto-adding all members; check-in stays available as an opt-in.
+        self.assertEqual(form.fields["manage_users_through_club"].initial, "all")
 
 
 class LotListViewTests(StandardTestCase):
@@ -10568,7 +10574,7 @@ class EnsureSiteDefaultsCommandTests(TestCase):
         self.assertTrue(ClubMember.objects.filter(club=club, user=user, is_deleted=False).exists())
         auction.refresh_from_db()
         self.assertEqual(auction.club, club)
-        self.assertEqual(auction.manage_users_through_club, "checkin")
+        self.assertEqual(auction.manage_users_through_club, "all")
 
 
 class AdminReadonlyFieldsTests(StandardTestCase):
