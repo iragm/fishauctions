@@ -41,6 +41,13 @@
         {% if item.where_to_get_it %}
         <small class="text-muted d-block mb-2">Where to get it: {{ item.where_to_get_it|safe }}</small>
         {% endif %}
+        {% if item.setup_steps %}
+        <ol class="mb-2 ps-3">
+          {% for step in item.setup_steps %}
+          <li class="mb-1">{{ step|safe }}</li>
+          {% endfor %}
+        </ol>
+        {% endif %}
         {% for snippet in item.snippets %}
         {% if snippet.label %}<small class="d-block fw-bold mt-2">{{ snippet.label }}</small>{% endif %}
         <pre class="mb-1"><code>{{ snippet.code }}</code></pre>

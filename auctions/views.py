@@ -11741,6 +11741,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<li><code>COPYRIGHT_MESSAGE</code> &mdash; shown in the footer. HTML is allowed.</li>"
                     "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, shown next to the unsubscribe link on promo emails (required by anti-spam law).</li>"
                     "<li><code>WEBSITE_FOCUS</code> &mdash; the plural, lowercase noun your site is about, e.g. <code>fish</code>, <code>birds</code>, <code>items</code>.</li>"
+                    "<li><code>I_BRED_THIS_FISH_LABEL</code> &mdash; the label shown next to the &ldquo;breeder points&rdquo; checkbox.</li>"
+                    "<li><code>WEEKLY_PROMO_MESSAGE</code> &mdash; extra text included in the weekly promotional email (plain text only; usually left blank).</li>"
                     "</ul>"
                 ),
                 "snippets": [
@@ -11749,7 +11751,9 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             f'NAVBAR_BRAND="{settings.NAVBAR_BRAND}"\n'
                             'COPYRIGHT_MESSAGE="Website copyright your club"\n'
                             'MAILING_ADDRESS="123 Your Street, Anytown, USA"\n'
-                            f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"'
+                            f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"\n'
+                            f'I_BRED_THIS_FISH_LABEL="{settings.I_BRED_THIS_FISH_LABEL}"\n'
+                            'WEEKLY_PROMO_MESSAGE=""'
                         )
                     }
                 ],
@@ -11787,7 +11791,14 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             f'ENABLE_CLUB_FINDER="{self._yes_no(settings.ENABLE_CLUB_FINDER)}"\n'
                             f'ENABLE_HELP="{self._yes_no(settings.ENABLE_HELP)}"'
                         )
-                    }
+                    },
+                    {
+                        "label": (
+                            "ALLOW_USERS_TO_CREATE_LOTS only affects new accounts. To toggle standalone-lot creation "
+                            "for existing users, run (use off to disable):"
+                        ),
+                        "code": "docker exec -it django python3 manage.py change_standalone_lots on",
+                    },
                 ],
             },
             {
@@ -11841,6 +11852,23 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     },
                 ],
             },
+            {
+                "section": "Core setup",
+                "name": "Terms of service",
+                "configured": Path(settings.BASE_DIR / "tos.html").exists(),
+                "what_it_does": (
+                    "Your site needs a terms-of-service page at <code>/tos/</code>. Create a <code>tos.html</code> file "
+                    "in the project root (next to your <code>.env</code>) containing your terms &mdash; the contents are "
+                    "rendered inside the site's normal layout. Until the file exists, visiting <code>/tos/</code> raises "
+                    "an error."
+                ),
+                "snippets": [
+                    {
+                        "label": "Create the file in the project root and paste in your terms:",
+                        "code": "nano tos.html",
+                    }
+                ],
+            },
             # -- PayPal -----------------------------------------------------------
             {
                 "section": "PayPal",
@@ -11850,7 +11878,10 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 and env_has_real_value(settings.PAYPAL_SECRET),
                 "what_it_does": (
                     "Lets your club collect online payments with the site's own PayPal credentials. "
-                    "Use your <strong>Live</strong> keys, not Sandbox &mdash; sandbox keys silently fail to take real payments."
+                    "Use your <strong>Live</strong> keys, not Sandbox &mdash; sandbox keys silently fail to take real payments. "
+                    "<strong>Heads up:</strong> PayPal requires platform-seller approval that is hard to get, so this "
+                    "integration has been built but never used in production. If you just want to take payments, set up "
+                    "Square instead."
                 ),
                 "where_to_get_it": (
                     "Create a REST app under <code>Apps &amp; Credentials</code> (Live tab), copy its client ID and "
@@ -11864,6 +11895,29 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             f"# Return URL:\n{base_url}/paypal/onboard/success/\n"
                             f"# Webhook URL (subscribe to order & payment events):\n{base_url}/paypal/webhook/"
                         ),
+                    },
+                    {
+                        "label": (
+                            "To let users connect their own PayPal accounts you need an approved platform partner BN "
+                            "code from PayPal, then add these (PAYPAL_ENABLED_FOR_USERS defaults to False, which hides "
+                            "the connect-PayPal button for new accounts):"
+                        ),
+                        "code": (
+                            'PARTNER_MERCHANT_ID="your-partner-merchant-id"\n'
+                            'PAYPAL_BN_CODE="your-bn-code"\n'
+                            'PAYPAL_ENABLED_FOR_USERS="True"'
+                        ),
+                    },
+                    {
+                        "label": "Once your integration is tested, enable PayPal for existing accounts:",
+                        "code": "docker exec -it django python3 manage.py change_paypal on",
+                    },
+                    {
+                        "label": (
+                            "To test against the PayPal sandbox, point the API at it (if unset, sandbox is used in "
+                            "development and live in production):"
+                        ),
+                        "code": 'PAYPAL_API_BASE="https://api-m.sandbox.paypal.com"',
                     },
                 ],
                 "links": [
@@ -11881,8 +11935,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "configured": env_has_real_value(settings.SQUARE_APPLICATION_ID)
                 and env_has_real_value(settings.SQUARE_CLIENT_SECRET),
                 "what_it_does": (
-                    "Lets sellers connect Square accounts to collect online payments. "
-                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox)."
+                    "Lets sellers connect Square accounts to collect online payments &mdash; the recommended option. "
+                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox). "
+                    "<code>SQUARE_ENABLED_FOR_USERS</code> only controls whether <em>newly created</em> users can link an "
+                    "account. <code>FIELD_ENCRYPTION_KEY</code> encrypts stored payment tokens and is normally generated "
+                    "for you by <code>update.sh</code>."
                 ),
                 "where_to_get_it": (
                     "Create an app, then copy the Application ID, OAuth secret, and webhook signature key. "
@@ -11895,7 +11952,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             'SQUARE_ENVIRONMENT="production"\n'
                             'SQUARE_APPLICATION_ID="sq0idp-xxxxx"\n'
                             'SQUARE_CLIENT_SECRET="sq0csp-xxxxx"\n'
-                            'SQUARE_WEBHOOK_SIGNATURE_KEY="your-webhook-key"'
+                            'SQUARE_WEBHOOK_SIGNATURE_KEY="your-webhook-key"\n'
+                            'FIELD_ENCRYPTION_KEY="your-fernet-key"'
                         )
                     },
                     {
@@ -11904,6 +11962,10 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             f"# OAuth redirect URL:\n{base_url}/square/onboard/success/\n"
                             f"# Webhook subscription URL:\n{base_url}/square/webhook/"
                         ),
+                    },
+                    {
+                        "label": "To enable Square for existing users (new users follow SQUARE_ENABLED_FOR_USERS):",
+                        "code": "docker exec -it django python3 manage.py change_square on",
                     },
                 ],
                 "links": [
@@ -12052,6 +12114,30 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "Create an application with a bot (enable the <code>Server Members Intent</code>), then copy the "
                     "token, public key, and client ID."
                 ),
+                "setup_steps": [
+                    "At the Discord developer portal, create an application and add a bot.",
+                    "Under the bot settings, enable the <strong>Server Members Intent</strong>.",
+                    "Copy the bot token, public key, and client ID into the <code>.env</code> snippet below.",
+                    (
+                        "In the application's <strong>General Information</strong> tab, set the "
+                        f"<strong>Interactions Endpoint URL</strong> to <code>{base_url}/discord/interactions/</code>."
+                    ),
+                    (
+                        "When adding the bot to a server it needs <strong>Manage Roles</strong> and <strong>Send "
+                        "Messages</strong>, and its role must sit <strong>above</strong> any role it assigns in the "
+                        "server's role hierarchy."
+                    ),
+                    (
+                        "Register the <code>/connect</code> slash command once (see the command below). Global "
+                        "registration can take up to an hour to propagate."
+                    ),
+                    (
+                        "Each club admin then links a server from <code>/clubs/&lt;slug&gt;/discord/</code>: run "
+                        "<code>/connect club_uuid:&lt;uuid&gt;</code> in the channel where the join button should appear, "
+                        "then use <strong>Fetch roles</strong> to sync role names and configure paid/unpaid roles and "
+                        "BAP/HAP thresholds."
+                    ),
+                ],
                 "snippets": [
                     {
                         "code": (
@@ -12059,7 +12145,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             'DISCORD_BOT_TOKEN="your-bot-token"\n'
                             'DISCORD_BOT_CLIENT_ID="your-application-client-id"'
                         )
-                    }
+                    },
+                    {
+                        "label": "Register the /connect slash command (run once after the keys are set):",
+                        "code": "docker exec -it django python3 manage.py register_discord_commands",
+                    },
                 ],
                 "links": [
                     {"label": "Discord developer portal", "url": "https://discord.com/developers/applications"},
@@ -12075,14 +12165,46 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
                 ),
-                "what_it_does": "Adds an &ldquo;Add to Google Wallet&rdquo; button so members can save their membership card.",
+                "what_it_does": (
+                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on each club member's page so members can save "
+                    "their membership card (QR code and barcode) to their phone. Only the signed-in account that matches "
+                    "the membership can save it &mdash; UUID renewal links cannot. A Wallet class is created automatically "
+                    "for each club; if the keyfile is missing or invalid the integration disables itself (warning logged) "
+                    "so the site still boots."
+                ),
                 "where_to_get_it": (
                     "Apply for a Wallet issuer account for the Issuer ID, then drop the Google Cloud service-account key "
                     "JSON file next to your <code>.env</code> (it's gitignored). <code>GOOGLE_WALLET_KEYFILE</code> is just "
-                    "the filename."
+                    "the filename &mdash; settings.py joins it to <code>BASE_DIR</code>."
                 ),
+                "setup_steps": [
+                    "Create a Google Cloud project at console.cloud.google.com.",
+                    "Enable the <strong>Google Wallet API</strong> for that project (APIs &amp; Services &rarr; Library).",
+                    (
+                        "Apply for a Wallet issuer account at the issuer console (Google Wallet API &rarr; Get started). "
+                        "After approval Google gives you a numeric <strong>Issuer ID</strong>."
+                    ),
+                    (
+                        "In Cloud IAM &amp; Admin &rarr; Service Accounts, create a service account, then under its "
+                        "<strong>Keys</strong> tab add a new <strong>JSON</strong> key and download it. In the Wallet "
+                        "console, invite that service account email as a <em>Developer</em>."
+                    ),
+                    (
+                        "Drop the JSON keyfile next to your <code>.env</code> (JSON files at the repo root are "
+                        "gitignored) and add the snippet below."
+                    ),
+                    (
+                        "<strong>Note:</strong> Google caps unapproved issuers at ~5 generic classes total, so "
+                        "auto-creation starts failing past that &mdash; wait until your issuer is approved before "
+                        "enabling this site-wide."
+                    ),
+                ],
                 "snippets": [
-                    {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'}
+                    {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'},
+                    {
+                        "label": "To backfill Wallet classes for clubs that already exist, run (idempotent):",
+                        "code": "docker exec -it django python3 manage.py sync_google_wallet_classes",
+                    },
                 ],
                 "links": [
                     {"label": "Google Wallet issuer console", "url": "https://pay.google.com/business/console"},
@@ -12099,11 +12221,33 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER
                     and settings.APPLE_WALLET_TEAM_IDENTIFIER
                 ),
-                "what_it_does": "Adds an &ldquo;Add to Apple Wallet&rdquo; button. Requires a paid Apple Developer account.",
+                "what_it_does": (
+                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one. Same security model "
+                    "&mdash; only the signed-in account that matches the membership can download the pass. Passes are "
+                    "signed <code>.pkpass</code> files generated on each download (no REST API, no class to pre-create). "
+                    "If any setting below is missing the button is hidden and downloads return 404. Requires a paid "
+                    "Apple Developer account ($99/yr)."
+                ),
                 "where_to_get_it": (
                     "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop both files next to "
                     "your <code>.env</code> (they're gitignored)."
                 ),
+                "setup_steps": [
+                    (
+                        "In the Apple Developer portal, create a <strong>Pass Type ID</strong> (reverse-DNS form, e.g. "
+                        "<code>pass.com.yourdomain.membership</code>) and note your <strong>Team ID</strong>."
+                    ),
+                    (
+                        "Create a certificate for that Pass Type ID (generate a CSR with Keychain Access), download the "
+                        "<code>.cer</code>, install it, then export it as a password-protected <code>.p12</code>. Drop "
+                        "the <code>.p12</code> next to your <code>.env</code>."
+                    ),
+                    (
+                        "Download the Apple WWDR intermediate cert (<em>Worldwide Developer Relations - G4</em>) as a "
+                        "<code>.pem</code> and drop it next to your <code>.env</code> too."
+                    ),
+                    "Add the snippet below (.p12 and .pem files at the repo root are gitignored).",
+                ],
                 "snippets": [
                     {
                         "code": (
@@ -12111,7 +12255,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             'APPLE_WALLET_CERT_PASSWORD="your-p12-password"\n'
                             'APPLE_WALLET_WWDR_FILE="AppleWWDRCAG4.pem"\n'
                             'APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership"\n'
-                            'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"'
+                            'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"\n'
+                            'APPLE_WALLET_ORGANIZATION_NAME="Your Club"'
                         )
                     }
                 ],
@@ -12120,6 +12265,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                         "label": "Apple Developer — Pass Type IDs",
                         "url": "https://developer.apple.com/account/resources/identifiers/list/passTypeId",
                     },
+                    {"label": "Apple PKI — WWDR certificate", "url": "https://www.apple.com/certificateauthority/"},
                 ],
             },
         ]

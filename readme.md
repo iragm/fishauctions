@@ -5,7 +5,7 @@ A free, full featured auction platform:
 * Run online or in-person auctions
 * Reserve and buy now prices
 * Automatic invoicing
-* **Integrated payment processing** with PayPal and Square (OAuth-based seller accounts)
+* Integrated payment processing with PayPal and Square
 * Using a projector, show pictures of lots as they are auctioned off
 * Users don't need to create an account for in-person auctions
 * Support for Breeder Award Programs/Breeder Participation Programs
@@ -22,13 +22,11 @@ What started as a free and open source tool to allow fish clubs to run online au
 If you have a suggestion or are a developer who would like to contribute, read on.
 
 ## Features and issues
-I'm open to adding new features as they are requested.  Please search for your suggestion in the open issues first.
+I'm open to adding new features that make the site better - large or small.  [Open a new issue](https://github.com/iragm/fishauctions/issues/new) with your suggestions or bug reports.  Please include as much detail as possible.
 
 ## Development
-This tool is built with Python3, Django, Bootstrap and a bit of JQuery.  Some of the auction admin stuff uses HTMx.
-
-### Getting started (development environment)
-This project has now been packaged in Docker, so assuming you have docker installed, you should be able to just:
+### Getting started
+This project is packaged in Docker, so assuming you have docker installed, you should be able to just:
 ```
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
@@ -38,27 +36,20 @@ docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
-**`DEBUG` is fail-closed**: an unset `DEBUG` env var resolves to `False` (production mode). The `.env.example` sets `DEBUG='True'` so a fresh dev setup works out of the box. If you have an existing `.env` from before this change, add `DEBUG='True'` (or `DEBUG=1`) to keep dev mode; otherwise the app will start in production mode and route real email, hit the live PayPal API, etc.
+Enter the username `admin` and the password `example`, and you should be good to go.
 
-**Single club mode**: On by default (`SINGLE_CLUB_MODE="True"`). The site runs as one club named after `NAVBAR_BRAND` (there is no separate `SINGLE_CLUB_NAME`), every user is auto-added as a member, and auctions are tied to it. `./update.sh` creates `.env` if needed, prompts for the site domain, generates missing secrets, marks setup complete, and the app creates the club automatically on startup. Set `SINGLE_CLUB_MODE="False"` only if you host multiple clubs on one install (like auction.fish).
-
-**Setup checklist**: After signing in as a superuser, open **Admin → Setup Checklist**. It explains where the `.env` file lives and gives copy/paste snippets, where-to-get-keys links, and live status for the site domain, branding, permissions, email (Gmail/SES), payments (PayPal/Square), Google Maps/sign-in/reCAPTCHA, Mailchimp, Discord, and digital wallet cards.
+**Setup checklist**: After signing in, open **Admin → Setup Checklist** and follow the steps listed there to enable anything you want
 
 **Demo data**: In development mode (DEBUG=True), demo data loads automatically only when single club mode is off and the database is empty.
 
-One last thing to do is to create an admin.  Back in the shell, enter:
+**Creating a user**: This is done automatically, but you can create additional users with (admin/example shown below):
 ```
 docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
 ```
-Now, back to your web browser, enter the username `admin` and the password `example`, and you should be good to go.  If not, open an issue here and I'll take a look at it.
+
 
 #### A few notes on development environments
-
-Development-friendly default values are set for most of the environment, but you may wish to use existing databases or specify secure passwords.
-
 The .env.example doesn't document everything, but it has the most common settings.  For example, if you use port 80 for something else, you could serve up the development site on a different port by editing your .env file to have the line HTTP_PORT=81
-
-For more information on the settings and what they do, see the production section, below.
 
 Some stuff (like Google Maps) won't work without an API key.  When generating your API key, make sure to include the port number you use if it's not port 80, for example, http://127.0.0.1:81 if you use port 81
 
@@ -92,8 +83,6 @@ To check if code passes the linting check *without* modifying any files on disk,
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 
-A note on migrations: occasionally webpush seems to give permission denied about a file `0006_alter_subscriptioninfo_user_agent.py`.  If this happens, just run `docker exec -u root -it django python3 manage.py makemigrations`
-
 ### Developing in VSCode
 
 This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).
@@ -119,12 +108,6 @@ Support for you running your own auction website is extremely limited (read: non
 ### Pre setup checklist:
 * Register a domain name with your favorite registrar.  I like Cloudflare, it also provides free DDOS protection and caching.
 * Purchase a VM.  I use Hostinger.  I don't love them, but they're cheap.  They're fine.  [Grab a KVM2 and use this referral code to get 20% off](https://www.hostinger.com/cart?product=vps%3Avps_kvm_2&period=12&referral_type=cart_link&REFERRALCODE=LXNOIRADNJML&referral_id=01957151-831f-71d8-8b2e-10baf21e9524).  I use and recommend Ubuntu as the OS.
-* Get a Vapid key [by following the instructions here](https://pypi.org/project/django-webpush/).  This is for push notifications.
-* Get a Gmail address with 2F enabled and get an [app key](https://support.google.com/accounts/answer/185833?hl=en), or sign up for Amazon's SES.
-* Get a [Google Maps API key](https://console.cloud.google.com/)
-* Get a Google OAUTH key by following the [app registration section here](https://docs.allauth.org/en/latest/socialaccount/providers/google.html).  Just do steps 1 and 2 and make a note of the secret keys, the Django configuration has already been done.
-* Get a [Recaptcha v2 invisible key](https://cloud.google.com/security/products/recaptcha)
-* For Payments, create a [PayPal App](https://developer.paypal.com/dashboard/applications/live) and note the client id and secret, or create a Square App and get the secret/app id.  See the Payments section for more information.
 
 ### Deploy the website
 Log into your VM and enter the following:
@@ -137,45 +120,9 @@ cd fishauctions
 
 After the site starts, sign in as a superuser and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Discord, and digital membership cards.
 
-One thing to pay attention to is the email configuration. The Setup Checklist has copy/paste snippets for both options (Gmail and Amazon SES) plus links to enable Gmail 2-step verification and create an app password. A few things worth knowing:
+Work through that page rather than hand-editing settings from this guide: every `.env` setting and integration has its own item there with step-by-step instructions, the exact lines to add, and the management commands to turn a feature on for users who already exist.
 
-With SES enabled, normal site mail is sent from `info@SITE_DOMAIN` automatically. Club and auction mail can also send from
-`club-slug-auctions@SITE_DOMAIN`, `club-slug-contact@SITE_DOMAIN`, and `auction-slug@SITE_DOMAIN`.
-Set up the matching SES DNS records for your domain (MX for inbound mail, TXT for SPF, and the DKIM records SES gives you), then in the club
-Setup → Emails page choose who should receive auction and contact replies. This Emails page is only shown when
-`POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"`.
-
-> **Note on `DEFAULT_FROM_EMAIL`:** When SES routing is active the app automatically uses `info@SITE_DOMAIN` as the default sender address. Any `DEFAULT_FROM_EMAIL` you may have set previously is intentionally superseded — the domain-based address is required for DKIM to sign outbound mail correctly.
-
-For full SES setup instructions (domain verification, SNS topic, Lambda function, receipt rules, and DNS records) see **[SES.md](SES.md)**.
-
-To set up payments for your auctions, note that:
-* Only auctions created by a site admin (superuser) will be able process payments with the configuration described below (but see the next point for the one exception).
-
-* To allow anyone to connect their PayPal accounts, you need to get an approved platform partner BN code from PayPal and then configure env settings `PARTNER_MERCHANT_ID`, `PAYPAL_BN_CODE`, and `PAYPAL_ENABLED_FOR_USERS=True`.  A management command exists (`docker exec -it django python3 manage.py change_paypal on`) to activate PayPal for existing accounts once you've tested your integration.
-
-Set `PAYPAL_ENABLED_FOR_USERS=False` (this is the default).  This prevents new accounts from seeing a connect PayPal account button, which as noted above, shouldn't be done unless you've configured the partner API.
-
-Set `PAYPAL_CLIENT_ID="client-id"` and `PAYPAL_SECRET="secret"` to the values you got from the pre setup checklist.
-
-If payments are not working after setting this up, make sure your API keys are for live, not sandbox.  To use the sandbox for testing, add `PAYPAL_API_BASE="https://api-m.sandbox.paypal.com"` to your .env.  Note that if this isn't set, sandbox is used in dev and live is used in production.
-
-A few other settings, and what they do. The **Admin → Setup Checklist** page (in the app) lists the branding and feature-flag settings — `NAVBAR_BRAND`, `COPYRIGHT_MESSAGE`, `MAILING_ADDRESS`, `WEBSITE_FOCUS`, `ALLOW_USERS_TO_CREATE_AUCTIONS`, `ALLOW_USERS_TO_CREATE_LOTS`, `USERS_ARE_TRUSTED_BY_DEFAULT`, `ENABLE_PROMO_PAGE`, `ENABLE_CLUB_FINDER`, and `ENABLE_HELP` — each with a one-line description and your current value. A few notes that don't fit on that page:
-
-- `ALLOW_USERS_TO_CREATE_AUCTIONS=True` plus `USERS_ARE_TRUSTED_BY_DEFAULT=False` lets people create test auctions any time, and promoted auctions only once an admin marks their account trusted. Setting both to True lets anyone create a promoted auction any time and is not recommended.
-- The `change_standalone_lots` management command toggles standalone-lot creation for *existing* users, e.g. `docker exec -it django python3 manage.py change_standalone_lots on` (`ALLOW_USERS_TO_CREATE_LOTS` only affects newly created users).
-- `I_BRED_THIS_FISH_LABEL` is the label shown next to the "breeder points" checkbox.
-- `WEEKLY_PROMO_MESSAGE` is included in the weekly promotional email (plain text only; generally leave blank).
-
-Most of the other options in the .env file are pretty self-explanatory.
-Save and exit nano, then type:
-```
-docker compose --profile "*" build
-docker compose up
-```
-
-#### Configure the URL
-Run `./update.sh` this should automatically configure the URL you set up in your .env
+The rest of this section covers the few host-level steps the in-app checklist can't do for you.
 
 #### Configure folder permissions
 Static files, logs, and images are bound volumes from the host machine, so Docker is not able to configure permissions on them.
@@ -191,129 +138,7 @@ The UID and GID of the Docker user need to match the permissions on the host mac
 
 If you haven't configured things properly, you'll see a couple warnings when starting the Django Web container, for example, `User 'app' (UID: 1000, GID: 1000) cannot write to "/home/app/web/mediafiles"`.  These should tell you the exact command to run on the host machine (your server) to fix permissions and get up and running.
 
-#### Add your TOS
-Finally, create a file called `tos.html` with your terms of service in the same directory as the .env file.
-
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
-
-#### Payments (PayPal & Square)
-
-**Note that PayPal won't give us the time of day and you need approval to be a platform seller, so while this has been implemented, it hasn't actually been used!**  Square payments work fine, use those instead.
-
-For Square payments, go to the Square App section [here](https://developer.squareup.com/apps), create your app.  In the Oauth section, set your redirect URL to `https://example.com/square/onboard/success/`, with your domain insead of example.com.  Https and the trailing / are required.
-
-Under Webhooks>Subscriptions, add a subscription to `https://example.com/square/webhook/`
-
-Next, add these to your `.env` file:
-```bash
-SQUARE_ENABLED_FOR_USERS=True
-SQUARE_ENVIRONMENT=production # or blank to use sandbox in development
-# from https://developer.squareup.com/apps Applications>Oauth
-SQUARE_APPLICATION_ID=sq0idp-xxxxx
-SQUARE_CLIENT_SECRET=sq0csp-xxxxx
-# from https://developer.squareup.com/apps Applications>Webhooks>Subscriptions>[name]>Signature Key
-SQUARE_WEBHOOK_SIGNATURE_KEY=your_webhook_key
-FIELD_ENCRYPTION_KEY=your_fernet_key_here
-```
-
-
-For PayPal payments, similar OAuth configuration is needed (see .env.example for details).
-
-If you have existing users, enable Square payments for them by running `docker exec -it django python3 manage.py  change_square on`.  `SQUARE_ENABLED_FOR_USERS` will determine if any newly created users will be able to link their account.
-
-
-#### Google Wallet membership cards (optional)
-
-Adds an *Add to Google Wallet* button on each club member's self-service page so members can save their membership card (with QR code and barcode) to their phone. The button is only shown when the member is signed in and their account matches the membership — UUID renewal links cannot trigger the wallet save (you should never add someone else's card to your own wallet).
-
-**One-time server-wide setup** (done by the site admin):
-
-1. Create a Google Cloud project at [console.cloud.google.com](https://console.cloud.google.com).
-2. Enable the **Google Wallet API** for that project (APIs & Services → Library).
-3. Apply for a Google Wallet issuer account at [pay.google.com/business/console](https://pay.google.com/business/console) (Google Wallet API → Get started). After approval Google will give you a numeric **Issuer ID** — this is your `GOOGLE_WALLET_ISSUER_ID`.
-4. In the Wallet console, link the Google Cloud service account you'll use for signing:
-   - In the Cloud console, IAM & Admin → Service Accounts → **Create service account**.
-   - Skip optional roles; create the account, then open it and go to the **Keys** tab → **Add key** → **Create new key** → **JSON**. Download the key file and keep it private.
-   - Back in the Wallet console, **Users** → invite the service account email with the *Developer* role.
-5. Drop the JSON keyfile you downloaded in step 4 into the **same directory as your `.env` file** (the project root). Pick a filename you'll recognize — e.g. `google-wallet-key.json`. JSON files at the repo root are gitignored, so you don't need to do anything else to keep it out of source control.
-6. Add to your `.env` file:
-   ```
-   GOOGLE_WALLET_ISSUER_ID=3388000000022XXXXXX
-   GOOGLE_WALLET_KEYFILE=google-wallet-key.json
-   ```
-   `GOOGLE_WALLET_KEYFILE` is just the filename — settings.py joins it to `BASE_DIR`. If the file is missing or invalid, the integration silently disables itself (warning logged) so a misconfigured prod box still boots; the wallet button just won't appear and the auto-create-class signal no-ops.
-
-Wallet GenericClass records (one per club) are created automatically — a `post_save` signal on `Club` dispatches a Celery task on creation, and the class ID is keyed off `club.pk` (not the slug) so renames don't churn Wallet identities. To backfill existing clubs after enabling Wallet, run:
-```
-docker exec -it django python3 manage.py sync_google_wallet_classes
-```
-Pass `--sync` to run inline instead of dispatching to Celery. The task is idempotent (409 *already exists* is treated as success).
-
-When everything is wired up, members visiting their club page (`/clubs/<slug>/`) while signed in will see the *Add to Google Wallet* badge below their membership number, QR code and barcode.
-
-**Note on the demo / unapproved issuer:** Google caps unapproved issuers at ~5 generic classes total. Auto-creation will start failing once you exceed that. The Celery task logs a clear 4xx error and retries on transient failures; in practice you'll want to wait until your issuer is approved before enabling the integration site-wide.
-
-#### Apple Wallet membership cards (optional)
-
-Adds an *Add to Apple Wallet* button next to the Google Wallet one. Same security model — only the signed-in account that matches the membership can download the pass; UUID renewal links cannot.
-
-Unlike Google Wallet there is no REST API: passes are signed `.pkpass` zip files generated server-side on each download. No Celery task, no class to pre-create.
-
-**One-time setup** (done by the site admin):
-
-1. **Apple Developer Account.** You need a paid account ($99/yr) at [developer.apple.com](https://developer.apple.com).
-2. **Pass Type Identifier.** Sign in → Certificates, Identifiers & Profiles → Identifiers → **+** → *Pass Type IDs*. Use the reverse-DNS form, e.g. `pass.com.yourdomain.membership`. Note your **Team ID** (top-right of the developer portal).
-3. **Pass Type ID certificate.** On the new Pass Type ID, click *Create Certificate*, generate a CSR with Keychain Access on macOS (Keychain Access → Certificate Assistant → Request a Certificate from a Certificate Authority → save to disk), upload the CSR, download the resulting `.cer`. In Keychain Access, double-click the `.cer` to install, then right-click the cert under *My Certificates* → **Export → .p12** and set a password. Drop the `.p12` next to your `.env`.
-4. **Apple WWDR intermediate cert.** Download from [Apple PKI](https://www.apple.com/certificateauthority/) — pick *Worldwide Developer Relations - G4* and save the `.pem`. Drop it next to your `.env` too.
-5. JSON, `.p12`, and `.pem` files at the repo root are gitignored.
-6. Add to your `.env`:
-   ```
-   APPLE_WALLET_CERT_FILE=pass-type-id.p12
-   APPLE_WALLET_CERT_PASSWORD=your-p12-password
-   APPLE_WALLET_WWDR_FILE=AppleWWDRCAG4.pem
-   APPLE_WALLET_PASS_TYPE_IDENTIFIER=pass.com.yourdomain.membership
-   APPLE_WALLET_TEAM_IDENTIFIER=ABCDE12345
-   APPLE_WALLET_ORGANIZATION_NAME=Your Club
-   ```
-   If any of these is missing the button is hidden and pkpass downloads return 404.
-
-When wired up, members visiting `/clubs/<slug>/` while signed in see *Add to Apple Wallet* next to the Google version. Tapping it on an iPhone (Safari) opens Wallet's native add UI. On desktop you'll just download the `.pkpass` file.
-
-Icons and logos in the pass are auto-generated from the club name (white text on the same slate background as the Google card). If you want custom artwork later, drop a `apple_wallet_assets/<club-slug>/` directory pattern in and extend `auctions/apple_wallet.py:_placeholder_png`.
-
-#### Discord bot integration (optional)
-
-This feature lets club members join a Discord server and automatically receive a role and be added to the club member list.
-
-**One-time server-wide setup** (done by the site admin):
-
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications), create an application, and add a bot.
-2. Under the bot settings, enable the **Server Members Intent**.
-3. Copy the bot token, public key, and client ID, then add them to your `.env` file:
-   ```
-   DISCORD_PUBLIC_KEY=your_application_public_key_here
-   DISCORD_BOT_TOKEN=your_bot_token_here
-   DISCORD_BOT_CLIENT_ID=your_application_client_id_here
-   ```
-4. In your application's **General Information** tab, set the **Interactions Endpoint URL** to `https://yourdomain.com/discord/interactions/`. Discord requires a publicly accessible HTTPS URL — localhost will not work.
-5. The bot needs these permissions when added to a server:
-   - **Manage Roles** — to assign roles to new members
-   - **Send Messages** — to post the join button message in a welcome channel
-   - The bot's role must be placed **above** any roles it will assign in the server's role hierarchy.
-
-**Register the `/connect` slash command** (one-time, after bot setup):
-
-```
-docker exec -it django python3 manage.py register_discord_commands
-```
-
-This registers the `/connect` slash command with Discord globally. It must be run at least once — the command will not appear in Discord until you do. Note that global command registration can take up to an hour to propagate; for instant availability during testing, register it as a guild command instead via the Discord developer portal.
-
-**Per-club Discord setup** (done by each club admin through the UI at `/clubs/<slug>/discord/`):
-
-1. Find your club's UUID on the Discord settings page, then in the Discord channel where you want the join button to appear, run `/connect club_uuid:<uuid>`. This links the server to the club, syncs roles, and posts the join button in that channel.
-2. Click **Fetch roles** on the settings page any time you want to re-sync role names from Discord, then configure paid/unpaid role flags and BAP/HAP point thresholds.
-
 
 ### Post setup:
 If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
@@ -332,8 +157,3 @@ Note: Do not remove the default "Uncategorized" category, it's referenced in sev
 Updates can be run by typing `./update.sh` in your VM.
 
 Very rarely following an update I've needed to run `docker compose down && docker compose up -d` instead of just running update, so if the site isn't coming back after an update, give this a try before rolling back to your snapshot.
-
-### Changes and new features:
-Most optional integrations are now safe to leave blank.  If Google Maps, Google OAuth, reCAPTCHA, PayPal, or digital wallet keys are not configured, the related UI stays hidden or degrades gracefully and the Admin → Setup Checklist page explains how to enable them later.
-
-I will (often) add new features that benefit auction.fish.  I will not add new features that benefit your website and don't help auction.fish.
