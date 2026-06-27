@@ -53,6 +53,8 @@ from .models import (
     ClubHistory,
     ClubMember,
     ClubMoney,
+    CommandPalettePage,
+    CommandPaletteSearch,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -562,7 +564,7 @@ class LotModelTests(TestCase):
 
     def test_bid_on_lot_creates_new_record_not_update(self):
         """bid_on_lot should create a new bid record when a user raises their proxy bid, not update the old one"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
@@ -598,7 +600,7 @@ class LotModelTests(TestCase):
 
     def test_sealed_bid_creates_exactly_one_record_per_bid(self):
         """For sealed bids, each call to bid_on_lot should create exactly one bid record (no duplicates)"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         timeStart = timezone.now() - datetime.timedelta(days=1)
@@ -631,7 +633,7 @@ class LotModelTests(TestCase):
     def test_user_cannot_bid_against_themselves(self):
         """A user who is already the high bidder should raise their proxy bid silently (INFO),
         not generate a NEW_HIGH_BIDDER event — i.e., they cannot bid against themselves."""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
@@ -1654,7 +1656,7 @@ class DecimalBidValidationTests(TestCase):
 
     def test_fractional_bid_rejected_on_whole_dollar_auction(self):
         """A bid with cents is rejected when only_whole_dollar_bids=True"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.whole_dollar_lot, self.userA, 10.50)
         self.assertEqual(result["type"], "ERROR")
@@ -1662,21 +1664,21 @@ class DecimalBidValidationTests(TestCase):
 
     def test_whole_dollar_bid_accepted_on_whole_dollar_auction(self):
         """A whole-dollar bid is accepted when only_whole_dollar_bids=True"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.whole_dollar_lot, self.userA, 10)
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
 
     def test_decimal_bid_accepted_on_decimal_auction(self):
         """A bid with cents is accepted when only_whole_dollar_bids=False"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.decimal_lot, self.userA, Decimal("5.50"))
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
 
     def test_more_than_two_decimal_places_rejected(self):
         """A bid with more than 2 decimal places is always rejected"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         result = bid_on_lot(self.decimal_lot, self.userA, "10.555")
         self.assertEqual(result["type"], "ERROR")
@@ -1688,7 +1690,7 @@ class DecimalBidValidationTests(TestCase):
         With one bidder present, lot.high_bid equals the reserve_price.
         The 5% increment applies to that reserve_price.
         """
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         # Use a lot with reserve=$10.00 so the math is clean
         time = timezone.now() + datetime.timedelta(days=30)
@@ -1716,7 +1718,7 @@ class DecimalBidValidationTests(TestCase):
 
     def test_whole_dollar_bid_increment_minimum(self):
         """Whole-dollar auction: minimum increment is $1 even when 5% < $1"""
-        from auctions.consumers import bid_on_lot
+        from auctions.bidding import bid_on_lot
 
         # Use a lot with reserve=$5 (5% = $0.25, rounded down = $0, min=1 → increment is $1)
         time = timezone.now() + datetime.timedelta(days=30)
@@ -7465,322 +7467,6 @@ class WebSocketConsumerTests(TransactionTestCase):
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
-    async def test_lot_consumer_bid_authenticated_with_tos(self):
-        """Test placing a bid as authenticated user who has joined auction"""
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive a response about the bid (either success or error message)
-            found_bid_response = False
-            for _ in range(5):  # Reduced from 10 to 5
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    # Accept any bid-related response: success info types or error
-                    if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
-                        found_bid_response = True
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_bid_response, "Did not receive expected bid response")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_user_not_joined_auction(self):
-        """Test that users who haven't joined auction cannot bid"""
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_who_does_not_join
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error
-            found_error = False
-            for _ in range(5):  # Reduced from 10 to 5
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("joined", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error message")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_anonymous_user(self):
-        """Test that anonymous users cannot bid"""
-        from channels.testing import WebsocketCommunicator
-        from django.contrib.auth.models import AnonymousUser
-
-        from auctions.consumers import LotConsumer
-
-        lot = await self._create_active_lot_with_auction(self.user)
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = AnonymousUser()
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Anonymous users should not get a response for their bid
-            # The consumer just passes without doing anything
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_before_online_bidding_starts(self):
-        """Test that bids cannot be placed before online bidding starts for in-person auctions"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create an in-person auction with online bidding that hasn't started yet
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        online_bidding_start = timezone.now() + datetime.timedelta(hours=2)
-        online_bidding_end = timezone.now() + datetime.timedelta(days=2)
-
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="In-person auction with future online bidding",
-            is_online=False,
-            date_start=timezone.now(),
-            date_end=theFuture,
-            date_online_bidding_starts=online_bidding_start,
-            date_online_bidding_ends=online_bidding_end,
-            online_bidding="allow",
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Test lot before online bidding",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error about online bidding not started
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("hasn't started", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about online bidding not started")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_after_online_bidding_ends(self):
-        """Test that bids cannot be placed after online bidding ends for in-person auctions"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create an in-person auction with online bidding that has ended
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        online_bidding_start = timezone.now() - datetime.timedelta(days=2)
-        online_bidding_end = timezone.now() - datetime.timedelta(hours=1)
-
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="In-person auction with ended online bidding",
-            is_online=False,
-            date_start=timezone.now() - datetime.timedelta(days=3),
-            date_end=theFuture,
-            date_online_bidding_starts=online_bidding_start,
-            date_online_bidding_ends=online_bidding_end,
-            online_bidding="allow",
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Test lot after online bidding",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = self.user_with_no_lots
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 15})
-
-            # Should receive an error about online bidding ended
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("ended", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about online bidding ended")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
-    async def test_lot_consumer_bid_on_sold_lot(self):
-        """Test that bids cannot be placed on lots that have already been sold"""
-        from channels.db import database_sync_to_async
-        from channels.testing import WebsocketCommunicator
-
-        from auctions.consumers import LotConsumer
-
-        # Create a sold lot
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        auction = await database_sync_to_async(Auction.objects.create)(
-            created_by=self.user,
-            title="Auction with sold lot",
-            is_online=True,
-            date_start=timezone.now(),
-            date_end=theFuture,
-        )
-        location = await database_sync_to_async(PickupLocation.objects.create)(
-            name="test location", auction=auction, pickup_time=theFuture
-        )
-        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user, auction=auction, pickup_location=location
-        )
-        winner_tos = await database_sync_to_async(AuctionTOS.objects.create)(
-            user=self.user_with_no_lots, auction=auction, pickup_location=location
-        )
-
-        lot = await database_sync_to_async(Lot.objects.create)(
-            lot_name="Sold lot",
-            auction=auction,
-            auctiontos_seller=seller_tos,
-            quantity=1,
-            reserve_price=10,
-            date_end=theFuture,
-            winner=self.user_with_no_lots,
-            auctiontos_winner=winner_tos,
-            winning_price=20,
-        )
-
-        # Try to bid as another user
-        another_user = await database_sync_to_async(User.objects.create_user)(
-            username="another_bidder", password="testpassword", email="another@example.com"
-        )
-        await database_sync_to_async(AuctionTOS.objects.create)(
-            user=another_user, auction=auction, pickup_location=location
-        )
-
-        communicator = WebsocketCommunicator(
-            LotConsumer.as_asgi(),
-            f"/ws/lots/{lot.pk}/",
-        )
-        communicator.scope["user"] = another_user
-        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
-
-        try:
-            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
-
-            # Try to place a bid
-            await communicator.send_json_to({"bid": 25})
-
-            # Should receive an error about lot being sold
-            found_error = False
-            for _ in range(5):
-                try:
-                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
-                    if response.get("error"):
-                        found_error = True
-                        self.assertIn("sold", response["error"].lower())
-                        break
-                except:
-                    break
-
-            self.assertTrue(found_error, "Did not receive expected error about lot being sold")
-        finally:
-            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-
     async def test_lot_consumer_auction_admin_can_view(self):
         """Test that auction admins can connect to lot consumer"""
         from channels.db import database_sync_to_async
@@ -8227,6 +7913,17 @@ class BulkAddLotsAutoTests(StandardTestCase):
         # Check for error message
         messages = list(response.context["messages"])
         self.assertTrue(any("admin" in str(m).lower() for m in messages))
+
+    def test_save_lot_ajax_anonymous_is_rejected_not_500(self):
+        """An unauthenticated POST (e.g. expired session) should be rejected cleanly by
+        DRF's IsAuthenticated, not crash with AttributeError on AnonymousUser.email"""
+        self.client.logout()
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot"}',
+            content_type="application/json",
+        )
+        self.assertIn(response.status_code, (401, 403))
 
     def test_save_lot_ajax_security(self):
         """Test that non-admin users cannot add lots for others"""
@@ -9283,6 +8980,44 @@ class SquarePaymentTests(StandardTestCase):
         self.square_seller.token_expires_at = timezone.now() - datetime.timedelta(hours=1)
         self.square_seller.save()
         self.assertTrue(self.square_seller.is_token_expired())
+
+    def test_supports_tap_to_pay_reflects_scopes(self):
+        """supports_tap_to_pay is True only when the in-person scope was granted."""
+        from .models import SQUARE_OAUTH_SCOPES
+
+        # The seller was created without scopes (legacy connection) → must reconnect.
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+        # A full reconnect records the requested scopes, which include the in-person scope.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        self.assertTrue(self.square_seller.supports_tap_to_pay)
+        # A non-empty grant that still lacks the in-person scope is not enough (no substring match).
+        self.square_seller.scopes = "PAYMENTS_WRITE PAYMENTS_READ"
+        self.square_seller.save()
+        self.assertFalse(self.square_seller.supports_tap_to_pay)
+
+    def test_find_square_reconnects_command(self):
+        """The audit command lists legacy sellers and drops them once they have the scope."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from .models import SQUARE_OAUTH_SCOPES
+
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 1", output)
+        self.assertIn(self.admin_user.username, output)
+
+        # Once the scope is recorded (reconnected), the seller drops off the list.
+        self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
+        self.square_seller.save()
+        out = StringIO()
+        call_command("find_square_reconnects", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Need to reconnect: 0", output)
+        self.assertNotIn(self.admin_user.username, output)
 
     def test_winner_invoice_property(self):
         """Test Lot.winner_invoice property"""
@@ -14903,6 +14638,64 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertEqual(payment.payment_method, "PayPal")
         self.assertEqual(payment.amount, Decimal("37.50"))
 
+    def test_rounded_paypal_payment_marks_invoice_paid_and_zeroes_balance(self):
+        """With invoice rounding on, paying the rounded balance must settle to PAID / $0.00.
+
+        A fractional balance paid at the rounded amount leaves a sub-dollar residual on
+        net_after_payments; the PAID check must use the rounded balance so the invoice still settles.
+        This would fail under the old `net_after_payments >= 0` check (it would stay UNPAID).
+        """
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundpaypal", "rp@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance → rounds to $19.00.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        self.assertNotEqual(rounded, unrounded)  # rounding actually applies here
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        event = {
+            "id": "WH-ORDER-ROUNDED",
+            "event_type": "CHECKOUT.ORDER.COMPLETED",
+            "resource": {
+                "id": "ORDER-ROUNDED-1",
+                "status": "COMPLETED",
+                "purchase_units": [
+                    {
+                        "reference_id": str(invoice.pk),
+                        "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                        "payments": {
+                            "captures": [
+                                {
+                                    "id": "CAPTURE-ROUNDED-1",
+                                    "status": "COMPLETED",
+                                    "amount": {"currency_code": "USD", "value": f"{rounded:.2f}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        self.assertEqual(invoice.rounded_net_after_payments, Decimal("0.00"))  # balance due shows 0.00
+
     def test_checkout_order_completed_non_completed_status_is_ignored(self):
         """CHECKOUT.ORDER.COMPLETED with non-COMPLETED status does not create a payment"""
         from auctions.models import InvoicePayment
@@ -15148,8 +14941,9 @@ class ClubViewTests(TestCase):
         )
 
     def test_club_detail_requires_login(self):
-        """Anonymous user gets 404 when enable_club_page=False (default)"""
-        self.assertFalse(self.club.enable_club_page)
+        """Anonymous user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
@@ -15174,6 +14968,24 @@ class ClubViewTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_viewing_club_page_records_last_club_used_for_member(self):
+        """A member viewing a club page has it recorded as their last club used (for the palette)."""
+        self.owner.userdata.refresh_from_db()
+        self.assertIsNone(self.owner.userdata.last_club_used)
+        self.client.login(username="club_owner2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.owner.userdata.refresh_from_db()
+        self.assertEqual(self.owner.userdata.last_club_used, self.club)
+
+    def test_viewing_club_page_does_not_record_for_non_member(self):
+        """A non-member viewing a public club page does not get it recorded as their last club used."""
+        self.club.enable_club_page = True
+        self.club.save()
+        self.client.login(username="other2", password="testpass")
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.other_user.userdata.refresh_from_db()
+        self.assertIsNone(self.other_user.userdata.last_club_used)
 
     def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
         self.club.enable_club_page = True
@@ -15447,16 +15259,18 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_club_detail_disabled_returns_404(self):
-        """Non-admin user gets 404 when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Non-admin user gets 404 when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="other2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 
     def test_club_detail_disabled_admin_can_view(self):
-        """Club admin can always view the club page even when enable_club_page=False"""
-        self.assertFalse(self.club.enable_club_page)
+        """Club admin can always view the club page even when enable_club_page is off"""
+        self.club.enable_club_page = False
+        self.club.save()
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -16904,6 +16718,42 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertFalse(self.club.send_membership_expiration_reminders)
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+
+    def test_membership_settings_none_system_forces_zero_fee(self):
+        """Selecting 'No membership fees' zeroes the fee even if one was submitted."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "none",
+                "membership_annual_fee": "20.00",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
+        self.assertEqual(self.club.membership_annual_fee, Decimal(0))
+
+    def test_membership_settings_paid_system_rejects_zero_fee(self):
+        """A paid membership system requires a fee greater than 0."""
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "membership_system": "rolling",
+                "membership_annual_fee": "0",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(
+            response.context["form"],
+            "membership_annual_fee",
+            [
+                'Enter a fee greater than 0, or choose "No membership fees" above.',
+            ],
+        )
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.membership_system, "none")
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
         self.client.login(username="club_settings_editor", password="testpass")
@@ -18863,6 +18713,20 @@ class ClubMembershipInvoiceTests(TestCase):
             Invoice.objects.filter(
                 club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True
             ).exists()
+        )
+
+    def test_payment_view_redirects_member_not_due_to_card(self):
+        """A member whose dues are current is bounced back to their membership card."""
+        PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
+        self.club_member.membership_last_paid = timezone.now().date()
+        self.club_member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=200)
+        self.club_member.save()
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertRedirects(
+            response,
+            reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.club_member.uuid}),
+            fetch_redirect_response=False,
         )
 
     # -- CreatePayPalOrderView redirects for club invoices ---------------------
@@ -20885,6 +20749,45 @@ class ManageUsersThroughClubTests(TestCase):
         form.is_valid()
         self.assertNotIn("add_membership_fee_to_invoices_for_expired_members", form.errors)
 
+    def _online_club_auction(self):
+        online = Auction.objects.create(
+            created_by=self.creator,
+            title="Online Club Auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            club=self.club,
+        )
+        PickupLocation.objects.create(
+            name="online loc", auction=online, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        return online
+
+    def test_checkin_choice_hidden_for_online_auction(self):
+        """Check-in mode is in-person only, so the option is dropped for online auctions."""
+        form = AuctionEditForm(
+            instance=self._online_club_auction(), user=self.creator, cloned_from=None, user_timezone="UTC"
+        )
+        choice_values = [c[0] for c in form.fields["manage_users_through_club"].choices]
+        self.assertNotIn("checkin", choice_values)
+        self.assertIn("all", choice_values)
+
+    def test_checkin_mode_rejected_for_online_auction(self):
+        """Even if check-in is forced past the UI, the validator rejects it for online auctions."""
+        online = self._online_club_auction()
+        form = AuctionEditForm(
+            data={"manage_users_through_club": "checkin", "club": str(self.club.pk)},
+            instance=online,
+            user=self.creator,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        # Restore the full choice set so the field accepts "checkin" and our custom validator runs.
+        form.fields["manage_users_through_club"].choices = Auction.MANAGE_USERS_CHOICES
+        form.is_valid()
+        self.assertIn("manage_users_through_club", form.errors)
+        self.assertIn("in-person", " ".join(form.errors["manage_users_through_club"]).lower())
+
     def test_permission_check_grants_club_admin_and_manage_auctions(self):
         self._enable_club_managed()
         self.assertTrue(self.auction.permission_check(self.club_admin_user))
@@ -21148,6 +21051,195 @@ class ManageUsersThroughClubTests(TestCase):
         )
         cm2.generate_bidder_number()
         self.assertNotEqual(cm1.bidder_number, cm2.bidder_number)
+
+
+class PlaceBidApiTests(TestCase):
+    """The /api/lots/<pk>/bid/ endpoint persists bids over HTTP so a dropped or
+    stalled websocket can't silently lose them (the in-person bidding regression).
+    These cover persistence, permissions, the websocket broadcast, and -- most
+    importantly -- that a broadcast failure still saves the bid.
+    """
+
+    def setUp(self):
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        self.seller = User.objects.create_user(username="bid_seller", password="x", email="seller@example.com")
+        self.bidder = User.objects.create_user(username="bid_bidder", password="x", email="bidder@example.com")
+        self.outsider = User.objects.create_user(username="bid_outsider", password="x", email="out@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.seller,
+            title="Active bidding auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+        )
+        self.location = PickupLocation.objects.create(name="bid location", auction=self.auction, pickup_time=the_future)
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller, auction=self.auction, pickup_location=self.location
+        )
+        self.bidder_tos = AuctionTOS.objects.create(
+            user=self.bidder, auction=self.auction, pickup_location=self.location
+        )
+        self.lot = Lot.objects.create(
+            lot_name="A biddable lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=the_future,
+        )
+        # date_posted is auto_now_add, which makes the lot "too new to bid" for 20 min;
+        # backdate it (bypassing auto_now_add) so bidding is actually allowed.
+        Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
+        self.lot.refresh_from_db()
+        self.url = reverse("lot_bid", kwargs={"pk": self.lot.pk})
+
+    def _bids(self, user=None):
+        qs = Bid.objects.exclude(is_deleted=True).filter(lot_number=self.lot)
+        if user:
+            qs = qs.filter(user=user)
+        return qs
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_persists_bid(self, mock_broadcast):
+        """A valid bid is saved and the result is broadcast to other viewers."""
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "NEW_HIGH_BIDDER")
+        bid = self._bids(self.bidder).first()
+        self.assertIsNotNone(bid)
+        self.assertEqual(bid.amount, 15)
+        self.assertTrue(mock_broadcast.called)
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_requires_login(self, mock_broadcast):
+        """Anonymous users can't bid and nothing is saved."""
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertIn(response.status_code, (401, 403))
+        self.assertFalse(self._bids().exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_rejects_user_not_in_auction(self, mock_broadcast):
+        """A user who hasn't joined the auction gets an error and no bid is saved."""
+        self.client.force_login(self.outsider)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertFalse(self._bids(self.outsider).exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_missing_lot_returns_404(self, mock_broadcast):
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": 99999999}), {"bid": "15"})
+        self.assertEqual(response.status_code, 404)
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_on_lot_without_category(self, mock_broadcast):
+        """A lot with no species_category must not crash bidding (the category-interest
+        update is skipped, since UserInterestCategory.category can't be null)."""
+        Lot.objects.filter(pk=self.lot.pk).update(species_category=None)
+        self.lot.refresh_from_db()
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "NEW_HIGH_BIDDER")
+        self.assertTrue(self._bids(self.bidder).exists())
+
+    def test_bid_saved_even_when_broadcast_fails(self):
+        """The whole point of moving bids to HTTP: a websocket/channel-layer failure
+        must NOT lose the bid. The broadcast raises, yet the bid is still persisted."""
+        from auctions.bidding import place_bid_and_broadcast
+
+        with patch("auctions.bidding.broadcast_bid_result", side_effect=Exception("redis down")):
+            result = place_bid_and_broadcast(self.lot, self.bidder, "15")
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+        self.assertEqual(self._bids(self.bidder).count(), 1)
+
+    def test_broadcast_targets_lot_group(self):
+        """A normal bid is broadcast to the whole-lot group so every viewer updates."""
+        from auctions.bidding import place_bid_and_broadcast
+
+        sent = {}
+
+        async def fake_group_send(group, message):
+            sent["group"] = group
+            sent["message"] = message
+
+        with patch("auctions.consumers.get_channel_layer") as mock_get_layer:
+            mock_get_layer.return_value.group_send = fake_group_send
+            place_bid_and_broadcast(self.lot, self.bidder, "15")
+
+        self.assertEqual(sent["group"], f"lot_{self.lot.pk}")
+        self.assertEqual(sent["message"]["info"], "NEW_HIGH_BIDDER")
+
+    def _in_person_lot(self, **auction_kwargs):
+        """An in-person auction + a lot in it, with the bidder joined. Permission-case
+        helper ported from the old websocket bid tests."""
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(
+            created_by=self.seller,
+            title="In-person auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+            online_bidding="allow",
+            **auction_kwargs,
+        )
+        location = PickupLocation.objects.create(name="ip loc", auction=auction, pickup_time=the_future)
+        seller_tos = AuctionTOS.objects.create(user=self.seller, auction=auction, pickup_location=location)
+        AuctionTOS.objects.create(user=self.bidder, auction=auction, pickup_location=location)
+        lot = Lot.objects.create(
+            lot_name="in person lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=the_future,
+        )
+        Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
+        return lot
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_before_online_bidding_starts(self, mock_broadcast):
+        """In-person auction: bids are rejected before the online bidding window opens."""
+        lot = self._in_person_lot(
+            date_online_bidding_starts=timezone.now() + datetime.timedelta(hours=2),
+            date_online_bidding_ends=timezone.now() + datetime.timedelta(days=2),
+        )
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": lot.pk}), {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("hasn't started", response.json()["message"].lower())
+        self.assertFalse(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_after_online_bidding_ends(self, mock_broadcast):
+        """In-person auction: bids are rejected after the online bidding window closes."""
+        lot = self._in_person_lot(
+            date_online_bidding_starts=timezone.now() - datetime.timedelta(days=2),
+            date_online_bidding_ends=timezone.now() - datetime.timedelta(hours=1),
+        )
+        self.client.force_login(self.bidder)
+        response = self.client.post(reverse("lot_bid", kwargs={"pk": lot.pk}), {"bid": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("ended", response.json()["message"].lower())
+        self.assertFalse(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).exists())
+
+    @patch("auctions.bidding.broadcast_bid_result")
+    def test_api_bid_on_sold_lot(self, mock_broadcast):
+        """A lot with a winner already assigned can't be bid on.
+        (No winning_price set, so it isn't `ended`; this exercises the winner check.)"""
+        self.lot.winner = self.seller
+        self.lot.auctiontos_winner = self.bidder_tos
+        self.lot.save()
+        self.client.force_login(self.bidder)
+        response = self.client.post(self.url, {"bid": "25"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], "ERROR")
+        self.assertIn("sold", response.json()["message"].lower())
+        self.assertFalse(self._bids(self.bidder).exists())
 
 
 class MailchimpHelperTests(TestCase):
@@ -21755,3 +21847,1203 @@ class BrevoErrorClassificationTests(TestCase):
 
     def test_non_401_returns_none(self):
         self.assertIsNone(brevo.blocked_ip_from_error(brevo.BrevoApiError(400, "bad request from 1.2.3.4")))
+
+
+class CommandPaletteTests(StandardTestCase):
+    """Tests for the command palette: search scoping, default items, search logging, and routing."""
+
+    def _login(self, user):
+        self.client.force_login(user)
+
+    def _all_item_titles(self, response):
+        titles = []
+        for group in response.json()["groups"]:
+            for item in group["items"]:
+                titles.append(item["title"])
+        return titles
+
+    def _group_labels(self, response):
+        return [group["label"] for group in response.json()["groups"]]
+
+    def test_endpoints_require_login(self):
+        client = Client()
+        resp = client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("login", resp.url.lower())  # redirected to authenticate
+        resp = client.post(reverse("command_palette_log"), {"search": "x"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_default_items_for_admin(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertEqual(resp.status_code, 200)
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("View lots" in t for t in titles))
+        self.assertTrue(any("View users" in t for t in titles))  # admin-only
+        self.assertTrue(any("Quick checkout" in t for t in titles))  # admin-only
+
+    def test_default_items_for_non_admin_shows_invoice(self):
+        self.invoiceB.status = "UNPAID"
+        self.invoiceB.save()
+        self.userB.userdata.last_auction_used = self.online_auction
+        self.userB.userdata.save()
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"))
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("invoice" in t.lower() for t in titles))
+        self.assertFalse(any("View users" in t for t in titles))  # not an admin
+
+    def test_search_returns_auctions_and_lots(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("Auctions", self._group_labels(resp))
+        resp = self.client.get(reverse("command_palette"), {"q": "test lot"})
+        self.assertIn("Lots", self._group_labels(resp))
+
+    def test_search_hides_unlisted_auction_and_lots(self):
+        self.online_auction.title = "Visible Scope Auction"
+        self.online_auction.save()
+        self.lot.lot_name = "Visible Scope Lot"
+        self.lot.save()
+        hidden_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Visible Scope Auction Hidden",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=False,
+        )
+        hidden_location = PickupLocation.objects.create(
+            name="hidden location",
+            auction=hidden_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        hidden_tos = AuctionTOS.objects.create(
+            user=self.admin_user,
+            auction=hidden_auction,
+            pickup_location=hidden_location,
+        )
+        Lot.objects.create(
+            lot_name="Visible Scope Lot Hidden",
+            auction=hidden_auction,
+            auctiontos_seller=hidden_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Auction"})
+        auction_titles = [i["title"] for g in resp.json()["groups"] if g["label"] == "Auctions" for i in g["items"]]
+        self.assertIn(self.online_auction.title, auction_titles)
+        self.assertNotIn(hidden_auction.title, auction_titles)
+        resp = self.client.get(reverse("command_palette"), {"q": "Visible Scope Lot"})
+        lot_subtitles = [i["subtitle"] for g in resp.json()["groups"] if g["label"] == "Lots" for i in g["items"]]
+        self.assertIn(self.online_auction.title, lot_subtitles)
+        self.assertNotIn(hidden_auction.title, lot_subtitles)
+
+    def test_lot_search_excludes_deleted_parent_auction(self):
+        deleted_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Deleted Parent Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            is_deleted=True,
+        )
+        deleted_location = PickupLocation.objects.create(
+            name="deleted location",
+            auction=deleted_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=6),
+        )
+        deleted_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=deleted_auction,
+            pickup_location=deleted_location,
+        )
+        Lot.objects.create(
+            lot_name="Deleted Parent Lot",
+            auction=deleted_auction,
+            auctiontos_seller=deleted_tos,
+            quantity=1,
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Deleted Parent Lot"})
+        self.assertNotIn("Lots", self._group_labels(resp))
+
+    def test_search_matches_page_shortcuts(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "preferences"})
+        self.assertIn("Go to", self._group_labels(resp))
+
+    def test_club_member_search_scoped_to_admins(self):
+        club = Club.objects.create(name="Test Aquarium Club")
+        ClubMember.objects.create(club=club, name="Secret Member", email="secret@example.com")
+        # An admin of the club can find members.
+        ClubMember.objects.create(club=club, user=self.user, name="Admin Member", permission_view=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertIn("Club members", self._group_labels(resp))
+        # A user with no admin rights to the club cannot.
+        self._login(self.userB)
+        resp = self.client.get(reverse("command_palette"), {"q": "Secret"})
+        self.assertNotIn("Club members", self._group_labels(resp))
+
+    def test_log_upsert_keeps_one_row_and_records_click(self):
+        self._login(self.user)
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(reverse("command_palette_log"), {"search": "pref", "result": "pending"})
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row rather than creating a new one.
+        resp = self.client.post(
+            reverse("command_palette_log"), {"id": search_id, "search": "preferences", "result": "pending"}
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        # Clicking a page result finalizes the row and bumps that page's hit counter.
+        self.client.post(
+            reverse("command_palette_log"),
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        row = CommandPaletteSearch.objects.get(pk=search_id)
+        self.assertEqual(row.search, "preferences")
+        self.assertEqual(row.result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)
+
+    def test_recent_searches_appear_in_defaults(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="angelfish", result="abandoned")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
+
+    def test_landing_page_in_person_admin_redirects_to_users(self):
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
+
+    def test_email_search_is_exact_and_includes_auctiontos(self):
+        # online_auction is created by self.user, so they administer it.
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="findme@example.com",
+            name="Find Me",
+        )
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@example.com"})
+        labels = self._group_labels(resp)
+        self.assertIn("Auction users", labels)
+        # the link pre-populates ?query= so the record surfaces on the destination page
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Auction users" for i in g["items"]]
+        self.assertTrue(any("query=" in u for u in urls))
+        # exact match only: a partial email should not match
+        resp = self.client.get(reverse("command_palette"), {"q": "findme@exa"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_auctiontos_tied_to_club_member_is_excluded(self):
+        club = Club.objects.create(name="Linked Club")
+        member = ClubMember.objects.create(club=club, email="linked@example.com", name="Linked Person")
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="linked@example.com",
+            name="Linked Person",
+            clubmember=member,
+        )
+        self._login(self.user)  # admin of online_auction, not of Linked Club
+        resp = self.client.get(reverse("command_palette"), {"q": "linked@example.com"})
+        self.assertNotIn("Auction users", self._group_labels(resp))
+
+    def test_multi_club_member_results_include_all_admin_clubs(self):
+        for name in ["Club Alpha", "Club Beta"]:
+            club = Club.objects.create(name=name)
+            ClubMember.objects.create(club=club, user=self.user, name=f"admin {name}", permission_view=True)
+            ClubMember.objects.create(club=club, name="Zelda Tester", email=f"zelda-{club.pk}@example.com")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "Zelda"})
+        member_items = [i for g in resp.json()["groups"] if g["label"] == "Club members" for i in g["items"]]
+        self.assertEqual(len(member_items), 2)
+
+    def test_synonym_matches_page_shortcut(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "update email"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("account_email"), urls)
+
+    def test_auction_field_name_matches_settings_page(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "tax"})
+        urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+        self.assertIn(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}), urls)
+
+    def test_auction_field_search_only_includes_editable_form_fields(self):
+        # paypal_email_address is a model field that lives on no form, so "paypal" must not be
+        # advertised as a configurable auction setting ("configure paypal email address").
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "paypal"})
+        edit_url = reverse("edit_auction", kwargs={"slug": self.online_auction.slug})
+        settings_items = [
+            i for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"] if i["url"] == edit_url
+        ]
+        # The editable "PayPal payments" toggle (enable_online_payments) still surfaces...
+        self.assertTrue(settings_items)
+        for item in settings_items:
+            self.assertIn("PayPal payments", item["subtitle"])
+            # ...but the un-editable paypal_email_address field never does.
+            self.assertNotIn("email address", item["subtitle"].lower())
+
+    def test_set_winners_excluded_for_online_auction(self):
+        # Online auctions pick winners from bids; the set-lot-winners shortcut must not appear.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertNotIn(self.online_auction.set_lot_winners_link, urls)
+
+    def test_set_winners_shown_for_open_in_person_auction(self):
+        self.in_person_auction.date_start = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set lot winners"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
+
+    def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug}), urls)
+        self.assertNotIn(self.in_person_auction.add_lot_link, urls)
+
+        self.in_person_auction.allow_bulk_adding_lots = False
+        self.in_person_auction.save()
+        resp = self.client.get(reverse("command_palette"), {"q": "add lot"})
+        urls = [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+        self.assertIn(self.in_person_auction.add_lot_link, urls)
+
+    def test_command_palette_response_is_not_cached(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "online"})
+        self.assertIn("private", resp["Cache-Control"])
+        self.assertIn("no-store", resp["Cache-Control"])
+
+    def test_print_and_label_shortcuts(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        print_labels_url = reverse("print_my_labels", kwargs={"slug": self.online_auction.slug})
+        for q in ["print", "label"]:
+            urls = [
+                i["url"]
+                for g in self.client.get(reverse("command_palette"), {"q": q}).json()["groups"]
+                for i in g["items"]
+            ]
+            self.assertIn(print_labels_url, urls, f"print labels shortcut missing for '{q}'")
+            self.assertIn(reverse("printing"), urls, f"printing preferences shortcut missing for '{q}'")
+        # The per-auction label setup is admin-only and keyed off "label", not "print".
+        label_urls = [
+            i["url"]
+            for g in self.client.get(reverse("command_palette"), {"q": "label"}).json()["groups"]
+            for i in g["items"]
+        ]
+        self.assertIn(reverse("auction_label_config", kwargs={"slug": self.online_auction.slug}), label_urls)
+
+    def test_bounce_is_recorded(self):
+        self._login(self.user)
+        resp = self.client.post(reverse("command_palette_log"), {"search": "zzzznotathing", "result": "bounce"})
+        row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
+        self.assertEqual(row.result, "bounce")
+
+    def test_ready_invoice_is_top_default_result(self):
+        self.invoice.status = "UNPAID"
+        self.invoice.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        first = resp.json()["groups"][0]["items"][0]
+        self.assertEqual(first["type"], "invoice")
+
+    def _all_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] for i in g["items"]]
+
+    def _go_to_urls(self, resp):
+        return [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
+
+    def _make_palette_club(self, user, **permissions):
+        """Create a club, make ``user`` a member with the given permissions, and record it as the
+        user's last club used so the palette's club shortcuts target it."""
+        club = Club.objects.create(name="Palette Club", enable_club_page=True)
+        ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
+        user.userdata.last_club_used = club
+        user.userdata.save()
+        return club
+
+    def test_api_search_returns_club_api_keys_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "api"})
+        self.assertIn(reverse("club_api_keys", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_username_search_returns_preferences_and_change_username(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "username"})
+        urls = self._go_to_urls(resp)
+        self.assertIn(reverse("change_username"), urls)
+        self.assertIn(reverse("preferences"), urls)
+        # The preferences hit names the specific field it would change.
+        pref_items = [
+            i
+            for g in resp.json()["groups"]
+            if g["label"] == "Go to"
+            for i in g["items"]
+            if i["url"] == reverse("preferences")
+        ]
+        self.assertTrue(any("username" in i["subtitle"].lower() for i in pref_items))
+
+    def test_club_settings_field_search_returns_settings_page(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "facebook"})
+        self.assertIn(reverse("club_edit", kwargs={"slug": club.slug}), self._go_to_urls(resp))
+
+    def test_club_shortcuts_scoped_to_last_club_used(self):
+        club_a = Club.objects.create(name="Club A Palette")
+        club_b = Club.objects.create(name="Club B Palette")
+        ClubMember.objects.create(club=club_a, user=self.user, name="A", permission_view=True)
+        ClubMember.objects.create(club=club_b, user=self.user, name="B", permission_view=True)
+        self.user.userdata.last_club_used = club_a
+        self.user.userdata.save()
+        self._login(self.user)
+        urls = self._go_to_urls(self.client.get(reverse("command_palette"), {"q": "members"}))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club_a.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club_b.slug}), urls)
+
+    def test_lot_search_excludes_promoted_auction_user_has_not_joined(self):
+        promoted = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Promoted Palette Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            promote_this_auction=True,
+        )
+        loc = PickupLocation.objects.create(
+            name="promoted loc", auction=promoted, pickup_time=timezone.now() + datetime.timedelta(days=6)
+        )
+        seller = AuctionTOS.objects.create(user=self.admin_user, auction=promoted, pickup_location=loc)
+        Lot.objects.create(lot_name="Promoted Palette Lot", auction=promoted, auctiontos_seller=seller, quantity=1)
+        self._login(self.user)  # self.user has not joined the promoted auction
+        resp = self.client.get(reverse("command_palette"), {"q": "Promoted Palette"})
+        # The auction itself is visible (promoted), but its lots are not searchable by a non-participant.
+        self.assertIn("Auctions", self._group_labels(resp))
+        self.assertNotIn("Lots", self._group_labels(resp))
+
+    def test_checkin_membership_card_shown_for_unchecked_in_member(self):
+        club = Club.objects.create(name="Check-in Palette Club")
+        member_user = User.objects.create_user(username="cm_palette", password="testpassword", email="cm@example.com")
+        member = ClubMember.objects.create(club=club, user=member_user, name="CM Palette")
+        auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Check-in Palette Auction",
+            is_online=False,
+            date_start=timezone.now() + datetime.timedelta(days=2),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            club=club,
+            manage_users_through_club="checkin",
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.assertTrue(auction.use_check_in_mode)
+        member_user.userdata.last_auction_used = auction
+        member_user.userdata.save()
+        self._login(member_user)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}), urls)
+
+    def test_club_default_falls_back_to_home_without_manage_permissions(self):
+        club = Club.objects.create(name="Home Fallback Club")
+        ClubMember.objects.create(club=club, user=self.userB, name="Plain Member")
+        self.userB.userdata.last_club_used = club
+        self.userB.userdata.save()
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_detail", kwargs={"slug": club.slug}), urls)
+        self.assertNotIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_club_default_shows_members_with_manage_permission(self):
+        club = self._make_palette_club(self.userB, permission_view=True)
+        self._login(self.userB)
+        urls = self._all_urls(self.client.get(reverse("command_palette")))
+        self.assertIn(reverse("club_admin", kwargs={"slug": club.slug}), urls)
+
+    def test_membership_card_search_terms_return_uuid_card(self):
+        club = self._make_palette_club(self.user)
+        member = ClubMember.objects.get(club=club, user=self.user)
+        card_url = reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid})
+        self._login(self.user)
+        for term in ["card", "membership", "member", club.name]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertIn(card_url, urls, f"membership card missing for query '{term}'")
+
+    def test_membership_pay_page_not_in_palette(self):
+        club = self._make_palette_club(self.user, permission_edit_club=True)
+        pay_url = reverse("club_membership_pay", kwargs={"slug": club.slug})
+        self._login(self.user)
+        for term in ["renew", "membership", "pay dues", "dues"]:
+            urls = self._all_urls(self.client.get(reverse("command_palette"), {"q": term}))
+            self.assertNotIn(pay_url, urls, f"pay page should not appear for '{term}'")
+
+    def test_analytics_view_is_admin_only(self):
+        CommandPaletteSearch.objects.create(user=self.user, search="needle", result="bounce")
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 302)  # non-superuser redirected
+        superuser = User.objects.create_superuser("cp_super", "cp_super@example.com", "testpassword")
+        self.client.force_login(superuser)
+        resp = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "needle")
+
+
+class MobileCommandPaletteTests(StandardTestCase):
+    """The /api/mobile/ command-palette endpoints reuse the shared command_palette module, so this
+    only covers what differs from the web: JWT (not session) auth, the JSON contract the app reads,
+    and that search-logging is wired through the same log_search upsert."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
+        self.search_url = reverse("mobile-command-palette")
+        self.log_url = reverse("mobile-command-palette-log")
+
+    def _labels(self, resp):
+        return [g["label"] for g in resp.json()["groups"]]
+
+    def test_requires_jwt_not_session(self):
+        # No token at all is rejected (DRF answers 401/403 depending on the auth header).
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+        # A web session must NOT grant access to the mobile endpoints (IsMobileAuthenticated only
+        # accepts JWT), so a session-authenticated request is still denied.
+        self.client.force_login(self.user)
+        self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
+
+    def test_search_returns_grouped_results(self):
+        resp = self.client.get(self.search_url, {"q": "online"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Auctions", self._labels(resp))
+        resp = self.client.get(self.search_url, {"q": "test lot"}, **self.bearer)
+        self.assertIn("Lots", self._labels(resp))
+
+    def test_item_shape_and_default_items(self):
+        resp = self.client.get(self.search_url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Cache-Control"], "private, no-store")
+        items = [i for g in resp.json()["groups"] for i in g["items"]]
+        self.assertTrue(items)
+        # Admin of the most recent auction sees the "View lots" default; every item carries the
+        # full contract the mobile client renders.
+        self.assertTrue(any("View lots" in i["title"] for i in items))
+        for key in ("type", "title", "subtitle", "url", "icon", "id"):
+            self.assertIn(key, items[0])
+
+    def test_log_upsert_and_click_bumps_page_hits(self):
+        page = CommandPalettePage.objects.first()
+        resp = self.client.post(self.log_url, {"search": "pref", "result": "pending"}, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        search_id = resp.json()["id"]
+        # Refining the query updates the same row (one row per session).
+        resp = self.client.post(
+            self.log_url, {"id": search_id, "search": "preferences", "result": "pending"}, **self.bearer
+        )
+        self.assertEqual(resp.json()["id"], search_id)
+        self.client.post(
+            self.log_url,
+            {
+                "id": search_id,
+                "search": "preferences",
+                "result": "clicked",
+                "result_type": "page",
+                "result_object_id": page.pk,
+            },
+            **self.bearer,
+        )
+        self.assertEqual(CommandPaletteSearch.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(CommandPaletteSearch.objects.get(pk=search_id).result, "clicked")
+        page.refresh_from_db()
+        self.assertEqual(page.hits, 1)
+
+
+class MobileLabelTests(StandardTestCase):
+    """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.url = reverse("mobile-label-lot", kwargs={"pk": self.lot.pk})  # self.lot is sold by self.user
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def test_returns_png_for_lot_seller(self):
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_auction_admin_can_print_other_sellers_lot(self):
+        resp = self.client.get(self.url, **self._bearer(self.admin_user))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_forbidden_for_non_owner_non_admin(self):
+        resp = self.client.get(self.url, **self._bearer(self.userB))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_missing_lot_is_404(self):
+        url = reverse("mobile-label-lot", kwargs={"pk": 99999999})
+        self.assertEqual(self.client.get(url, **self._bearer(self.user)).status_code, 404)
+
+    def test_unsupported_format_is_400(self):
+        resp = self.client.get(self.url, {"fmt": "zpl"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_default_resolution_is_600x400(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, **self._bearer(self.user))
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (600, 400))
+
+    def test_resolution_param_sizes_the_png(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"resolution": "96x64", "dpi": "203"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        img = Image.open(BytesIO(resp.content))
+        self.assertEqual(img.size, (96, 64))
+        # PIL round-trips DPI through the PNG pixels-per-meter chunk, so it comes back ~203.0.
+        dpi_x, dpi_y = img.info.get("dpi")
+        self.assertEqual((round(dpi_x), round(dpi_y)), (203, 203))
+
+    def test_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "not-a-size"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_out_of_range_resolution_is_400(self):
+        resp = self.client.get(self.url, {"resolution": "99999x99999"}, **self._bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_jwt(self):
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+class SingleLotLabelPngTests(StandardTestCase):
+    """The web single-lot label endpoint can also emit a PNG (?format=png) via the shared renderer,
+    with the same ?resolution / ?dpi controls as the mobile endpoint; default stays the PDF sheet."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("single_lot_label", kwargs={"pk": self.lot.pk})  # self.lot's seller is self.user
+        self.client.login(username="my_lot", password="testpassword")
+
+    def test_default_is_pdf(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotEqual(resp["Content-Type"], "image/png")
+
+    def test_format_png_returns_png(self):
+        resp = self.client.get(self.url, {"format": "png"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_png_honors_resolution(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        resp = self.client.get(self.url, {"format": "png", "resolution": "96x64"})
+        self.assertEqual(Image.open(BytesIO(resp.content)).size, (96, 64))
+
+    def test_png_malformed_resolution_is_400(self):
+        resp = self.client.get(self.url, {"format": "png", "resolution": "garbage"})
+        self.assertEqual(resp.status_code, 400)
+
+
+class MobileEmailLoginTests(TestCase):
+    """MobileAuthService email fallback must work even when multiple users share an email, and it
+    must honour allauth's mandatory email-verification policy (no weaker side door than the web)."""
+
+    def setUp(self):
+        from allauth.account.models import EmailAddress
+
+        self.alice = User.objects.create_user("alice", "dup@example.com", "pw-alice")
+        self.bob = User.objects.create_user("bob", "dup@example.com", "pw-bob")
+        # ACCOUNT_EMAIL_VERIFICATION is mandatory, so these must have a verified email to log in.
+        for user in (self.alice, self.bob):
+            EmailAddress.objects.create(user=user, email=user.email, verified=True, primary=True)
+
+    def test_login_by_username_still_works(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("alice", "pw-alice"), self.alice)
+
+    def test_duplicate_email_resolves_to_password_owner(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-bob"), self.bob)
+        self.assertEqual(MobileAuthService.authenticate("dup@example.com", "pw-alice"), self.alice)
+
+    def test_wrong_password_returns_none(self):
+        from auctions.mobile.services.auth import MobileAuthService
+
+        self.assertIsNone(MobileAuthService.authenticate("dup@example.com", "nope"))
+
+    def test_unverified_email_blocked_when_verification_mandatory(self):
+        """A correct password is not enough when the email is unverified — matches web login."""
+        from auctions.mobile.services.auth import MobileAuthService
+
+        # No verified EmailAddress for carol.
+        User.objects.create_user("carol", "carol@example.com", "pw-carol")
+        self.assertIsNone(MobileAuthService.authenticate("carol", "pw-carol"))
+        self.assertIsNone(MobileAuthService.authenticate("carol@example.com", "pw-carol"))
+
+    def test_inactive_user_blocked(self):
+        from allauth.account.models import EmailAddress
+
+        from auctions.mobile.services.auth import MobileAuthService
+
+        dave = User.objects.create_user("dave", "dave@example.com", "pw-dave", is_active=False)
+        EmailAddress.objects.create(user=dave, email=dave.email, verified=True, primary=True)
+        self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
+
+
+class MobileWebSessionTests(TestCase):
+    """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
+    WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
+    must never be established by the mint call and must carry HttpOnly/Secure flags from the consume
+    redirect; the token must be single-use and fail closed (redirect to login, no session)."""
+
+    SESSION_COOKIE = "sessionid"
+
+    def setUp(self):
+        from django.conf import settings
+        from django.core.cache import cache
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        # Random-token TTL keys can't collide between tests, but clear to keep the cache deterministic.
+        cache.clear()
+        self.user = User.objects.create_user("websession", "ws@example.com", "pw")
+        self.access = str(RefreshToken.for_user(self.user).access_token)
+        self.mint_url = reverse("mobile-auth-web-session")
+        self.consume_url = reverse("mobile-auth-web-session-consume")
+        self.login_url = reverse("account_login")
+        self.home_url = settings.LOGIN_REDIRECT_URL
+
+    def _bearer(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+
+    def _mint_token(self):
+        from auctions.mobile.services.web_session import WebSessionService
+
+        return WebSessionService.create_handoff_token(self.user)
+
+    def _logged_in_user_id(self):
+        from django.contrib.auth import SESSION_KEY
+
+        return self.client.session.get(SESSION_KEY)
+
+    def test_mint_requires_jwt(self):
+        self.assertIn(self.client.post(self.mint_url).status_code, (401, 403))
+
+    def test_mint_returns_consume_url_without_establishing_a_session(self):
+        resp = self.client.post(self.mint_url, **self._bearer())
+        self.assertEqual(resp.status_code, 200)
+        handoff_url = resp.json()["handoff_url"]
+        self.assertIn(self.consume_url, handoff_url)
+        self.assertIn("t=", handoff_url)
+        # The mint call must NOT log anyone in: no session cookie, the token is the only credential.
+        self.assertNotIn(self.SESSION_COOKIE, resp.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_logs_in_and_sets_session_cookie(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.home_url)
+        self.assertIn(self.SESSION_COOKIE, resp.cookies)
+        # The follow-up request carries the cookie, so the WebView is now authenticated as the user.
+        self.assertEqual(self._logged_in_user_id(), str(self.user.pk))
+
+    @override_settings(SESSION_COOKIE_SECURE=True)
+    def test_session_cookie_carries_httponly_and_secure(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token()})
+        morsel = resp.cookies[self.SESSION_COOKIE]
+        self.assertTrue(morsel["httponly"])
+        self.assertTrue(morsel["secure"])
+
+    def test_token_is_single_use(self):
+        token = self._mint_token()
+        first = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(first.url, self.home_url)
+
+        # Replaying the same token must not mint a second session.
+        self.client.logout()
+        second = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(second.url, self.login_url)
+        self.assertNotIn(self.SESSION_COOKIE, second.cookies)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_missing_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_invalid_token_redirects_to_login_without_session(self):
+        resp = self.client.get(self.consume_url, {"t": "not-a-real-token"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_inactive_user_cannot_consume(self):
+        token = self._mint_token()
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        resp = self.client.get(self.consume_url, {"t": token})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, self.login_url)
+        self.assertIsNone(self._logged_in_user_id())
+
+    def test_consume_honours_safe_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "/lots/"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/lots/")
+
+    def test_consume_rejects_offsite_next(self):
+        resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "https://evil.example.com/"})
+        self.assertEqual(resp.status_code, 302)
+        # Open-redirect attempt falls back to the safe default rather than the attacker's host.
+        self.assertEqual(resp.url, self.home_url)
+
+
+class MobilePaymentConfirmTests(StandardTestCase):
+    """confirm_mobile_payment verifies an on-device Tap to Pay charge + idempotent recording.
+
+    The Mobile Payments SDK charges the card on-device and returns a completed payment_id; the
+    server re-fetches it via GetPayment (client.payments.get) and verifies it before recording.
+
+    Tap to Pay is operated by the merchant (auction admin), so the service is driven here as
+    ``self.admin_user`` (an is_admin TOS on the auction); the buyer is never authorized.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A fresh buyer with no lots + one ADD adjustment owes a deterministic $20.
+        self.buyer = User.objects.create_user("mobilebuyer", "mb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+    def _mock_seller(self, get_return=None, get_side_effect=None):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        client = MagicMock()
+        if get_side_effect is not None:
+            client.payments.get.side_effect = get_side_effect
+        else:
+            client.payments.get.return_value = get_return
+        seller.get_square_client.return_value = client
+        return seller, client
+
+    def _payment_response(
+        self,
+        pid="PAY1",
+        status_="COMPLETED",
+        receipt="RC123",
+        amount=2000,
+        currency=None,
+        location_id="LOC1",
+        reference_id=None,
+    ):
+        from types import SimpleNamespace
+
+        # Mirror the squareup 44.x typed GetPaymentResponse: .errors, .payment, and a nested Money
+        # object (attributes, not a dict) on .amount_money.
+        currency = currency if currency is not None else self.pay_invoice.currency
+        reference_id = reference_id if reference_id is not None else str(self.pay_invoice.pk)
+        payment = SimpleNamespace(
+            id=pid,
+            status=status_,
+            receipt_number=receipt,
+            amount_money=SimpleNamespace(amount=amount, currency=currency),
+            location_id=location_id,
+            reference_id=reference_id,
+        )
+        return SimpleNamespace(errors=None, payment=payment)
+
+    def test_confirm_verifies_payment_records_and_marks_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            result = PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="idem-1", user=self.admin_user
+            )
+        self.assertTrue(client.payments.get.called)  # GetPayment, not payments.create
+        self.assertFalse(client.payments.create.called)  # the server must NOT charge anything
+        self.assertEqual(client.payments.get.call_args.kwargs["payment_id"], "PAY1")
+        self.assertEqual(result["payment_id"], "PAY1")
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+
+    def test_create_and_confirm_use_rounded_amount(self):
+        """With invoice rounding on, Tap to Pay charges/verifies the rounded balance, not the cents.
+
+        A fractional residual ($19.60 owed) is charged at the rounded $19.00 (customer's favour);
+        confirm must accept the $19.00 (1900c) Square charge and mark the invoice PAID even though a
+        fractional residual remains on net_after_payments.
+        """
+        from decimal import Decimal
+
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertTrue(self.online_auction.invoice_rounding)  # default; the fix is a no-op without it
+        tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("roundbuyer", "rb@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
+        InvoicePayment.objects.create(
+            invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
+        )
+        invoice.refresh_from_db()
+        # Rounding must actually change the amount for this test to be meaningful.
+        unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
+        rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        self.assertNotEqual(rounded, unrounded)
+        self.assertEqual(rounded, Decimal("19.00"))
+
+        amount_cents = int(rounded * 100)
+        seller, _ = self._mock_seller(
+            get_return=self._payment_response(amount=amount_cents, reference_id=str(invoice.pk))
+        )
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            create_result = PaymentService.create_mobile_payment(invoice_pk=invoice.pk, user=self.admin_user)
+            self.assertEqual(create_result["amount"], str(rounded))  # rounded, not the fractional balance
+
+            confirm_result = PaymentService.confirm_mobile_payment(
+                invoice_pk=invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+            )
+        self.assertEqual(confirm_result["payment_id"], "PAY1")
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "PAID")
+        payment = InvoicePayment.objects.get(invoice=invoice, external_id="PAY1")
+        self.assertEqual(payment.amount, rounded)  # recorded the verified (rounded) Square amount
+
+    def _assert_rejected_and_unrecorded(self, payment_response):
+        """A verification failure must raise ValueError and record / mark nothing."""
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(get_return=payment_response)
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+        self.pay_invoice.refresh_from_db()
+        self.assertNotEqual(self.pay_invoice.status, "PAID")
+        ensure.assert_not_called()
+        renew.assert_not_called()
+
+    def test_confirm_rejects_wrong_amount(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(amount=1999))
+
+    def test_confirm_rejects_wrong_currency(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(currency="EUR"))
+
+    def test_confirm_rejects_non_completed_status(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(status_="PENDING"))
+
+    def test_confirm_rejects_wrong_location(self):
+        self._assert_rejected_and_unrecorded(self._payment_response(location_id="LOC_OTHER"))
+
+    def test_confirm_rejects_wrong_reference_id(self):
+        # A payment bound to a different invoice's reference (its pk) must not pay this one.
+        self._assert_rejected_and_unrecorded(self._payment_response(reference_id=str(self.pay_invoice.pk + 99999)))
+
+    def test_confirm_rejects_already_paid(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        self.pay_invoice.status = "PAID"
+        self.pay_invoice.save(update_fields=["status"])
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        self.assertFalse(client.payments.get.called)
+
+    def test_confirm_is_idempotent_on_external_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        # Owe more than the pre-existing payment so a balance remains (a payment that covers the
+        # whole invoice would trip the "no amount due" guard before the dedup path is reached).
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=40, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+        # Simulate the Square webhook (or a prior retry) already recording this payment.
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        # $60 owed, $20 already recorded → $40 (4000 cents) due at confirm time; the verification
+        # recomputes amount_due net of the existing payment, so the fetched payment must match it.
+        seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=4000))
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            PaymentService.confirm_mobile_payment(
+                invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+            )
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
+        ensure.assert_not_called()  # didn't create the record → must not re-run renewal side effects
+        renew.assert_not_called()
+        self.pay_invoice.refresh_from_db()
+        self.assertEqual(self.pay_invoice.status, "PAID")
+
+    def test_confirm_square_error_raises_valueerror(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller(get_side_effect=Exception("payment not found"))
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(ValueError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+
+    def test_create_returns_access_token_not_application_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+        self.assertEqual(result["access_token"], "tok")
+        self.assertNotIn("square_application_id", result)
+        self.assertEqual(result["location_id"], "LOC1")
+        self.assertEqual(result["amount"], "20.00")
+        # The client must charge with this reference_id; it matches the web convention (str(pk)).
+        self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+
+    def test_create_blocks_seller_without_tap_to_pay_scope(self):
+        # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device
+        # is handed a token, with a distinguishable error so the app can prompt a reconnect.
+        from auctions.mobile.services.payments import PaymentService, SquareReconnectRequired
+
+        seller, _ = self._mock_seller()
+        seller.supports_tap_to_pay = False
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(SquareReconnectRequired):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+
+    def test_create_denies_buyer(self):
+        # The buyer must NOT be able to create a payment — that would leak the seller's Square token.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+
+    def test_create_denies_non_admin_other_user(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.userB)
+
+    def test_create_allows_is_admin_tos_on_square_auction_without_club(self):
+        # A Square auction with no club: anyone with an is_admin AuctionTOS (not just the creator)
+        # can take payment. online_auction has no club, and this fresh admin isn't its creator.
+        from auctions.mobile.services.payments import PaymentService
+
+        self.assertIsNone(self.online_auction.club_id)  # no club on this auction
+        tos_admin = User.objects.create_user("tos_admin", "ta@example.com", "pw")
+        AuctionTOS.objects.create(
+            user=tos_admin, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=tos_admin)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_allows_club_manage_auctions_permission(self):
+        # A club member with "manage auctions" can take payment for that club's auction invoice —
+        # even when the auction is not manage_users_through_club (so Auction.permission_check alone,
+        # which gates the club branch on is_club_managed, would not grant it).
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Mgr Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        manager = User.objects.create_user("club_mgr", "mgr@example.com", "pw")
+        ClubMember.objects.create(club=club, user=manager, name="Mgr", permission_manage_auctions=True)
+        self.assertFalse(self.online_auction.permission_check(manager))  # not granted by the auction alone
+        seller, _ = self._mock_seller()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=manager)
+        self.assertEqual(result["access_token"], "tok")
+
+    def test_create_denies_club_member_without_payment_permission(self):
+        # A plain club member (no money / manage-auctions / admin permission) is still denied.
+        from auctions.mobile.services.payments import PaymentService
+
+        club = Club.objects.create(name="Plain Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = False
+        self.online_auction.save()
+        member = User.objects.create_user("plain_member", "pm@example.com", "pw")
+        ClubMember.objects.create(club=club, user=member, name="Plain")
+        with self.assertRaises(PermissionError):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=member)
+
+    def test_confirm_denies_buyer_before_charging(self):
+        # Buyer is rejected before any Square call and nothing is recorded.
+        from auctions.mobile.services.payments import PaymentService
+
+        seller, client = self._mock_seller(get_return=self._payment_response())
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            with self.assertRaises(PermissionError):
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.buyer
+                )
+        self.assertFalse(client.payments.get.called)
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 0)
+
+
+class MobilePaymentEndpointTests(StandardTestCase):
+    """The /api/mobile/payments/ HTTP layer: JWT auth, the PermissionError->403 mapping, and that
+    only the merchant (auction admin) — not the buyer — can reach create/confirm."""
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self._RefreshToken = RefreshToken
+        self.buyer = User.objects.create_user("endpointbuyer", "eb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+        self.create_url = reverse("mobile-payment-create")
+        self.confirm_url = reverse("mobile-payment-confirm")
+
+    def _bearer(self, user):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self._RefreshToken.for_user(user).access_token}"}
+
+    def _mock_seller(self):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        return seller
+
+    def test_create_requires_jwt(self):
+        self.assertIn(self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}).status_code, (401, 403))
+
+    def test_admin_can_create_and_gets_reference_id(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(
+                self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.admin_user)
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["access_token"], "tok")
+        self.assertEqual(body["reference_id"], str(self.pay_invoice.pk))
+
+    def test_buyer_create_is_403(self):
+        # Even with Square configured, the buyer must get 403 and never see the access token.
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            resp = self.client.post(self.create_url, {"invoice_pk": self.pay_invoice.pk}, **self._bearer(self.buyer))
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("access_token", resp.json())
+
+    def test_buyer_confirm_is_403(self):
+        resp = self.client.post(
+            self.confirm_url,
+            {"invoice_pk": self.pay_invoice.pk, "payment_id": "PAY1", "idempotency_key": "i"},
+            **self._bearer(self.buyer),
+        )
+        self.assertEqual(resp.status_code, 403)

@@ -243,6 +243,17 @@ def auctiontos_notifications(self):
     call_command("auctiontos_notifications")
 
 
+@shared_task(bind=True, ignore_result=True)
+def flush_expired_tokens(self):
+    """
+    Delete expired JWT blacklist / outstanding-token rows.
+
+    Mobile JWT refresh-token rotation (ROTATE_REFRESH_TOKENS + BLACKLIST_AFTER_ROTATION) writes a row
+    per login and per refresh; without periodic cleanup the token_blacklist tables grow unbounded.
+    """
+    call_command("flushexpiredtokens")
+
+
 def get_invoice_notification_task_name(invoice_pk):
     """Generate a unique task name for an invoice notification."""
     return f"invoice_notification_{invoice_pk}"
@@ -616,6 +627,17 @@ def webpush_notifications_deduplicate(self):
     Previously run daily at 10:00 via cron.
     """
     call_command("webpush_notifications_deduplicate")
+
+
+@shared_task(bind=True, ignore_result=True)
+def deduplicate_user_interest(self):
+    """
+    Merge duplicate UserInterestCategory rows created by request races.
+
+    There's no unique constraint on (user, category); the write paths tolerate
+    the occasional duplicate and this reconciles them, summing the interest.
+    """
+    call_command("deduplicate_user_interest")
 
 
 def schedule_auction_stats_update(run_at=None):

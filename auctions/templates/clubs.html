@@ -81,7 +81,7 @@ function initMap() {
                 <div class="alert alert-warning m-3">Club maps are unavailable until a Google Maps API key is configured.</div>
                 {% endif %}
             </div>
-            {% if not has_user_location %}
+            {% if not has_user_location and not request.is_mobile_app %}
             <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
             {% endif %}
             <div>Something missing? {% if not request.user.is_authenticated %}<a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in</a> to report an issue{% else %}Contact me at {{ admin_email | urlize }}{% endif %}.</div>

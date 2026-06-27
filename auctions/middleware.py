@@ -3,6 +3,22 @@ Custom middleware for the auctions application.
 """
 
 
+class MobileAppMiddleware:
+    """Flag requests coming from the native mobile app's WebView.
+
+    The app sets a ``FishAuctionsApp`` token in its User-Agent; templates read
+    ``request.is_mobile_app`` to drop web chrome (navbar, footer, install banners) that the
+    app renders natively. Cheap and unconditional, so it stays near the top of the stack.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        request.is_mobile_app = "FishAuctionsApp" in request.META.get("HTTP_USER_AGENT", "")
+        return self.get_response(request)
+
+
 class CrossOriginIsolationMiddleware:
     """
     Middleware to add Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy headers.

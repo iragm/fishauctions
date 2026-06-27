@@ -644,10 +644,11 @@ class Club(models.Model):
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
     MEMBERSHIP_SYSTEM_CHOICES = (
+        ("none", "No membership fees"),
         ("january_first", "January 1st renewal"),
         ("rolling", "Rolling annual membership"),
     )
-    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
+    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="none")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     show_member_barcode = models.BooleanField(
         default=True,
@@ -776,7 +777,7 @@ class Club(models.Model):
     )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
     enable_club_page = models.BooleanField(
-        default=False,
+        default=True,
         verbose_name="Enable public club page",
         help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
     )
@@ -3941,6 +3942,9 @@ class Auction(models.Model):
             .count()
         )
         chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        mobile_app = (
+            auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
+        )
         if self.is_online:
             lot_with_buy_now = (
                 Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
@@ -3957,9 +3961,11 @@ class Auction(models.Model):
         if auctiontos.count() == 0:
             lot_with_buy_now_percent = 0
             account_percent = 0
+            mobile_app_percent = 0
         else:
             account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
             lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+            mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self)
         viewed_invoices = invoices.filter(opened=True)
         if invoices.count():
@@ -3976,6 +3982,7 @@ class Auction(models.Model):
         return {
             "labels": [
                 "An account",
+                "Mobile app",
                 "Search",
                 "Watch",
                 "Push notifications as lots sell",
@@ -3989,6 +3996,7 @@ class Auction(models.Model):
             "data": [
                 [
                     account_percent,
+                    mobile_app_percent,
                     seach_percent,
                     watch_percent,
                     notification_percent,
@@ -6327,7 +6335,7 @@ class Lot(models.Model):
         if self.auction:
             return self.auction.dynamic_end
         # there is currently no hard endings on lots not associated with an auction
-        # as soon as the lot is saved, date_end will be set to dynamic_end (by consumers.reset_lot_end_time)
+        # as soon as the lot is saved, date_end will be set to dynamic_end (by bidding.reset_lot_end_time)
         # a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point
         # collect stats from a couple auctions with dynamic endings and re-assess
         return self.date_end + dynamic_end
@@ -7214,7 +7222,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             return self.show_paypal_button or self.show_square_button
@@ -7259,7 +7268,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             if self.club.uses_site_paypal or self.club.uses_own_paypal_credentials:
@@ -7297,7 +7307,8 @@ class Invoice(models.Model):
             return False
         if self.status == "PAID":
             return False
-        if self.net_after_payments >= 0:
+        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             seller = self.club.effective_square_seller
@@ -8358,6 +8369,14 @@ class UserData(models.Model):
     email_visible = models.BooleanField(default=False)
     email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
     last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+    last_club_used = models.ForeignKey(
+        Club,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The most recent club whose page this user viewed while a member. Used to scope command palette shortcuts.",
+    )
     last_activity = models.DateTimeField(auto_now_add=True)
     latitude = models.FloatField(default=0)
     longitude = models.FloatField(default=0)
@@ -8576,6 +8595,7 @@ class UserData(models.Model):
                 "location",
                 "club",
                 "last_auction_used",
+                "last_club_used",
                 "location_coordinates",
                 "paypal_email_address",
                 "preferred_bidder_number",
@@ -8779,6 +8799,7 @@ class UserData(models.Model):
             self.location = None
             self.club = None
             self.last_auction_used = None
+            self.last_club_used = None
             self.latitude = 0
             self.longitude = 0
             self.location_coordinates = None
@@ -8797,6 +8818,7 @@ class UserData(models.Model):
                     "location",
                     "club",
                     "last_auction_used",
+                    "last_club_used",
                     "latitude",
                     "longitude",
                     "location_coordinates",
@@ -9186,6 +9208,21 @@ class PayPalSeller(models.Model):
         return super().delete()
 
 
+# Square OAuth scopes we request. PAYMENTS_WRITE_IN_PERSON powers Tap to Pay; sellers who
+# connected before it was added hold tokens without it and must reconnect (refreshing keeps the
+# original scopes). This is the single source of truth for the authorize request and for what we
+# record as granted on the seller.
+SQUARE_TAP_TO_PAY_SCOPE = "PAYMENTS_WRITE_IN_PERSON"
+SQUARE_OAUTH_SCOPES = (
+    "PAYMENTS_WRITE",
+    "PAYMENTS_READ",
+    "MERCHANT_PROFILE_READ",
+    "ORDERS_READ",
+    "ORDERS_WRITE",
+    SQUARE_TAP_TO_PAY_SCOPE,
+)
+
+
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
@@ -9205,6 +9242,12 @@ class SquareSeller(models.Model):
     access_token = EncryptedCharField(max_length=500, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
+    scopes = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Space-separated OAuth scopes granted at connect time. Empty = legacy connection (pre Tap to Pay).",
+    )
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
     connected_on = models.DateTimeField(auto_now_add=True)
@@ -9252,6 +9295,15 @@ class SquareSeller(models.Model):
                 applies_to="SETTINGS",
             )
         return super().delete()
+
+    @property
+    def supports_tap_to_pay(self):
+        """True if this seller's stored OAuth grant includes the in-person scope Tap to Pay needs.
+
+        Sellers connected before the scope was added have empty/legacy ``scopes`` and must
+        reconnect; refreshing their token keeps the original (non-in-person) scopes.
+        """
+        return SQUARE_TAP_TO_PAY_SCOPE in (self.scopes or "").split()
 
     def is_token_expired(self):
         """Check if the access token is expired or will expire soon (within 1 hour)"""
@@ -9397,7 +9449,9 @@ class SquareSeller(models.Model):
         try:
             from decimal import Decimal
 
-            amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
+            # Charge the rounded balance so the amount matches the invoice total the buyer sees
+            # (rounded_net_after_payments falls back to the exact amount when rounding is off).
+            amount_decimal = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
             amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
         except Exception:
             logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
@@ -9577,6 +9631,25 @@ class UserInterestCategory(models.Model):
 
     def __str__(self):
         return f"{self.user} interest level in {self.category} is {self.as_percent}"
+
+    @classmethod
+    def add_interest(cls, user, category, weight):
+        """Increment a user's interest in a category, creating the row if it doesn't exist.
+
+        Deliberately uses filter().first() instead of get_or_create: there is no
+        unique constraint on (user, category) (duplicates are tolerated here and
+        reconciled by the deduplicate_user_interest task), so get_or_create's get()
+        would raise MultipleObjectsReturned the moment a duplicate exists. A double
+        click might briefly create a second row; that's harmless soft data and gets
+        merged on the next dedupe pass.
+        """
+        interest = cls.objects.filter(user=user, category=category).first()
+        if interest is None:
+            interest = cls(user=user, category=category, interest=weight)
+        else:
+            interest.interest += weight
+        interest.save()
+        return interest
 
     def save(self, *args, **kwargs):
         """
@@ -9867,6 +9940,88 @@ class SearchHistory(models.Model):
     search = models.CharField(max_length=600)
     createdon = models.DateTimeField(auto_now_add=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+
+
+class CommandPalettePage(models.Model):
+    """Maps a generic phrase typed in the command palette to a destination page.
+
+    Populated by data migrations and managed in the Django admin only (no front-end UI).
+    For example "sell lots" -> the set-lot-winners page for the user's most recent auction.
+    A single phrase may map to several pages (several rows with the same ``search_term``).
+    """
+
+    search_term = models.CharField(
+        max_length=200, db_index=True, help_text="The phrase people type, e.g. 'sell lots' or 'address'."
+    )
+    synonyms = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Extra phrases that map here too (comma- or newline-separated). Good for typos and alternate wording.",
+    )
+    target = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text=(
+            "Dynamic destination key resolved against the user's context, e.g. "
+            "'last_auction:set_winners' or 'clubs:brevo'. Leave blank to use the URL field instead."
+        ),
+    )
+    url = models.CharField(
+        max_length=500, blank=True, help_text="Literal path used when target is blank, e.g. '/selling/'."
+    )
+    title = models.CharField(
+        max_length=200, blank=True, help_text="Optional label override. Leave blank to use a sensible default."
+    )
+    description = models.CharField(max_length=400, blank=True)
+    icon = models.CharField(max_length=50, blank=True, help_text="Bootstrap icon class, e.g. 'bi-cash-coin'.")
+    model = models.CharField(
+        max_length=20, blank=True, help_text="Optional hint: auction, club, or lot. Not currently required."
+    )
+    hits = models.PositiveIntegerField(default=0, help_text="Number of times this shortcut has been clicked.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-hits", "search_term"]
+
+    def __str__(self):
+        return f"{self.search_term} -> {self.target or self.url}"
+
+
+class CommandPaletteSearch(models.Model):
+    """One row per command-palette search session (not per keystroke).
+
+    The front end updates a single row as the user refines their query, then records
+    whether they clicked a result or abandoned the search. Only stored for logged-in users.
+    Built to be flexible so we can mine the data later and grow CommandPalettePage mappings.
+    """
+
+    RESULT_PENDING = "pending"
+    RESULT_CLICKED = "clicked"
+    RESULT_ABANDONED = "abandoned"
+    RESULT_BOUNCE = "bounce"
+    RESULT_CHOICES = [
+        (RESULT_PENDING, "In progress"),
+        (RESULT_CLICKED, "Clicked a result"),
+        (RESULT_ABANDONED, "Cleared or left"),
+        (RESULT_BOUNCE, "No results found"),
+    ]
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    search = models.CharField(max_length=600, blank=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    updatedon = models.DateTimeField(auto_now=True)
+    result = models.CharField(max_length=20, choices=RESULT_CHOICES, default=RESULT_PENDING)
+    result_type = models.CharField(
+        max_length=50, blank=True, help_text="auction, lot, club, clubmember, page, or default."
+    )
+    result_url = models.CharField(max_length=500, blank=True)
+    result_object_id = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} searched '{self.search}' ({self.result})"
 
 
 class ChatSubscription(models.Model):

@@ -43,6 +43,7 @@ urlpatterns = [
     path("api/watchitem/<int:pk>/", views.WatchOrUnwatch.as_view()),
     path("api/clubs/", views.GetClubs.as_view()),
     path("api/lots/deactivate/<int:pk>/", views.LotDeactivate.as_view()),
+    path("api/lots/<int:pk>/bid/", views.PlaceBid.as_view(), name="lot_bid"),
     path("api/images/rotate/", views.ImagesRotate.as_view()),
     path("api/images/primary/", views.ImagesPrimary.as_view()),
     path("api/lots/get_recommended/", views.RecommendedLots.as_view()),
@@ -123,6 +124,11 @@ urlpatterns = [
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
     path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),
+    path(
+        "admin-dashboard/command-palette/",
+        views.CommandPaletteAnalyticsView.as_view(),
+        name="command_palette_analytics",
+    ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(
@@ -168,6 +174,8 @@ urlpatterns = [
     path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view(), name="lot_by_pk_and_slug"),
     path("bids/", login_required(views.MyBids.as_view()), name="my_bids"),
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
+    path("command-palette/", login_required(views.CommandPaletteView.as_view()), name="command_palette"),
+    path("command-palette/log/", login_required(views.CommandPaletteLogView.as_view()), name="command_palette_log"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),

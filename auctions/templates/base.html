@@ -61,6 +61,9 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
+        {% if request.user.is_authenticated %}
+        <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
+        {% endif %}
         {% endblock %}
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}
@@ -248,6 +251,7 @@ window.onload = function() {
             data-login_uri="{% url 'google_login_by_token' %}">
         </div>
       {% endif %}
+      {% if not request.is_mobile_app %}
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
           <a class="navbar-brand" href="{% url 'home' %}">{{ navbar_brand }}</a>
@@ -295,6 +299,7 @@ window.onload = function() {
                     <a class="dropdown-item" href="{% url 'admin_referrers' %}?days=30">Referrers</a>
                     <a class="dropdown-item" href="{% url 'admin_user_signups' %}?days=90">User signups</a>
                     <a class="dropdown-item" href="{% url 'admin_user_flow' %}">User flow</a>
+                    <a class="dropdown-item" href="{% url 'command_palette_analytics' %}">Command palette searches</a>
                     <a class="dropdown-item" href="/admin/auth/user/?o=-6">Admin site</a>
                     <a class="dropdown-item" href="{% url 'admin_error' %}">Test error messages</a>
                     </div>
@@ -365,6 +370,7 @@ window.onload = function() {
           </div>
         </div>
         </nav>
+        {% endif %}
         </span>
         {% if not hide_tos_banner %}
         <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="{% url 'tos' %}">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
@@ -390,7 +396,7 @@ window.onload = function() {
           </script>
         {% endif %}
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
-        {% if not has_user_location and location_message %}
+        {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
           <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
         </div>
@@ -435,11 +441,14 @@ window.onload = function() {
             </div>
         </div>
         {% block undiv_content %}{% endblock %}
+        {% if not request.is_mobile_app %}
         <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{{ copyright_message | safe }}</small></div>
+        {% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}
       <div id="modals-here"></div>
+      {% if request.user.is_authenticated and not request.is_mobile_app %}{% include 'command_palette.html' %}{% endif %}
     </body>
     {# this is to redirect for printing #}
     <script>

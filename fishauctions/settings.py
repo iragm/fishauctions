@@ -138,20 +138,46 @@ LOGGING = {
             "level": "ERROR",
             "propagate": False,
         },
+        # Consumer/websocket errors are otherwise invisible (console/file only, which
+        # nobody watches). Route ERROR+ to mail_admins so a broken consumer pages us the
+        # same way an unhandled 500 does. INFO/WARNING (e.g. WS lifecycle logs) still
+        # only go to console/file because mail_admins is level ERROR.
+        "auctions.consumers": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        # Bidding logic: a swallowed error here means a bid may have failed, so page us.
+        "auctions.bidding": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        # Unhandled exceptions escaping the websocket ASGI app (see asgi.py middleware).
+        "auctions.websocket": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
     },
 }
 
 if DEBUG:
-    # Remove admin email handler if it exists
-    django_logger = LOGGING.get("loggers", {}).get("django.request")
-    if django_logger:
-        handlers = django_logger.get("handlers", [])
-        LOGGING["loggers"]["django.request"]["handlers"] = [h for h in handlers if h != "mail_admins"]
+    # Never email admins in development: strip the mail_admins handler from every logger.
+    for _logger_config in LOGGING.get("loggers", {}).values():
+        handlers = _logger_config.get("handlers")
+        if handlers and "mail_admins" in handlers:
+            _logger_config["handlers"] = [h for h in handlers if h != "mail_admins"]
 
 # Channels
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        # Use the pub/sub layer, NOT the BRPOP-based RedisChannelLayer.  The BRPOP layer's
+        # background receive task blocks on bzpopmin(timeout=brpop_timeout=5s); with redis-py
+        # 7.x that blocking read dies at the 5s mark and crashes the consumer with no graceful
+        # disconnect, so lot-page sockets dropped/reconnected every ~6s and in-person online
+        # bids vanished silently.  Pub/sub uses SUBSCRIBE and has no such blocking loop.
+        "BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer",
         "CONFIG": {
             "hosts": [
                 (
@@ -163,8 +189,6 @@ CHANNEL_LAYERS = {
                 )
             ],
             # "hosts": [('127.0.0.1', 6379)],
-            "capacity": 2000,  # default 100
-            "expiry": 20,  # default 60
         },
     },
 }
@@ -216,6 +240,7 @@ ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -363,6 +388,16 @@ ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 ACCOUNT_CHANGE_EMAIL = True
 
 SESSION_COOKIE_AGE = 1209600 * 100
+
+# The mobile WebView handoff relies on the session cookie being server-set with these flags so the
+# native app never has to read or reconstruct it. HttpOnly/SameSite=Lax are Django defaults, set
+# explicitly here; Secure is enabled whenever we're not in local dev (production is HTTPS-only behind
+# nginx — see SECURE_PROXY_SSL_HEADER). Dev runs over plain http on port 80, so Secure would drop the
+# cookie there; gating on DEBUG keeps local login working.
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 if DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
@@ -866,7 +901,13 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
         "mobile_auth": "10/min",
-        "mobile_api": "200/hour",
+        # Catch-all for mobile reads/writes. Sized for admin bulk workflows that live here — checkout
+        # is 2 calls/buyer (create+confirm) and labels are 1 call/lot, so a busy auction hour is
+        # several hundred calls; 200/hour blocked that mid-checkout.
+        "mobile_api": "1000/hour",
+        # Search-as-you-type: each query fires a search + a log call on a ~300ms debounce, so a fast
+        # typer briefly peaks ~6 req/sec. 120/min tolerates that burst while capping sustained abuse.
+        "mobile_search": "120/min",
     },
 }
 

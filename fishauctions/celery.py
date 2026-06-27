@@ -78,6 +78,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Merge duplicate user interest categories from request races - every 24 hours
+    "deduplicate_user_interest": {
+        "task": "auctions.tasks.deduplicate_user_interest",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Clean up old invoice notification tasks - every 24 hours
     "cleanup_old_invoice_notification_tasks": {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
@@ -86,6 +91,11 @@ app.conf.beat_schedule = {
     # Update Discord roles for members whose membership has expired or been renewed - every 24 hours
     "update_expired_membership_discord_roles": {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
+    "flush_expired_tokens": {
+        "task": "auctions.tasks.flush_expired_tokens",
         "schedule": 86400.0,  # Run every 24 hours
     },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.

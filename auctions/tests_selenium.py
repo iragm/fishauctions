@@ -19,11 +19,19 @@ Note: These tests connect to the running application via nginx, not the Django t
 server. This means they test the actual deployed application state, not test database data.
 """
 
+import datetime
 import os
 import time
 import unittest
 
-from django.test import TestCase, tag
+from channels.testing import ChannelsLiveServerTestCase
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.test import Client, TestCase, tag
+from django.urls import reverse
+from django.utils import timezone
+
+from auctions.models import Auction, AuctionTOS, Bid, Category, Lot, PickupLocation
 
 try:
     from selenium import webdriver
@@ -797,3 +805,225 @@ class GenericAdminFormTests(SeleniumTestCase):
         # Test jQuery $ shorthand is available
         jquery_shorthand = self.driver.execute_script("return typeof $ !== 'undefined'")
         self.assertTrue(jquery_shorthand, "jQuery $ shorthand not available")
+
+
+# ---------------------------------------------------------------------------
+# End-to-end bidding over real websockets
+#
+# The SeleniumTestCase classes above hit the live nginx app and cannot see test
+# data, which is useless for exercising the bid flow. LiveBiddingTestCase instead
+# runs an in-process ASGI server (Daphne, via ChannelsLiveServerTestCase) against
+# the *test* database, so a browser can load a real lot page, place a real bid
+# over HTTP, and observe the websocket broadcast update the page -- the exact path
+# that silently dropped in-person bids.
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class LiveBiddingTestCase(ChannelsLiveServerTestCase):
+    """Base class for browser bid tests that need real websockets + test data.
+
+    host = "web": the django service name. It's already in ALLOWED_HOSTS (so the
+    websocket's AllowedHostsOriginValidator accepts the Origin) and resolves from the
+    selenium container, so the browser can reach the live ASGI server.
+    """
+
+    host = "web"
+    serve_static = True
+
+    @classmethod
+    def setUpClass(cls):
+        # Work around a ChannelsLiveServerTestCase quirk: by the time this runs, the DB
+        # name is already "test_<name>", but the Daphne subprocess re-derives it by
+        # prepending the test prefix again ("test_test_<name>", which doesn't exist).
+        # Pin TEST.NAME to the real test DB so the subprocess connects to the same one.
+        db = settings.DATABASES["default"]
+        db.setdefault("TEST", {})
+        if not db["TEST"].get("NAME"):
+            db["TEST"]["NAME"] = db["NAME"]
+        super().setUpClass()
+
+    def setUp(self):
+        super().setUp()
+        self._drivers = []
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        self.seller = User.objects.create_user(username="e2e_seller", password="x", email="e2e_seller@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.seller,
+            title="E2E bidding auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+        )
+        self.location = PickupLocation.objects.create(name="e2e location", auction=self.auction, pickup_time=the_future)
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.seller, auction=self.auction, pickup_location=self.location
+        )
+        # A real category: TransactionTestCase truncates migration-loaded categories
+        # between tests, and bid_on_lot requires lot.species_category to be non-null.
+        self.category = Category.objects.create(name="E2E category")
+        self.lot = Lot.objects.create(
+            lot_name="E2E test lot",
+            auction=self.auction,
+            auctiontos_seller=self.seller_tos,
+            species_category=self.category,
+            quantity=1,
+            reserve_price=10,
+            date_end=the_future,
+        )
+        # date_posted is auto_now_add; backdate it so the lot isn't "too new to bid".
+        Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
+
+    def tearDown(self):
+        for driver in self._drivers:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        super().tearDown()
+
+    # --- data helpers -----------------------------------------------------
+    def make_bidder(self, username):
+        """A user who has joined the auction and whose username is publicly visible."""
+        user = User.objects.create_user(username=username, password="x", email=f"{username}@example.com")
+        userdata = user.userdata
+        userdata.username_visible = True
+        userdata.save()
+        AuctionTOS.objects.create(user=user, auction=self.auction, pickup_location=self.location)
+        return user
+
+    # --- browser helpers --------------------------------------------------
+    def new_browser(self, user=None):
+        """A fresh browser session, optionally already logged in as `user`."""
+        driver = get_selenium_driver()
+        self._drivers.append(driver)
+        if user is not None:
+            self.login(driver, user)
+        return driver
+
+    def login(self, driver, user):
+        """Log the browser in as `user` by transplanting a real session cookie.
+
+        DB-backed sessions are committed by this TransactionTestCase, so the cookie
+        minted here by the test client is valid for the live ASGI server.
+        """
+        client = Client()
+        client.force_login(user)
+        driver.get(self.live_server_url + "/")  # must be on the domain before add_cookie
+        driver.add_cookie(
+            {
+                "name": settings.SESSION_COOKIE_NAME,
+                "value": client.cookies[settings.SESSION_COOKIE_NAME].value,
+                "path": "/",
+            }
+        )
+
+    def open_lot(self, driver, lot=None):
+        """Load the lot page and wait until its websocket is actually OPEN, so the
+        consumer is subscribed before any bid is broadcast."""
+        lot = lot or self.lot
+        driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk}))
+        WebDriverWait(driver, 20).until(
+            lambda d: d.execute_script("return !!(window.lotWebSocket && window.lotWebSocket.readyState === 1)")
+        )
+
+    def place_bid(self, driver, amount):
+        """Drive the real bid UI: enter amount, confirm in the modal."""
+        field = driver.find_element(By.ID, "bid_amount")
+        field.clear()
+        field.send_keys(str(amount))
+        driver.find_element(By.ID, "bid_button").click()
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "finalize-bid"))).click()
+
+    def text_of(self, driver, element_id):
+        try:
+            return driver.find_element(By.ID, element_id).text.strip()
+        except NoSuchElementException:
+            return ""
+
+    def wait_chat_contains(self, driver, needle, timeout=20):
+        needle = needle.lower()
+        WebDriverWait(driver, timeout).until(lambda d: needle in self.text_of(d, "chat").lower())
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class BidPlacementE2ETests(LiveBiddingTestCase):
+    """The crux: place a bid in the browser and confirm the websocket round-trips,
+    and that one bidder's secret max proxy bid never leaks to anyone else."""
+
+    def test_placing_a_bid_makes_you_the_high_bidder(self):
+        """Bid in the UI -> the websocket broadcast comes back and you're shown as the
+        high bidder, and the Bid is persisted."""
+        bidder = self.make_bidder("e2e_bidder")
+        driver = self.new_browser(bidder)
+        self.open_lot(driver)
+
+        self.place_bid(driver, 15)
+
+        # The high-bidder message is delivered over the websocket (not the HTTP response).
+        self.wait_chat_contains(driver, "first bid")
+        self.assertIn(bidder.username, self.text_of(driver, "high_bidder_name"))
+        self.assertTrue(
+            Bid.objects.exclude(is_deleted=True).filter(user=bidder, lot_number=self.lot).exists(),
+            "bid was not persisted",
+        )
+
+    def test_proxy_max_bid_is_not_leaked_to_other_bidders(self):
+        """A bidder's secret max (proxy) bid must never reach another user's page --
+        only the public current price is broadcast."""
+        alice = self.make_bidder("e2e_alice")
+        bob = self.make_bidder("e2e_bob")
+        alice_browser = self.new_browser(alice)
+        bob_browser = self.new_browser(bob)
+        # Both connected before the bid, so both receive the broadcast.
+        self.open_lot(alice_browser)
+        self.open_lot(bob_browser)
+
+        # Alice's secret max is 50; the public price should only move to the reserve (10).
+        self.place_bid(alice_browser, 50)
+        self.wait_chat_contains(bob_browser, "first bid")
+
+        # Bob sees the public price, never Alice's max.
+        self.assertEqual(self.text_of(bob_browser, "price"), "10")
+        self.assertNotIn("50", self.text_of(bob_browser, "price"))
+        self.assertNotIn("50", self.text_of(bob_browser, "high_bidder_name"))
+        self.assertEqual(self.text_of(bob_browser, "your_bid"), "", "bob has no bid, so no max should show")
+
+        # Even when Bob probes by bidding into the proxy range, Alice's 50 stays hidden
+        # and Alice (proxy) remains the high bidder.
+        self.place_bid(bob_browser, 20)
+        self.wait_chat_contains(bob_browser, "still the high bidder")
+        self.assertNotIn("50", self.text_of(bob_browser, "price"))
+        self.assertNotIn("50", self.text_of(bob_browser, "high_bidder_name"))
+        self.assertIn(alice.username, self.text_of(bob_browser, "high_bidder_name"))
+
+        # Alice's own page *does* show her max (50), to her only -- confirming the data
+        # exists server-side but is never broadcast to Bob. Reload to read the
+        # server-rendered value (the live update only carries the public price).
+        alice_browser.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": self.lot.pk}))
+        WebDriverWait(alice_browser, 10).until(lambda d: self.text_of(d, "your_bid_price") != "")
+        self.assertEqual(float(self.text_of(alice_browser, "your_bid_price")), 50.0)
+
+    def test_being_outbid_updates_the_previous_high_bidder(self):
+        """When Bob outbids Alice, Alice's page updates to show Bob as high bidder --
+        and Bob's max never leaks to Alice."""
+        alice = self.make_bidder("e2e_alice2")
+        bob = self.make_bidder("e2e_bob2")
+        alice_browser = self.new_browser(alice)
+        bob_browser = self.new_browser(bob)
+        self.open_lot(alice_browser)
+        self.open_lot(bob_browser)
+
+        self.place_bid(alice_browser, 12)
+        self.wait_chat_contains(bob_browser, "first bid")
+
+        # Bob outbids with a secret max of 30.
+        self.place_bid(bob_browser, 30)
+        self.wait_chat_contains(alice_browser, "high bidder")
+
+        # Alice now sees Bob as the high bidder, and Bob's max (30) is not exposed to her.
+        self.assertIn(bob.username, self.text_of(alice_browser, "high_bidder_name"))
+        self.assertNotIn("30", self.text_of(alice_browser, "price"))
+        self.assertNotIn("30", self.text_of(alice_browser, "high_bidder_name"))

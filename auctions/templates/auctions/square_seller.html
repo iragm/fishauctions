@@ -11,6 +11,17 @@
     </div>
   {% endif %}
 
+  {% if seller and not seller.supports_tap_to_pay %}
+    <div class="alert alert-warning d-flex flex-column flex-sm-row align-items-sm-center gap-2" role="alert">
+      <div class="flex-grow-1">
+        <strong>Reconnect required for Tap to Pay.</strong>
+        This Square account was connected before in‑person (Tap to Pay) payments were supported.
+        Reconnect to enable charging cards on your phone — your existing settings and club link stay in place.
+      </div>
+      <a class="btn btn-warning btn-sm flex-shrink-0" href="{% url 'square_connect' %}">Reconnect Square</a>
+    </div>
+  {% endif %}
+
   <p class="mb-2">
     Connect your Square account to let users pay their invoices directly on this site.
   </p>

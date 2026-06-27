@@ -208,7 +208,7 @@ class Command(BaseCommand):
             and auction.date_start - timedelta(hours=24) <= now < auction.date_start
         ):
             lines = [
-                f"**{auction.title}** starts in <t:{int(auction.date_start.timestamp())}:f>",
+                f"**{auction.title}** starts <t:{int(auction.date_start.timestamp())}:R>",
                 auction_url,
             ]
             ok = _send_discord_channel_message(channel_id, "\n".join(lines))
