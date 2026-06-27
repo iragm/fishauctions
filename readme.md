@@ -116,33 +116,13 @@ git clone https://github.com/iragm/fishauctions
 cd fishauctions
 ./update.sh
 ```
-`./update.sh` now copies `.env.example` if needed, prompts for `SITE_DOMAIN`, generates the app/database/VAPID/encryption secrets, and refuses to let the containers start until that one-time setup has been completed.
+`./update.sh` will initialize the environment for you, including generating secure secrets.
 
-After the site starts, sign in as a superuser and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Discord, and digital membership cards.
+After the site starts, sign in as a superuser (username=admin, password=example, make sure to change these!) and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Discord, and digital membership cards.
 
-Work through that page rather than hand-editing settings from this guide: every `.env` setting and integration has its own item there with step-by-step instructions, the exact lines to add, and the management commands to turn a feature on for users who already exist.
-
-The rest of this section covers the few host-level steps the in-app checklist can't do for you.
-
-#### Configure folder permissions
-Static files, logs, and images are bound volumes from the host machine, so Docker is not able to configure permissions on them.
-
-On the host machine, from the same folder as update.sh, run:
-```
-sudo chown -R 1000:1000 ./mediafiles
-sudo chown -R 1000:1000 ./auctions/static
-sudo chown -R 1000:1000 ./logs
-```
-
-The UID and GID of the Docker user need to match the permissions on the host machine, so if for some reason your volumes have a different owner, you can alternatively change the UID/GID for app in the .env file by changing the `PUID` and `PGID` lines (the default is 1000 for both).
-
-If you haven't configured things properly, you'll see a couple warnings when starting the Django Web container, for example, `User 'app' (UID: 1000, GID: 1000) cannot write to "/home/app/web/mediafiles"`.  These should tell you the exact command to run on the host machine (your server) to fix permissions and get up and running.
-
-With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
+Work through that page, at a minimum you'll need Gmail for email, Google Maps and Recaptcha v2, everything else is optional (but recommended).
 
 ### Post setup:
-If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
-
 Go to the Django admin site (it's in the admin dropdown menu) and update the categories and FAQ articles to suit your tastes.
 
 Note that the Django admin site is barely used in production.  I use it to:
