@@ -2090,8 +2090,10 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         # clean_manage_users_through_club rejects enabling on non-empty auctions
         # self.fields['notes'].help_text = "Foo"
-        if self.instance.is_online:
+        if self.instance.is_online and not self.single_club_mode:
             # Check-in mode only applies to in-person events, so don't offer it for online auctions.
+            # Single-club mode is the exception: it always manages participants through the club and
+            # defaults to check-in, so we keep that option even for online single-club auctions.
             self.fields["manage_users_through_club"].choices = [
                 choice for choice in self.fields["manage_users_through_club"].choices if choice[0] != "checkin"
             ]
