@@ -521,6 +521,7 @@ GOOGLE_ADSENSE_ID = os.environ.get("GOOGLE_ADSENSE_ID", "")
 SHOW_ADS = parse_bool_env(os.environ.get("SHOW_ADS") or None, default=True)
 
 GOOGLE_OAUTH_LINK = os.environ.get("GOOGLE_OAUTH_LINK", "")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"
 
 LOCATION_FIELD_PATH = "/static/location_field"

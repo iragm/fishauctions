@@ -16,6 +16,12 @@ class MobileLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
 
+class MobileGoogleAuthSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/auth/google/."""
+
+    id_token = serializers.CharField(write_only=True, help_text="Google ID token from the client-side sign-in flow")
+
+
 class MobileUserSerializer(serializers.Serializer):
     """Read-only user profile returned by GET /api/mobile/auth/me/."""
 

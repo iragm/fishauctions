@@ -4,6 +4,7 @@ from .views import (
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileDeviceRegisterView,
+    MobileGoogleAuthView,
     MobileLoginView,
     MobileLotLabelView,
     MobilePaymentConfirmView,
@@ -17,6 +18,7 @@ from .views import (
 urlpatterns = [
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
+    path("auth/google/", MobileGoogleAuthView.as_view(), name="mobile-auth-google"),
     path("auth/refresh/", MobileTokenRefreshView.as_view(), name="mobile-auth-refresh"),
     path("auth/me/", MobileUserMeView.as_view(), name="mobile-auth-me"),
     # Pre-authenticate the WebView from the native JWT session (one-time handoff token).

@@ -24,6 +24,24 @@ POST /api/mobile/auth/login/
 
         { "detail": "Invalid credentials" }
 
+POST /api/mobile/auth/google/
+    Exchange a Google ID token (from the client-side Sign-In flow) for a JWT pair.
+    Verifies the token against the configured Web OAuth client ID, rejects unverified
+    emails, and finds or creates a local user linked to a Google SocialAccount.
+
+    Request::
+
+        { "id_token": "<google-id-token>" }
+
+    Response 200::
+
+        { "access": "<jwt>", "refresh": "<jwt>" }
+
+    Response 401::
+
+        { "detail": "Invalid ID token." }
+        { "detail": "Google account email is not verified." }
+
 POST /api/mobile/auth/refresh/
     Rotate a refresh token (old token is blacklisted).
 
@@ -240,6 +258,7 @@ from .permissions import IsMobileAuthenticated
 from .serializers import (
     CommandPaletteLogSerializer,
     MobileDeviceSerializer,
+    MobileGoogleAuthSerializer,
     MobileLoginSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
@@ -292,6 +311,103 @@ class MobileLoginView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class MobileGoogleAuthView(APIView):
+    """POST /api/mobile/auth/google/ — exchange a Google ID token for a JWT pair."""
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileGoogleAuthSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        client_id = settings.GOOGLE_OAUTH_CLIENT_ID
+        if not client_id:
+            logger.error("GOOGLE_OAUTH_CLIENT_ID is not configured; Google auth is unavailable.")
+            return Response(
+                {"detail": "Google authentication is not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token as google_id_token
+
+            idinfo = google_id_token.verify_oauth2_token(
+                serializer.validated_data["id_token"],
+                google_requests.Request(),
+                audience=client_id,
+            )
+        except ValueError as exc:
+            logger.warning("Google ID token verification failed.", exc_info=exc)
+            return Response({"detail": "Invalid ID token."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not idinfo.get("email_verified"):
+            return Response(
+                {"detail": "Google account email is not verified."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user = self._get_or_create_user(idinfo["email"], idinfo["sub"])
+        if user is None:
+            return Response({"detail": "Unable to authenticate."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {"access": str(refresh.access_token), "refresh": str(refresh)},
+            status=status.HTTP_200_OK,
+        )
+
+    @staticmethod
+    def _get_or_create_user(email: str, google_sub: str):
+        from allauth.account.models import EmailAddress
+        from allauth.socialaccount.models import SocialAccount
+        from django.contrib.auth.models import User
+
+        # Fastest path: existing SocialAccount with this Google sub → return its user
+        try:
+            social = SocialAccount.objects.select_related("user").get(provider="google", uid=google_sub)
+            user = social.user
+            return user if user.is_active else None
+        except SocialAccount.DoesNotExist:
+            pass
+
+        # Mirror SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT: find existing user by email
+        user = User.objects.filter(email__iexact=email).first()
+        if user is None:
+            # New user — generate a unique username from the email local part
+            base = email.split("@")[0][:30] or "user"
+            username = base
+            suffix = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base[:27]}_{suffix}"
+                suffix += 1
+            user = User.objects.create_user(username=username, email=email)
+
+        # Google has attested this email is verified — ensure allauth agrees so the
+        # mandatory-email-verification gate doesn't block the newly linked user.
+        try:
+            addr = EmailAddress.objects.get(user=user, email__iexact=email)
+            if not addr.verified or not addr.primary:
+                addr.verified = True
+                addr.primary = True
+                addr.save(update_fields=["verified", "primary"])
+        except EmailAddress.DoesNotExist:
+            EmailAddress.objects.create(user=user, email=email, verified=True, primary=True)
+
+        # Link (or update) the SocialAccount for this user
+        SocialAccount.objects.update_or_create(
+            user=user,
+            provider="google",
+            defaults={"uid": google_sub},
+        )
+
+        return user if user.is_active else None
 
 
 class MobileTokenRefreshView(TokenRefreshView):
