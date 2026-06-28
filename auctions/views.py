@@ -11806,9 +11806,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 # A preference, not a credential: either value is valid, so always "Done".
                 "configured": True,
                 "what_it_does": (
-                    "On by default. Runs the whole site as one club (named after your navbar brand), "
-                    "auto-adds every user as a member, and ties auctions to it. "
-                    "Turn it off only if you host multiple clubs on one install. "
+                    "On by default. The site runs as one club named after <code>NAVBAR_BRAND</code> (there is no "
+                    "separate <code>SINGLE_CLUB_NAME</code>), every user is auto-added as a member, and auctions are "
+                    "tied to it. Set to <code>False</code> only if you host multiple clubs on one install (like "
+                    "auction.fish). Can be toggled later without data loss &mdash; the club, memberships, and auctions "
+                    "created while it was on remain intact. "
                     f"Currently <strong>{'on' if getattr(settings, 'SINGLE_CLUB_MODE', False) else 'off'}</strong>."
                 ),
                 "snippets": [
@@ -11964,7 +11966,9 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 and env_has_real_value(settings.PAYPAL_SECRET),
                 "what_it_does": (
                     "Lets your club collect online payments with the site's own PayPal credentials. "
-                    "Use your <strong>Live</strong> keys, not Sandbox &mdash; sandbox keys silently fail to take real payments. "
+                    "Use your <strong>Live</strong> keys, not Sandbox. "
+                    "When <code>PAYPAL_ENABLED_FOR_USERS</code> is enabled, sellers link their accounts via a PayPal "
+                    "OAuth flow; the return URL below is the OAuth callback. "
                     "<strong>Heads up:</strong> PayPal requires platform-seller approval that is hard to get, so this "
                     "integration has been built but never used in production. If you just want to take payments, set up "
                     "Square instead."

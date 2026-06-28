@@ -40,7 +40,7 @@ Enter the username `admin` and the password `example`, and you should be good to
 
 **Setup checklist**: After signing in, open **Admin → Setup Checklist** and follow the steps listed there to enable anything you want
 
-**Demo data**: In development mode (DEBUG=True), demo data loads automatically only when single club mode is off and the database is empty.
+**Demo data**: In development mode (DEBUG=True), demo data loads automatically when the database is empty (skipped when `SINGLE_CLUB_MODE` is on).
 
 **Creating a user**: This is done automatically, but you can create additional users with (admin/example shown below):
 ```
