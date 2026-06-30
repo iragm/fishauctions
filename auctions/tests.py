@@ -23268,6 +23268,47 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.pay_invoice.refresh_from_db()
         self.assertEqual(self.pay_invoice.status, "PAID")
 
+    def test_confirm_surfaces_actionable_message_on_idempotency_key_reuse(self):
+        # The footgun: the create idempotency key is stable per invoice, so after an earlier Tap to Pay
+        # charge a re-tap reuses it and Square returns that ORIGINAL (already-recorded) charge instead
+        # of charging the new balance. Confirm must raise the specific PaymentAlreadyChargedError —
+        # naming the prior charge and what is still due — not the generic mismatch error, and record
+        # nothing new.
+        from auctions.mobile.services.payments import PaymentAlreadyChargedError, PaymentService
+
+        # A prior $20 Square charge (external_id PAY1) is already on the invoice...
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        # ...then $30 more is added, so $30 is now due. Re-tapping deduped to the original $20 payment.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=30, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+        seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=2000))
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            with self.assertRaises(PaymentAlreadyChargedError) as cm:
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        # PaymentAlreadyChargedError is still a ValueError subclass (so generic handlers catch it too).
+        self.assertIsInstance(cm.exception, ValueError)
+        msg = str(cm.exception)
+        self.assertIn("20.00", msg)  # the amount already charged
+        self.assertIn("30.00", msg)  # the amount still due
+        # Nothing new recorded, no renewal side effects, invoice not flipped to PAID off the stale charge.
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
+        ensure.assert_not_called()
+        renew.assert_not_called()
+
     def test_confirm_square_error_raises_valueerror(self):
         from auctions.mobile.services.payments import PaymentService
 
@@ -23475,3 +23516,50 @@ class MobilePaymentEndpointTests(StandardTestCase):
             **self._bearer(self.buyer),
         )
         self.assertEqual(resp.status_code, 403)
+
+    def test_confirm_already_charged_returns_409_with_actionable_code(self):
+        # The idempotency-key-reuse footgun must reach the app as an actionable 409 (code
+        # "already_charged" + a cashier-facing detail), not the generic "couldn't verify" message.
+        from types import SimpleNamespace
+
+        from auctions.mobile.services.payments import PaymentService
+
+        # A prior $20 Square charge is on the invoice; then $30 more is added, so $30 is now due. The
+        # re-tap deduped to the original $20 charge (same payment_id), which no longer covers the due.
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=30, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+        seller = self._mock_seller()
+        client = MagicMock()
+        client.payments.get.return_value = SimpleNamespace(
+            errors=None,
+            payment=SimpleNamespace(
+                id="PAY1",
+                status="COMPLETED",
+                receipt_number="RC",
+                amount_money=SimpleNamespace(amount=2000, currency=self.pay_invoice.currency),
+                location_id="LOC1",
+                reference_id=str(self.pay_invoice.pk),
+            ),
+        )
+        seller.get_square_client.return_value = client
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            resp = self.client.post(
+                self.confirm_url,
+                {"invoice_pk": self.pay_invoice.pk, "payment_id": "PAY1", "idempotency_key": "i"},
+                **self._bearer(self.admin_user),
+            )
+        self.assertEqual(resp.status_code, 409)
+        body = resp.json()
+        self.assertEqual(body["code"], "already_charged")
+        self.assertIn("still due", body["detail"])
+        # No second payment was recorded off the stale charge.
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)

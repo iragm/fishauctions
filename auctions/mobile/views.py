@@ -185,7 +185,10 @@ POST /api/mobile/payments/confirm/
     Response 409: the charge could not be verified against Square (status/amount/currency/location/
     reference mismatch, or Square was unreachable). The card may already have been charged — the
     Square webhook reconciles the same payment by reference_id, so the client should refresh the
-    invoice before charging again rather than retrying blindly.
+    invoice before charging again rather than retrying blindly. A ``"code": "already_charged"`` body
+    means the stable idempotency key returned an earlier charge already on the invoice (no new money
+    moved); ``detail`` names the prior charge and remaining balance, which the client should show as-is
+    so the cashier collects the rest another way instead of re-tapping.
 
 Command palette
 ---------------
@@ -267,7 +270,12 @@ from .serializers import (
 from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
-from .services.payments import PaymentService, PaymentVerificationError, SquareReconnectRequired
+from .services.payments import (
+    PaymentAlreadyChargedError,
+    PaymentService,
+    PaymentVerificationError,
+    SquareReconnectRequired,
+)
 from .services.web_session import WebSessionService
 
 # The allauth backend is what the web login uses; logging the handoff in under the same backend
@@ -657,6 +665,13 @@ class MobilePaymentConfirmView(APIView):
             return Response(
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
             )
+        except PaymentAlreadyChargedError as exc:
+            # The stable idempotency key made Square return an earlier charge that's already on the
+            # invoice; no new money moved. Surface the specific, actionable message (prior amount +
+            # remaining balance) so the cashier collects the rest another way instead of re-tapping
+            # the same deduped charge. Caught before PaymentVerificationError (its parent).
+            logger.info("Mobile payment confirm: idempotency-key reuse returned a prior charge.", exc_info=exc)
+            return Response({"detail": str(exc), "code": "already_charged"}, status=status.HTTP_409_CONFLICT)
         except PaymentVerificationError as exc:
             # The card may already have been charged on-device; the Square webhook reconciles the
             # same payment by reference_id, so tell the operator to refresh rather than retry blindly.
