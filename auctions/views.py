@@ -4677,7 +4677,10 @@ class CSVContactImportMixin:
         """Pass a row, and a lowercase list of field names.
         Extract the first match found (case insensitive) and return the value from the row.
         Empty string returned if the value is not found in the row."""
-        case_insensitive_row = {k.lower(): v for k, v in row.items()}
+        # Skip falsy keys: csv.DictReader stores any surplus cells of a ragged row (more columns than
+        # the header) under a None key, and None.lower() would raise. Dropping it keeps a malformed row
+        # importable instead of 500-ing the whole upload.
+        case_insensitive_row = {k.lower(): v for k, v in row.items() if k}
         for name in field_name_list:
             value = case_insensitive_row.get(name)
             if value is not None:
@@ -4687,7 +4690,9 @@ class CSVContactImportMixin:
     @staticmethod
     def csv_columns_exist(field_names, columns):
         """Returns True if any value in the list `columns` exists in the file headers."""
-        case_insensitive_row = {k.lower() for k in field_names}
+        # Skip falsy entries: a ragged row's surplus cells surface as a None header key (see
+        # extract_csv_field), and None.lower() would raise.
+        case_insensitive_row = {k.lower() for k in field_names if k}
         for column in columns:
             if column in case_insensitive_row:
                 return True
@@ -4740,6 +4745,10 @@ class CSVContactImportMixin:
     import_record_kind = "record"
     import_supports_duplicates = False
     import_preview_columns = ()  # list of (header, field_key)
+    # A field key in each planned action's "fields" dict used to collapse rows that refer to the same
+    # record within a single file (e.g. "email" for contact importers, where one row == one person). Leave
+    # None for importers where a repeated value is legitimate (e.g. several lots/awards for one seller).
+    import_dedupe_field = None
 
     def import_target_id(self):
         """A stable id binding a preview token to one auction/club so it cannot be replayed elsewhere."""
@@ -4748,15 +4757,56 @@ class CSVContactImportMixin:
     def _preview_cache_key(self, token):
         return f"{self.PREVIEW_CACHE_PREFIX}:{token}"
 
+    def _dedupe_key(self, action):
+        """Key used to collapse same-record rows within one file, or None to never collapse this action."""
+        field = self.import_dedupe_field
+        if not field or action.get("action") == "skip":
+            return None
+        value = (action.get("fields", {}).get(field) or "").strip().lower()
+        return value or None
+
+    @staticmethod
+    def _merge_planned_fields(primary, duplicate):
+        """Fold a later same-key row's data into the primary planned action: fill only blank string fields
+        (so complementary rows combine without loss) while leaving the primary's existing non-empty values,
+        booleans and ints untouched (so a conflicting value can't be silently flipped). Optional-column
+        ``present`` flags are OR-ed so a column that appears in either row still drives an update."""
+        primary_fields = primary.setdefault("fields", {})
+        for key, value in duplicate.get("fields", {}).items():
+            if value in (None, "", False):
+                continue
+            if primary_fields.get(key) in (None, ""):
+                primary_fields[key] = value
+        if "present" in duplicate:
+            primary_present = primary.setdefault("present", {})
+            for key, value in duplicate["present"].items():
+                if value:
+                    primary_present[key] = True
+
     def build_preview(self, csv_reader, filename=None):
         """Run plan_row over every row, stash the planned actions in Redis, and return the token."""
         actions = []
+        # Maps a dedupe key (e.g. normalized email) -> index of the first action that "owns" it, so later
+        # rows for the same record fold into it instead of creating a duplicate or being silently merged
+        # away by the model layer (which would drop the later row's differing fields).
+        primary_by_key = {}
         for raw in csv_reader:
             planned = self.plan_row(raw)
             if planned is None:
                 continue
             planned.setdefault("raw", {k: v for k, v in raw.items() if k})
             planned["i"] = len(actions)
+            key = self._dedupe_key(planned)
+            if key is not None and key in primary_by_key:
+                primary = actions[primary_by_key[key]]
+                self._merge_planned_fields(primary, planned)
+                planned["action"] = "skip"
+                planned["reason"] = f"Duplicate {self.import_dedupe_field} in file — combined into an earlier row"
+                planned["target_pk"] = None
+                planned["target_display"] = ""
+                planned["match_type"] = None
+            elif key is not None:
+                primary_by_key[key] = planned["i"]
             actions.append(planned)
         token = uuid.uuid4().hex
         payload = {
@@ -4849,14 +4899,28 @@ class CSVContactImportMixin:
         if payload is None:
             messages.error(self.request, "This import preview expired or was not found. Please upload the file again.")
             return redirect(self.import_cancel_url())
+        # Atomically claim this token before doing any writes. cache.add() is a Redis SET-NX, so only the
+        # first of two concurrent (or double-submitted) confirms wins the claim; the rest bail out here
+        # instead of applying the same batch twice. The JS submit-disable on the review page handles the
+        # common accidental double-click; this guards the race / replay it can't.
+        claim_key = f"{self._preview_cache_key(token)}:applying"
+        if not cache.add(claim_key, 1, self.PREVIEW_TTL_SECONDS):
+            messages.info(self.request, "This import is already being processed.")
+            return redirect(self.import_done_url())
         results = {}
-        # Apply the whole batch atomically: if one row raises, nothing is half-written.
-        with transaction.atomic():
-            for action in payload["actions"]:
-                decision = post_data.get(f"decision_{action['i']}", "merge")
-                tag = self.apply_action(action, decision)
-                results[tag] = results.get(tag, 0) + 1
+        try:
+            # Apply the whole batch atomically: if one row raises, nothing is half-written.
+            with transaction.atomic():
+                for action in payload["actions"]:
+                    decision = post_data.get(f"decision_{action['i']}", "merge")
+                    tag = self.apply_action(action, decision)
+                    results[tag] = results.get(tag, 0) + 1
+        except Exception:
+            # The batch rolled back and wrote nothing; release the claim so the admin can retry the token.
+            cache.delete(claim_key)
+            raise
         self.clear_preview(token)
+        cache.delete(claim_key)
         self.record_import_history(results, payload.get("filename"))
         self.message_import_results(results)
         return redirect(self.import_done_url())
@@ -4901,6 +4965,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
     # CSV import preview framework (see CSVContactImportMixin)
     import_record_kind = "user"
     import_supports_duplicates = True
+    import_dedupe_field = "email"  # two rows with the same email are the same person; combine them
     import_preview_columns = (
         ("Bidder #", "bidder_number"),
         ("Name", "name"),
@@ -19136,6 +19201,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
     # CSV import preview framework (see CSVContactImportMixin)
     import_record_kind = "member"
     import_supports_duplicates = True
+    import_dedupe_field = "email"  # two rows with the same email are the same member; combine them
     import_preview_columns = (
         ("Name", "name"),
         ("Email", "email"),

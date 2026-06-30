@@ -3379,6 +3379,76 @@ class CSVImportPreviewTests(StandardTestCase):
         no_email = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location)
         self.assertFalse(no_email.email)
 
+    def test_ragged_row_does_not_500(self):
+        """A row with more columns than the header (e.g. an unescaped comma) is imported instead of
+        crashing the whole upload with an AttributeError on the None DictReader key."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # Header has 2 columns; the data row has 4 -> DictReader stashes the surplus under a None key.
+        csv_file = SimpleUploadedFile(
+            "ragged.csv", b"name,email\nBob,bob@example.com,extra,more\n", content_type="text/csv"
+        )
+        response = self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, email="bob@example.com").exists())
+
+    def test_duplicate_email_rows_in_file_collapse_to_one_record(self):
+        """Two rows sharing a normalized email are combined into a single record (the later row is flagged
+        as a skipped in-file duplicate), and complementary blank fields are filled rather than lost."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        # Row 1 has the name but no phone; row 2 (same email, different case/space) has the phone.
+        csv_file = SimpleUploadedFile(
+            "dupes.csv",
+            b"name,email,phone\nDana,Dupe@Example.com,\nDana, dupe@example.com ,555-1212\n",
+            content_type="text/csv",
+        )
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        matches = AuctionTOS.objects.filter(auction=self.online_auction, email="dupe@example.com")
+        self.assertEqual(matches.count(), 1)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        # The phone from the second row was folded into the single surviving record (not dropped).
+        self.assertEqual(matches.first().phone_number, "555-1212")
+
+    def test_duplicate_email_rows_surfaced_in_preview_as_skipped(self):
+        """The in-file duplicate is shown on the review page as a skipped/combined row, not silently."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "dupes.csv",
+            b"name,email\nEli,combine@example.com\nEli,combine@example.com\n",
+            content_type="text/csv",
+        )
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        preview = self.client.get(upload["Location"])
+        self.assertContains(preview, "Duplicate email in file")
+
+    def test_double_confirm_same_token_does_not_double_import(self):
+        """Re-POSTing the same confirm token (double-click / replay) imports the batch only once."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("once.csv", b"name,email\nOnce Only,once@example.com\n", content_type="text/csv")
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        token = upload["Location"].split("preview=")[1].split("&")[0]
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        # Second confirm with the now-consumed token must not create a second record.
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction, email="once@example.com").count(), 1)
+
+    def test_cancel_frees_token_and_writes_nothing(self):
+        """The Cancel POST clears the Redis token (so a later confirm can't apply it) and writes nothing."""
+        from django.core.cache import cache
+
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("cancel.csv", b"name,email\nNope,nope@example.com\n", content_type="text/csv")
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        token = upload["Location"].split("preview=")[1].split("&")[0]
+        self.client.post(self._bulk_add_url(), {"_cancel": token})
+        self.assertIsNone(cache.get(f"csv_import:{token}"))
+        # Confirming the cancelled token is a no-op.
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+
 
 class GoogleDriveImportTests(StandardTestCase):
     """Test Google Drive import functionality"""
@@ -15956,6 +16026,39 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
         self.run_csv_import(url, csv_file)  # default decision = merge
         self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before)
+
+    def test_csv_import_duplicate_email_rows_collapse_to_one_member(self):
+        """Two import rows sharing a normalized email become a single member instead of two records."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        before = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
+        csv_file = SimpleUploadedFile(
+            "members.csv",
+            b"name,email,phone\nFinn,Twin@Example.com,\nFinn, twin@example.com ,555-9000\n",
+            content_type="text/csv",
+        )
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        self.run_csv_import(url, csv_file)
+        matches = ClubMember.objects.filter(club=self.club, email="twin@example.com", is_deleted=False)
+        self.assertEqual(matches.count(), 1)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before + 1)
+        self.assertEqual(matches.first().phone_number, "555-9000")
+
+    def test_csv_import_ragged_row_does_not_500(self):
+        """A member row with more columns than the header is imported rather than crashing the upload."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        csv_file = SimpleUploadedFile(
+            "members.csv", b"name,email\nRag,rag@example.com,oops,more\n", content_type="text/csv"
+        )
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="rag@example.com").exists())
 
     def test_csv_import_non_admin_gets_403(self):
         """Non-admin user cannot import CSV"""

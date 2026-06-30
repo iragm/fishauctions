@@ -22,7 +22,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
     {% if summary.skip %}<li class="list-inline-item"><span class="badge bg-secondary">{{ summary.skip }}</span> skipped</li>{% endif %}
   </ul>
 
-  <form method="POST" action="{{ confirm_url }}">
+  <form method="POST" action="{{ confirm_url }}" id="csv-import-confirm-form">
     {% csrf_token %}
     <input type="hidden" name="_confirm" value="{{ token }}">
 
@@ -115,8 +115,38 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
     </div>
     {% endif %}
 
-    <button type="submit" class="btn btn-success">Confirm import</button>
-    <a href="{{ cancel_url }}" class="btn btn-outline-secondary">Cancel</a>
   </form>
+
+  {% comment %}
+  Cancel is its own POST (not a plain link) so it hits the _cancel branch and frees the Redis token
+  immediately instead of waiting for it to expire. Both buttons live outside their forms and are wired up
+  with the HTML5 form="" attribute so they can sit together while submitting different forms.
+  {% endcomment %}
+  <form method="POST" action="{{ confirm_url }}" id="csv-import-cancel-form">
+    {% csrf_token %}
+    <input type="hidden" name="_cancel" value="{{ token }}">
+  </form>
+
+  <div class="d-flex gap-2 mt-3">
+    <button type="submit" form="csv-import-confirm-form" class="btn btn-success">Confirm import</button>
+    <button type="submit" form="csv-import-cancel-form" class="btn btn-outline-secondary">Cancel</button>
+  </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script type="text/javascript">
+  // Disable both buttons once either form is submitted so a double-click / impatient second click can't
+  // fire the confirm (or cancel) twice. Mirrors the submit-disable used on the lot and location forms.
+  (function () {
+    var confirmForm = document.getElementById("csv-import-confirm-form");
+    var cancelForm = document.getElementById("csv-import-cancel-form");
+    var buttons = document.querySelectorAll('[form="csv-import-confirm-form"], [form="csv-import-cancel-form"]');
+    function lock() {
+      buttons.forEach(function (b) { b.disabled = true; });
+    }
+    if (confirmForm) { confirmForm.addEventListener("submit", lock); }
+    if (cancelForm) { cancelForm.addEventListener("submit", lock); }
+  })();
+</script>
 {% endblock %}
