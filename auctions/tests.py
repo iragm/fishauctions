@@ -75,7 +75,30 @@ from .models import (
 )
 
 
-class StandardTestCase(TestCase):
+class CsvImportTestMixin:
+    """Shared helper for driving the two-phase CSV importer in tests (used by StandardTestCase and any
+    plain TestCase that exercises an importer)."""
+
+    def run_csv_import(self, url, csv_file, *, decisions=None, file_field="csv_file", follow=True):
+        """Upload the file, read the preview token from the redirect, then POST the confirm so the rows
+        are actually written. Returns the confirm response.
+
+        `decisions` maps a planned-action row index -> "merge" (default) or "create", controlling what
+        happens to possible-duplicate rows. If the upload did not produce a preview (e.g. permission
+        denied, or no recognizable columns), the upload response is returned unchanged.
+        """
+        upload = self.client.post(url, {file_field: csv_file})
+        location = upload.get("HX-Redirect") or upload.get("Location") or ""
+        if "preview=" not in location:
+            return upload
+        token = location.split("preview=")[1].split("&")[0]
+        data = {"_confirm": token}
+        for index, decision in (decisions or {}).items():
+            data[f"decision_{index}"] = decision
+        return self.client.post(url, data, follow=follow)
+
+
+class StandardTestCase(CsvImportTestMixin, TestCase):
     """This is a base class that sets up some common stuff so other tests can be run without needing to write a lot of boilplate code
     Give this class along with your view/model/etc., to ChatGPT and it can write the test subclass
     In general, make sure that AuctionTOS.is_admin=True users can do what they need, users without an AuctionTOS are blocked, no data leaks to non-admins and non-logged in users
@@ -2874,9 +2897,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that users were created with memo
@@ -2908,9 +2931,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that admin users were created correctly
@@ -2946,9 +2969,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that admin user was created
@@ -2973,9 +2996,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was assigned
@@ -3010,9 +3033,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that new user was created but without the conflicting bidder number
@@ -3053,9 +3076,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was updated
@@ -3088,9 +3111,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was kept (not cleared)
@@ -3125,9 +3148,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that memo and admin were updated
@@ -3166,9 +3189,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that user was updated
@@ -3215,9 +3238,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that no history was created (no users added, no users actually updated)
@@ -3246,9 +3269,9 @@ class CSVImportTests(StandardTestCase):
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that history was created with filename
@@ -3258,6 +3281,103 @@ class CSVImportTests(StandardTestCase):
         history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
         self.assertIn("users_import.csv", history.action)
         self.assertIn("1 users added", history.action)
+
+
+class CSVImportPreviewTests(StandardTestCase):
+    """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
+
+    def _bulk_add_url(self):
+        return reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
+
+    def test_upload_without_confirm_creates_nothing(self):
+        """Uploading a CSV only builds a preview; nothing is written until the confirm step."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "u.csv", b"name,email\nPreview Only,previewonly@example.com\n", content_type="text/csv"
+        )
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        # Upload but never POST the confirm token.
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        self.assertIn("preview=", upload.get("Location", ""))
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.assertFalse(
+            AuctionTOS.objects.filter(auction=self.online_auction, email="previewonly@example.com").exists()
+        )
+
+    def test_preview_page_renders_with_duplicate_radios(self):
+        """GET ?preview renders the review page, showing the merge/create choice for a possible duplicate."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "signin.csv",
+            b"name,bidder number,email\nBob Smith,9998,\nNew Person,9997,newperson@example.com\n",
+            content_type="text/csv",
+        )
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        preview = self.client.get(upload["Location"])
+        self.assertEqual(preview.status_code, 200)
+        self.assertContains(preview, "Review import")
+        self.assertContains(preview, "Merge into existing")
+        self.assertContains(preview, "Bob Smith")
+
+    def test_no_email_walkin_merges_into_existing_online_record(self):
+        """The reported bug: a no-email check-in row for someone who already joined online (with an email)
+        is surfaced as a possible duplicate and, on the default 'merge' choice, updates the existing record
+        (the check-in bidder number wins) instead of creating a second account."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("signin.csv", b"name,bidder number\nBob Smith,9998\n", content_type="text/csv")
+        # No decisions passed -> default 'merge'.
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.bidder_number, "9998")
+        self.assertEqual(self.online_tos.email, "bob@example.com")
+
+    def test_no_email_walkin_create_choice_makes_flagged_duplicate(self):
+        """Choosing 'create' for the same no-email row makes a second record, flagged as a possible
+        duplicate of the original for later admin review."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("signin.csv", b"name,bidder number\nBob Smith,9998\n", content_type="text/csv")
+        self.run_csv_import(self._bulk_add_url(), csv_file, decisions={0: "create"})
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        new = AuctionTOS.objects.filter(auction=self.online_auction, bidder_number="9998").first()
+        self.assertIsNotNone(new)
+        self.assertEqual(new.possible_duplicate, self.online_tos)
+
+    def test_email_match_is_case_and_whitespace_insensitive(self):
+        """A CSV email that differs only by case/whitespace matches the existing record (no duplicate)."""
+        self.online_tos.name = "Carol"
+        self.online_tos.email = "carol@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile(
+            "u.csv", b"name,email,memo\nCarol, Carol@Example.COM ,vip\n", content_type="text/csv"
+        )
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.memo, "vip")
+
+    def test_email_is_normalized_on_save(self):
+        """AuctionTOS.save lowercases/strips a real email but leaves an empty one untouched (None stays None
+        so the email__isnull 'no email' filter keeps working)."""
+        tos = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, email="  Mixed@Case.COM "
+        )
+        self.assertEqual(tos.email, "mixed@case.com")
+        no_email = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location)
+        self.assertFalse(no_email.email)
 
 
 class GoogleDriveImportTests(StandardTestCase):
@@ -8662,8 +8782,8 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         self.client.login(username=self.admin_user.username, password="testpassword")
         url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
         response = self.client.post(url)
-        # Should redirect with error message
-        assert response.status_code == 200
+        # Should redirect back to the lot list with an error message
+        assert response.status_code in (200, 302)
 
     def test_import_lots_csv_create_new_lot(self):
         """CSV import creates a new lot for existing user"""
@@ -8686,7 +8806,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8714,7 +8834,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8738,7 +8858,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8769,7 +8889,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8796,7 +8916,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         )
         csv_file = io.BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         self.assertEqual(response.status_code, 200)
         new_lot = Lot.objects.filter(lot_name="Dropdown CSV Lot", auction=self.online_auction).first()
         self.assertIsNotNone(new_lot)
@@ -8815,7 +8935,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully but skip the row
         assert response.status_code == 200
@@ -8840,13 +8960,13 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         # Upload once
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         assert response.status_code == 200
 
         # Upload again
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         assert response.status_code == 200
 
         # Check that lot was updated, not duplicated
@@ -8879,7 +8999,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect with warning
         assert response.status_code == 200
@@ -8912,7 +9032,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         # Get initial history count
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -15301,7 +15421,7 @@ class ClubViewTests(TestCase):
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
 
 
-class ClubPermissionTests(TestCase):
+class ClubPermissionTests(CsvImportTestMixin, TestCase):
     """Verify that each club permission level grants exactly the right access.
 
     Three user categories are tested for each view:
@@ -15351,6 +15471,26 @@ class ClubPermissionTests(TestCase):
 
     def _login(self, user):
         self.client.login(username=user.username, password="testpass")
+
+    def test_bap_csv_import_creates_awards_after_confirm(self):
+        """The BAP importer also routes through the preview: an award is only created after confirm,
+        matched to the member by email."""
+        self._login(self.bap_user)
+        url = reverse("club_bap_import", kwargs={"slug": self.club.slug})
+        csv_file = SimpleUploadedFile(
+            "bap.csv", b"email,bap,hap,cap\ntarget@example.com,3,0,0\n", content_type="text/csv"
+        )
+        before = BapAward.objects.filter(club_member=self.target_member).count()
+        # Upload alone must not create the award.
+        self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before)
+        # Confirm via the helper (re-uploads + confirms) and check the award lands.
+        csv_file = SimpleUploadedFile(
+            "bap.csv", b"email,bap,hap,cap\ntarget@example.com,3,0,0\n", content_type="text/csv"
+        )
+        self.run_csv_import(url, csv_file)
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before + 1)
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).latest("pk").points, 3)
 
     # --- Anonymous access ---
 
@@ -15737,7 +15877,7 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class ClubMemberUpdateTests(TestCase):
+class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
     """Tests for club member self-service update and CSV import/export"""
 
     def setUp(self):
@@ -15782,33 +15922,47 @@ class ClubMemberUpdateTests(TestCase):
         csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"csv_file": csv_file})
-        self.assertEqual(response.status_code, 302)
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
         imported = ClubMember.objects.get(club=self.club, email="newmember@example.com")
         self.assertFalse(imported.send_welcome_email)
         self.assertTrue(imported.welcome_email_sent)
 
-    def test_csv_import_skips_rows_without_email(self):
-        """CSV import skips rows with no email"""
+    def test_csv_import_skips_rows_without_name_or_email(self):
+        """CSV import skips rows that have neither a name nor an email (no way to identify the person)"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
-        csv_content = "email,first name\n,NoEmail\n"
+        csv_content = "email,first name\n,\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
         initial_count = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
-        response = self.client.post(url, {"csv_file": csv_file})
-        self.assertEqual(response.status_code, 302)
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), initial_count)
+
+    def test_csv_import_rhyming_name_is_flagged_not_duplicated(self):
+        """A no-email import row whose name rhymes with an existing member (Bob -> Robert) is surfaced as a
+        possible duplicate and, on the default merge, does not create a second member."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        ClubMember.objects.create(club=self.club, name="Robert Smith", email="robert@example.com")
+        self.client.login(username="cu_owner", password="testpass")
+        before = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
+        csv_file = SimpleUploadedFile("members.csv", b"first name,last name\nBob,Smith\n", content_type="text/csv")
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        self.run_csv_import(url, csv_file)  # default decision = merge
+        self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before)
 
     def test_csv_import_non_admin_gets_403(self):
         """Non-admin user cannot import CSV"""
         self.client.login(username="cu_other", password="testpass")
         csv_file = SimpleUploadedFile("members.csv", b"email\ntest@example.com\n", content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         self.assertEqual(response.status_code, 403)
 
     def test_csv_export_requires_permission(self):
