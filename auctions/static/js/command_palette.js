@@ -1,7 +1,9 @@
 /* Command palette: cross-site search + jump-to-page, opened from the navbar brand or Ctrl/Cmd+K.
  * Talks to the JSON endpoints named `command_palette` (results) and `command_palette_log` (search log).
- * Search logging keeps a single row per session: it is upserted as the query is refined, finalized as
- * "clicked" when a result is opened, or "abandoned" when the box is cleared / the palette is closed. */
+ * Search logging keeps a single row per session (writes are serialized so refinements share a row):
+ * the query is recorded as soon as it is typed — before results load — so a search isn't lost when the
+ * user navigates away first. It is then refined to "bounce" if nothing matched, "clicked" when a result
+ * is opened, or "abandoned" when the box is cleared / the palette is closed / the page is left. */
 (function () {
   "use strict";
 
@@ -32,6 +34,8 @@
     var lastQuery = ""; // last query we ran a search for
     var lastQueryEmpty = false; // did the most recent executed query return zero results?
     var navigatedByClick = false; // suppress the abandon-on-close beacon after a click
+    var finalized = false; // has the current query already been finalized (abandoned/bounce)?
+    var logChain = Promise.resolve(); // serialize log writes so refinements share one row
     var items = []; // flat list of rendered result elements for keyboard nav
     var activeIndex = -1;
 
@@ -55,34 +59,49 @@
       return body;
     }
 
+    // Serialize log writes through one promise chain: the first POST creates the row and sets
+    // currentSearchId before the next refinement runs, so a refined query updates the same row
+    // instead of racing several requests (each unaware of the id) into duplicate rows. keepalive
+    // lets a write that's still in flight survive the navigation a command palette usually causes.
+    function postLog(fields) {
+      logChain = logChain.then(function () {
+        return fetch(logUrl, {
+          method: "POST",
+          headers: { "X-CSRFToken": csrfToken },
+          body: logBody(fields),
+          credentials: "same-origin",
+          keepalive: true,
+        })
+          .then(function (resp) {
+            return resp.json();
+          })
+          .then(function (data) {
+            if (data && data.id) {
+              currentSearchId = data.id;
+            }
+          })
+          .catch(function () {});
+      });
+      return logChain;
+    }
+
     // result is "pending" while results exist, or "bounce" when the query returned nothing
     // (bounces let us mine common typos/missing phrases and add them as synonyms later).
     function logSearchState(query, result) {
-      fetch(logUrl, {
-        method: "POST",
-        headers: { "X-CSRFToken": csrfToken },
-        body: logBody({ search: query, result: result || "pending" }),
-        credentials: "same-origin",
-      })
-        .then(function (resp) {
-          return resp.json();
-        })
-        .then(function (data) {
-          if (data && data.id) {
-            currentSearchId = data.id;
-          }
-        })
-        .catch(function () {});
+      return postLog({ search: query, result: result || "pending" });
     }
 
-    // Finalize the session when the box is cleared or the palette closes. A query that ended with
-    // no results is recorded as a "bounce" (mined later for missing shortcuts); otherwise the user
-    // looked but didn't pick anything: "abandoned". Without this, the close handler would always
-    // overwrite an earlier "bounce" with "abandoned", so the analytics never counted bounces.
+    // Finalize the session when the box is cleared, the palette closes, or the page is left. A
+    // query that ended with no results is recorded as a "bounce" (mined later for missing
+    // shortcuts); otherwise the user looked but didn't pick anything: "abandoned". The row is
+    // already recorded (logged as soon as the query was typed), so even if currentSearchId hasn't
+    // come back yet we still send the final state — without an id the server records a fresh row
+    // rather than dropping the search, which is what used to happen on a quick navigation away.
     function logFinal(query) {
-      if (!currentSearchId || !query) {
+      if (finalized || !query) {
         return;
       }
+      finalized = true;
       var result = lastQueryEmpty ? "bounce" : "abandoned";
       // sendBeacon survives page unload / modal close; csrf travels in the form body.
       var body = logBody({ search: query, result: result });
@@ -94,8 +113,19 @@
       currentSearchId = null;
     }
 
+    // Best-effort finalize when the user leaves the page (clicked a normal link, back button,
+    // closed the tab). The modal's hidden event does not fire on a full-page navigation, so without
+    // this a search ended by navigating away was never finalized.
+    function flushFinal() {
+      if (navigatedByClick) {
+        return;
+      }
+      logFinal(input.value.trim());
+    }
+
     function logClickAndGo(item) {
       navigatedByClick = true;
+      finalized = true;
       var query = input.value.trim();
       var body = logBody({
         search: query,
@@ -107,7 +137,13 @@
       var go = function () {
         window.location.href = item.url;
       };
-      fetch(logUrl, { method: "POST", headers: { "X-CSRFToken": csrfToken }, body: body, credentials: "same-origin" })
+      fetch(logUrl, {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken },
+        body: body,
+        credentials: "same-origin",
+        keepalive: true,
+      })
         .then(go)
         .catch(go);
     }
@@ -243,9 +279,17 @@
         fetchResults(query);
         return;
       }
+      // Record the query as soon as it's typed, before results load. The palette's job is to send
+      // the user elsewhere, so they often navigate away before the results request round-trips;
+      // logging up front (and refining to a bounce once we know the count) is what keeps those
+      // searches from going unrecorded.
+      finalized = false;
+      logSearchState(query, "pending");
       fetchResults(query, function (count) {
         lastQueryEmpty = count === 0;
-        logSearchState(query, count === 0 ? "bounce" : "pending");
+        if (count === 0) {
+          logSearchState(query, "bounce");
+        }
       });
     }
 
@@ -281,16 +325,17 @@
     modalEl.addEventListener("show.bs.modal", function () {
       // Fresh session each time the palette opens.
       navigatedByClick = false;
+      finalized = false;
       currentSearchId = null;
       lastQuery = "";
       input.value = "";
       fetchResults("");
     });
-    modalEl.addEventListener("hidden.bs.modal", function () {
-      if (!navigatedByClick) {
-        logFinal(input.value.trim());
-      }
-    });
+    modalEl.addEventListener("hidden.bs.modal", flushFinal);
+
+    // Leaving the page (normal link, back button, tab close) does not fire the modal's hidden
+    // event, so finalize here too. pagehide fires on navigation and on bfcache unload.
+    window.addEventListener("pagehide", flushFinal);
 
     // Navbar brand opens the palette instead of navigating to the landing page.
     var brand = document.querySelector(".navbar-brand");

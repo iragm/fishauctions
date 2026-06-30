@@ -22517,6 +22517,16 @@ class CommandPaletteTests(StandardTestCase):
         row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
         self.assertEqual(row.result, "bounce")
 
+    def test_finalize_without_id_records_the_search(self):
+        # The client finalizes a search (e.g. a sendBeacon on navigation away) even when the
+        # in-progress row's id hasn't come back yet. A finalize with no id must still record the
+        # search rather than drop it, which is how searches abandoned by navigating used to vanish.
+        self._login(self.user)
+        resp = self.client.post(reverse("command_palette_log"), {"search": "guppy", "result": "abandoned"})
+        row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
+        self.assertEqual(row.search, "guppy")
+        self.assertEqual(row.result, "abandoned")
+
     def test_ready_invoice_is_top_default_result(self):
         self.invoice.status = "UNPAID"
         self.invoice.save()
