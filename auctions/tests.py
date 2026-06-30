@@ -19371,6 +19371,10 @@ class NonOAuthPayPalTests(TestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
     def test_settings_page_shows_oauth_when_flag_off(self):
+        # The OAuth "Connect" button is gated behind the user's paypal_enabled flag, which
+        # defaults to PAYPAL_ENABLED_FOR_USERS (False). Enable it so the button can render.
+        self.money_user.userdata.paypal_enabled = True
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
         self.client.login(username="nonoauth_money", password="pw")
         url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         content = self.client.get(url).content.decode()
