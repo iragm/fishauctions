@@ -17090,6 +17090,8 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_system, "none")
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
+        self.editor.userdata.paypal_enabled = True
+        self.editor.userdata.save(update_fields=["paypal_enabled"])
         self.client.login(username="club_settings_editor", password="testpass")
         with override_settings(PAYPAL_CLIENT_ID="test_id", PAYPAL_SECRET="test_secret"):
             response = self.client.get(self.membership_url)
