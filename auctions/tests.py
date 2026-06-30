@@ -6130,6 +6130,43 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertIn("alert alert-warning", content)
         self.assertIn(invoice.unsold_lot_warning, content)
 
+    def test_quick_checkout_app_shows_deep_link_and_hides_qr(self):
+        # Inside the native app (FishAuctionsApp UA) the cashier taps the card on-device, so the
+        # scan-a-QR flow is replaced by a fishauctions://pay/<pk> deep link and the QR is hidden.
+        # Web visitors keep the existing QR/card checkout and never see the deep link. The gate reuses
+        # the same request.is_mobile_app UA check that hides the web navbar in base.html.
+        from unittest.mock import PropertyMock
+
+        from auctions.views import QuickCheckoutHTMX
+
+        self.in_person_tos.bidder_number = "APP1"
+        self.in_person_tos.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "APP1"},
+        )
+        deep_link = f"fishauctions://pay/{invoice.pk}"
+
+        # Force a Square QR into the context so the "hidden in-app" assertion is meaningful.
+        with (
+            patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
+            patch.object(Invoice, "reason_for_payment_not_available", new_callable=PropertyMock, return_value=""),
+            patch.object(
+                QuickCheckoutHTMX, "create_payment_link", return_value=("https://squareup.com/pay/fake", None)
+            ),
+        ):
+            app_html = self.client.get(url, HTTP_USER_AGENT="FishAuctionsApp/1.0 (iOS)").content.decode("utf-8")
+            web_html = self.client.get(url, HTTP_USER_AGENT="Mozilla/5.0").content.decode("utf-8")
+
+        # In-app: native deep link shown, QR hidden.
+        self.assertIn(deep_link, app_html)
+        self.assertNotIn("Scan this code to pay with Square", app_html)
+        # Web: QR/card checkout shown, no deep link.
+        self.assertNotIn(deep_link, web_html)
+        self.assertIn("Scan this code to pay with Square", web_html)
+
 
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
@@ -23253,6 +23290,47 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(result["amount"], "20.00")
         # The client must charge with this reference_id; it matches the web convention (str(pk)).
         self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+        # Every documented create field is present (and nothing extra leaks).
+        self.assertEqual(
+            set(result),
+            {
+                "invoice_pk",
+                "amount",
+                "currency",
+                "location_id",
+                "reference_id",
+                "access_token",
+                "idempotency_key",
+                "square_environment",
+            },
+        )
+
+    def test_create_idempotency_key_is_stable_and_invoice_derived(self):
+        # The on-device SDK keys the Tap to Pay charge with idempotency_key, so it must be stable
+        # across retries (not a fresh uuid per call) and differ between invoices — otherwise a retried
+        # create -> tap double-charges, or two invoices collide on Square's dedup.
+        from auctions.mobile.services.payments import PaymentService
+
+        other_tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("idembuyer", "idem@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        other_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=other_tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=other_invoice)
+        other_invoice.refresh_from_db()
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()[0]):
+            first = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+            again = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+            other = PaymentService.create_mobile_payment(invoice_pk=other_invoice.pk, user=self.admin_user)
+
+        # Deterministic: two creates for the same invoice yield the identical key (a uuid would not).
+        self.assertEqual(first["idempotency_key"], again["idempotency_key"])
+        self.assertIn(str(self.pay_invoice.pk), first["idempotency_key"])  # derived from the invoice pk
+        # Distinct invoices must not share an idempotency key.
+        self.assertNotEqual(first["idempotency_key"], other["idempotency_key"])
+        self.assertLessEqual(len(first["idempotency_key"]), 45)  # Square's idempotency_key length cap
 
     def test_create_blocks_seller_without_tap_to_pay_scope(self):
         # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device

@@ -1,5 +1,4 @@
 import logging
-import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -180,7 +179,11 @@ class PaymentService:
             # so this ships the seller's OAuth access token to the device by design — the SDK
             # requires it. Prefer the shortest-lived token the seller's Square OAuth allows.
             "access_token": access_token,
-            "idempotency_key": str(uuid.uuid4()),
+            # Stable, invoice-derived idempotency key — NOT random. The Mobile Payments SDK keys the
+            # on-device charge with this, so if create -> tap is retried for the same (still-unpaid)
+            # invoice the duplicate collapses to a single Square charge instead of double-charging.
+            # Deterministic so it is identical across retries; Square caps idempotency_key at 45 chars.
+            "idempotency_key": f"taptopay-inv-{invoice_pk}",
             "square_environment": settings.SQUARE_ENVIRONMENT,
         }
 

@@ -89,7 +89,9 @@ class MobilePaymentCreateResponseSerializer(serializers.Serializer):
     # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId), so we
     # ship the seller's OAuth access token to the device by design (the SDK requires it).
     access_token = serializers.CharField()
-    idempotency_key = serializers.CharField()
+    # Stable, invoice-derived (NOT random) so a retried create -> tap for the same invoice dedupes to a
+    # single on-device Square charge instead of double-charging.
+    idempotency_key = serializers.CharField(help_text="Stable per-invoice idempotency key for the on-device charge")
     square_environment = serializers.CharField()
 
 

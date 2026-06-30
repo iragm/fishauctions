@@ -159,7 +159,7 @@ POST /api/mobile/payments/create/
           "location_id": "LXXXXXXXXXXXXXXXX",
           "reference_id": "123",
           "access_token": "EAAA...",
-          "idempotency_key": "550e8400-...",
+          "idempotency_key": "taptopay-inv-123",
           "square_environment": "sandbox"
         }
 
