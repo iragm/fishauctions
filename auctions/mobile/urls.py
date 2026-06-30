@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
+    MobileConfigView,
     MobileDeviceRegisterView,
     MobileGoogleAuthView,
     MobileLoginView,
@@ -16,6 +17,8 @@ from .views import (
 )
 
 urlpatterns = [
+    # Public config (no auth) — read before sign-in
+    path("config/", MobileConfigView.as_view(), name="mobile-config"),
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
     path("auth/google/", MobileGoogleAuthView.as_view(), name="mobile-auth-google"),

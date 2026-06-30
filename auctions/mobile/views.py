@@ -2,7 +2,25 @@
 Mobile API views.
 
 All endpoints live under /api/mobile/ and require JWT Bearer authentication
-(except auth/login and auth/refresh which issue / rotate tokens).
+(except auth/login and auth/refresh which issue / rotate tokens, and config/
+which is public).
+
+Config
+------
+GET /api/mobile/config/
+    Public deployment config the app reads *before* sign-in to wire up the Square Mobile
+    Payments SDK and Google Sign-In against the right deployment. Unauthenticated.
+
+    PUBLIC VALUES ONLY — never add secrets here (see the view docstring).
+
+    Response 200::
+
+        {
+          "square_application_id":   "sq0idp-xxxx",
+          "square_environment":      "sandbox",   // or "production"
+          "google_server_client_id": "xxxx.apps.googleusercontent.com",
+          "brand_name":              "auction.fish"
+        }
 
 Authentication
 --------------
@@ -490,6 +508,42 @@ class MobileWebSessionConsumeView(APIView):
         ):
             return next_url
         return settings.LOGIN_REDIRECT_URL
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
+class MobileConfigView(APIView):
+    """GET /api/mobile/config/ — public deployment config for the app.
+
+    Unauthenticated on purpose: the app fetches this *before* any sign-in to wire up the Square
+    Mobile Payments SDK and Google Sign-In against the right deployment.
+
+    PUBLIC VALUES ONLY. Everything returned here is shipped to every device and is safe to expose
+    publicly — these same values already appear in the web app's client-side code: the Square
+    *application* id (NOT the secret), the Square environment name, the Google OAuth *client* id
+    (NOT a client secret), and the navbar brand. NEVER add secrets here: no OAuth access tokens,
+    client secrets, API keys, signing keys, or anything else that must stay server-side.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        return Response(
+            {
+                "square_application_id": settings.SQUARE_APPLICATION_ID,
+                "square_environment": settings.SQUARE_ENVIRONMENT,
+                # Web OAuth client id used as the audience when verifying Google ID tokens in
+                # /api/mobile/auth/google/; the app passes it as the Google Sign-In serverClientId.
+                "google_server_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
+                "brand_name": settings.NAVBAR_BRAND,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

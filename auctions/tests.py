@@ -22892,6 +22892,48 @@ class MobileLabelTests(StandardTestCase):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
 
 
+class MobileConfigTests(TestCase):
+    """/api/mobile/config/ — public, unauthenticated deployment config the app reads before sign-in."""
+
+    def setUp(self):
+        self.url = reverse("mobile-config")
+
+    @override_settings(
+        SQUARE_APPLICATION_ID="sq0idp-test",
+        SQUARE_ENVIRONMENT="sandbox",
+        GOOGLE_OAUTH_CLIENT_ID="123.apps.googleusercontent.com",
+        NAVBAR_BRAND="Test Auctions",
+    )
+    def test_returns_public_config_without_auth(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.json(),
+            {
+                "square_application_id": "sq0idp-test",
+                "square_environment": "sandbox",
+                "google_server_client_id": "123.apps.googleusercontent.com",
+                "brand_name": "Test Auctions",
+            },
+        )
+
+    def test_exposes_no_secrets(self):
+        # Guard against a secret ever being added to this public endpoint: the response keys are a
+        # fixed allowlist of public values, and none of the bytes leak a server-side secret.
+        with override_settings(
+            SQUARE_CLIENT_SECRET="sq0csp-supersecret",
+            SECRET_KEY="django-secret-key-value",
+        ):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            set(resp.json().keys()),
+            {"square_application_id", "square_environment", "google_server_client_id", "brand_name"},
+        )
+        self.assertNotIn(b"sq0csp-supersecret", resp.content)
+        self.assertNotIn(b"django-secret-key-value", resp.content)
+
+
 class SingleLotLabelPngTests(StandardTestCase):
     """The web single-lot label endpoint can also emit a PNG (?format=png) via the shared renderer,
     with the same ?resolution / ?dpi controls as the mobile endpoint; default stays the PDF sheet."""
