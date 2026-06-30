@@ -59,7 +59,7 @@
       Your account <em>{{ user_paypal_seller.payer_email|default:user_paypal_seller.user.username }}</em>
       will be used for this club's payments. Auctions you've created personally will continue to use the same account.
     </p>
-  {% else %}
+  {% elif request.user.userdata.paypal_enabled %}
     <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}?club={{ club.slug }}">
       <i class="bi bi-paypal"></i> Connect a PayPal account for this club
     </a>
@@ -92,7 +92,7 @@
       Your account <em>{{ user_square_seller.payer_email|default:user_square_seller.user.username }}</em>
       will be used for this club's payments.
     </p>
-  {% else %}
+  {% elif request.user.userdata.square_enabled %}
     <a class="btn btn-primary btn-sm" href="{% url 'square_connect' %}?club={{ club.slug }}">
       <i class="bi bi-credit-card"></i> Connect a Square account for this club
     </a>

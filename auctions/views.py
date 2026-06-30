@@ -3612,6 +3612,12 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def dispatch(self, request, *args, **kwargs):
+        # APIView.dispatch doesn't call AuctionViewMixin.dispatch, so set self.auction here
+        # so self.is_auction_admin is available in the handlers below.
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug", ""), is_deleted=False)
+        return super().dispatch(request, *args, **kwargs)
+
     def get(self, request, *args, **kwargs):
         options = list(
             AuctionDropdown.objects.filter(auction=self.auction)
@@ -10421,6 +10427,11 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
     """Start the PayPal onboarding process for a seller"""
 
     def get(self, request):
+        # PayPal must be enabled for this user before they can onboard a seller account.
+        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        if not request.user.userdata.paypal_enabled:
+            messages.error(request, "PayPal isn't enabled for your account.")
+            return redirect(reverse("home"))
         _stash_club_for_payment_oauth(request)
         tracking_id = request.user.userdata.unsubscribe_link
         payload = {
@@ -10698,6 +10709,11 @@ class SquareConnectView(LoginRequiredMixin, View):
     """Start the Square OAuth process for a seller"""
 
     def get(self, request):
+        # Square must be enabled for this user before they can onboard a seller account.
+        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        if not request.user.userdata.square_enabled:
+            messages.error(request, "Square isn't enabled for your account.")
+            return redirect(reverse("home"))
         _stash_club_for_payment_oauth(request)
         # Build Square OAuth URL
         # Use the user's unsubscribe_link as state parameter for security
@@ -12604,6 +12620,16 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
                 view_count=Count("url"),
             )
             .order_by("-view_count")[:number_of_popular_pages_to_show]
+        )
+        # Top user agents over the last 24 hours, to help spot and filter out bots
+        last_24_hours = timezone.now() - timedelta(hours=24)
+        context["top_user_agents"] = list(
+            PageView.objects.filter(date_start__gte=last_24_hours)
+            .exclude(user_agent__isnull=True)
+            .exclude(user_agent="")
+            .values("user_agent")
+            .annotate(view_count=Count("pk"))
+            .order_by("-view_count")[:5]
         )
         # heat  map stuff follows
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]

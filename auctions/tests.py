@@ -4901,6 +4901,26 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Custom dropdown")
 
+    def test_custom_dropdown_options_api_admin_can_create(self):
+        """Regression: the API view must set self.auction so is_auction_admin works (used to 500)."""
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("auction_custom_dropdown_options", kwargs={"slug": self.online_auction.slug}),
+            data={"action": "create", "value": "River"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertTrue(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
+
+    def test_custom_dropdown_options_api_non_admin_denied(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(
+            reverse("auction_custom_dropdown_options", kwargs={"slug": self.online_auction.slug}),
+            data={"action": "create", "value": "River"},
+        )
+        self.assertIn(response.status_code, [302, 403])
+        self.assertFalse(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
+
 
 class PayPalFormFieldVisibilityTests(StandardTestCase):
     """Test that PayPal payment field is only shown when user has PayPal connected"""
@@ -15824,6 +15844,57 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self._login(self.money_user)
         response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
+
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_button_hidden_when_user_not_enabled(self):
+        self.money_user.userdata.paypal_enabled = False
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Connect a PayPal account for this club")
+
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_button_shown_when_user_enabled(self):
+        self.money_user.userdata.paypal_enabled = True
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Connect a PayPal account for this club")
+
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_view_blocks_user_not_enabled(self):
+        self.money_user.userdata.paypal_enabled = False
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("paypal_connect") + f"?club={self.club.slug}")
+        self.assertEqual(response.status_code, 302)
+
+    @override_settings(SQUARE_APPLICATION_ID="test-app", SQUARE_CLIENT_SECRET="test-secret")
+    def test_square_connect_button_hidden_when_user_not_enabled(self):
+        self.money_user.userdata.square_enabled = False
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Connect a Square account for this club")
+
+    @override_settings(SQUARE_APPLICATION_ID="test-app", SQUARE_CLIENT_SECRET="test-secret")
+    def test_square_connect_button_shown_when_user_enabled(self):
+        self.money_user.userdata.square_enabled = True
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Connect a Square account for this club")
+
+    def test_square_connect_view_blocks_user_not_enabled(self):
+        self.money_user.userdata.square_enabled = False
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("square_connect") + f"?club={self.club.slug}")
+        self.assertEqual(response.status_code, 302)
 
     def test_money_user_can_access_treasurer_report(self):
         self._login(self.money_user)
