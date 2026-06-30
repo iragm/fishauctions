@@ -6163,9 +6163,33 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         # In-app: native deep link shown, QR hidden.
         self.assertIn(deep_link, app_html)
         self.assertNotIn("Scan this code to pay with Square", app_html)
+        # The explanatory template comment must never render as visible text.
+        self.assertNotIn("deep-link to the on-device Tap to Pay screen", app_html)
         # Web: QR/card checkout shown, no deep link.
         self.assertNotIn(deep_link, web_html)
         self.assertIn("Scan this code to pay with Square", web_html)
+
+    def test_quick_checkout_app_hides_deep_link_without_square(self):
+        # Tap to Pay charges on the seller's Square account, so the in-app deep link must only appear
+        # when Square is actually linked/authorized (show_square_button). With no Square account or
+        # permission the button must not show, matching the Square QR gate and create_mobile_payment.
+        from unittest.mock import PropertyMock
+
+        self.in_person_tos.bidder_number = "APP2"
+        self.in_person_tos.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "APP2"},
+        )
+        deep_link = f"fishauctions://pay/{invoice.pk}"
+
+        with patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=False):
+            app_html = self.client.get(url, HTTP_USER_AGENT="FishAuctionsApp/1.0 (iOS)").content.decode("utf-8")
+
+        self.assertNotIn(deep_link, app_html)
+        self.assertNotIn("Tap to Pay with card", app_html)
 
 
 class PickupLocationTests(StandardTestCase):
