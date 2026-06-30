@@ -28,6 +28,14 @@ class PaymentAlreadyChargedError(PaymentVerificationError):
     ``PaymentVerificationError`` (hence ``ValueError``) so existing handlers still catch it.
     """
 
+    def __init__(self, user_message):
+        # This message is deliberately operator-facing (prior charge amount + remaining balance) and
+        # carries no stack trace or system internals, so the view surfaces it to the cashier verbatim.
+        # Exposing it via an explicit attribute — instead of str(exc) at the boundary — keeps that
+        # intent in code and keeps the exception's stringification out of the HTTP response.
+        super().__init__(user_message)
+        self.user_message = user_message
+
 
 class SquareReconnectRequired(ValueError):
     """The seller's Square account predates Tap to Pay (token missing PAYMENTS_WRITE_IN_PERSON).

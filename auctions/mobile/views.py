@@ -671,7 +671,9 @@ class MobilePaymentConfirmView(APIView):
             # remaining balance) so the cashier collects the rest another way instead of re-tapping
             # the same deduped charge. Caught before PaymentVerificationError (its parent).
             logger.info("Mobile payment confirm: idempotency-key reuse returned a prior charge.", exc_info=exc)
-            return Response({"detail": str(exc), "code": "already_charged"}, status=status.HTTP_409_CONFLICT)
+            # exc.user_message is an explicit, operator-facing string set when the error is raised — not
+            # the exception's stringification — so no stack trace/internals leak into the response.
+            return Response({"detail": exc.user_message, "code": "already_charged"}, status=status.HTTP_409_CONFLICT)
         except PaymentVerificationError as exc:
             # The card may already have been charged on-device; the Square webhook reconciles the
             # same payment by reference_id, so tell the operator to refresh rather than retry blindly.
