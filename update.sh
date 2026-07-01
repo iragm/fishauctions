@@ -202,4 +202,9 @@ ensure_permissions
 set_env_value "SETUP_COMPLETE" "\"1\""
 update_nginx_domain
 
-docker compose up -d --build
+# Rebuild images and recreate every container. --force-recreate is required because the
+# source tree is bind-mounted into the app containers (see docker-compose.yaml): a git pull
+# changes the mounted code but not the image, so a plain `up -d` would leave the long-running
+# gunicorn/celery processes serving the OLD code until they are restarted. Force-recreating
+# also picks up new .env values and pulled nginx config in a single step.
+docker compose up -d --build --force-recreate
