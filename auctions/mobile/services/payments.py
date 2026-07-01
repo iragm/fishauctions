@@ -1,5 +1,4 @@
 import logging
-import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -16,6 +15,26 @@ class PaymentVerificationError(ValueError):
     so refreshing the invoice usually shows it as paid — rather than a flat "invalid request".
     Subclasses ``ValueError`` so existing ``except ValueError`` handlers still catch it.
     """
+
+
+class PaymentAlreadyChargedError(PaymentVerificationError):
+    """The stable per-invoice idempotency key made Square return an EARLIER completed charge.
+
+    The create idempotency key is stable per invoice, so if the balance changed after an earlier Tap
+    to Pay charge, re-tapping makes the on-device SDK reuse that key and Square returns the original
+    (already-recorded) payment instead of charging the new amount. No new money moves, so re-tapping
+    is futile. Raised with a cashier-facing message naming the prior charge and what is still due, so
+    the operator collects the remainder another way rather than tapping again. Subclasses
+    ``PaymentVerificationError`` (hence ``ValueError``) so existing handlers still catch it.
+    """
+
+    def __init__(self, user_message):
+        # This message is deliberately operator-facing (prior charge amount + remaining balance) and
+        # carries no stack trace or system internals, so the view surfaces it to the cashier verbatim.
+        # Exposing it via an explicit attribute — instead of str(exc) at the boundary — keeps that
+        # intent in code and keeps the exception's stringification out of the HTTP response.
+        super().__init__(user_message)
+        self.user_message = user_message
 
 
 class SquareReconnectRequired(ValueError):
@@ -180,7 +199,11 @@ class PaymentService:
             # so this ships the seller's OAuth access token to the device by design — the SDK
             # requires it. Prefer the shortest-lived token the seller's Square OAuth allows.
             "access_token": access_token,
-            "idempotency_key": str(uuid.uuid4()),
+            # Stable, invoice-derived idempotency key — NOT random. The Mobile Payments SDK keys the
+            # on-device charge with this, so if create -> tap is retried for the same (still-unpaid)
+            # invoice the duplicate collapses to a single Square charge instead of double-charging.
+            # Deterministic so it is identical across retries; Square caps idempotency_key at 45 chars.
+            "idempotency_key": f"taptopay-inv-{invoice_pk}",
             "square_environment": settings.SQUARE_ENVIRONMENT,
         }
 
@@ -200,6 +223,10 @@ class PaymentService:
         Raises
         ------
         PermissionError           — user is not an admin of the invoice's auction/club.
+        PaymentAlreadyChargedError— the stable idempotency key made Square return an earlier charge
+                                    already recorded on this invoice; no new money moved and the
+                                    message names the prior charge + remaining balance. Subclasses
+                                    PaymentVerificationError (so catch it first).
         PaymentVerificationError  — the card may have been charged but the fetched payment failed a
                                     verification check (status/amount/currency/location/reference)
                                     or could not be fetched from Square. Subclasses ValueError.
@@ -295,6 +322,27 @@ class PaymentService:
             msg = f"Square payment {payment_id} is not completed (status={payment_status})"
             raise PaymentVerificationError(msg)
         if sq_amount != amount_cents or sq_currency != invoice.currency:
+            # Footgun guard: the create idempotency key is stable per invoice, so if the balance
+            # changed after an earlier Tap to Pay charge, re-tapping makes the SDK reuse that key and
+            # Square returns the ORIGINAL completed charge (already recorded here) instead of charging
+            # the new amount. That looks like an amount mismatch even though no new money moved — so
+            # when the fetched payment is one we have already applied to this invoice, raise a
+            # specific, actionable error (prior amount + what is still due) instead of the generic one.
+            already_recorded = (
+                sq_reference_id == expected_reference_id
+                and InvoicePayment.objects.filter(
+                    invoice=invoice, external_id=fetched_payment_id or payment_id
+                ).exists()
+            )
+            if already_recorded:
+                prior_display = f"{Decimal(sq_amount) / 100:.2f}" if sq_amount is not None else "the original amount"
+                msg = (
+                    f"This invoice was already charged {prior_display} {invoice.currency} with Tap to Pay, "
+                    f"so the reader returned that earlier payment instead of making a new one. "
+                    f"{amount_due:.2f} {invoice.currency} is still due — take it as cash or send a new "
+                    f"payment link instead of tapping again."
+                )
+                raise PaymentAlreadyChargedError(msg)
             msg = (
                 f"Square payment {payment_id} amount mismatch: "
                 f"got {sq_amount} {sq_currency}, expected {amount_cents} {invoice.currency}"

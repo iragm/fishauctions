@@ -16,6 +16,12 @@ class MobileLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
 
+class MobileGoogleAuthSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/auth/google/."""
+
+    id_token = serializers.CharField(write_only=True, help_text="Google ID token from the client-side sign-in flow")
+
+
 class MobileUserSerializer(serializers.Serializer):
     """Read-only user profile returned by GET /api/mobile/auth/me/."""
 
@@ -83,7 +89,9 @@ class MobilePaymentCreateResponseSerializer(serializers.Serializer):
     # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId), so we
     # ship the seller's OAuth access token to the device by design (the SDK requires it).
     access_token = serializers.CharField()
-    idempotency_key = serializers.CharField()
+    # Stable, invoice-derived (NOT random) so a retried create -> tap for the same invoice dedupes to a
+    # single on-device Square charge instead of double-charging.
+    idempotency_key = serializers.CharField(help_text="Stable per-invoice idempotency key for the on-device charge")
     square_environment = serializers.CharField()
 
 

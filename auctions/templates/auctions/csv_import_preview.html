@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Review import{% endblock %}
+
+{% comment %}
+Shared review page for every CSV importer (see CSVContactImportMixin in views.py).
+Nothing has been written yet at this point: the parsed rows live in a one-time Redis token. Submitting
+this form applies them; cancelling discards the token. For contact imports (import_supports_duplicates),
+each possible-duplicate row gets a merge/create choice. Lot/award imports omit that section.
+{% endcomment %}
+
+{% block content %}
+<div class="container">
+  <h3>Review import{% if filename %} <small class="text-muted">{{ filename }}</small>{% endif %}</h3>
+  <p>
+    Nothing has been imported yet. Review the {{ total }} row{{ total|pluralize }} below, then confirm or cancel.
+  </p>
+
+  <ul class="list-inline">
+    {% if summary.create %}<li class="list-inline-item"><span class="badge bg-success">{{ summary.create }}</span> new</li>{% endif %}
+    {% if summary.update %}<li class="list-inline-item"><span class="badge bg-primary">{{ summary.update }}</span> matched &amp; updated</li>{% endif %}
+    {% if summary.duplicate %}<li class="list-inline-item"><span class="badge bg-warning text-dark">{{ summary.duplicate }}</span> possible duplicate{{ summary.duplicate|pluralize }}</li>{% endif %}
+    {% if summary.skip %}<li class="list-inline-item"><span class="badge bg-secondary">{{ summary.skip }}</span> skipped</li>{% endif %}
+  </ul>
+
+  <form method="POST" action="{{ confirm_url }}" id="csv-import-confirm-form">
+    {% csrf_token %}
+    <input type="hidden" name="_confirm" value="{{ token }}">
+
+    {% if supports_duplicates and duplicate_rows %}
+    <div class="card mb-3">
+      <div class="card-header">
+        Possible duplicates &mdash; choose what to do with each
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0 align-middle">
+          <thead>
+            <tr>
+              <th>Imported row</th>
+              <th>Matches existing</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in duplicate_rows %}
+            <tr>
+              <td>
+                <strong>{{ row.fields.name|default:"(no name)" }}</strong>
+                {% if row.fields.email %}<br><small class="text-muted">{{ row.fields.email }}</small>{% endif %}
+                {% if row.fields.bidder_number %}<br><small>Bidder #{{ row.fields.bidder_number }}</small>{% endif %}
+              </td>
+              <td>{{ row.target_display }}</td>
+              <td>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="decision_{{ row.i }}" id="merge_{{ row.i }}" value="merge" checked>
+                  <label class="form-check-label" for="merge_{{ row.i }}">Merge into existing</label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="decision_{{ row.i }}" id="create_{{ row.i }}" value="create">
+                  <label class="form-check-label" for="create_{{ row.i }}">Create new record</label>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if apply_rows %}
+    <div class="card mb-3">
+      <div class="card-header">Rows to import</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-striped mb-0">
+          <thead>
+            <tr>
+              <th></th>
+              {% for header, key in columns %}<th>{{ header }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in apply_rows %}
+            <tr>
+              <td>
+                {% if row.action == "create" %}<span class="badge bg-success">new</span>
+                {% elif row.action == "update" %}<span class="badge bg-primary">update</span>{% endif %}
+              </td>
+              {% for cell in row.cells %}<td>{{ cell }}</td>{% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if skipped_rows %}
+    <div class="card mb-3">
+      <div class="card-header">Skipped rows ({{ skipped_rows|length }})</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr><th>Reason</th><th>Row</th></tr>
+          </thead>
+          <tbody>
+            {% for row in skipped_rows %}
+            <tr>
+              <td><small>{{ row.reason }}</small></td>
+              <td><small class="text-muted">{% for k, v in row.raw.items %}{{ k }}: {{ v }}{% if not forloop.last %} &middot; {% endif %}{% endfor %}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+  </form>
+
+  {% comment %}
+  Cancel is its own POST (not a plain link) so it hits the _cancel branch and frees the Redis token
+  immediately instead of waiting for it to expire. Both buttons live outside their forms and are wired up
+  with the HTML5 form="" attribute so they can sit together while submitting different forms.
+  {% endcomment %}
+  <form method="POST" action="{{ confirm_url }}" id="csv-import-cancel-form">
+    {% csrf_token %}
+    <input type="hidden" name="_cancel" value="{{ token }}">
+  </form>
+
+  <div class="d-flex gap-2 mt-3">
+    <button type="submit" form="csv-import-confirm-form" class="btn btn-success">Confirm import</button>
+    <button type="submit" form="csv-import-cancel-form" class="btn btn-outline-secondary">Cancel</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script type="text/javascript">
+  // Disable both buttons once either form is submitted so a double-click / impatient second click can't
+  // fire the confirm (or cancel) twice. Mirrors the submit-disable used on the lot and location forms.
+  (function () {
+    var confirmForm = document.getElementById("csv-import-confirm-form");
+    var cancelForm = document.getElementById("csv-import-cancel-form");
+    var buttons = document.querySelectorAll('[form="csv-import-confirm-form"], [form="csv-import-cancel-form"]');
+    function lock() {
+      buttons.forEach(function (b) { b.disabled = true; });
+    }
+    if (confirmForm) { confirmForm.addEventListener("submit", lock); }
+    if (cancelForm) { cancelForm.addEventListener("submit", lock); }
+  })();
+</script>
+{% endblock %}

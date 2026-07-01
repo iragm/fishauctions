@@ -15,6 +15,21 @@
         {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
         {% if tos.possible_duplicate %}Note: This user may be a duplicate, confirm that this is their only bidder number<br>{% endif %}
+        {% if request.is_mobile_app and invoice.show_square_button and not invoice.reason_for_payment_not_available %}
+          {% comment %}
+            Inside the native app: deep-link to the on-device Tap to Pay screen (host must be "pay",
+            first path segment the invoice pk). Gated on the same request.is_mobile_app UA check that
+            hides the web navbar in base.html, plus invoice.show_square_button so the button only
+            appears when the seller's Square account is actually linked and authorized (matching the
+            Square QR check below and the create_mobile_payment seller/permission check). The
+            scan-a-QR-code flow doesn't apply on the device itself, so we hide the QR section below
+            and show only this native button in-app.
+          {% endcomment %}
+          <a href="fishauctions://pay/{{ invoice.pk }}" class="btn btn-primary btn-lg w-100 my-2">
+            <i class="bi bi-credit-card-2-front"></i> Tap to Pay with card
+          </a>
+        {% endif %}
+        {% if not request.is_mobile_app %}
         {% if paypal_qr_code_link or square_qr_code_link %}
           <div class="row justify-content-center my-2">
             {% if paypal_qr_code_link %}
@@ -40,6 +55,7 @@
             </div>
             {% endif %}
           </div>
+        {% endif %}
         {% endif %}
         <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>
         <a href="{{ invoice.get_absolute_url }}?print" target="_blank"><i class="bi bi-printer-fill"></i> Print invoice</a>

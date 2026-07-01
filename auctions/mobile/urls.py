@@ -3,7 +3,9 @@ from django.urls import path
 from .views import (
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
+    MobileConfigView,
     MobileDeviceRegisterView,
+    MobileGoogleAuthView,
     MobileLoginView,
     MobileLotLabelView,
     MobilePaymentConfirmView,
@@ -15,8 +17,11 @@ from .views import (
 )
 
 urlpatterns = [
+    # Public config (no auth) — read before sign-in
+    path("config/", MobileConfigView.as_view(), name="mobile-config"),
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
+    path("auth/google/", MobileGoogleAuthView.as_view(), name="mobile-auth-google"),
     path("auth/refresh/", MobileTokenRefreshView.as_view(), name="mobile-auth-refresh"),
     path("auth/me/", MobileUserMeView.as_view(), name="mobile-auth-me"),
     # Pre-authenticate the WebView from the native JWT session (one-time handoff token).

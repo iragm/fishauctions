@@ -123,6 +123,7 @@ urlpatterns = [
     path("clubs/", views.ClubMap.as_view(), name="clubs"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
+    path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),
     path(
         "admin-dashboard/command-palette/",
         views.CommandPaletteAnalyticsView.as_view(),

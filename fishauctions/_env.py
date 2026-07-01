@@ -12,6 +12,21 @@ _TRUTHY = frozenset({"1", "true", "yes", "on", "t", "y"})
 _FALSY = frozenset({"0", "false", "no", "off", "f", "n", ""})
 
 INSECURE_SECRET_VALUES = frozenset({"", "unsecure"})
+OPTIONAL_PLACEHOLDER_VALUES = frozenset(
+    {
+        "",
+        "unsecure",
+        "secret",
+        "public-key",
+        "private-key",
+        "change-me-to-a-long-random-secret",
+        "secret.apps.googleusercontent.com",
+        "client-id",
+        "ca-pub-abcde",
+        "G-abcde",
+        "GTM-abcde",
+    }
+)
 
 
 def parse_bool_env(value: str | None, *, default: bool) -> bool:
@@ -56,3 +71,11 @@ def require_secure_prod_secrets(secrets: Mapping[str, str | None]) -> None:
         f"secure value before starting the application in production."
     )
     raise ImproperlyConfigured(msg)
+
+
+def env_has_real_value(value: str | None, *, placeholder_values: frozenset[str] = OPTIONAL_PLACEHOLDER_VALUES) -> bool:
+    """Return True when an optional env value is present and not a known placeholder."""
+    if value is None:
+        return False
+    normalized = value.strip()
+    return bool(normalized) and normalized not in placeholder_values

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Setup Checklist{% endblock %}
+
+{% block content %}
+<h3 class="mb-2">Setup Checklist</h3>
+
+<div class="alert alert-info">
+  <p class="mb-2">
+    All configuration lives in a single <code>.env</code> file in the project root &mdash; the same
+    directory as <code>update.sh</code> and <code>docker-compose.yaml</code> (the folder you cloned
+    the repository into). Following the
+    <a href="https://12factor.net/config" target="_blank" rel="noopener">12-factor</a> approach, settings
+    are <strong>never</strong> edited in code; change them here instead.
+  </p>
+  <p class="mb-0">
+    To edit it, open a terminal on the server and run <code>nano .env</code> (or edit it however you like).
+    Each item below shows the line(s) to add or change. After saving, apply the changes by restarting:
+    <code>docker compose up -d</code> (or re-run <code>./update.sh</code>).
+  </p>
+</div>
+
+{% regroup setup_items by section as setup_sections %}
+{% for section in setup_sections %}
+<h4 class="mt-4 mb-2">{{ section.grouper }}</h4>
+<div class="list-group">
+  {% for item in section.list %}
+  <div class="list-group-item">
+    <div class="d-flex justify-content-between align-items-start gap-3">
+      <div class="flex-grow-1">
+        {% if not item.hide_title %}
+        <h5 class="mb-1">
+          {% if item.configured %}
+          <i class="bi bi-check-circle-fill text-success me-1"></i>
+          {% else %}
+          <i class="bi bi-exclamation-circle-fill text-warning me-1"></i>
+          {% endif %}
+          {{ item.name }}
+        </h5>
+        {% endif %}
+        <p class="mb-1">{{ item.what_it_does|safe }}</p>
+        {% if item.where_to_get_it %}
+        <small class="text-muted d-block mb-2">Where to get it: {{ item.where_to_get_it|safe }}</small>
+        {% endif %}
+        {% if item.setup_steps %}
+        <ol class="mb-2 ps-3">
+          {% for step in item.setup_steps %}
+          <li class="mb-1">{{ step|safe }}</li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+        {% for snippet in item.snippets %}
+        {% if snippet.label %}<small class="d-block fw-bold mt-2">{{ snippet.label }}</small>{% endif %}
+        <pre class="mb-1"><code>{{ snippet.code }}</code></pre>
+        {% endfor %}
+        {% if item.links %}
+        <div class="mt-2 d-flex flex-wrap gap-2">
+          {% for link in item.links %}
+          <a class="btn btn-sm btn-primary" href="{{ link.url }}" target="_blank" rel="noopener">
+            {{ link.label }} <i class="bi bi-box-arrow-up-right"></i>
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <span class="badge {% if item.configured %}bg-success{% else %}bg-warning text-dark{% endif %}">
+        {% if item.configured %}Done{% else %}Needs setup{% endif %}
+      </span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endblock %}

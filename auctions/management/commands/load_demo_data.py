@@ -22,6 +22,10 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Skipping demo data load - DEBUG=False (production mode)"))
             return
 
+        if getattr(settings, "SINGLE_CLUB_MODE", False):
+            self.stdout.write(self.style.WARNING("Skipping demo data load - SINGLE_CLUB_MODE is enabled"))
+            return
+
         # Check if any auctions already exist
         if Auction.objects.exists():
             self.stdout.write(

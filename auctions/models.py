@@ -547,6 +547,18 @@ def remove_html_color_tags(text):
     return sanitize_summernote_html(text)
 
 
+def normalize_email(value):
+    """Canonicalize an email for storage and duplicate matching.
+
+    Strips surrounding whitespace and lowercases the whole address. The DB collation is already
+    case-insensitive and the codebase compares with ``email__iexact`` almost everywhere, so this just
+    makes that intent the stored reality and stops case/whitespace variants (e.g. ``" Bob@X.com"`` vs
+    ``"bob@x.com"``) from creating duplicate contact records on import. Returns ``""`` for empty input
+    to preserve the existing empty-string convention on these fields (rather than introducing ``None``).
+    """
+    return (value or "").strip().lower()
+
+
 def _default_membership_number():
     """Return a random 10-digit membership number for new ClubMember records.
 
@@ -922,6 +934,33 @@ class Club(models.Model):
 
     def __str__(self):
         return str(self.name)
+
+    def find_member(self, name="", email="", exclude_pk=None):
+        """ClubMember analogue of Auction.find_user: duplicate check / lookup for a club member.
+
+        Matches by normalized email first, then by exact-or-rhyming name (reusing rhyming_name_q so
+        "Bob Smith" finds "Robert Smith"). Only considers non-deleted members of this club. Returns the
+        oldest matching ClubMember (deterministic) or None.
+        """
+        from .filters import rhyming_name_q
+
+        email = normalize_email(email)
+        qs = ClubMember.objects.filter(club=self, is_deleted=False)
+        if exclude_pk:
+            qs = qs.exclude(pk=exclude_pk)
+        if not name and not email:
+            return None
+        if email:
+            email_search = qs.filter(email__iexact=email).order_by("createdon", "pk").first()
+            if email_search:
+                return email_search
+        if name:
+            name_search = (
+                qs.filter(Q(name__iexact=name.strip()) | rhyming_name_q(name)).order_by("createdon", "pk").first()
+            )
+            if name_search:
+                return name_search
+        return None
 
     @property
     def mailchimp_connected(self):
@@ -1775,6 +1814,10 @@ class ClubMember(ContactRecord):
         ]
 
     def save(self, *args, **kwargs):
+        # Canonicalize a real email (strip + lowercase) so stored values and all duplicate matching share
+        # one form. Guarded by `if self.email` so an empty value keeps its existing None/"" state.
+        if self.email:
+            self.email = normalize_email(self.email)
         # Belt-and-suspenders uniqueness for membership_number: the DB has a unique
         # constraint, but on the off chance the random default collides with an
         # existing row, repick before the INSERT happens so callers don't have to
@@ -1871,11 +1914,8 @@ class ClubMember(ContactRecord):
         if _discord_changed or (_is_new and self.discord_id):
             self.maybe_assign_discord_role()
         if self.name:
-            duplicate = (
-                ClubMember.objects.filter(club=self.club, name__iexact=self.name, is_deleted=False)
-                .exclude(pk=self.pk)
-                .first()
-            )
+            # Exact-or-rhyming name match (parity with AuctionTOS.save), e.g. "Bob" flags "Robert".
+            duplicate = self.club.find_member(name=self.name, exclude_pk=self.pk)
             if duplicate:
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
                 ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
@@ -2563,19 +2603,24 @@ class Auction(models.Model):
     def find_user(self, name="", email="", exclude_pk=None):
         """Used for duplicate checks and when adding users to an auction
         Returns an AuctionTOS instance or None"""
+        email = normalize_email(email)
         qs = AuctionTOS.objects.filter(auction__pk=self.pk)
         if not name and not email:
             return None
         if exclude_pk:
             qs = qs.exclude(pk=exclude_pk)
         if email:
-            email_search = qs.filter(email=email).first()
+            email_search = qs.filter(email__iexact=email).order_by("createdon", "pk").first()
             if email_search:
                 return email_search
         if name:
             from .filters import AuctionTOSFilter
 
-            name_search = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
+            # order_by keeps the match deterministic when several records share a name; the oldest
+            # record wins so we attach to the original/canonical contact rather than an arbitrary one.
+            name_search = (
+                AuctionTOSFilter.generic(self, qs, name, match_names_only=True).order_by("createdon", "pk").first()
+            )
             if name_search:
                 return name_search
         return None
@@ -4613,6 +4658,12 @@ class AuctionTOS(models.Model):
         return 0
 
     def save(self, *args, **kwargs):
+        # Canonicalize a real email (strip + lowercase) so every downstream comparison (user lookup,
+        # bidder-number reuse, the exact-email merge below) and the stored value share one form. Guarded
+        # by `if self.email` so an empty value keeps its existing None/"" state (the "no email" filter
+        # relies on email__isnull, so we must not turn None into "").
+        if self.email:
+            self.email = normalize_email(self.email)
         if not self.pk:
             # logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
@@ -4769,10 +4820,11 @@ class AuctionTOS(models.Model):
                 user=None,  # System change
             )
 
-        # Check for an exact email duplicate in this auction and merge immediately
+        # Check for an exact email duplicate in this auction and merge immediately.
+        # iexact (not =) so a not-yet-normalized existing row still matches the normalized self.email.
         if self.email:
             email_duplicate = (
-                AuctionTOS.objects.filter(auction=self.auction, email=self.email)
+                AuctionTOS.objects.filter(auction=self.auction, email__iexact=self.email)
                 .exclude(pk=self.pk)
                 .order_by("createdon")
                 .first()

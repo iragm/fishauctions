@@ -68,6 +68,28 @@
   {% endfor %}
   </tbody>
 </table>
+<h3>Top user agents from the last 24 hours</h3>
+<p class="text-muted">Useful for spotting and filtering out bots.</p>
+<table>
+  <thead>
+    <tr>
+      <th>User agent</th>
+      <th>Views</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for agent in top_user_agents %}
+    <tr>
+      <td>{{ agent.user_agent }}</td>
+      <td>{{ agent.view_count }}</td>
+    </tr>
+  {% empty %}
+    <tr>
+      <td colspan="2">No page views in the last 24 hours.</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 <h3>Heat map of traffic over the last {{ days }} days</h3>
 <div id="map_wrapper" style='height: 600px;'>
 <div id="map_visualization" class="mapping mt-2" style='width: 100%; height: 100%;'></div>

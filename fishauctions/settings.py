@@ -16,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fishauctions._env import parse_bool_env, require_secure_prod_secrets
+from fishauctions._env import env_has_real_value, parse_bool_env, require_secure_prod_secrets
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
@@ -310,6 +310,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 SITE_ID = 1
 SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "127.0.0.1")
+SETUP_COMPLETE = parse_bool_env(os.environ.get("SETUP_COMPLETE") or None, default=False)
+# Single club mode is on by default: most self-hosters run one club. The club is
+# named after NAVBAR_BRAND, so there's no separate SINGLE_CLUB_NAME to configure.
+SINGLE_CLUB_MODE = parse_bool_env(os.environ.get("SINGLE_CLUB_MODE") or None, default=True)
 
 
 # Static files (CSS, JavaScript, Images)
@@ -438,12 +442,13 @@ AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
 EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = os.environ.get("EMAIL_PORT", 587)
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "user@example.com")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "unsecure")
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_SUBJECT_PREFIX = ""
 
-RECAPTCHA_PUBLIC_KEY = os.environ.get("RECAPTCHA_PUBLIC_KEY", "unsecure")
-RECAPTCHA_PRIVATE_KEY = os.environ.get("RECAPTCHA_PRIVATE_KEY", "unsecure")
+RECAPTCHA_PUBLIC_KEY = os.environ.get("RECAPTCHA_PUBLIC_KEY", "")
+RECAPTCHA_PRIVATE_KEY = os.environ.get("RECAPTCHA_PRIVATE_KEY", "")
+RECAPTCHA_ENABLED = env_has_real_value(RECAPTCHA_PUBLIC_KEY) and env_has_real_value(RECAPTCHA_PRIVATE_KEY)
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
@@ -512,11 +517,16 @@ WEIGHT_AGAINST_TOP_INTEREST = 20
 GOOGLE_MEASUREMENT_ID = os.environ.get("GOOGLE_MEASUREMENT_ID", "")
 GOOGLE_TAG_ID = os.environ.get("GOOGLE_TAG_ID", "")
 GOOGLE_ADSENSE_ID = os.environ.get("GOOGLE_ADSENSE_ID", "")
+# Master on/off switch for all ads (AdSense and internal campaign ads). Default on.
+SHOW_ADS = parse_bool_env(os.environ.get("SHOW_ADS") or None, default=True)
 
-GOOGLE_OAUTH_LINK = os.environ.get("GOOGLE_OAUTH_LINK", "unsecure")
+GOOGLE_OAUTH_LINK = os.environ.get("GOOGLE_OAUTH_LINK", "")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"
 
 LOCATION_FIELD_PATH = "/static/location_field"
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+GOOGLE_MAPS_ENABLED = env_has_real_value(GOOGLE_MAPS_API_KEY)
 
 LOCATION_FIELD = {
     "map.provider": "google",
@@ -525,7 +535,7 @@ LOCATION_FIELD = {
     "search.suffix": "",
     # Google
     "provider.google.api": "//maps.google.com/maps/api/js?sensor=false",
-    "provider.google.api_key": os.environ.get("GOOGLE_MAPS_API_KEY", "unsecure"),
+    "provider.google.api_key": GOOGLE_MAPS_API_KEY,
     "provider.google.api_libraries": "",
     "provider.google.map.type": "ROADMAP",
     # misc
@@ -564,9 +574,9 @@ USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_
 UNTRUSTED_MESSAGE = os.environ.get(
     "UNTRUSTED_MESSAGE", "You cannot currently promote auctions.  Please contact the website administrator for access."
 )
-ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, default=True)
+ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, default=False)
 ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None, default=True)
-ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=True)
+ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 

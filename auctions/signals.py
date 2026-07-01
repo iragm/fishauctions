@@ -11,6 +11,8 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
+from .site_setup import ensure_single_club_membership_for_user
+
 logger = logging.getLogger(__name__)
 
 # Email timing constants (in hours)
@@ -549,6 +551,7 @@ def user_logged_in_callback(sender, user, request, **kwargs):
     # Bulk update — no ClubHistory here because this is an automatic system action on login
     # and there is no meaningful "who did this" actor to record.
     ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
+    ensure_single_club_membership_for_user(user)
 
 
 @receiver(post_save, sender=User)
@@ -557,6 +560,7 @@ def create_user_userdata(sender, instance, created, **kwargs):
         from auctions.models import UserData
 
         UserData.objects.create(user=instance)
+    ensure_single_club_membership_for_user(instance)
 
 
 @receiver(post_save, sender="auctions.Club")

@@ -224,6 +224,7 @@ from .models import (
     guess_category,
     median_value,
     nearby_auctions,
+    normalize_email,
 )
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
@@ -232,6 +233,7 @@ from .serializers import (
     ClubMemberSerializer,
 )
 from .services import map_fields
+from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -3610,6 +3612,12 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def dispatch(self, request, *args, **kwargs):
+        # APIView.dispatch doesn't call AuctionViewMixin.dispatch, so set self.auction here
+        # so self.is_auction_admin is available in the handlers below.
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug", ""), is_deleted=False)
+        return super().dispatch(request, *args, **kwargs)
+
     def get(self, request, *args, **kwargs):
         options = list(
             AuctionDropdown.objects.filter(auction=self.auction)
@@ -4675,7 +4683,10 @@ class CSVContactImportMixin:
         """Pass a row, and a lowercase list of field names.
         Extract the first match found (case insensitive) and return the value from the row.
         Empty string returned if the value is not found in the row."""
-        case_insensitive_row = {k.lower(): v for k, v in row.items()}
+        # Skip falsy keys: csv.DictReader stores any surplus cells of a ragged row (more columns than
+        # the header) under a None key, and None.lower() would raise. Dropping it keeps a malformed row
+        # importable instead of 500-ing the whole upload.
+        case_insensitive_row = {k.lower(): v for k, v in row.items() if k}
         for name in field_name_list:
             value = case_insensitive_row.get(name)
             if value is not None:
@@ -4685,7 +4696,9 @@ class CSVContactImportMixin:
     @staticmethod
     def csv_columns_exist(field_names, columns):
         """Returns True if any value in the list `columns` exists in the file headers."""
-        case_insensitive_row = {k.lower() for k in field_names}
+        # Skip falsy entries: a ragged row's surplus cells surface as a None header key (see
+        # extract_csv_field), and None.lower() would raise.
+        case_insensitive_row = {k.lower() for k in field_names if k}
         for column in columns:
             if column in case_insensitive_row:
                 return True
@@ -4704,6 +4717,247 @@ class CSVContactImportMixin:
             )
             return None
 
+    # ------------------------------------------------------------------
+    # Preview / confirm framework
+    #
+    # Every CSV importer parses the upload into a list of JSON-serializable "planned actions", stashes them
+    # in Redis under a one-time token, and shows a review page (auctions/csv_import_preview.html) before
+    # anything is written. The user can cancel, see skipped rows with reasons, and for contact imports choose
+    # per possible-duplicate whether to merge into the existing record (default) or create a new one.
+    #
+    # A subclass implements:
+    #   plan_row(self, row) -> dict|None        classify one CSV row (see action schema below)
+    #   apply_action(self, action, decision) -> str   write one planned action, return a result tag
+    #   import_done_url(self) / import_cancel_url(self)
+    #   import_target_id(self)                  binds the token to its auction/club
+    #   record_import_history(self, results, filename)
+    # and sets class attrs import_record_kind / import_supports_duplicates / import_preview_columns.
+    #
+    # Planned-action dict:
+    #   {"action": "create"|"update"|"duplicate"|"skip",
+    #    "fields": {...normalized values for display + apply...},
+    #    "target_pk": <existing record pk or None>,   # update/duplicate
+    #    "target_display": "<existing record label>", # update/duplicate
+    #    "match_type": "email"|"name"|None,
+    #    "reason": "<why skipped / note>",
+    #    "raw": {...original row...}}                  # filled in by build_preview if omitted
+    # ------------------------------------------------------------------
+
+    PREVIEW_CACHE_PREFIX = "csv_import"
+    PREVIEW_TTL_SECONDS = 60 * 60  # 1 hour
+    PREVIEW_TEMPLATE = "auctions/csv_import_preview.html"
+
+    # Subclass overrides
+    import_record_kind = "record"
+    import_supports_duplicates = False
+    import_preview_columns = ()  # list of (header, field_key)
+    # A field key in each planned action's "fields" dict used to collapse rows that refer to the same
+    # record within a single file (e.g. "email" for contact importers, where one row == one person). Leave
+    # None for importers where a repeated value is legitimate (e.g. several lots/awards for one seller).
+    import_dedupe_field = None
+
+    def import_target_id(self):
+        """A stable id binding a preview token to one auction/club so it cannot be replayed elsewhere."""
+        return None
+
+    def _preview_cache_key(self, token):
+        return f"{self.PREVIEW_CACHE_PREFIX}:{token}"
+
+    def _dedupe_key(self, action):
+        """Key used to collapse same-record rows within one file, or None to never collapse this action."""
+        field = self.import_dedupe_field
+        if not field or action.get("action") == "skip":
+            return None
+        value = (action.get("fields", {}).get(field) or "").strip().lower()
+        return value or None
+
+    @staticmethod
+    def _merge_planned_fields(primary, duplicate):
+        """Fold a later same-key row's data into the primary planned action: fill only blank string fields
+        (so complementary rows combine without loss) while leaving the primary's existing non-empty values,
+        booleans and ints untouched (so a conflicting value can't be silently flipped). Optional-column
+        ``present`` flags are OR-ed so a column that appears in either row still drives an update."""
+        primary_fields = primary.setdefault("fields", {})
+        for key, value in duplicate.get("fields", {}).items():
+            if value in (None, "", False):
+                continue
+            if primary_fields.get(key) in (None, ""):
+                primary_fields[key] = value
+        if "present" in duplicate:
+            primary_present = primary.setdefault("present", {})
+            for key, value in duplicate["present"].items():
+                if value:
+                    primary_present[key] = True
+
+    def build_preview(self, csv_reader, filename=None):
+        """Run plan_row over every row, stash the planned actions in Redis, and return the token."""
+        actions = []
+        # Maps a dedupe key (e.g. normalized email) -> index of the first action that "owns" it, so later
+        # rows for the same record fold into it instead of creating a duplicate or being silently merged
+        # away by the model layer (which would drop the later row's differing fields).
+        primary_by_key = {}
+        for raw in csv_reader:
+            planned = self.plan_row(raw)
+            if planned is None:
+                continue
+            planned.setdefault("raw", {k: v for k, v in raw.items() if k})
+            planned["i"] = len(actions)
+            key = self._dedupe_key(planned)
+            if key is not None and key in primary_by_key:
+                primary = actions[primary_by_key[key]]
+                self._merge_planned_fields(primary, planned)
+                planned["action"] = "skip"
+                planned["reason"] = f"Duplicate {self.import_dedupe_field} in file — combined into an earlier row"
+                planned["target_pk"] = None
+                planned["target_display"] = ""
+                planned["match_type"] = None
+            elif key is not None:
+                primary_by_key[key] = planned["i"]
+            actions.append(planned)
+        token = uuid.uuid4().hex
+        payload = {
+            "view": type(self).__name__,
+            "kind": self.import_record_kind,
+            "target_id": self.import_target_id(),
+            "user_id": self.request.user.pk,
+            "filename": filename,
+            "actions": actions,
+        }
+        cache.set(self._preview_cache_key(token), payload, self.PREVIEW_TTL_SECONDS)
+        return token
+
+    def load_preview(self, token):
+        """Return the cached payload for *token*, or None if missing/expired/not owned by this request.
+
+        Binding to the requesting user, the auction/club target, and the originating view class prevents a
+        leaked or guessed token from being replayed by another user or against a different auction/club.
+        """
+        if not token:
+            return None
+        payload = cache.get(self._preview_cache_key(token))
+        if not payload:
+            return None
+        if payload.get("user_id") != self.request.user.pk:
+            return None
+        if payload.get("target_id") != self.import_target_id():
+            return None
+        if payload.get("view") != type(self).__name__:
+            return None
+        return payload
+
+    def clear_preview(self, token):
+        if token:
+            cache.delete(self._preview_cache_key(token))
+
+    def _hx_aware_redirect(self, url):
+        """Redirect that becomes a full-page navigation even from an HTMx (hx-post) request."""
+        if self.request.headers.get("HX-Request"):
+            response = HttpResponse(status=204)
+            response["HX-Redirect"] = url
+            return response
+        return redirect(url)
+
+    def redirect_to_preview(self, token):
+        """Navigate the browser (full page, HTMx-aware) to the preview for *token*."""
+        return self._hx_aware_redirect(f"{self.request.path}?preview={token}")
+
+    def render_preview(self, token):
+        payload = self.load_preview(token)
+        if payload is None:
+            messages.error(self.request, "This import preview expired or was not found. Please upload the file again.")
+            return redirect(self.import_cancel_url())
+        actions = payload["actions"]
+        columns = self.import_preview_columns
+        summary = {"create": 0, "update": 0, "duplicate": 0, "skip": 0}
+        apply_rows = []
+        duplicate_rows = []
+        skipped_rows = []
+        for action in actions:
+            kind = action["action"]
+            summary[kind] = summary.get(kind, 0) + 1
+            # Precompute display cells aligned to import_preview_columns (templates can't index a dict by a
+            # variable key), so the template just iterates row.cells.
+            row = {**action, "cells": [action.get("fields", {}).get(key, "") for _, key in columns]}
+            if kind == "duplicate":
+                duplicate_rows.append(row)
+            elif kind in ("create", "update"):
+                apply_rows.append(row)
+            elif kind == "skip":
+                skipped_rows.append(row)
+        context = {
+            "token": token,
+            "kind": payload["kind"],
+            "filename": payload.get("filename"),
+            "summary": summary,
+            "total": len(actions),
+            "columns": columns,
+            "supports_duplicates": self.import_supports_duplicates,
+            "apply_rows": apply_rows,
+            "duplicate_rows": duplicate_rows,
+            "skipped_rows": skipped_rows,
+            "confirm_url": self.request.path,
+            "cancel_url": self.import_cancel_url(),
+        }
+        return render(self.request, self.PREVIEW_TEMPLATE, context)
+
+    def apply_preview(self, token, post_data):
+        payload = self.load_preview(token)
+        if payload is None:
+            messages.error(self.request, "This import preview expired or was not found. Please upload the file again.")
+            return redirect(self.import_cancel_url())
+        # Atomically claim this token before doing any writes. cache.add() is a Redis SET-NX, so only the
+        # first of two concurrent (or double-submitted) confirms wins the claim; the rest bail out here
+        # instead of applying the same batch twice. The JS submit-disable on the review page handles the
+        # common accidental double-click; this guards the race / replay it can't.
+        claim_key = f"{self._preview_cache_key(token)}:applying"
+        if not cache.add(claim_key, 1, self.PREVIEW_TTL_SECONDS):
+            messages.info(self.request, "This import is already being processed.")
+            return redirect(self.import_done_url())
+        results = {}
+        try:
+            # Apply the whole batch atomically: if one row raises, nothing is half-written.
+            with transaction.atomic():
+                for action in payload["actions"]:
+                    decision = post_data.get(f"decision_{action['i']}", "merge")
+                    tag = self.apply_action(action, decision)
+                    results[tag] = results.get(tag, 0) + 1
+        except Exception:
+            # The batch rolled back and wrote nothing; release the claim so the admin can retry the token.
+            cache.delete(claim_key)
+            raise
+        self.clear_preview(token)
+        cache.delete(claim_key)
+        self.record_import_history(results, payload.get("filename"))
+        self.message_import_results(results)
+        return redirect(self.import_done_url())
+
+    def record_import_history(self, results, filename=None):
+        """Optional hook: write an audit/history entry after a confirmed import. No-op by default."""
+
+    def message_import_results(self, results):
+        """Flash a summary message after a confirmed import."""
+        labels = [
+            ("created", "added"),
+            ("updated", "updated"),
+            ("merged", "merged into existing"),
+            ("skipped", "skipped"),
+        ]
+        parts = [f"{results[tag]} {self.import_record_kind}s {label}" for tag, label in labels if results.get(tag)]
+        if parts:
+            messages.success(self.request, ", ".join(parts))
+
+    def handle_import_post(self, request, csv_field_names=("csv_file",)):
+        """Shared POST router for the confirm and cancel phases.
+
+        Returns a response for a confirm/cancel submission, or None if this POST is not part of the
+        preview flow (so the caller can handle a file upload or its own form, e.g. a formset)."""
+        if request.POST.get("_confirm"):
+            return self.apply_preview(request.POST["_confirm"], request.POST)
+        if request.POST.get("_cancel"):
+            self.clear_preview(request.POST.get("_cancel"))
+            return redirect(self.import_cancel_url())
+        return None
+
 
 class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, TemplateView, ContextMixin):
     """Add/edit lots of auctiontos"""
@@ -4713,6 +4967,25 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
     extra_rows = 5
     AuctionTOSFormSet = None
     allow_non_admins = True
+
+    # CSV import preview framework (see CSVContactImportMixin)
+    import_record_kind = "user"
+    import_supports_duplicates = True
+    import_dedupe_field = "email"  # two rows with the same email are the same person; combine them
+    import_preview_columns = (
+        ("Bidder #", "bidder_number"),
+        ("Name", "name"),
+        ("Email", "email"),
+        ("Phone", "phone"),
+    )
+    BIDDER_NUMBER_FIELDS = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
+    NAME_FIELDS = ["name", "full name", "first name", "firstname"]
+    EMAIL_FIELDS = ["email", "e-mail", "email address", "e-mail address"]
+    ADDRESS_FIELDS = ["address", "mailing address"]
+    PHONE_FIELDS = ["phone", "phone number", "telephone", "telephone number"]
+    BIDDING_FIELDS = ["allow bidding", "bidding", "bidding allowed", "allowedtobid"]
+    MEMO_FIELDS = ["memo", "note", "notes"]
+    ADMIN_FIELDS = ["admin", "staff", "is_admin", "is_staff"]
 
     def _block_if_club_managed(self):
         if self.auction and self.auction.is_club_managed:
@@ -4728,6 +5001,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         redirected = self._block_if_club_managed()
         if redirected is not None:
             return redirected
+        preview_token = self.request.GET.get("preview")
+        if preview_token:
+            return self.render_preview(preview_token)
         # first, try to read in a CSV file stored in session
         initial_formset_data = self.request.session.get("initial_formset_data", [])
         if initial_formset_data:
@@ -4784,265 +5060,217 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
-        """Process CSV data from a DictReader object and add/update users"""
+    def import_target_id(self):
+        return f"auction:{self.auction.pk}"
 
-        email_field_names = ["email", "e-mail", "email address", "e-mail address"]
-        bidder_number_fields = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
-        name_field_names = ["name", "full name", "first name", "firstname"]
-        address_field_names = ["address", "mailing address"]
-        phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
-        is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
-        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed", "allowedtobid"]
-        memo_field_names = ["memo", "note", "notes"]
-        is_admin_field_names = ["admin", "staff", "is_admin", "is_staff"]
-        # we are not reading in location here, do we care??
-        some_columns_exist = False
-        error = ""
-        # order matters here - the most important columns should be validated last,
-        # so the error refers to the most important missing column
-        try:
-            # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
-            is_club_member_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_club_member_fields)
-            is_bidding_allowed_fields_exists = self.csv_columns_exist(
-                csv_reader.fieldnames, is_bidding_allowed_field_names
+    def import_done_url(self):
+        return reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+
+    def import_cancel_url(self):
+        return reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+
+    @staticmethod
+    def _tos_label(tos):
+        label = tos.name or "(no name)"
+        if tos.bidder_number:
+            return f"{label} (bidder #{tos.bidder_number})"
+        if tos.email:
+            return f"{label} ({tos.email})"
+        return label
+
+    def _parse_user_row(self, row):
+        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has."""
+        club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
+        is_club_member = self.extract_csv_field(row, club_member_fields).lower() in [
+            "yes",
+            "true",
+            "member",
+            "club member",
+            self.auction.alternative_split_label.lower(),
+        ]
+        bidding_allowed = self.extract_csv_field(row, self.BIDDING_FIELDS, "yes").lower() in ["yes", "true"]
+        is_admin = self.extract_csv_field(row, self.ADMIN_FIELDS).lower() in ["yes", "true", "1"]
+        fields = {
+            "bidder_number": self.extract_csv_field(row, self.BIDDER_NUMBER_FIELDS)[:20],
+            "name": self.extract_csv_field(row, self.NAME_FIELDS)[:181],
+            "email": normalize_email(self.extract_csv_field(row, self.EMAIL_FIELDS))[:254],
+            "phone": self.extract_csv_field(row, self.PHONE_FIELDS)[:20],
+            "address": self.extract_csv_field(row, self.ADDRESS_FIELDS)[:500],
+            "memo": (self.extract_csv_field(row, self.MEMO_FIELDS) or "")[:500],
+            "is_club_member": is_club_member,
+            "bidding_allowed": bidding_allowed,
+            "is_admin": is_admin,
+        }
+        cols = list(row.keys())
+        present = {
+            "is_club_member": self.csv_columns_exist(cols, club_member_fields),
+            "bidding_allowed": self.csv_columns_exist(cols, self.BIDDING_FIELDS),
+            "memo": self.csv_columns_exist(cols, self.MEMO_FIELDS),
+            "is_admin": self.csv_columns_exist(cols, self.ADMIN_FIELDS),
+        }
+        return fields, present
+
+    def plan_row(self, row):
+        fields, present = self._parse_user_row(row)
+        name, email = fields["name"], fields["email"]
+        base = {"fields": fields, "present": present, "target_pk": None, "target_display": "", "match_type": None}
+        if not name and not email:
+            return {**base, "action": "skip", "reason": "Row has no name or email"}
+        if email:
+            existing = self.auction.find_user(email=email)
+            if existing:
+                return {
+                    **base,
+                    "action": "update",
+                    "target_pk": existing.pk,
+                    "target_display": self._tos_label(existing),
+                    "match_type": "email",
+                    "reason": "Matched an existing user by email",
+                }
+        if name:
+            existing = self.auction.find_user(name=name)
+            if existing:
+                return {
+                    **base,
+                    "action": "duplicate",
+                    "target_pk": existing.pk,
+                    "target_display": self._tos_label(existing),
+                    "match_type": "name",
+                    "reason": "Same or similar name as an existing user",
+                }
+        return {**base, "action": "create", "reason": ""}
+
+    def _create_tos(self, fields):
+        bidder_number = fields.get("bidder_number", "")
+        if bidder_number and AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exists():
+            bidder_number = ""
+        return AuctionTOS.objects.create(
+            auction=self.auction,
+            pickup_location=self.auction.location_qs.first(),
+            manually_added=True,
+            bidder_number=bidder_number,
+            name=fields.get("name", ""),
+            phone_number=fields.get("phone", ""),
+            email=fields.get("email", ""),
+            address=fields.get("address", ""),
+            is_club_member=fields.get("is_club_member", False),
+            bidding_allowed=fields.get("bidding_allowed", True),
+            memo=fields.get("memo", ""),
+            is_admin=fields.get("is_admin", False),
+        )
+
+    def _update_tos(self, tos, fields, present):
+        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when their
+        column was present in the file; the CSV bidder number wins (when non-conflicting) so the number
+        physically assigned at check-in is the one the scanner resolves to. Returns True if anything changed."""
+        changed = False
+        name = fields.get("name", "")
+        if name and tos.name != name:
+            tos.name = name
+            changed = True
+        phone = fields.get("phone", "")
+        if phone and tos.phone_number != phone:
+            tos.phone_number = phone
+            changed = True
+        address = fields.get("address", "")
+        if address and tos.address != address:
+            tos.address = address
+            changed = True
+        email = fields.get("email", "")
+        if email and not tos.email:
+            tos.email = email
+            changed = True
+        if present.get("is_club_member") and tos.is_club_member != fields.get("is_club_member"):
+            tos.is_club_member = fields.get("is_club_member")
+            changed = True
+        if present.get("bidding_allowed") and tos.bidding_allowed != fields.get("bidding_allowed"):
+            tos.bidding_allowed = fields.get("bidding_allowed")
+            changed = True
+        if present.get("memo"):
+            memo = fields.get("memo", "")
+            if tos.memo != memo:
+                tos.memo = memo
+                changed = True
+        if present.get("is_admin") and tos.is_admin != fields.get("is_admin"):
+            tos.is_admin = fields.get("is_admin")
+            changed = True
+        bidder_number = fields.get("bidder_number", "")
+        if bidder_number and tos.bidder_number != bidder_number:
+            conflict = (
+                AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exclude(pk=tos.pk).exists()
             )
-            memo_field_exists = self.csv_columns_exist(csv_reader.fieldnames, memo_field_names)
-            is_admin_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_admin_field_names)
-            if not self.csv_columns_exist(csv_reader.fieldnames, phone_field_names):
-                error = "Warning: This file does not contain a phone column"
-            else:
-                some_columns_exist = True
-            if not self.csv_columns_exist(csv_reader.fieldnames, address_field_names):
-                error = "Warning: This file does not contain an address column"
-            else:
-                some_columns_exist = True
-            if not self.csv_columns_exist(csv_reader.fieldnames, name_field_names):
-                error = "Warning: This file does not contain a name column"
-            else:
-                some_columns_exist = True
-            if not self.csv_columns_exist(csv_reader.fieldnames, email_field_names):
-                error = "Warning: This file does not contain an email column"
-            else:
-                some_columns_exist = True
-            if not some_columns_exist:
-                error = (
-                    "Unable to read information from this CSV file.  Make sure it contains an email and a name column"
+            if not conflict:
+                tos.bidder_number = bidder_number
+                changed = True
+        if changed:
+            tos.save()
+        return changed
+
+    def apply_action(self, action, decision):
+        kind = action["action"]
+        if kind == "skip":
+            return "skipped"
+        fields = action.get("fields", {})
+        present = action.get("present", {})
+        target_pk = action.get("target_pk")
+        if kind == "create" or (kind == "duplicate" and decision == "create"):
+            tos = self._create_tos(fields)
+            if kind == "duplicate" and target_pk:
+                # keep the admin-review link to the record it resembles
+                AuctionTOS.objects.filter(pk=tos.pk).update(possible_duplicate=target_pk)
+                AuctionTOS.objects.filter(pk=target_pk, possible_duplicate__isnull=True).update(
+                    possible_duplicate=tos.pk
                 )
+            return "created"
+        # update (email match) or merge (name-match duplicate the admin chose to merge)
+        tos = AuctionTOS.objects.filter(pk=target_pk, auction=self.auction).first() if target_pk else None
+        if not tos:
+            self._create_tos(fields)
+            return "created"
+        changed = self._update_tos(tos, fields, present)
+        if not changed:
+            return "unchanged"
+        return "updated" if kind == "update" else "merged"
 
-            total_tos = 0
-            total_skipped = 0
-            total_updated = 0
-            for row in csv_reader:
-                bidder_number = self.extract_csv_field(row, bidder_number_fields)
-                email = self.extract_csv_field(row, email_field_names)
-                name = self.extract_csv_field(row, name_field_names)
-                phone = self.extract_csv_field(row, phone_field_names)
-                address = self.extract_csv_field(row, address_field_names)
-                memo = self.extract_csv_field(row, memo_field_names)
-                is_club_member = self.extract_csv_field(row, is_club_member_fields)
-                if is_club_member.lower() in [
-                    "yes",
-                    "true",
-                    "member",
-                    "club member",
-                    self.auction.alternative_split_label.lower(),
-                ]:
-                    is_club_member = True
-                else:
-                    is_club_member = False
-                is_bidding_allowed = self.extract_csv_field(row, is_bidding_allowed_field_names, "yes")
-                if is_bidding_allowed.lower() in ["yes", "true"]:
-                    bidding_allowed = True
-                else:
-                    bidding_allowed = False
-                is_admin = self.extract_csv_field(row, is_admin_field_names)
-                if is_admin and is_admin.lower() in ["yes", "true", "1"]:
-                    is_admin = True
-                else:
-                    is_admin = False
-                # if email or name or phone or address:
-                if email:
-                    # The old way -- skip anybody who is already in the auction
-                    # if self.auction.find_user(name, email):
-                    #     # if self.tos_is_in_auction(self.auction, name, email):
-                    #     logger.debug("CSV import skipping %s", name)
-                    #     total_skipped += 1
-                    # new way: update existing users with the same email
-                    existing_tos = self.auction.find_user(name="", email=email)
-                    if existing_tos:
-                        logger.debug("CSV import updating %s", email)
-                        # Track if any field actually changed
-                        changed = False
-                        if phone and existing_tos.phone_number != phone[:20]:
-                            existing_tos.phone_number = phone[:20]
-                            changed = True
-                        if address and existing_tos.address != address[:500]:
-                            existing_tos.address = address[:500]
-                            changed = True
-                        if is_club_member_field_exists and existing_tos.is_club_member != is_club_member:
-                            existing_tos.is_club_member = is_club_member
-                            changed = True
-                        if is_bidding_allowed_fields_exists and existing_tos.bidding_allowed != bidding_allowed:
-                            existing_tos.bidding_allowed = bidding_allowed
-                            changed = True
-                        if name and existing_tos.name != name[:181]:
-                            existing_tos.name = name[:181]
-                            changed = True
-                        if bidder_number:
-                            if (
-                                not AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
-                                .exclude(pk=existing_tos.pk)
-                                .first()
-                            ):
-                                if existing_tos.bidder_number != bidder_number[:20]:
-                                    existing_tos.bidder_number = bidder_number[:20]
-                                    changed = True
-                        if memo_field_exists:
-                            new_memo = memo[:500] if memo else ""
-                            if existing_tos.memo != new_memo:
-                                existing_tos.memo = new_memo
-                                changed = True
-                        if is_admin_field_exists and existing_tos.is_admin != is_admin:
-                            existing_tos.is_admin = is_admin
-                            changed = True
-                        if changed:
-                            existing_tos.save()
-                            total_updated += 1
-                    else:
-                        logger.debug("CSV import adding %s", name)
-                        if bidder_number:
-                            if AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).first():
-                                bidder_number = ""
-                        AuctionTOS.objects.create(
-                            auction=self.auction,
-                            pickup_location=self.auction.location_qs.first(),
-                            manually_added=True,
-                            bidder_number=bidder_number[:20],
-                            name=name[:181],
-                            phone_number=phone[:20],
-                            email=email[:254],
-                            address=address[:500],
-                            is_club_member=is_club_member,
-                            bidding_allowed=bidding_allowed,
-                            memo=memo[:500] if memo else "",
-                            is_admin=is_admin,
-                        )
-                        total_tos += 1
-                else:
-                    total_skipped += 1
-            if error:
-                messages.error(self.request, error)
-            # Create history entry only if users were added or updated
-            if total_tos > 0 or total_updated > 0:
-                msg_parts = []
-                if total_tos > 0:
-                    msg_parts.append(f"{total_tos} users added")
-                if total_updated > 0:
-                    msg_parts.append(f"{total_updated} users updated")
-                msg = ", ".join(msg_parts)
-                if filename:
-                    msg += f" from {filename}"
-                self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
-            # Prepare user-facing message
-            msg = ""
-            if total_tos > 0:
-                msg = f"{total_tos} users added"
-            if total_updated:
-                if msg:
-                    msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
-                else:
-                    msg = f"{total_updated} users were updated"
-            if total_skipped:
-                if msg:
-                    msg += f", {total_skipped} users were skipped because they did not contain an email address"
-                else:
-                    msg = f"{total_skipped} users were skipped because they did not contain an email address"
-            if msg:
-                messages.info(self.request, msg)
-            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
-        except (UnicodeDecodeError, ValueError) as e:
+    def record_import_history(self, results, filename=None):
+        created = results.get("created", 0)
+        updated = results.get("updated", 0) + results.get("merged", 0)
+        if not created and not updated:
+            return
+        parts = []
+        if created:
+            parts.append(f"{created} users added")
+        if updated:
+            parts.append(f"{updated} users updated")
+        msg = ", ".join(parts)
+        if filename:
+            msg += f" from {filename}"
+        self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+
+    def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
+        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        fieldnames = csv_reader.fieldnames or []
+        recognized = self.csv_columns_exist(
+            fieldnames, self.EMAIL_FIELDS + self.NAME_FIELDS + self.PHONE_FIELDS + self.ADDRESS_FIELDS
+        )
+        if not recognized:
             messages.error(
-                self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
+                self.request,
+                "Unable to read information from this CSV file. Make sure it contains an email and a name column.",
             )
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
-
-    def handle_csv_file(self, csv_file, *args, **kwargs):
-        """If a CSV file has been uploaded, parse it and redirect"""
-        try:
-            csv_file.seek(0)
-            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            filename = getattr(csv_file, "name", None)
-            return self.process_csv_data(csv_reader, filename=filename)
-        except (UnicodeDecodeError, ValueError) as e:
-            messages.error(
-                self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
-            )
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
-
-        # The code below would populate the formset with the info from the CSV.
-        # This process is simply not working, and it fails silently with no log.
-
-        # total_tos = 0
-        # total_skipped = 0
-        # initial_formset_data = []
-        # for row in csv_reader:
-        #     bidder_number = extract_info(row, bidder_number_fields)
-        #     email = extract_info(row, email_field_names)
-        #     name = extract_info(row, name_field_names)
-        #     phone = extract_info(row, phone_field_names)
-        #     address = extract_info(row, address_field_names)
-        #     is_club_member = extract_info(row, is_club_member_fields)
-
-        #     if (email or name or phone or address) and total_tos <= self.max_users_that_can_be_added_at_once:
-        #         if self.tos_is_in_auction(self.auction, name, email):
-        #             total_skipped += 1
-        #         else:
-        #             total_tos += 1
-        #             initial_formset_data.append(
-        #                 {
-        #                     "bidder_number": bidder_number,
-        #                     "name": name,
-        #                     "phone_number": phone,
-        #                     "email": email,
-        #                     "address": address,
-        #                     "is_club_member": is_club_member,
-        #                     "pickup_location": "2",
-        #                 }
-        #             )
-        # # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
-        # self.request.session["initial_formset_data"] = initial_formset_data
-        # if total_tos >= self.max_users_that_can_be_added_at_once:
-        #     messages.error(
-        #         self.request,
-        #         f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.",
-        #     )
-        # if total_skipped:
-        #     messages.info(
-        #         self.request,
-        #         f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below",
-        #     )
-        # if error:
-        #     messages.error(self.request, error)
-        # if total_tos:
-        #     self.extra_rows = total_tos
-        # # note that regardless of whether this is valid or not, we redirect to the same page after parsing the CSV file
-        # return redirect(reverse("bulk_add_users", kwargs={"slug": self.auction.slug}))
+            return self._hx_aware_redirect(self.import_cancel_url())
+        token = self.build_preview(csv_reader, filename=filename)
+        return self.redirect_to_preview(token)
 
     def post(self, request, *args, **kwargs):
         _ = self.can_add_edit_people
         redirected = self._block_if_club_managed()
         if redirected is not None:
             return redirected
+        # A preview confirm/cancel submission takes priority over file uploads and the manual formset.
+        import_response = self.handle_import_post(request)
+        if import_response is not None:
+            return import_response
         # Check for CSV file with multiple possible field names
         csv_file = None
         for field_name in ["csv_file", "csv_file_quick"]:
@@ -5051,7 +5279,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
                 break
 
         if csv_file:
-            return self.handle_csv_file(csv_file)
+            return self.handle_csv_upload(csv_file)
         self.instantiate_formset()
         tos_formset = self.AuctionTOSFormSet(
             self.request.POST,
@@ -5174,23 +5402,20 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             # Create a CSV reader from the response text (handles encoding automatically)
             csv_reader = csv.DictReader(response.text.splitlines())
 
-            # Create a BulkAddUsers instance to use its process_csv_data method
-            # Note: This reuses existing CSV processing logic. Any exceptions from
-            # process_csv_data will be caught by the outer try/except blocks.
+            # Reuse BulkAddUsers' row planning, but show the same review page before anything is written.
+            # Any exceptions from build_preview are caught by the outer try/except blocks.
             bulk_add_view = BulkAddUsers()
             bulk_add_view.request = self.request
             bulk_add_view.auction = self.auction
+            token = bulk_add_view.build_preview(csv_reader, filename="Google Drive sync")
 
-            # Process the CSV data (this adds messages via self.request)
-            bulk_add_view.process_csv_data(csv_reader, filename="Google Drive sync")
-
-            # Update the last sync time
+            # Record that we pulled the sheet; the actual user changes happen when the admin confirms.
             self.auction.last_sync_time = timezone.now()
             self.auction.save()
-            self.auction.create_history("USERS", action="Google Drive sync complete")
-            # Redirect to the users list
-            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
-            return redirect(url)
+            self.auction.create_history("USERS", action="Pulled Google Drive sheet for import review")
+            # Send the admin to the BulkAddUsers preview, which renders and (on confirm) applies the token.
+            preview_url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug}) + f"?preview={token}"
+            return redirect(preview_url)
 
         except requests.RequestException as e:
             if "401" in str(e):
@@ -5793,312 +6018,291 @@ class SaveLotAjax(APIView, AuctionViewMixin):
         return super().dispatch(request, *args, **kwargs)
 
 
-class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
-    """Import or update lots from a CSV file"""
+class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, View):
+    """Import or update lots from a CSV file.
+
+    Each row either updates an existing lot (matched by lot number) or creates a lot under a seller (an
+    AuctionTOS, matched/created by normalized email then name). The shared preview surfaces lots to
+    create/update, seller possible-duplicates (merge into existing vs create new), and skipped rows with
+    reasons before anything is written."""
+
+    import_record_kind = "lot"
+    import_supports_duplicates = True
+    import_preview_columns = (
+        ("Lot #", "lot_number"),
+        ("Lot name", "lot_name"),
+        ("Seller", "name"),
+        ("Email", "email"),
+    )
+
+    LOT_NUMBER_FIELDS = ["lot number", "lot_number", "lot #", "number"]
+    EMAIL_FIELDS = ["email", "e-mail", "email address", "e-mail address"]
+    NAME_FIELDS = ["name", "full name", "first name", "firstname", "bidder name"]
+    LOT_NAME_FIELDS = ["lot name", "lot_name", "item", "item name"]
+    DESCRIPTION_FIELDS = ["description", "desc", "details"]
+    QUANTITY_FIELDS = ["quantity", "qty", "amount"]
+    RESERVE_PRICE_FIELDS = ["reserve price", "reserve_price", "minimum bid", "min bid", "starting bid"]
+    BUY_NOW_PRICE_FIELDS = ["buy now price", "buy_now_price", "buy now", "buynow"]
+    CATEGORY_FIELDS = ["category", "species category", "species_category"]
+    BRED_FIELDS = ["breeder points", "i bred this fish", "i_bred_this_fish", "bred"]
+    DONATION_FIELDS = ["donation", "donate"]
+
+    def import_target_id(self):
+        return f"auction:{self.auction.pk}"
+
+    def import_done_url(self):
+        return reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+
+    def import_cancel_url(self):
+        return reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+
+    def get(self, request, *args, **kwargs):
+        preview_token = request.GET.get("preview")
+        if preview_token:
+            return self.render_preview(preview_token)
+        return self._hx_aware_redirect(self.import_cancel_url())
 
     def post(self, request, *args, **kwargs):
+        import_response = self.handle_import_post(request)
+        if import_response is not None:
+            return import_response
         csv_file = request.FILES.get("csv_file", None)
         if not csv_file:
             messages.error(request, "No CSV file provided")
-            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
+            return self._hx_aware_redirect(self.import_cancel_url())
+        return self.handle_csv_upload(csv_file)
 
-        try:
-            csv_file.seek(0)
-            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            filename = getattr(csv_file, "name", None)
-            return self.process_csv_data(csv_reader, filename=filename)
-        except (UnicodeDecodeError, ValueError) as e:
-            messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
-            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
-
-    def process_csv_data(self, csv_reader, filename=None):
-        """Process CSV data and create/update lots"""
-
-        def extract_info(row, field_name_list, default_response=""):
-            """Extract value from row using case-insensitive field name matching"""
-            case_insensitive_row = {k.lower(): v for k, v in row.items()}
-            for name in field_name_list:
-                value = case_insensitive_row.get(name)
-                if value is not None:
-                    return value
-            return default_response
-
-        def columns_exist(field_names, columns):
-            """Returns True if any value in the list `columns` exists in the file"""
-            case_insensitive_row = {k.lower() for k in field_names}
-            for column in columns:
-                if column in case_insensitive_row:
-                    return True
-            return False
-
-        # Define field name variations for CSV columns
-        lot_number_fields = ["lot number", "lot_number", "lot #", "number"]
-        email_field_names = ["email", "e-mail", "email address", "e-mail address"]
-        name_field_names = ["name", "full name", "first name", "firstname", "bidder name"]
-        lot_name_fields = ["lot name", "lot_name", "item", "item name"]
-        description_fields = ["description", "desc", "details"]
-        quantity_fields = ["quantity", "qty", "amount"]
-        reserve_price_fields = ["reserve price", "reserve_price", "minimum bid", "min bid", "starting bid"]
-        buy_now_price_fields = ["buy now price", "buy_now_price", "buy now", "buynow"]
-        category_fields = ["category", "species category", "species_category"]
-        i_bred_this_fish_fields = ["breeder points", "i bred this fish", "i_bred_this_fish", "bred"]
-        donation_fields = ["donation", "donate"]
-
-        # Use auction's custom field names for matching
-        custom_checkbox_fields = ["custom checkbox", "custom_checkbox"]
+    def _custom_field_specs(self):
+        """Resolve the auction's configurable custom-field column names + valid dropdown values."""
+        checkbox_fields = ["custom checkbox", "custom_checkbox"]
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
-            custom_checkbox_fields.append(self.auction.custom_checkbox_name.lower())
-
-        custom_field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
+            checkbox_fields.append(self.auction.custom_checkbox_name.lower())
+        field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
-            custom_field_1_fields.append(self.auction.custom_field_1_name.lower())
-        custom_dropdown_fields = ["custom dropdown", "custom_dropdown"]
+            field_1_fields.append(self.auction.custom_field_1_name.lower())
+        dropdown_fields = ["custom dropdown", "custom_dropdown"]
         if self.auction.custom_dropdown_name:
-            custom_dropdown_fields.append(self.auction.custom_dropdown_name.lower())
-        custom_dropdown_options = set()
-        use_custom_dropdown = False
+            dropdown_fields.append(self.auction.custom_dropdown_name.lower())
+        dropdown_options = set()
         if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
-            custom_dropdown_options = set(
-                AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
-            )
-            use_custom_dropdown = len(custom_dropdown_options) >= 2
+            dropdown_options = set(AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True))
+            if len(dropdown_options) < 2:
+                dropdown_options = set()
+        return checkbox_fields, field_1_fields, dropdown_fields, dropdown_options
 
-        def valid_custom_dropdown(value):
-            if use_custom_dropdown and value in custom_dropdown_options:
-                return value
-            return ""
+    @staticmethod
+    def _to_bool(value):
+        if isinstance(value, str):
+            return value.lower() in ["yes", "true", "1", "y", "t"]
+        return bool(value)
 
-        # Track results
-        lots_created = 0
-        lots_updated = 0
-        users_created = 0
-        errors = {
-            "missing_info": 0,
-            "closed_invoices": 0,
-            "no_lot_number_no_bidder": 0,
+    @staticmethod
+    def _to_int(value, default=None):
+        try:
+            return int(value) if value else default
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_lot_row(self, row):
+        checkbox_fields, field_1_fields, dropdown_fields, dropdown_options = self._custom_field_specs()
+        custom_dropdown = self.extract_csv_field(row, dropdown_fields)
+        if custom_dropdown not in dropdown_options:
+            custom_dropdown = ""
+        category_name = self.extract_csv_field(row, self.CATEGORY_FIELDS)
+        category = Category.objects.filter(name__iexact=category_name).first() if category_name else None
+        return {
+            "lot_number": self.extract_csv_field(row, self.LOT_NUMBER_FIELDS),
+            "email": normalize_email(self.extract_csv_field(row, self.EMAIL_FIELDS))[:254],
+            "name": self.extract_csv_field(row, self.NAME_FIELDS)[:181],
+            "lot_name": self.extract_csv_field(row, self.LOT_NAME_FIELDS)[:40],
+            "description": self.extract_csv_field(row, self.DESCRIPTION_FIELDS),
+            "quantity": self._to_int(self.extract_csv_field(row, self.QUANTITY_FIELDS, "1"), 1),
+            "reserve_price": self._to_int(self.extract_csv_field(row, self.RESERVE_PRICE_FIELDS)),
+            "buy_now_price": self._to_int(self.extract_csv_field(row, self.BUY_NOW_PRICE_FIELDS)),
+            "category_id": category.pk if category else None,
+            "i_bred_this_fish": self._to_bool(self.extract_csv_field(row, self.BRED_FIELDS)),
+            "donation": self._to_bool(self.extract_csv_field(row, self.DONATION_FIELDS)),
+            "custom_checkbox": self._to_bool(self.extract_csv_field(row, checkbox_fields)),
+            "custom_field_1": self.extract_csv_field(row, field_1_fields)[:60],
+            "custom_dropdown": custom_dropdown,
         }
 
-        try:
-            for row in csv_reader:
-                # Extract core fields
-                lot_number = extract_info(row, lot_number_fields)
-                email = extract_info(row, email_field_names)
-                name = extract_info(row, name_field_names)
-
-                # Extract lot fields
-                lot_name = extract_info(row, lot_name_fields)
-                description = extract_info(row, description_fields)
-                quantity_str = extract_info(row, quantity_fields, "1")
-                reserve_price_str = extract_info(row, reserve_price_fields)
-                buy_now_price_str = extract_info(row, buy_now_price_fields)
-                category_name = extract_info(row, category_fields)
-                i_bred_this_fish_str = extract_info(row, i_bred_this_fish_fields)
-                donation_str = extract_info(row, donation_fields)
-                custom_checkbox_str = extract_info(row, custom_checkbox_fields)
-                custom_field_1 = extract_info(row, custom_field_1_fields)
-                custom_dropdown = extract_info(row, custom_dropdown_fields)
-
-                # Convert boolean fields
-                def to_bool(value):
-                    if isinstance(value, str):
-                        return value.lower() in ["yes", "true", "1", "y", "t"]
-                    return bool(value)
-
-                i_bred_this_fish = to_bool(i_bred_this_fish_str)
-                donation = to_bool(donation_str)
-                custom_checkbox = to_bool(custom_checkbox_str)
-
-                # Convert numeric fields
-                try:
-                    quantity = int(quantity_str) if quantity_str else 1
-                except ValueError:
-                    quantity = 1
-
-                try:
-                    reserve_price = int(reserve_price_str) if reserve_price_str else None
-                except ValueError:
-                    reserve_price = None
-
-                try:
-                    buy_now_price = int(buy_now_price_str) if buy_now_price_str else None
-                except ValueError:
-                    buy_now_price = None
-
-                # Look up category
-                category = None
-                if category_name:
-                    category = Category.objects.filter(name__iexact=category_name).first()
-
-                # Step 1: If lot number exists, try to find and update the lot
-                lot = None
-                if lot_number:
-                    # Search by custom_lot_number first, then lot_number_int
-                    lot = (
-                        Lot.objects.exclude(is_deleted=True)
-                        .filter(auction=self.auction, custom_lot_number=lot_number)
-                        .first()
-                    )
-                    if not lot:
-                        # Try to parse as int for lot_number_int search, but don't error if it fails
-                        try:
-                            lot_number_int = int(lot_number)
-                            lot = (
-                                Lot.objects.exclude(is_deleted=True)
-                                .filter(auction=self.auction, lot_number_int=lot_number_int)
-                                .first()
-                            )
-                        except ValueError:
-                            # Lot number is not numeric, that's fine - it might be a custom lot number
-                            pass
-
-                    if lot:
-                        # Update existing lot (don't update winner, winning_price, partial_refund, banned)
-                        if lot_name:
-                            lot.lot_name = lot_name[:40]
-                        if description:
-                            lot.summernote_description = description
-                        if quantity:
-                            lot.quantity = quantity
-                        if reserve_price is not None:
-                            lot.reserve_price = reserve_price
-                        if buy_now_price is not None:
-                            lot.buy_now_price = buy_now_price
-                        if category:
-                            lot.species_category = category
-                        # Boolean fields always update
-                        lot.i_bred_this_fish = i_bred_this_fish
-                        lot.donation = donation
-                        lot.custom_checkbox = custom_checkbox
-                        if custom_field_1:
-                            lot.custom_field_1 = custom_field_1[:60]
-                        custom_dropdown_value = valid_custom_dropdown(custom_dropdown)
-                        if custom_dropdown_value:
-                            lot.custom_dropdown = custom_dropdown_value
-                        lot.save()
-                        lots_updated += 1
-                        continue
-
-                # Step 2: No existing lot found, try to create a new one
-                # Need both name and email to find/create user
-                if not name or not email:
-                    errors["no_lot_number_no_bidder"] += 1
-                    continue
-
-                # Step 3: Find or create AuctionTOS
-                tos = self.auction.find_user(name=name, email=email)
-                if not tos:
-                    # Create new AuctionTOS
-                    tos = AuctionTOS.objects.create(
-                        auction=self.auction,
-                        pickup_location=self.auction.location_qs.first(),
-                        manually_added=True,
-                        name=name[:181],
-                        email=email[:254],
-                    )
-                    users_created += 1
-                    # Update auction history
-                    history_action = f"Added user {name} via CSV import"
-                    if filename:
-                        history_action += f" from {filename}"
-                    self.auction.create_history(
-                        applies_to="USERS",
-                        action=history_action,
-                        user=self.request.user,
-                    )
-
-                # Step 4: Check invoice status
-                invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
-                if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-
-                if invoice.status != "DRAFT":
-                    errors["closed_invoices"] += 1
-                    continue
-
-                # Step 5: Create new lot
-                if not lot_name:
-                    errors["missing_info"] += 1
-                    continue
-
-                custom_dropdown_value = valid_custom_dropdown(custom_dropdown)
-                new_lot = Lot(
-                    lot_name=lot_name[:40],
-                    summernote_description=description or "",
-                    quantity=quantity,
-                    reserve_price=reserve_price if reserve_price is not None else self.auction.minimum_bid,
-                    buy_now_price=buy_now_price,
-                    i_bred_this_fish=i_bred_this_fish,
-                    donation=donation,
-                    custom_checkbox=custom_checkbox,
-                    custom_field_1=custom_field_1[:60] if custom_field_1 else "",
-                    custom_dropdown=custom_dropdown_value,
-                    auctiontos_seller=tos,
-                    auction=self.auction,
-                    added_by=self.request.user,
-                )
-                if tos.user:
-                    new_lot.user = tos.user
-                if category:
-                    new_lot.species_category = category
-                new_lot.save()
-                lots_created += 1
-
-            # Build success/error messages
-            msg_parts = []
-            if lots_created:
-                msg_parts.append(f"{lots_created} lot{'s' if lots_created != 1 else ''} created")
-            if lots_updated:
-                msg_parts.append(f"{lots_updated} lot{'s' if lots_updated != 1 else ''} updated")
-            if users_created:
-                msg_parts.append(f"{users_created} user{'s' if users_created != 1 else ''} added")
-
-            if msg_parts:
-                messages.success(self.request, ", ".join(msg_parts))
-
-            # Report errors separately for clarity
-            if errors["no_lot_number_no_bidder"]:
-                messages.warning(
-                    self.request,
-                    f"{errors['no_lot_number_no_bidder']} row(s) skipped: missing lot number and bidder information",
-                )
-            if errors["missing_info"]:
-                messages.warning(
-                    self.request, f"{errors['missing_info']} row(s) skipped: missing required lot information"
-                )
-            if errors["closed_invoices"]:
-                messages.warning(
-                    self.request,
-                    f"{errors['closed_invoices']} lot(s) not created: user's invoice is not open",
-                )
-
-            # Update auction history
-            if lots_created or lots_updated:
-                history_msg = f"CSV import: {lots_created} lots created, {lots_updated} lots updated"
-                if users_created:
-                    history_msg += f", {users_created} users added"
-                if filename:
-                    history_msg += f" from {filename}"
-                self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
-
-            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
-
-        except (UnicodeDecodeError, ValueError) as e:
-            messages.error(
-                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+    def _find_lot(self, lot_number):
+        if not lot_number:
+            return None
+        lot = Lot.objects.exclude(is_deleted=True).filter(auction=self.auction, custom_lot_number=lot_number).first()
+        if lot:
+            return lot
+        lot_number_int = self._to_int(lot_number)
+        if lot_number_int is not None:
+            return (
+                Lot.objects.exclude(is_deleted=True).filter(auction=self.auction, lot_number_int=lot_number_int).first()
             )
-            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = url
-            return response
+        return None
+
+    @staticmethod
+    def _seller_label(tos):
+        label = tos.name or "(no name)"
+        if tos.email:
+            return f"{label} ({tos.email})"
+        return label
+
+    def _seller_invoice_open(self, tos):
+        invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+        return invoice is None or invoice.status == "DRAFT"
+
+    def plan_row(self, row):
+        fields = self._parse_lot_row(row)
+        base = {"fields": fields, "target_pk": None, "target_display": "", "match_type": None, "seller_pk": None}
+        # Step 1: update an existing lot matched by lot number (no seller involved)
+        lot = self._find_lot(fields["lot_number"])
+        if lot:
+            return {**base, "action": "update", "target_pk": lot.pk, "reason": "Update existing lot"}
+        # Step 2: a new lot needs both a seller name and email
+        if not fields["name"] or not fields["email"]:
+            return {**base, "action": "skip", "reason": "Missing lot number and complete bidder information"}
+        if not fields["lot_name"]:
+            return {**base, "action": "skip", "reason": "Missing required lot information (lot name)"}
+        # Step 3: resolve the seller — exact email match attaches silently; a name-only match is a duplicate
+        seller_by_email = self.auction.find_user(email=fields["email"])
+        if seller_by_email:
+            if not self._seller_invoice_open(seller_by_email):
+                return {**base, "action": "skip", "reason": f"{seller_by_email.name}'s invoice is not open"}
+            return {
+                **base,
+                "action": "create",
+                "seller_pk": seller_by_email.pk,
+                "reason": "New lot for existing seller",
+            }
+        seller_by_name = self.auction.find_user(name=fields["name"])
+        if seller_by_name:
+            if not self._seller_invoice_open(seller_by_name):
+                return {**base, "action": "skip", "reason": f"{seller_by_name.name}'s invoice is not open"}
+            return {
+                **base,
+                "action": "duplicate",
+                "target_pk": seller_by_name.pk,
+                "seller_pk": seller_by_name.pk,
+                "target_display": self._seller_label(seller_by_name),
+                "match_type": "name",
+                "reason": "Seller name matches an existing user",
+            }
+        return {**base, "action": "create", "reason": "New lot and new seller"}
+
+    def _update_lot(self, lot, fields):
+        # Don't touch winner, winning_price, partial_refund, banned — only the importable fields.
+        if fields.get("lot_name"):
+            lot.lot_name = fields["lot_name"]
+        if fields.get("description"):
+            lot.summernote_description = fields["description"]
+        if fields.get("quantity"):
+            lot.quantity = fields["quantity"]
+        if fields.get("reserve_price") is not None:
+            lot.reserve_price = fields["reserve_price"]
+        if fields.get("buy_now_price") is not None:
+            lot.buy_now_price = fields["buy_now_price"]
+        if fields.get("category_id"):
+            lot.species_category_id = fields["category_id"]
+        lot.i_bred_this_fish = fields.get("i_bred_this_fish", False)
+        lot.donation = fields.get("donation", False)
+        lot.custom_checkbox = fields.get("custom_checkbox", False)
+        if fields.get("custom_field_1"):
+            lot.custom_field_1 = fields["custom_field_1"]
+        if fields.get("custom_dropdown"):
+            lot.custom_dropdown = fields["custom_dropdown"]
+        lot.save()
+
+    def _resolve_seller(self, fields, action, decision):
+        """Return (seller, created_bool). Reuses the matched seller unless the admin chose to create a new
+        record for a name-match duplicate."""
+        seller_pk = action.get("seller_pk")
+        make_new = action["action"] == "duplicate" and decision == "create"
+        if seller_pk and not make_new:
+            seller = AuctionTOS.objects.filter(pk=seller_pk, auction=self.auction).first()
+            if seller:
+                return seller, False
+        seller = AuctionTOS.objects.create(
+            auction=self.auction,
+            pickup_location=self.auction.location_qs.first(),
+            manually_added=True,
+            name=fields.get("name", ""),
+            email=fields.get("email", ""),
+        )
+        return seller, True
+
+    def _create_lot(self, fields, seller):
+        new_lot = Lot(
+            lot_name=fields.get("lot_name", ""),
+            summernote_description=fields.get("description") or "",
+            quantity=fields.get("quantity") or 1,
+            reserve_price=(
+                fields["reserve_price"] if fields.get("reserve_price") is not None else self.auction.minimum_bid
+            ),
+            buy_now_price=fields.get("buy_now_price"),
+            i_bred_this_fish=fields.get("i_bred_this_fish", False),
+            donation=fields.get("donation", False),
+            custom_checkbox=fields.get("custom_checkbox", False),
+            custom_field_1=fields.get("custom_field_1", ""),
+            custom_dropdown=fields.get("custom_dropdown", ""),
+            auctiontos_seller=seller,
+            auction=self.auction,
+            added_by=self.request.user,
+        )
+        if seller.user:
+            new_lot.user = seller.user
+        if fields.get("category_id"):
+            new_lot.species_category_id = fields["category_id"]
+        new_lot.save()
+
+    def apply_action(self, action, decision):
+        kind = action["action"]
+        if kind == "skip":
+            return "skipped"
+        fields = action.get("fields", {})
+        if kind == "update":
+            lot = Lot.objects.exclude(is_deleted=True).filter(pk=action.get("target_pk"), auction=self.auction).first()
+            if not lot:
+                return "skipped"
+            self._update_lot(lot, fields)
+            return "updated"
+        # create or duplicate → resolve the seller, re-check the invoice, create the lot
+        seller, created_seller = self._resolve_seller(fields, action, decision)
+        if not self._seller_invoice_open(seller):
+            return "skipped"
+        if created_seller:
+            self._users_created = getattr(self, "_users_created", 0) + 1
+        self._create_lot(fields, seller)
+        return "created"
+
+    def message_import_results(self, results):
+        parts = []
+        if results.get("created"):
+            parts.append(f"{results['created']} lots created")
+        if results.get("updated"):
+            parts.append(f"{results['updated']} lots updated")
+        users_created = getattr(self, "_users_created", 0)
+        if users_created:
+            parts.append(f"{users_created} users added")
+        if results.get("skipped"):
+            parts.append(f"{results['skipped']} rows skipped")
+        if parts:
+            messages.success(self.request, ", ".join(parts))
+
+    def record_import_history(self, results, filename=None):
+        if not results.get("created") and not results.get("updated"):
+            return
+        history_msg = f"CSV import: {results.get('created', 0)} lots created, {results.get('updated', 0)} lots updated"
+        users_created = getattr(self, "_users_created", 0)
+        if users_created:
+            history_msg += f", {users_created} users added"
+        if filename:
+            history_msg += f" from {filename}"
+        self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
+
+    def process_csv_data(self, csv_reader, filename=None):
+        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        token = self.build_preview(csv_reader, filename=filename)
+        return self.redirect_to_preview(token)
 
 
 class ViewLot(DetailView):
@@ -10223,6 +10427,11 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
     """Start the PayPal onboarding process for a seller"""
 
     def get(self, request):
+        # PayPal must be enabled for this user before they can onboard a seller account.
+        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        if not request.user.userdata.paypal_enabled:
+            messages.error(request, "PayPal isn't enabled for your account.")
+            return redirect(reverse("home"))
         _stash_club_for_payment_oauth(request)
         tracking_id = request.user.userdata.unsubscribe_link
         payload = {
@@ -10500,6 +10709,11 @@ class SquareConnectView(LoginRequiredMixin, View):
     """Start the Square OAuth process for a seller"""
 
     def get(self, request):
+        # Square must be enabled for this user before they can onboard a seller account.
+        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        if not request.user.userdata.square_enabled:
+            messages.error(request, "Square isn't enabled for your account.")
+            return redirect(reverse("home"))
         _stash_club_for_payment_oauth(request)
         # Build Square OAuth URL
         # Use the user's unsubscribe_link as state parameter for security
@@ -11748,6 +11962,619 @@ class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
         return 1 / 0
 
 
+class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
+    template_name = "auctions/admin_setup_checklist.html"
+
+    @staticmethod
+    def _yes_no(value):
+        return "True" if value else "False"
+
+    def get_context_data(self, **kwargs):
+        from urllib.parse import urlsplit
+
+        from fishauctions._env import env_has_real_value
+
+        context = super().get_context_data(**kwargs)
+
+        server_ip = get_server_public_ip()
+        if server_ip:
+            domain_help = (
+                "Register a domain name with a DNS provider, then create DNS records "
+                f"(an A record) that point to this server's IP: <code>{server_ip}</code>"
+            )
+        else:
+            domain_help = (
+                "Register a domain name with a DNS provider, then create DNS records "
+                "(an A record) that point to this server's public IP address."
+            )
+
+        # Build https://your-host from SITE_DOMAIN so the payment redirect/webhook
+        # URLs below are copy-paste ready for this install.
+        raw_domain = (settings.SITE_DOMAIN or "example.com").strip() or "example.com"
+        site_host = urlsplit(raw_domain if "://" in raw_domain else f"//{raw_domain}").hostname or raw_domain
+        base_url = f"https://{site_host}"
+
+        email_configured = (
+            settings.POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend"
+            and env_has_real_value(settings.AWS_ACCESS_KEY_ID)
+            and env_has_real_value(settings.AWS_SECRET_ACCESS_KEY)
+        ) or (env_has_real_value(settings.EMAIL_HOST_USER) and env_has_real_value(settings.EMAIL_HOST_PASSWORD))
+
+        context["setup_items"] = [
+            # -- Core setup -------------------------------------------------------
+            {
+                "section": "Core setup",
+                "name": "Site domain",
+                "configured": bool((settings.SITE_DOMAIN or "").strip() and settings.SITE_DOMAIN != "example.com"),
+                "what_it_does": (
+                    "Used in absolute URLs, routed email senders, and the production HTTPS certificate. "
+                    "Enter just the hostname &mdash; no <code>https://</code> and no trailing slash."
+                ),
+                "where_to_get_it": domain_help,
+                "snippets": [{"code": 'SITE_DOMAIN="example.com"'}],
+            },
+            {
+                "section": "Core setup",
+                "name": "Single club mode",
+                # A preference, not a credential: either value is valid, so always "Done".
+                "configured": True,
+                "what_it_does": (
+                    "On by default. The site runs as one club named after <code>NAVBAR_BRAND</code> (there is no "
+                    "separate <code>SINGLE_CLUB_NAME</code>), every user is auto-added as a member, and auctions are "
+                    "tied to it. Set to <code>False</code> only if you host multiple clubs on one install (like "
+                    "auction.fish). Can be toggled later without data loss &mdash; the club, memberships, and auctions "
+                    "created while it was on remain intact. "
+                    f"Currently <strong>{'on' if getattr(settings, 'SINGLE_CLUB_MODE', False) else 'off'}</strong>."
+                ),
+                "snippets": [
+                    {"code": f'SINGLE_CLUB_MODE="{self._yes_no(getattr(settings, "SINGLE_CLUB_MODE", False))}"'}
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "Site identity & branding",
+                # A preference, not a credential: always "Done", the help text explains it.
+                "configured": True,
+                "what_it_does": (
+                    "Branding shown across the site and on emails:"
+                    "<ul class='mb-0'>"
+                    "<li><code>NAVBAR_BRAND</code> &mdash; shown at the top of every page (also the single club's name).</li>"
+                    "<li><code>COPYRIGHT_MESSAGE</code> &mdash; shown in the footer. HTML is allowed.</li>"
+                    "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, shown next to the unsubscribe link on promo emails (required by anti-spam law).</li>"
+                    "<li><code>WEBSITE_FOCUS</code> &mdash; the plural, lowercase noun your site is about, e.g. <code>fish</code>, <code>birds</code>, <code>items</code>.</li>"
+                    "<li><code>I_BRED_THIS_FISH_LABEL</code> &mdash; the label shown next to the &ldquo;breeder points&rdquo; checkbox.</li>"
+                    "<li><code>WEEKLY_PROMO_MESSAGE</code> &mdash; extra text included in the weekly promotional email (plain text only; usually left blank).</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            f'NAVBAR_BRAND="{settings.NAVBAR_BRAND}"\n'
+                            'COPYRIGHT_MESSAGE="Website copyright your club"\n'
+                            'MAILING_ADDRESS="123 Your Street, Anytown, USA"\n'
+                            f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"\n'
+                            f'I_BRED_THIS_FISH_LABEL="{settings.I_BRED_THIS_FISH_LABEL}"\n'
+                            'WEEKLY_PROMO_MESSAGE=""'
+                        )
+                    }
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "Who can create auctions, lots, and promotions",
+                "configured": True,
+                "what_it_does": (
+                    "Controls what regular (non-admin) users can do and which optional pages appear. "
+                    "The snippet below shows your current values."
+                    "<ul class='mb-0'>"
+                    "<li><code>ALLOW_USERS_TO_CREATE_AUCTIONS</code> &mdash; let users create club auctions. "
+                    "False = Django admins only.</li>"
+                    "<li><code>ALLOW_USERS_TO_CREATE_LOTS</code> &mdash; let newly created users create standalone lots "
+                    "(not attached to an auction). Everyone can still add lots to club auctions.</li>"
+                    "<li><code>USERS_ARE_TRUSTED_BY_DEFAULT</code> &mdash; trusted users can promote auctions, manage "
+                    "payments, and send invoice notifications. Keep this False so an admin vets accounts first. A common "
+                    "setup is <code>ALLOW_USERS_TO_CREATE_AUCTIONS=True</code> with <code>USERS_ARE_TRUSTED_BY_DEFAULT=False</code>.</li>"
+                    "<li><code>UNTRUSTED_MESSAGE</code> &mdash; the message untrusted users see when they try to promote an auction.</li>"
+                    "<li><code>ENABLE_PROMO_PAGE</code> &mdash; True shows a marketing landing page instead of the "
+                    "auctions list as the home page.</li>"
+                    "<li><code>ENABLE_CLUB_FINDER</code> &mdash; True adds the &ldquo;find a club&rdquo; map to the menu.</li>"
+                    "<li><code>ENABLE_HELP</code> &mdash; True shows the in-auction help button and auction.fish tutorial videos.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            f'ALLOW_USERS_TO_CREATE_AUCTIONS="{self._yes_no(settings.ALLOW_USERS_TO_CREATE_AUCTIONS)}"\n'
+                            f'ALLOW_USERS_TO_CREATE_LOTS="{self._yes_no(settings.ALLOW_USERS_TO_CREATE_LOTS)}"\n'
+                            f'USERS_ARE_TRUSTED_BY_DEFAULT="{self._yes_no(settings.USERS_ARE_TRUSTED_BY_DEFAULT)}"\n'
+                            'UNTRUSTED_MESSAGE="You cannot currently promote auctions. Please contact the website administrator for access."\n'
+                            f'ENABLE_PROMO_PAGE="{self._yes_no(settings.ENABLE_PROMO_PAGE)}"\n'
+                            f'ENABLE_CLUB_FINDER="{self._yes_no(settings.ENABLE_CLUB_FINDER)}"\n'
+                            f'ENABLE_HELP="{self._yes_no(settings.ENABLE_HELP)}"'
+                        )
+                    },
+                    {
+                        "label": (
+                            "ALLOW_USERS_TO_CREATE_LOTS only affects new accounts. To toggle standalone-lot creation "
+                            "for existing users, run (use off to disable):"
+                        ),
+                        "code": "docker exec -it django python3 manage.py change_standalone_lots on",
+                    },
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "Email delivery",
+                "configured": email_configured,
+                "what_it_does": (
+                    "Sends sign-in, invoice, and notification emails. Pick one of the two options below. "
+                    "For Gmail, the app password is a special 16-character password (not your normal Google password) "
+                    "and only appears after you turn on 2-step verification."
+                ),
+                "snippets": [
+                    {
+                        "label": "Option A — Gmail (simplest). Turn on 2-step verification first, then create an app password.",
+                        "code": (
+                            'POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"\n'
+                            'EMAIL_HOST="smtp.gmail.com"\n'
+                            'EMAIL_PORT="587"\n'
+                            'EMAIL_USE_TLS="True"\n'
+                            'EMAIL_HOST_USER="you@gmail.com"\n'
+                            'EMAIL_HOST_PASSWORD="your-16-character-app-password"\n'
+                            'DEFAULT_FROM_EMAIL="Notifications <you@gmail.com>"'
+                        ),
+                    },
+                    {
+                        "label": (
+                            "Option B — Amazon SES (recommended for production; also enables reply routing). "
+                            "INBOUND_ROUTING_SECRET is a random secret you make up — it is this app's own value, not from AWS. "
+                            "With SES, mail is sent from info@your-domain automatically (DEFAULT_FROM_EMAIL is ignored)."
+                        ),
+                        "code": (
+                            'POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"\n'
+                            'AWS_ACCESS_KEY_ID="your-access-key"\n'
+                            'AWS_SECRET_ACCESS_KEY="your-secret-key"\n'
+                            'AWS_SES_REGION_NAME="us-east-1"\n'
+                            'AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"\n'
+                            'AWS_SES_CONFIGURATION_SET="your-configuration-set"\n'
+                            'INBOUND_ROUTING_SECRET="a-long-random-secret"'
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Gmail: enable 2-step verification",
+                        "url": "https://myaccount.google.com/signinoptions/two-step-verification",
+                    },
+                    {"label": "Gmail: create an app password", "url": "https://myaccount.google.com/apppasswords"},
+                    {
+                        "label": "Full SES setup guide (SES.md)",
+                        "url": "https://github.com/iragm/fishauctions/blob/master/SES.md",
+                    },
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "Terms of service",
+                "configured": Path(settings.BASE_DIR / "tos.html").exists(),
+                "what_it_does": (
+                    "Your site needs a terms-of-service page at <code>/tos/</code>. Create a <code>tos.html</code> file "
+                    "in the project root (next to your <code>.env</code>) containing your terms &mdash; the contents are "
+                    "rendered inside the site's normal layout. Until the file exists, visiting <code>/tos/</code> raises "
+                    "an error."
+                ),
+                "snippets": [
+                    {
+                        "label": "Create the file in the project root and paste in your terms:",
+                        "code": "nano tos.html",
+                    }
+                ],
+            },
+            # -- PayPal -----------------------------------------------------------
+            {
+                "section": "PayPal",
+                "name": "PayPal",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.PAYPAL_CLIENT_ID)
+                and env_has_real_value(settings.PAYPAL_SECRET),
+                "what_it_does": (
+                    "Lets your club collect online payments with the site's own PayPal credentials. "
+                    "Use your <strong>Live</strong> keys, not Sandbox. "
+                    "When <code>PAYPAL_ENABLED_FOR_USERS</code> is enabled, sellers link their accounts via a PayPal "
+                    "OAuth flow; the return URL below is the OAuth callback. "
+                    "<strong>Heads up:</strong> PayPal requires platform-seller approval that is hard to get, so this "
+                    "integration has been built but never used in production. If you just want to take payments, set up "
+                    "Square instead."
+                ),
+                "where_to_get_it": (
+                    "Create a REST app under <code>Apps &amp; Credentials</code> (Live tab), copy its client ID and "
+                    "secret, then set the return URL and subscribe a webhook to the URLs below."
+                ),
+                "snippets": [
+                    {"code": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"'},
+                    {
+                        "label": "URLs to configure in your PayPal app",
+                        "code": (
+                            f"# Return URL:\n{base_url}/paypal/onboard/success/\n"
+                            f"# Webhook URL (subscribe to order & payment events):\n{base_url}/paypal/webhook/"
+                        ),
+                    },
+                    {
+                        "label": (
+                            "To let users connect their own PayPal accounts you need an approved platform partner BN "
+                            "code from PayPal, then add these (PAYPAL_ENABLED_FOR_USERS defaults to False, which hides "
+                            "the connect-PayPal button for new accounts):"
+                        ),
+                        "code": (
+                            'PARTNER_MERCHANT_ID="your-partner-merchant-id"\n'
+                            'PAYPAL_BN_CODE="your-bn-code"\n'
+                            'PAYPAL_ENABLED_FOR_USERS="True"'
+                        ),
+                    },
+                    {
+                        "label": "Once your integration is tested, enable PayPal for existing accounts:",
+                        "code": "docker exec -it django python3 manage.py change_paypal on",
+                    },
+                    {
+                        "label": (
+                            "To test against the PayPal sandbox, point the API at it (if unset, sandbox is used in "
+                            "development and live in production):"
+                        ),
+                        "code": 'PAYPAL_API_BASE="https://api-m.sandbox.paypal.com"',
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "PayPal developer dashboard (get API keys)",
+                        "url": "https://developer.paypal.com/dashboard/applications/live",
+                    },
+                ],
+            },
+            # -- Square -----------------------------------------------------------
+            {
+                "section": "Square",
+                "name": "Square",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.SQUARE_APPLICATION_ID)
+                and env_has_real_value(settings.SQUARE_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets sellers connect Square accounts to collect online payments &mdash; the recommended option. "
+                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox). "
+                    "<code>SQUARE_ENABLED_FOR_USERS</code> only controls whether <em>newly created</em> users can link an "
+                    "account. <code>FIELD_ENCRYPTION_KEY</code> encrypts stored payment tokens and is normally generated "
+                    "for you by <code>update.sh</code>."
+                ),
+                "where_to_get_it": (
+                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key. "
+                    "Set the redirect and webhook URLs below in the app's OAuth and Webhooks sections."
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'SQUARE_ENABLED_FOR_USERS="True"\n'
+                            'SQUARE_ENVIRONMENT="production"\n'
+                            'SQUARE_APPLICATION_ID="sq0idp-xxxxx"\n'
+                            'SQUARE_CLIENT_SECRET="sq0csp-xxxxx"\n'
+                            'SQUARE_WEBHOOK_SIGNATURE_KEY="your-webhook-key"\n'
+                            'FIELD_ENCRYPTION_KEY="your-fernet-key"'
+                        )
+                    },
+                    {
+                        "label": "URLs to configure in your Square app",
+                        "code": (
+                            f"# OAuth redirect URL:\n{base_url}/square/onboard/success/\n"
+                            f"# Webhook subscription URL:\n{base_url}/square/webhook/"
+                        ),
+                    },
+                    {
+                        "label": "To enable Square for existing users (new users follow SQUARE_ENABLED_FOR_USERS):",
+                        "code": "docker exec -it django python3 manage.py change_square on",
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Square developer dashboard (get API keys)",
+                        "url": "https://developer.squareup.com/apps",
+                    },
+                ],
+            },
+            # -- Google Maps ------------------------------------------------------
+            {
+                "section": "Google Maps",
+                "name": "Google Maps",
+                "hide_title": True,
+                "configured": getattr(settings, "GOOGLE_MAPS_ENABLED", False),
+                "what_it_does": "Enables maps on auction and club pages plus location pickers.",
+                "where_to_get_it": (
+                    "Enable the <code>Maps JavaScript API</code> in Google Cloud and create the key(s) below."
+                ),
+                "snippets": [
+                    {
+                        "label": "Browser key — shows the maps and location pickers. Restrict it to your domain (include your port if it isn't 80).",
+                        "code": 'GOOGLE_MAPS_API_KEY="your-browser-key"',
+                    },
+                    {
+                        "label": "Server key (optional) — only needed to geocode club member addresses onto the member map. Restrict it to the Geocoding API.",
+                        "code": 'GOOGLE_MAPS_SERVER_API_KEY="your-server-key"',
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Google Cloud — Maps API keys",
+                        "url": "https://console.cloud.google.com/google/maps-apis/credentials",
+                    },
+                ],
+            },
+            # -- Google sign-in ---------------------------------------------------
+            {
+                "section": "Google sign-in",
+                "name": "Google sign-in (OAuth)",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_OAUTH_LINK),
+                "what_it_does": (
+                    "Adds one-click Google sign-in. The button stays hidden until a real client ID is set, "
+                    "so a placeholder degrades gracefully."
+                ),
+                "where_to_get_it": (
+                    "Create an OAuth web application and copy its client ID (ends in "
+                    "<code>.apps.googleusercontent.com</code>). Add your site to the authorized origins."
+                ),
+                "snippets": [{"code": 'GOOGLE_OAUTH_LINK="your-client-id.apps.googleusercontent.com"'}],
+                "links": [
+                    {
+                        "label": "Google Cloud — OAuth credentials",
+                        "url": "https://console.cloud.google.com/apis/credentials",
+                    },
+                    {
+                        "label": "Setup guide (django-allauth)",
+                        "url": "https://docs.allauth.org/en/latest/socialaccount/providers/google.html",
+                    },
+                ],
+            },
+            # -- reCAPTCHA --------------------------------------------------------
+            {
+                "section": "reCAPTCHA",
+                "name": "reCAPTCHA",
+                "hide_title": True,
+                "configured": getattr(settings, "RECAPTCHA_ENABLED", False),
+                "what_it_does": "Protects signup and password reset forms from abuse.",
+                "where_to_get_it": (
+                    "Register a site of type <strong>reCAPTCHA v2 &ldquo;Invisible&rdquo;</strong> (other types won't "
+                    "work here) and copy the site key and secret key."
+                ),
+                "snippets": [{"code": 'RECAPTCHA_PUBLIC_KEY="your-site-key"\nRECAPTCHA_PRIVATE_KEY="your-secret-key"'}],
+                "links": [
+                    {"label": "reCAPTCHA admin console (get keys)", "url": "https://www.google.com/recaptcha/admin"},
+                ],
+            },
+            # -- Analytics & ads --------------------------------------------------
+            {
+                "section": "Analytics & ads",
+                "name": "Analytics & ads",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_MEASUREMENT_ID)
+                or env_has_real_value(settings.GOOGLE_TAG_ID)
+                or env_has_real_value(settings.GOOGLE_ADSENSE_ID),
+                "what_it_does": (
+                    "Optional Google tracking and ads, all independent of each other:"
+                    "<ul class='mb-0'>"
+                    "<li><code>GOOGLE_MEASUREMENT_ID</code> &mdash; Google Analytics 4 (starts with <code>G-</code>).</li>"
+                    "<li><code>GOOGLE_TAG_ID</code> &mdash; Google Tag Manager container (starts with <code>GTM-</code>).</li>"
+                    "<li><code>GOOGLE_ADSENSE_ID</code> &mdash; AdSense publisher ID (starts with <code>ca-pub-</code>).</li>"
+                    "<li><code>SHOW_ADS</code> &mdash; master on/off switch for all ads (default True). "
+                    "Set it to False to remove ads site-wide regardless of the AdSense ID.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'GOOGLE_MEASUREMENT_ID="G-XXXXXXXXXX"\n'
+                            'GOOGLE_TAG_ID="GTM-XXXXXXX"\n'
+                            'GOOGLE_ADSENSE_ID="ca-pub-XXXXXXXXXXXXXXXX"\n'
+                            f'SHOW_ADS="{self._yes_no(settings.SHOW_ADS)}"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Google Analytics", "url": "https://analytics.google.com/"},
+                    {"label": "Google Tag Manager", "url": "https://tagmanager.google.com/"},
+                    {"label": "Google AdSense", "url": "https://www.google.com/adsense/"},
+                ],
+            },
+            # -- Mailchimp --------------------------------------------------------
+            {
+                "section": "Mailchimp",
+                "name": "Mailchimp",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.MAILCHIMP_CLIENT_ID)
+                and env_has_real_value(settings.MAILCHIMP_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets clubs connect a Mailchimp account to sync members to an audience. "
+                    "Each club connects its own account from its club settings page once these keys are set."
+                ),
+                "where_to_get_it": "Register an OAuth2 app and copy its client ID and secret.",
+                "snippets": [
+                    {"code": 'MAILCHIMP_CLIENT_ID="your-client-id"\nMAILCHIMP_CLIENT_SECRET="your-client-secret"'}
+                ],
+                "links": [
+                    {"label": "Register a Mailchimp OAuth app", "url": "https://admin.mailchimp.com/account/oauth2/"},
+                ],
+            },
+            # -- Discord ----------------------------------------------------------
+            {
+                "section": "Discord bot",
+                "name": "Discord bot",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.DISCORD_BOT_TOKEN)
+                and env_has_real_value(getattr(settings, "DISCORD_PUBLIC_KEY", ""))
+                and env_has_real_value(getattr(settings, "DISCORD_BOT_CLIENT_ID", "")),
+                "what_it_does": (
+                    "Lets members join a Discord server and automatically receive a role and club membership. "
+                    "The server keys are set here; each club then links its server from its Discord settings page. "
+                    "Discord needs a public HTTPS URL, so this won't work on localhost."
+                ),
+                "where_to_get_it": (
+                    "Create an application with a bot (enable the <code>Server Members Intent</code>), then copy the "
+                    "token, public key, and client ID."
+                ),
+                "setup_steps": [
+                    "At the Discord developer portal, create an application and add a bot.",
+                    "Under the bot settings, enable the <strong>Server Members Intent</strong>.",
+                    "Copy the bot token, public key, and client ID into the <code>.env</code> snippet below.",
+                    (
+                        "In the application's <strong>General Information</strong> tab, set the "
+                        f"<strong>Interactions Endpoint URL</strong> to <code>{base_url}/discord/interactions/</code>."
+                    ),
+                    (
+                        "When adding the bot to a server it needs <strong>Manage Roles</strong> and <strong>Send "
+                        "Messages</strong>, and its role must sit <strong>above</strong> any role it assigns in the "
+                        "server's role hierarchy."
+                    ),
+                    (
+                        "Register the <code>/connect</code> slash command once (see the command below). Global "
+                        "registration can take up to an hour to propagate."
+                    ),
+                    (
+                        "Each club admin then links a server from <code>/clubs/&lt;slug&gt;/discord/</code>: run "
+                        "<code>/connect club_uuid:&lt;uuid&gt;</code> in the channel where the join button should appear, "
+                        "then use <strong>Fetch roles</strong> to sync role names and configure paid/unpaid roles and "
+                        "BAP/HAP thresholds."
+                    ),
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'DISCORD_PUBLIC_KEY="your-application-public-key"\n'
+                            'DISCORD_BOT_TOKEN="your-bot-token"\n'
+                            'DISCORD_BOT_CLIENT_ID="your-application-client-id"'
+                        )
+                    },
+                    {
+                        "label": "Register the /connect slash command (run once after the keys are set):",
+                        "code": "docker exec -it django python3 manage.py register_discord_commands",
+                    },
+                ],
+                "links": [
+                    {"label": "Discord developer portal", "url": "https://discord.com/developers/applications"},
+                ],
+            },
+            # -- Google Wallet ----------------------------------------------------
+            {
+                "section": "Google Wallet membership cards",
+                "name": "Google Wallet membership cards",
+                "hide_title": True,
+                "configured": bool(
+                    settings.GOOGLE_WALLET_ISSUER_ID
+                    and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
+                    and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
+                ),
+                "what_it_does": (
+                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on each club member's page so members can save "
+                    "their membership card (QR code and barcode) to their phone. Only the signed-in account that matches "
+                    "the membership can save it &mdash; UUID renewal links cannot. A Wallet class is created automatically "
+                    "for each club; if the keyfile is missing or invalid the integration disables itself (warning logged) "
+                    "so the site still boots."
+                ),
+                "where_to_get_it": (
+                    "Apply for a Wallet issuer account for the Issuer ID, then drop the Google Cloud service-account key "
+                    "JSON file next to your <code>.env</code> (it's gitignored). <code>GOOGLE_WALLET_KEYFILE</code> is just "
+                    "the filename &mdash; settings.py joins it to <code>BASE_DIR</code>."
+                ),
+                "setup_steps": [
+                    "Create a Google Cloud project at console.cloud.google.com.",
+                    "Enable the <strong>Google Wallet API</strong> for that project (APIs &amp; Services &rarr; Library).",
+                    (
+                        "Apply for a Wallet issuer account at the issuer console (Google Wallet API &rarr; Get started). "
+                        "After approval Google gives you a numeric <strong>Issuer ID</strong>."
+                    ),
+                    (
+                        "In Cloud IAM &amp; Admin &rarr; Service Accounts, create a service account, then under its "
+                        "<strong>Keys</strong> tab add a new <strong>JSON</strong> key and download it. In the Wallet "
+                        "console, invite that service account email as a <em>Developer</em>."
+                    ),
+                    (
+                        "Drop the JSON keyfile next to your <code>.env</code> (JSON files at the repo root are "
+                        "gitignored) and add the snippet below."
+                    ),
+                    (
+                        "<strong>Note:</strong> Google caps unapproved issuers at ~5 generic classes total, so "
+                        "auto-creation starts failing past that &mdash; wait until your issuer is approved before "
+                        "enabling this site-wide."
+                    ),
+                ],
+                "snippets": [
+                    {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'},
+                    {
+                        "label": "To backfill Wallet classes for clubs that already exist, run (idempotent):",
+                        "code": "docker exec -it django python3 manage.py sync_google_wallet_classes",
+                    },
+                ],
+                "links": [
+                    {"label": "Google Wallet issuer console", "url": "https://pay.google.com/business/console"},
+                ],
+            },
+            # -- Apple Wallet -----------------------------------------------------
+            {
+                "section": "Apple Wallet membership cards",
+                "name": "Apple Wallet membership cards",
+                "hide_title": True,
+                "configured": bool(
+                    settings.APPLE_WALLET_CERT_FILE
+                    and settings.APPLE_WALLET_WWDR_FILE
+                    and settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER
+                    and settings.APPLE_WALLET_TEAM_IDENTIFIER
+                ),
+                "what_it_does": (
+                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one. Same security model "
+                    "&mdash; only the signed-in account that matches the membership can download the pass. Passes are "
+                    "signed <code>.pkpass</code> files generated on each download (no REST API, no class to pre-create). "
+                    "If any setting below is missing the button is hidden and downloads return 404. Requires a paid "
+                    "Apple Developer account ($99/yr)."
+                ),
+                "where_to_get_it": (
+                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop both files next to "
+                    "your <code>.env</code> (they're gitignored)."
+                ),
+                "setup_steps": [
+                    (
+                        "In the Apple Developer portal, create a <strong>Pass Type ID</strong> (reverse-DNS form, e.g. "
+                        "<code>pass.com.yourdomain.membership</code>) and note your <strong>Team ID</strong>."
+                    ),
+                    (
+                        "Create a certificate for that Pass Type ID (generate a CSR with Keychain Access), download the "
+                        "<code>.cer</code>, install it, then export it as a password-protected <code>.p12</code>. Drop "
+                        "the <code>.p12</code> next to your <code>.env</code>."
+                    ),
+                    (
+                        "Download the Apple WWDR intermediate cert (<em>Worldwide Developer Relations - G4</em>) as a "
+                        "<code>.pem</code> and drop it next to your <code>.env</code> too."
+                    ),
+                    "Add the snippet below (.p12 and .pem files at the repo root are gitignored).",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'APPLE_WALLET_CERT_FILE="pass-type-id.p12"\n'
+                            'APPLE_WALLET_CERT_PASSWORD="your-p12-password"\n'
+                            'APPLE_WALLET_WWDR_FILE="AppleWWDRCAG4.pem"\n'
+                            'APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership"\n'
+                            'APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345"\n'
+                            'APPLE_WALLET_ORGANIZATION_NAME="Your Club"'
+                        )
+                    }
+                ],
+                "links": [
+                    {
+                        "label": "Apple Developer — Pass Type IDs",
+                        "url": "https://developer.apple.com/account/resources/identifiers/list/passTypeId",
+                    },
+                    {"label": "Apple PKI — WWDR certificate", "url": "https://www.apple.com/certificateauthority/"},
+                ],
+            },
+        ]
+        return context
+
+
 class AdminTraffic(AdminOnlyViewMixin, TemplateView):
     """Popular pages and user last activity"""
 
@@ -11793,6 +12620,16 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
                 view_count=Count("url"),
             )
             .order_by("-view_count")[:number_of_popular_pages_to_show]
+        )
+        # Top user agents over the last 24 hours, to help spot and filter out bots
+        last_24_hours = timezone.now() - timedelta(hours=24)
+        context["top_user_agents"] = list(
+            PageView.objects.filter(date_start__gte=last_24_hours)
+            .exclude(user_agent__isnull=True)
+            .exclude(user_agent="")
+            .values("user_agent")
+            .annotate(view_count=Count("pk"))
+            .order_by("-view_count")[:5]
         )
         # heat  map stuff follows
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
@@ -17515,8 +18352,31 @@ class BapAwardDeleteView(APIView):
         )
 
 
-class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
-    """Create-only CSV import for BapAward records (never updates or deletes)."""
+class BapAwardCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):
+    """Create-only CSV import for BapAward records (never updates or deletes).
+
+    Routes through the shared preview: each row is matched to an existing club member by email and, on
+    confirm, a BapAward is created. There is no duplicate-resolution choice (awards are always new), so the
+    review page just shows the awards to create and the skipped rows with reasons."""
+
+    import_record_kind = "award"
+    import_supports_duplicates = False
+    import_preview_columns = (
+        ("Member", "member_name"),
+        ("Email", "email"),
+        ("BAP", "bap"),
+        ("HAP", "hap"),
+        ("CAP", "cap"),
+    )
+
+    def import_target_id(self):
+        return f"club:{self.club.pk}"
+
+    def import_done_url(self):
+        return reverse("club_bap", kwargs={"slug": self.club.slug})
+
+    def import_cancel_url(self):
+        return reverse("club_bap", kwargs={"slug": self.club.slug})
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -17526,61 +18386,93 @@ class BapAwardCSVImportView(LoginRequiredMixin, ClubViewMixin, View):
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
+    def get(self, request, *args, **kwargs):
+        preview_token = request.GET.get("preview")
+        if preview_token:
+            return self.render_preview(preview_token)
+        return redirect(self.import_cancel_url())
+
     def post(self, request, *args, **kwargs):
+        import_response = self.handle_import_post(request)
+        if import_response is not None:
+            return import_response
         csv_file = request.FILES.get("csv_file")
         if not csv_file:
             messages.error(request, "No file uploaded.")
-            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
-        total_added = total_skipped = 0
-        try:
-            reader = csv.DictReader(TextIOWrapper(csv_file, encoding="utf-8-sig", errors="replace"))
-            for row in reader:
-                row_lower = {k.lower().strip(): v.strip() for k, v in row.items() if k}
-                email = row_lower.get("email", "")
-                if not email:
-                    total_skipped += 1
-                    continue
-                member = ClubMember.objects.filter(club=self.club, email__iexact=email, is_deleted=False).first()
-                if not member:
-                    total_skipped += 1
-                    continue
-                bap = self._parse_int(row_lower.get("bap", ""))
-                hap = self._parse_int(row_lower.get("hap", ""))
-                cap = self._parse_int(row_lower.get("cap", ""))
-                if bap == 0 and hap == 0 and cap == 0:
-                    total_skipped += 1
-                    continue
-                notes = row_lower.get("notes", "")
-                award_date = (
-                    CSVContactImportMixin.parse_flexible_date(row_lower.get("date", "")) or timezone.now().date()
-                )
-                BapAward.objects.create(
-                    club_member=member,
-                    date=award_date,
-                    points=bap,
-                    hap_points=hap,
-                    cap_points=cap,
-                    notes=notes[:500] if notes else "",
-                    awarded_by=request.user,
-                )
-                total_added += 1
-        except Exception as e:
-            messages.error(request, f"Error processing CSV: {e}")
-            return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
-        msg_parts = []
-        if total_added:
-            msg_parts.append(f"{total_added} award(s) added")
-        if total_skipped:
-            msg_parts.append(f"{total_skipped} rows skipped")
-        messages.success(request, ", ".join(msg_parts) or "No awards imported.")
-        if total_added:
-            ClubHistory.objects.create(
-                club=self.club,
-                user=request.user,
-                action=f"BAP CSV import: {', '.join(msg_parts)}",
-                applies_to="BAP",
-            )
-        return redirect(reverse("club_bap", kwargs={"slug": self.club.slug}))
+            return redirect(self.import_cancel_url())
+        result = self.handle_csv_upload(csv_file)
+        if result is None:
+            return redirect(self.import_cancel_url())
+        return result
+
+    def plan_row(self, row):
+        row_lower = {k.lower().strip(): (v or "").strip() for k, v in row.items() if k}
+        email = normalize_email(row_lower.get("email", ""))
+        bap = self._parse_int(row_lower.get("bap", ""))
+        hap = self._parse_int(row_lower.get("hap", ""))
+        cap = self._parse_int(row_lower.get("cap", ""))
+        award_date = self.parse_flexible_date(row_lower.get("date", ""))
+        fields = {
+            "email": email,
+            "member_name": "",
+            "member_pk": None,
+            "bap": bap,
+            "hap": hap,
+            "cap": cap,
+            "notes": (row_lower.get("notes", "") or "")[:500],
+            "date": award_date.isoformat() if award_date else None,
+        }
+        base = {"fields": fields, "target_pk": None, "target_display": "", "match_type": None}
+        if not email:
+            return {**base, "action": "skip", "reason": "Row has no email"}
+        member = self.club.find_member(email=email)
+        if not member:
+            return {**base, "action": "skip", "reason": "No club member matches this email"}
+        fields["member_name"] = member.name
+        fields["member_pk"] = member.pk
+        if bap == 0 and hap == 0 and cap == 0:
+            return {**base, "action": "skip", "reason": f"No BAP/HAP/CAP points for {member.name}"}
+        return {**base, "action": "create", "reason": ""}
+
+    def apply_action(self, action, decision):
+        if action["action"] == "skip":
+            return "skipped"
+        fields = action["fields"]
+        member = ClubMember.objects.filter(pk=fields.get("member_pk"), club=self.club, is_deleted=False).first()
+        if not member:
+            return "skipped"
+        award_date = date_type.fromisoformat(fields["date"]) if fields.get("date") else timezone.now().date()
+        BapAward.objects.create(
+            club_member=member,
+            date=award_date,
+            points=fields.get("bap", 0),
+            hap_points=fields.get("hap", 0),
+            cap_points=fields.get("cap", 0),
+            notes=fields.get("notes", ""),
+            awarded_by=self.request.user,
+        )
+        return "created"
+
+    def message_import_results(self, results):
+        parts = []
+        if results.get("created"):
+            parts.append(f"{results['created']} award(s) added")
+        if results.get("skipped"):
+            parts.append(f"{results['skipped']} rows skipped")
+        messages.success(self.request, ", ".join(parts) or "No awards imported.")
+
+    def record_import_history(self, results, filename=None):
+        if not results.get("created"):
+            return
+        action = f"BAP CSV import: {results['created']} award(s) added"
+        if filename:
+            action += f" from {filename}"
+        ClubHistory.objects.create(club=self.club, user=self.request.user, action=action, applies_to="BAP")
+
+    def process_csv_data(self, csv_reader, filename=None):
+        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        token = self.build_preview(csv_reader, filename=filename)
+        return self.redirect_to_preview(token)
 
     @staticmethod
     def _parse_int(value):
@@ -18332,116 +19224,218 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
+    # CSV import preview framework (see CSVContactImportMixin)
+    import_record_kind = "member"
+    import_supports_duplicates = True
+    import_dedupe_field = "email"  # two rows with the same email are the same member; combine them
+    import_preview_columns = (
+        ("Name", "name"),
+        ("Email", "email"),
+        ("Phone", "phone"),
+    )
+
+    def import_target_id(self):
+        return f"club:{self.club.pk}"
+
+    def import_done_url(self):
+        return reverse("club_admin", kwargs={"slug": self.club.slug})
+
+    def import_cancel_url(self):
+        return reverse("club_admin", kwargs={"slug": self.club.slug})
+
+    def get(self, request, *args, **kwargs):
+        preview_token = request.GET.get("preview")
+        if preview_token:
+            return self.render_preview(preview_token)
+        return redirect(self.import_cancel_url())
+
     def post(self, request, *args, **kwargs):
+        import_response = self.handle_import_post(request)
+        if import_response is not None:
+            return import_response
         csv_file = request.FILES.get("csv_file")
         if not csv_file:
             messages.error(request, "No file uploaded.")
-            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+            return redirect(self.import_cancel_url())
         result = self.handle_csv_upload(csv_file)
         if result is None:
-            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+            return redirect(self.import_cancel_url())
         return result
 
-    def process_csv_data(self, csv_reader, filename=None):
-        total_added = 0
-        total_updated = 0
-        total_skipped = 0
-        try:
-            for row in csv_reader:
-                email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
-                if not email:
-                    total_skipped += 1
-                    continue
-                first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
-                last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
-                if first_name or last_name:
-                    member_name = f"{first_name} {last_name}".strip()
-                else:
-                    member_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES) or ""
-                phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
-                address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
-                memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
-                discord_id = self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES)
-                raw_contact_status = self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES)
-                contact_status = self.parse_contact_status(raw_contact_status)
-                mark_deleted = (raw_contact_status or "").strip().lower() in {
-                    "inactive past member",
-                    "disabled",
-                    "deleted",
-                    "deactivated",
+    @staticmethod
+    def _member_label(member):
+        label = member.name or "(no name)"
+        if member.email:
+            return f"{label} ({member.email})"
+        return label
+
+    @staticmethod
+    def _to_date(value):
+        return date_type.fromisoformat(value) if value else None
+
+    def _parse_member_row(self, row):
+        """Extract + normalize one CSV row into the member fields dict (dates as ISO strings for caching)."""
+        first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
+        last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
+        if first_name or last_name:
+            member_name = f"{first_name} {last_name}".strip()
+        else:
+            member_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES) or ""
+        raw_contact_status = self.extract_csv_field(row, self.CONTACT_STATUS_FIELD_NAMES)
+        contact_status = self.parse_contact_status(raw_contact_status)
+        mark_deleted = (raw_contact_status or "").strip().lower() in {
+            "inactive past member",
+            "disabled",
+            "deleted",
+            "deactivated",
+        }
+        if mark_deleted:
+            contact_status = "do_not_contact"
+
+        def iso(value):
+            parsed = self.parse_flexible_date(value)
+            return parsed.isoformat() if parsed else None
+
+        return {
+            "email": normalize_email(self.extract_csv_field(row, self.EMAIL_FIELD_NAMES))[:254],
+            "name": (member_name or "")[:200],
+            "phone": (self.extract_csv_field(row, self.PHONE_FIELD_NAMES) or "")[:20],
+            "address": (self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES) or "")[:500],
+            "memo": (self.extract_csv_field(row, self.MEMO_FIELD_NAMES) or "")[:500],
+            "discord_id": (self.extract_csv_field(row, self.DISCORD_ID_FIELD_NAMES) or "")[:100],
+            "contact_status": contact_status,
+            "mark_deleted": mark_deleted,
+            "membership_last_paid": iso(self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)),
+            "membership_expiration_date": iso(self.extract_csv_field(row, self.MEMBERSHIP_EXPIRATION_FIELD_NAMES)),
+            "date_joined": iso(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES)),
+        }
+
+    def plan_row(self, row):
+        fields = self._parse_member_row(row)
+        base = {"fields": fields, "target_pk": None, "target_display": "", "match_type": None}
+        email, name = fields["email"], fields["name"]
+        if not email and not name:
+            return {**base, "action": "skip", "reason": "Row has no name or email"}
+        if email:
+            existing = self.club.find_member(email=email)
+            if existing:
+                return {
+                    **base,
+                    "action": "update",
+                    "target_pk": existing.pk,
+                    "target_display": self._member_label(existing),
+                    "match_type": "email",
+                    "reason": "Matched an existing member by email",
                 }
-                if mark_deleted:
-                    contact_status = "do_not_contact"
-                membership_last_paid = self.parse_flexible_date(
-                    self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)
-                )
-                membership_expiration_date = self.parse_flexible_date(
-                    self.extract_csv_field(row, self.MEMBERSHIP_EXPIRATION_FIELD_NAMES)
-                )
-                date_joined = self.parse_flexible_date(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES))
-                existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
-                if existing:
-                    existing.name = member_name[:200] if member_name else existing.name
-                    existing.phone_number = phone[:20]
-                    existing.address = address[:500]
-                    existing.memo = memo[:500]
-                    if discord_id:
-                        existing.discord_id = discord_id[:100]
-                    if contact_status is not None:
-                        existing.contact_status = contact_status
-                    if mark_deleted:
-                        existing.is_deleted = True
-                    if membership_last_paid is not None:
-                        existing.membership_last_paid = membership_last_paid
-                    if membership_expiration_date is not None:
-                        existing.membership_expiration_date = membership_expiration_date
-                    existing.save()
-                    if date_joined is not None:
-                        ClubMember.objects.filter(pk=existing.pk).update(createdon=date_joined)
-                    total_updated += 1
-                else:
-                    new_member = ClubMember.objects.create(
-                        club=self.club,
-                        email=email[:254],
-                        name=member_name[:200] if member_name else "",
-                        phone_number=phone[:20] if phone else "",
-                        address=address[:500] if address else "",
-                        memo=memo[:500] if memo else "",
-                        discord_id=discord_id[:100] if discord_id else None,
-                        contact_status=contact_status or "contact",
-                        membership_last_paid=membership_last_paid,
-                        membership_expiration_date=membership_expiration_date,
-                        send_welcome_email=False,
-                        welcome_email_sent=True,
-                        source="csv",
-                        added_by=self.request.user,
-                        is_deleted=mark_deleted,
-                    )
-                    if date_joined is not None:
-                        ClubMember.objects.filter(pk=new_member.pk).update(createdon=date_joined)
-                    total_added += 1
+        if name:
+            existing = self.club.find_member(name=name)
+            if existing:
+                return {
+                    **base,
+                    "action": "duplicate",
+                    "target_pk": existing.pk,
+                    "target_display": self._member_label(existing),
+                    "match_type": "name",
+                    "reason": "Same or similar name as an existing member",
+                }
+        return {**base, "action": "create", "reason": ""}
 
-            msg_parts = []
-            if total_added:
-                msg_parts.append(f"{total_added} members added")
-            if total_updated:
-                msg_parts.append(f"{total_updated} members updated")
-            if total_skipped:
-                msg_parts.append(f"{total_skipped} rows skipped (no email)")
-            if msg_parts:
-                messages.success(self.request, ", ".join(msg_parts))
+    def _create_member(self, fields):
+        member = ClubMember.objects.create(
+            club=self.club,
+            email=fields.get("email", ""),
+            name=fields.get("name", ""),
+            phone_number=fields.get("phone", ""),
+            address=fields.get("address", ""),
+            memo=fields.get("memo", ""),
+            discord_id=fields.get("discord_id") or None,
+            contact_status=fields.get("contact_status") or "contact",
+            membership_last_paid=self._to_date(fields.get("membership_last_paid")),
+            membership_expiration_date=self._to_date(fields.get("membership_expiration_date")),
+            send_welcome_email=False,
+            welcome_email_sent=True,
+            source="csv",
+            added_by=self.request.user,
+            is_deleted=fields.get("mark_deleted", False),
+        )
+        date_joined = self._to_date(fields.get("date_joined"))
+        if date_joined is not None:
+            ClubMember.objects.filter(pk=member.pk).update(createdon=date_joined)
+        return member
 
-            if total_added > 0 or total_updated > 0:
-                ClubHistory.objects.create(
-                    club=self.club,
-                    user=self.request.user,
-                    action=f"CSV import: {', '.join(msg_parts)}" + (f" from {filename}" if filename else ""),
-                    applies_to="MEMBERS",
+    def _update_member(self, member, fields):
+        """Apply CSV fields onto an existing member. Only overwrites with non-empty values so a merge of a
+        sparse walk-in row never blanks existing contact details."""
+        if fields.get("name"):
+            member.name = fields["name"]
+        if fields.get("phone"):
+            member.phone_number = fields["phone"]
+        if fields.get("address"):
+            member.address = fields["address"]
+        if fields.get("memo"):
+            member.memo = fields["memo"]
+        if fields.get("discord_id"):
+            member.discord_id = fields["discord_id"]
+        if fields.get("contact_status") is not None:
+            member.contact_status = fields["contact_status"]
+        if fields.get("mark_deleted"):
+            member.is_deleted = True
+        if fields.get("email") and not member.email:
+            member.email = fields["email"]
+        last_paid = self._to_date(fields.get("membership_last_paid"))
+        if last_paid is not None:
+            member.membership_last_paid = last_paid
+        expiration = self._to_date(fields.get("membership_expiration_date"))
+        if expiration is not None:
+            member.membership_expiration_date = expiration
+        member.save()
+        date_joined = self._to_date(fields.get("date_joined"))
+        if date_joined is not None:
+            ClubMember.objects.filter(pk=member.pk).update(createdon=date_joined)
+
+    def apply_action(self, action, decision):
+        kind = action["action"]
+        if kind == "skip":
+            return "skipped"
+        fields = action.get("fields", {})
+        target_pk = action.get("target_pk")
+        if kind == "create" or (kind == "duplicate" and decision == "create"):
+            member = self._create_member(fields)
+            if kind == "duplicate" and target_pk:
+                ClubMember.objects.filter(pk=member.pk).update(possible_duplicate=target_pk)
+                ClubMember.objects.filter(pk=target_pk, possible_duplicate__isnull=True).update(
+                    possible_duplicate=member.pk
                 )
-        except Exception as e:
-            messages.error(self.request, f"Error processing CSV: {e}")
+            return "created"
+        member = (
+            ClubMember.objects.filter(pk=target_pk, club=self.club, is_deleted=False).first() if target_pk else None
+        )
+        if not member:
+            self._create_member(fields)
+            return "created"
+        self._update_member(member, fields)
+        return "updated" if kind == "update" else "merged"
 
-        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+    def record_import_history(self, results, filename=None):
+        parts = []
+        if results.get("created"):
+            parts.append(f"{results['created']} members added")
+        updated = results.get("updated", 0) + results.get("merged", 0)
+        if updated:
+            parts.append(f"{updated} members updated")
+        if not parts:
+            return
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action=f"CSV import: {', '.join(parts)}" + (f" from {filename}" if filename else ""),
+            applies_to="MEMBERS",
+        )
+
+    def process_csv_data(self, csv_reader, filename=None):
+        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        token = self.build_preview(csv_reader, filename=filename)
+        return self.redirect_to_preview(token)
 
 
 class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):

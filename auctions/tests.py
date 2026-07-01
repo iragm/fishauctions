@@ -26,7 +26,15 @@ from . import brevo
 from . import mailchimp as mc
 from .email_routing import resolve_routed_recipient
 from .filters import LotAdminFilter
-from .forms import AuctionEditForm, ChangeUsernameForm, ClubEmailSettingsForm, ClubMembershipSettingsForm, CreateLotForm
+from .forms import (
+    AuctionEditForm,
+    ChangeUsernameForm,
+    ClubEmailSettingsForm,
+    ClubMembershipSettingsForm,
+    CreateLotForm,
+    CustomResetPasswordForm,
+    CustomSignupForm,
+)
 from .models import (
     Auction,
     AuctionCampaign,
@@ -67,7 +75,30 @@ from .models import (
 )
 
 
-class StandardTestCase(TestCase):
+class CsvImportTestMixin:
+    """Shared helper for driving the two-phase CSV importer in tests (used by StandardTestCase and any
+    plain TestCase that exercises an importer)."""
+
+    def run_csv_import(self, url, csv_file, *, decisions=None, file_field="csv_file", follow=True):
+        """Upload the file, read the preview token from the redirect, then POST the confirm so the rows
+        are actually written. Returns the confirm response.
+
+        `decisions` maps a planned-action row index -> "merge" (default) or "create", controlling what
+        happens to possible-duplicate rows. If the upload did not produce a preview (e.g. permission
+        denied, or no recognizable columns), the upload response is returned unchanged.
+        """
+        upload = self.client.post(url, {file_field: csv_file})
+        location = upload.get("HX-Redirect") or upload.get("Location") or ""
+        if "preview=" not in location:
+            return upload
+        token = location.split("preview=")[1].split("&")[0]
+        data = {"_confirm": token}
+        for index, decision in (decisions or {}).items():
+            data[f"decision_{index}"] = decision
+        return self.client.post(url, data, follow=follow)
+
+
+class StandardTestCase(CsvImportTestMixin, TestCase):
     """This is a base class that sets up some common stuff so other tests can be run without needing to write a lot of boilplate code
     Give this class along with your view/model/etc., to ChatGPT and it can write the test subclass
     In general, make sure that AuctionTOS.is_admin=True users can do what they need, users without an AuctionTOS are blocked, no data leaks to non-admins and non-logged in users
@@ -2866,9 +2897,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that users were created with memo
@@ -2900,9 +2931,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that admin users were created correctly
@@ -2938,9 +2969,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that admin user was created
@@ -2965,9 +2996,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was assigned
@@ -3002,9 +3033,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that new user was created but without the conflicting bidder number
@@ -3045,9 +3076,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was updated
@@ -3080,9 +3111,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that bidder number was kept (not cleared)
@@ -3117,9 +3148,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that memo and admin were updated
@@ -3158,9 +3189,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that user was updated
@@ -3207,9 +3238,9 @@ class CSVImportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that no history was created (no users added, no users actually updated)
@@ -3238,9 +3269,9 @@ class CSVImportTests(StandardTestCase):
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
 
         # Import CSV
-        self.client.post(
+        self.run_csv_import(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_file},
+            csv_file,
         )
 
         # Check that history was created with filename
@@ -3250,6 +3281,173 @@ class CSVImportTests(StandardTestCase):
         history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
         self.assertIn("users_import.csv", history.action)
         self.assertIn("1 users added", history.action)
+
+
+class CSVImportPreviewTests(StandardTestCase):
+    """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
+
+    def _bulk_add_url(self):
+        return reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
+
+    def test_upload_without_confirm_creates_nothing(self):
+        """Uploading a CSV only builds a preview; nothing is written until the confirm step."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "u.csv", b"name,email\nPreview Only,previewonly@example.com\n", content_type="text/csv"
+        )
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        # Upload but never POST the confirm token.
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        self.assertIn("preview=", upload.get("Location", ""))
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.assertFalse(
+            AuctionTOS.objects.filter(auction=self.online_auction, email="previewonly@example.com").exists()
+        )
+
+    def test_preview_page_renders_with_duplicate_radios(self):
+        """GET ?preview renders the review page, showing the merge/create choice for a possible duplicate."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "signin.csv",
+            b"name,bidder number,email\nBob Smith,9998,\nNew Person,9997,newperson@example.com\n",
+            content_type="text/csv",
+        )
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        preview = self.client.get(upload["Location"])
+        self.assertEqual(preview.status_code, 200)
+        self.assertContains(preview, "Review import")
+        self.assertContains(preview, "Merge into existing")
+        self.assertContains(preview, "Bob Smith")
+
+    def test_no_email_walkin_merges_into_existing_online_record(self):
+        """The reported bug: a no-email check-in row for someone who already joined online (with an email)
+        is surfaced as a possible duplicate and, on the default 'merge' choice, updates the existing record
+        (the check-in bidder number wins) instead of creating a second account."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("signin.csv", b"name,bidder number\nBob Smith,9998\n", content_type="text/csv")
+        # No decisions passed -> default 'merge'.
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.bidder_number, "9998")
+        self.assertEqual(self.online_tos.email, "bob@example.com")
+
+    def test_no_email_walkin_create_choice_makes_flagged_duplicate(self):
+        """Choosing 'create' for the same no-email row makes a second record, flagged as a possible
+        duplicate of the original for later admin review."""
+        self.online_tos.name = "Bob Smith"
+        self.online_tos.email = "bob@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("signin.csv", b"name,bidder number\nBob Smith,9998\n", content_type="text/csv")
+        self.run_csv_import(self._bulk_add_url(), csv_file, decisions={0: "create"})
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        new = AuctionTOS.objects.filter(auction=self.online_auction, bidder_number="9998").first()
+        self.assertIsNotNone(new)
+        self.assertEqual(new.possible_duplicate, self.online_tos)
+
+    def test_email_match_is_case_and_whitespace_insensitive(self):
+        """A CSV email that differs only by case/whitespace matches the existing record (no duplicate)."""
+        self.online_tos.name = "Carol"
+        self.online_tos.email = "carol@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile(
+            "u.csv", b"name,email,memo\nCarol, Carol@Example.COM ,vip\n", content_type="text/csv"
+        )
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.memo, "vip")
+
+    def test_email_is_normalized_on_save(self):
+        """AuctionTOS.save lowercases/strips a real email but leaves an empty one untouched (None stays None
+        so the email__isnull 'no email' filter keeps working)."""
+        tos = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, email="  Mixed@Case.COM "
+        )
+        self.assertEqual(tos.email, "mixed@case.com")
+        no_email = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location)
+        self.assertFalse(no_email.email)
+
+    def test_ragged_row_does_not_500(self):
+        """A row with more columns than the header (e.g. an unescaped comma) is imported instead of
+        crashing the whole upload with an AttributeError on the None DictReader key."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # Header has 2 columns; the data row has 4 -> DictReader stashes the surplus under a None key.
+        csv_file = SimpleUploadedFile(
+            "ragged.csv", b"name,email\nBob,bob@example.com,extra,more\n", content_type="text/csv"
+        )
+        response = self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, email="bob@example.com").exists())
+
+    def test_duplicate_email_rows_in_file_collapse_to_one_record(self):
+        """Two rows sharing a normalized email are combined into a single record (the later row is flagged
+        as a skipped in-file duplicate), and complementary blank fields are filled rather than lost."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        # Row 1 has the name but no phone; row 2 (same email, different case/space) has the phone.
+        csv_file = SimpleUploadedFile(
+            "dupes.csv",
+            b"name,email,phone\nDana,Dupe@Example.com,\nDana, dupe@example.com ,555-1212\n",
+            content_type="text/csv",
+        )
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        matches = AuctionTOS.objects.filter(auction=self.online_auction, email="dupe@example.com")
+        self.assertEqual(matches.count(), 1)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        # The phone from the second row was folded into the single surviving record (not dropped).
+        self.assertEqual(matches.first().phone_number, "555-1212")
+
+    def test_duplicate_email_rows_surfaced_in_preview_as_skipped(self):
+        """The in-file duplicate is shown on the review page as a skipped/combined row, not silently."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "dupes.csv",
+            b"name,email\nEli,combine@example.com\nEli,combine@example.com\n",
+            content_type="text/csv",
+        )
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        preview = self.client.get(upload["Location"])
+        self.assertContains(preview, "Duplicate email in file")
+
+    def test_double_confirm_same_token_does_not_double_import(self):
+        """Re-POSTing the same confirm token (double-click / replay) imports the batch only once."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("once.csv", b"name,email\nOnce Only,once@example.com\n", content_type="text/csv")
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        token = upload["Location"].split("preview=")[1].split("&")[0]
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        # Second confirm with the now-consumed token must not create a second record.
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction, email="once@example.com").count(), 1)
+
+    def test_cancel_frees_token_and_writes_nothing(self):
+        """The Cancel POST clears the Redis token (so a later confirm can't apply it) and writes nothing."""
+        from django.core.cache import cache
+
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        before = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        csv_file = SimpleUploadedFile("cancel.csv", b"name,email\nNope,nope@example.com\n", content_type="text/csv")
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        token = upload["Location"].split("preview=")[1].split("&")[0]
+        self.client.post(self._bulk_add_url(), {"_cancel": token})
+        self.assertIsNone(cache.get(f"csv_import:{token}"))
+        # Confirming the cancelled token is a no-op.
+        self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before)
 
 
 class GoogleDriveImportTests(StandardTestCase):
@@ -4703,6 +4901,26 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Custom dropdown")
 
+    def test_custom_dropdown_options_api_admin_can_create(self):
+        """Regression: the API view must set self.auction so is_auction_admin works (used to 500)."""
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("auction_custom_dropdown_options", kwargs={"slug": self.online_auction.slug}),
+            data={"action": "create", "value": "River"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertTrue(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
+
+    def test_custom_dropdown_options_api_non_admin_denied(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(
+            reverse("auction_custom_dropdown_options", kwargs={"slug": self.online_auction.slug}),
+            data={"action": "create", "value": "River"},
+        )
+        self.assertIn(response.status_code, [302, 403])
+        self.assertFalse(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
+
 
 class PayPalFormFieldVisibilityTests(StandardTestCase):
     """Test that PayPal payment field is only shown when user has PayPal connected"""
@@ -4782,6 +5000,33 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
         self.assertIsInstance(form.fields["enable_square_payments"].widget, forms.HiddenInput)
+
+    @override_settings(SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Single Club")
+    def test_single_club_mode_hides_club_picker_and_blocks_turning_off_management(self):
+        # Use an in-person auction: check-in mode is an in-person concept and is rejected for online
+        # auctions by clean_manage_users_through_club, so it only belongs in the choices here.
+        Club.objects.create(name="Single Club")
+        self.in_person_auction.club = None
+        self.in_person_auction.manage_users_through_club = ""
+        self.in_person_auction.save()
+
+        form = AuctionEditForm(
+            instance=self.in_person_auction,
+            user=self.in_person_auction.created_by,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+
+        # The club picker is hidden and pinned to the single club...
+        self.assertIsInstance(form.fields["club"].widget, forms.HiddenInput)
+        self.assertEqual(form.fields["club"].initial.name, "Single Club")
+        # ...but participant management stays visible with the "Off" option removed.
+        self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+        choice_values = [value for value, _label in form.fields["manage_users_through_club"].choices]
+        self.assertNotIn("", choice_values)
+        self.assertEqual(set(choice_values), {"all", "checkin"})
+        # New single-club auctions default to auto-adding all members; check-in stays available as an opt-in.
+        self.assertEqual(form.fields["manage_users_through_club"].initial, "all")
 
 
 class LotListViewTests(StandardTestCase):
@@ -5885,6 +6130,67 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertIn("alert alert-warning", content)
         self.assertIn(invoice.unsold_lot_warning, content)
 
+    def test_quick_checkout_app_shows_deep_link_and_hides_qr(self):
+        # Inside the native app (FishAuctionsApp UA) the cashier taps the card on-device, so the
+        # scan-a-QR flow is replaced by a fishauctions://pay/<pk> deep link and the QR is hidden.
+        # Web visitors keep the existing QR/card checkout and never see the deep link. The gate reuses
+        # the same request.is_mobile_app UA check that hides the web navbar in base.html.
+        from unittest.mock import PropertyMock
+
+        from auctions.views import QuickCheckoutHTMX
+
+        self.in_person_tos.bidder_number = "APP1"
+        self.in_person_tos.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "APP1"},
+        )
+        deep_link = f"fishauctions://pay/{invoice.pk}"
+
+        # Force a Square QR into the context so the "hidden in-app" assertion is meaningful.
+        with (
+            patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
+            patch.object(Invoice, "reason_for_payment_not_available", new_callable=PropertyMock, return_value=""),
+            patch.object(
+                QuickCheckoutHTMX, "create_payment_link", return_value=("https://squareup.com/pay/fake", None)
+            ),
+        ):
+            app_html = self.client.get(url, HTTP_USER_AGENT="FishAuctionsApp/1.0 (iOS)").content.decode("utf-8")
+            web_html = self.client.get(url, HTTP_USER_AGENT="Mozilla/5.0").content.decode("utf-8")
+
+        # In-app: native deep link shown, QR hidden.
+        self.assertIn(deep_link, app_html)
+        self.assertNotIn("Scan this code to pay with Square", app_html)
+        # The explanatory template comment must never render as visible text.
+        self.assertNotIn("deep-link to the on-device Tap to Pay screen", app_html)
+        # Web: QR/card checkout shown, no deep link.
+        self.assertNotIn(deep_link, web_html)
+        self.assertIn("Scan this code to pay with Square", web_html)
+
+    def test_quick_checkout_app_hides_deep_link_without_square(self):
+        # Tap to Pay charges on the seller's Square account, so the in-app deep link must only appear
+        # when Square is actually linked/authorized (show_square_button). With no Square account or
+        # permission the button must not show, matching the Square QR gate and create_mobile_payment.
+        from unittest.mock import PropertyMock
+
+        self.in_person_tos.bidder_number = "APP2"
+        self.in_person_tos.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "APP2"},
+        )
+        deep_link = f"fishauctions://pay/{invoice.pk}"
+
+        with patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=False):
+            app_html = self.client.get(url, HTTP_USER_AGENT="FishAuctionsApp/1.0 (iOS)").content.decode("utf-8")
+
+        self.assertNotIn(deep_link, app_html)
+        self.assertNotIn("Tap to Pay with card", app_html)
+
 
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
@@ -6424,7 +6730,6 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
             "email_visible": False,
-            "show_ads": True,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -6461,7 +6766,6 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
             "email_visible": False,
-            "show_ads": True,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -8629,8 +8933,8 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         self.client.login(username=self.admin_user.username, password="testpassword")
         url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
         response = self.client.post(url)
-        # Should redirect with error message
-        assert response.status_code == 200
+        # Should redirect back to the lot list with an error message
+        assert response.status_code in (200, 302)
 
     def test_import_lots_csv_create_new_lot(self):
         """CSV import creates a new lot for existing user"""
@@ -8653,7 +8957,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8681,7 +8985,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8705,7 +9009,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8736,7 +9040,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -8763,7 +9067,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         )
         csv_file = io.BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         self.assertEqual(response.status_code, 200)
         new_lot = Lot.objects.filter(lot_name="Dropdown CSV Lot", auction=self.online_auction).first()
         self.assertIsNotNone(new_lot)
@@ -8782,7 +9086,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully but skip the row
         assert response.status_code == 200
@@ -8807,13 +9111,13 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         # Upload once
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         assert response.status_code == 200
 
         # Upload again
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         assert response.status_code == 200
 
         # Check that lot was updated, not duplicated
@@ -8846,7 +9150,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_file = BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect with warning
         assert response.status_code == 200
@@ -8879,7 +9183,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         # Get initial history count
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
 
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
 
         # Should redirect successfully
         assert response.status_code == 200
@@ -9993,7 +10297,6 @@ class CurrencyCustomizationTests(StandardTestCase):
                 "preferred_currency": "GBP",
                 "distance_unit": "mi",
                 "email_visible": False,
-                "show_ads": True,
                 "email_me_about_new_auctions": True,
                 "email_me_about_new_local_lots": True,
                 "email_me_about_new_lots_ship_to_location": True,
@@ -10418,7 +10721,7 @@ class UserLocationUpdateTests(StandardTestCase):
 class LoadDemoDataTests(TestCase):
     """Tests for the load_demo_data management command"""
 
-    @override_settings(DEBUG=True)
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=False)
     def test_load_demo_data_with_debug_true(self):
         """Test that demo data loads successfully when DEBUG=True and no auctions exist"""
         from io import StringIO
@@ -10460,7 +10763,7 @@ class LoadDemoDataTests(TestCase):
         lots_with_winners = Lot.objects.filter(lot_number__gte=90000, winner__isnull=False)
         self.assertGreater(lots_with_winners.count(), 0)
 
-    @override_settings(DEBUG=True)
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=False)
     def test_load_demo_data_skips_when_auctions_exist(self):
         """Test that demo data is not loaded when auctions already exist"""
         from io import StringIO
@@ -10512,6 +10815,37 @@ class LoadDemoDataTests(TestCase):
 
         # Verify no auctions were created
         self.assertEqual(Auction.objects.count(), 0)
+
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=True)
+    def test_load_demo_data_skips_when_single_club_mode_enabled(self):
+        from io import StringIO
+
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        self.assertIn("Skipping demo data load - SINGLE_CLUB_MODE is enabled", output)
+        self.assertEqual(Auction.objects.count(), 0)
+
+
+class EnsureSiteDefaultsCommandTests(TestCase):
+    @override_settings(DEBUG=True, SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Command Club")
+    def test_command_creates_single_club_and_memberships(self):
+        user = User.objects.create_user("commanduser", "command@example.com", "pw")
+        auction = Auction.objects.create(
+            title="Needs Club",
+            created_by=user,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        call_command("ensure_site_defaults")
+
+        club = Club.objects.get(name="Command Club")
+        self.assertTrue(ClubMember.objects.filter(club=club, user=user, is_deleted=False).exists())
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, club)
+        self.assertEqual(auction.manage_users_through_club, "all")
 
 
 class AdminReadonlyFieldsTests(StandardTestCase):
@@ -11282,6 +11616,27 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("GOOGLE_MEASUREMENT_ID", context)
         self.assertIn("GOOGLE_TAG_ID", context)
         self.assertIn("GOOGLE_ADSENSE_ID", context)
+        self.assertIn("show_ads", context)
+
+    @override_settings(SHOW_ADS=False)
+    def test_google_analytics_context_show_ads_off(self):
+        """SHOW_ADS=False disables ads globally via the context processor"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_analytics
+
+        context = google_analytics(RequestFactory().get("/"))
+        self.assertFalse(context["show_ads"])
+
+    @override_settings(SHOW_ADS=True)
+    def test_google_analytics_context_show_ads_on(self):
+        """SHOW_ADS=True enables ads globally via the context processor"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_analytics
+
+        context = google_analytics(RequestFactory().get("/"))
+        self.assertTrue(context["show_ads"])
 
     def test_google_oauth_context(self):
         """Test google_oauth context processor returns expected keys"""
@@ -11333,8 +11688,6 @@ class ContextProcessorsTestCase(TestCase):
 
         context = theme(request)
         self.assertIn("theme", context)
-        self.assertIn("show_ads", context)
-        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
 
     def test_theme_context_authenticated_user(self):
         """Test theme context processor for authenticated users"""
@@ -11349,8 +11702,6 @@ class ContextProcessorsTestCase(TestCase):
 
         context = theme(request)
         self.assertIn("theme", context)
-        self.assertIn("show_ads", context)
-        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
 
     def test_add_tz_with_cookie(self):
         """Test add_tz context processor with timezone cookie"""
@@ -11602,6 +11953,7 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
+        self.assertIn("recaptcha_enabled", context)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):
@@ -11622,6 +11974,53 @@ class GoogleLoginTemplateVisibilityTests(TestCase):
         response = self.client.get(reverse("account_signup"))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Looks like a Gmail address!")
+
+
+class AdminSetupChecklistViewTests(TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser("setupadmin", "setup@example.com", "testpass")
+        self.client.force_login(self.superuser)
+        # The checklist looks up the server's public IP over the network; pin it in tests.
+        ip_patcher = patch("auctions.views.get_server_public_ip", return_value="203.0.113.7")
+        ip_patcher.start()
+        self.addCleanup(ip_patcher.stop)
+
+    def test_admin_menu_shows_setup_checklist_link(self):
+        response = self.client.get(reverse("home"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Setup Checklist")
+
+    @override_settings(SINGLE_CLUB_MODE=True, SETUP_COMPLETE=True)
+    def test_setup_checklist_page_renders(self):
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Setup Checklist")
+        self.assertContains(response, "Single club mode")
+        self.assertContains(response, "Google Maps")
+        self.assertContains(response, "Mailchimp")
+        self.assertContains(response, "Square")
+        # The server IP appears in the site-domain DNS instructions.
+        self.assertContains(response, "203.0.113.7")
+
+    @override_settings(SITE_DOMAIN="127.0.0.1")
+    def test_site_domain_item_treats_localhost_default_as_configured(self):
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        setup_items = response.context["setup_items"]
+        site_domain_item = next(item for item in setup_items if item["name"] == "Site domain")
+        self.assertTrue(site_domain_item["configured"])
+
+    @override_settings(
+        POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="user@example.com",
+        EMAIL_HOST_PASSWORD="unsecure",
+    )
+    def test_email_delivery_item_requires_non_placeholder_smtp_credentials(self):
+        response = self.client.get(reverse("admin_setup_checklist"))
+        self.assertEqual(response.status_code, 200)
+        setup_items = response.context["setup_items"]
+        email_item = next(item for item in setup_items if item["name"] == "Email delivery")
+        self.assertFalse(email_item["configured"])
 
 
 class MiddlewareTestCase(TestCase):
@@ -13912,6 +14311,16 @@ class CustomSignupFormTest(TestCase):
         result = get_adapter().clean_username("validuser", shallow=True)
         self.assertEqual(result, "validuser")
 
+    @override_settings(RECAPTCHA_ENABLED=False)
+    def test_signup_form_removes_captcha_when_recaptcha_is_disabled(self):
+        form = CustomSignupForm()
+        self.assertNotIn("captcha", form.fields)
+
+    @override_settings(RECAPTCHA_ENABLED=False)
+    def test_reset_password_form_removes_captcha_when_recaptcha_is_disabled(self):
+        form = CustomResetPasswordForm()
+        self.assertNotIn("captcha", form.fields)
+
 
 class AdminUserSignupsJSONTests(TestCase):
     """Tests for the AdminUserSignupsJSON view with extended data series"""
@@ -15163,7 +15572,7 @@ class ClubViewTests(TestCase):
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
 
 
-class ClubPermissionTests(TestCase):
+class ClubPermissionTests(CsvImportTestMixin, TestCase):
     """Verify that each club permission level grants exactly the right access.
 
     Three user categories are tested for each view:
@@ -15213,6 +15622,26 @@ class ClubPermissionTests(TestCase):
 
     def _login(self, user):
         self.client.login(username=user.username, password="testpass")
+
+    def test_bap_csv_import_creates_awards_after_confirm(self):
+        """The BAP importer also routes through the preview: an award is only created after confirm,
+        matched to the member by email."""
+        self._login(self.bap_user)
+        url = reverse("club_bap_import", kwargs={"slug": self.club.slug})
+        csv_file = SimpleUploadedFile(
+            "bap.csv", b"email,bap,hap,cap\ntarget@example.com,3,0,0\n", content_type="text/csv"
+        )
+        before = BapAward.objects.filter(club_member=self.target_member).count()
+        # Upload alone must not create the award.
+        self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before)
+        # Confirm via the helper (re-uploads + confirms) and check the award lands.
+        csv_file = SimpleUploadedFile(
+            "bap.csv", b"email,bap,hap,cap\ntarget@example.com,3,0,0\n", content_type="text/csv"
+        )
+        self.run_csv_import(url, csv_file)
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before + 1)
+        self.assertEqual(BapAward.objects.filter(club_member=self.target_member).latest("pk").points, 3)
 
     # --- Anonymous access ---
 
@@ -15477,6 +15906,57 @@ class ClubPermissionTests(TestCase):
         response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
 
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_button_hidden_when_user_not_enabled(self):
+        self.money_user.userdata.paypal_enabled = False
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Connect a PayPal account for this club")
+
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_button_shown_when_user_enabled(self):
+        self.money_user.userdata.paypal_enabled = True
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Connect a PayPal account for this club")
+
+    @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_SECRET="test-secret")
+    def test_paypal_connect_view_blocks_user_not_enabled(self):
+        self.money_user.userdata.paypal_enabled = False
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("paypal_connect") + f"?club={self.club.slug}")
+        self.assertEqual(response.status_code, 302)
+
+    @override_settings(SQUARE_APPLICATION_ID="test-app", SQUARE_CLIENT_SECRET="test-secret")
+    def test_square_connect_button_hidden_when_user_not_enabled(self):
+        self.money_user.userdata.square_enabled = False
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Connect a Square account for this club")
+
+    @override_settings(SQUARE_APPLICATION_ID="test-app", SQUARE_CLIENT_SECRET="test-secret")
+    def test_square_connect_button_shown_when_user_enabled(self):
+        self.money_user.userdata.square_enabled = True
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Connect a Square account for this club")
+
+    def test_square_connect_view_blocks_user_not_enabled(self):
+        self.money_user.userdata.square_enabled = False
+        self.money_user.userdata.save(update_fields=["square_enabled"])
+        self._login(self.money_user)
+        response = self.client.get(reverse("square_connect") + f"?club={self.club.slug}")
+        self.assertEqual(response.status_code, 302)
+
     def test_money_user_can_access_treasurer_report(self):
         self._login(self.money_user)
         response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
@@ -15599,7 +16079,7 @@ class ClubPermissionTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class ClubMemberUpdateTests(TestCase):
+class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
     """Tests for club member self-service update and CSV import/export"""
 
     def setUp(self):
@@ -15644,33 +16124,80 @@ class ClubMemberUpdateTests(TestCase):
         csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"csv_file": csv_file})
-        self.assertEqual(response.status_code, 302)
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
         imported = ClubMember.objects.get(club=self.club, email="newmember@example.com")
         self.assertFalse(imported.send_welcome_email)
         self.assertTrue(imported.welcome_email_sent)
 
-    def test_csv_import_skips_rows_without_email(self):
-        """CSV import skips rows with no email"""
+    def test_csv_import_skips_rows_without_name_or_email(self):
+        """CSV import skips rows that have neither a name nor an email (no way to identify the person)"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
-        csv_content = "email,first name\n,NoEmail\n"
+        csv_content = "email,first name\n,\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
         initial_count = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
-        response = self.client.post(url, {"csv_file": csv_file})
-        self.assertEqual(response.status_code, 302)
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), initial_count)
+
+    def test_csv_import_rhyming_name_is_flagged_not_duplicated(self):
+        """A no-email import row whose name rhymes with an existing member (Bob -> Robert) is surfaced as a
+        possible duplicate and, on the default merge, does not create a second member."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        ClubMember.objects.create(club=self.club, name="Robert Smith", email="robert@example.com")
+        self.client.login(username="cu_owner", password="testpass")
+        before = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
+        csv_file = SimpleUploadedFile("members.csv", b"first name,last name\nBob,Smith\n", content_type="text/csv")
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        self.run_csv_import(url, csv_file)  # default decision = merge
+        self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before)
+
+    def test_csv_import_duplicate_email_rows_collapse_to_one_member(self):
+        """Two import rows sharing a normalized email become a single member instead of two records."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        before = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
+        csv_file = SimpleUploadedFile(
+            "members.csv",
+            b"name,email,phone\nFinn,Twin@Example.com,\nFinn, twin@example.com ,555-9000\n",
+            content_type="text/csv",
+        )
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        self.run_csv_import(url, csv_file)
+        matches = ClubMember.objects.filter(club=self.club, email="twin@example.com", is_deleted=False)
+        self.assertEqual(matches.count(), 1)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before + 1)
+        self.assertEqual(matches.first().phone_number, "555-9000")
+
+    def test_csv_import_ragged_row_does_not_500(self):
+        """A member row with more columns than the header is imported rather than crashing the upload."""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        csv_file = SimpleUploadedFile(
+            "members.csv", b"name,email\nRag,rag@example.com,oops,more\n", content_type="text/csv"
+        )
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="rag@example.com").exists())
 
     def test_csv_import_non_admin_gets_403(self):
         """Non-admin user cannot import CSV"""
         self.client.login(username="cu_other", password="testpass")
         csv_file = SimpleUploadedFile("members.csv", b"email\ntest@example.com\n", content_type="text/csv")
         url = reverse("club_member_import", kwargs={"slug": self.club.slug})
-        response = self.client.post(url, {"csv_file": csv_file})
+        response = self.run_csv_import(url, csv_file)
         self.assertEqual(response.status_code, 403)
 
     def test_csv_export_requires_permission(self):
@@ -16076,6 +16603,20 @@ class ParseBoolEnvTests(TestCase):
 
         self.assertIn("parse_bool_env", entrypoint_text)
         self.assertNotIn('[ "${DEBUG}" = "True" ]', entrypoint_text)
+
+    def test_entrypoint_requires_setup_complete(self) -> None:
+        entrypoint = Path(__file__).resolve().parent.parent / "entrypoint.sh"
+        entrypoint_text = entrypoint.read_text(encoding="utf-8")
+
+        self.assertIn("SETUP_COMPLETE", entrypoint_text)
+        self.assertIn("Run ./update.sh", entrypoint_text)
+
+    def test_update_script_marks_setup_complete(self) -> None:
+        update_script = Path(__file__).resolve().parent.parent / "update.sh"
+        update_text = update_script.read_text(encoding="utf-8")
+
+        self.assertIn("SETUP_COMPLETE", update_text)
+        self.assertIn("SITE_DOMAIN", update_text)
 
 
 class RequireSecureProdSecretsTests(TestCase):
@@ -16610,6 +17151,8 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_system, "none")
 
     def test_membership_settings_shows_form_without_connected_accounts(self):
+        self.editor.userdata.paypal_enabled = True
+        self.editor.userdata.save(update_fields=["paypal_enabled"])
         self.client.login(username="club_settings_editor", password="testpass")
         with override_settings(PAYPAL_CLIENT_ID="test_id", PAYPAL_SECRET="test_secret"):
             response = self.client.get(self.membership_url)
@@ -18889,6 +19432,10 @@ class NonOAuthPayPalTests(TestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
     def test_settings_page_shows_oauth_when_flag_off(self):
+        # The OAuth "Connect" button is gated behind the user's paypal_enabled flag, which
+        # defaults to PAYPAL_ENABLED_FOR_USERS (False). Enable it so the button can render.
+        self.money_user.userdata.paypal_enabled = True
+        self.money_user.userdata.save(update_fields=["paypal_enabled"])
         self.client.login(username="nonoauth_money", password="pw")
         url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         content = self.client.get(url).content.decode()
@@ -22037,6 +22584,16 @@ class CommandPaletteTests(StandardTestCase):
         row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
         self.assertEqual(row.result, "bounce")
 
+    def test_finalize_without_id_records_the_search(self):
+        # The client finalizes a search (e.g. a sendBeacon on navigation away) even when the
+        # in-progress row's id hasn't come back yet. A finalize with no id must still record the
+        # search rather than drop it, which is how searches abandoned by navigating used to vanish.
+        self._login(self.user)
+        resp = self.client.post(reverse("command_palette_log"), {"search": "guppy", "result": "abandoned"})
+        row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
+        self.assertEqual(row.search, "guppy")
+        self.assertEqual(row.result, "abandoned")
+
     def test_ready_invoice_is_top_default_result(self):
         self.invoice.status = "UNPAID"
         self.invoice.save()
@@ -22333,6 +22890,48 @@ class MobileLabelTests(StandardTestCase):
 
     def test_requires_jwt(self):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+class MobileConfigTests(TestCase):
+    """/api/mobile/config/ — public, unauthenticated deployment config the app reads before sign-in."""
+
+    def setUp(self):
+        self.url = reverse("mobile-config")
+
+    @override_settings(
+        SQUARE_APPLICATION_ID="sq0idp-test",
+        SQUARE_ENVIRONMENT="sandbox",
+        GOOGLE_OAUTH_CLIENT_ID="123.apps.googleusercontent.com",
+        NAVBAR_BRAND="Test Auctions",
+    )
+    def test_returns_public_config_without_auth(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.json(),
+            {
+                "square_application_id": "sq0idp-test",
+                "square_environment": "sandbox",
+                "google_server_client_id": "123.apps.googleusercontent.com",
+                "brand_name": "Test Auctions",
+            },
+        )
+
+    def test_exposes_no_secrets(self):
+        # Guard against a secret ever being added to this public endpoint: the response keys are a
+        # fixed allowlist of public values, and none of the bytes leak a server-side secret.
+        with override_settings(
+            SQUARE_CLIENT_SECRET="sq0csp-supersecret",
+            SECRET_KEY="django-secret-key-value",
+        ):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            set(resp.json().keys()),
+            {"square_application_id", "square_environment", "google_server_client_id", "brand_name"},
+        )
+        self.assertNotIn(b"sq0csp-supersecret", resp.content)
+        self.assertNotIn(b"django-secret-key-value", resp.content)
 
 
 class SingleLotLabelPngTests(StandardTestCase):
@@ -22735,6 +23334,47 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.pay_invoice.refresh_from_db()
         self.assertEqual(self.pay_invoice.status, "PAID")
 
+    def test_confirm_surfaces_actionable_message_on_idempotency_key_reuse(self):
+        # The footgun: the create idempotency key is stable per invoice, so after an earlier Tap to Pay
+        # charge a re-tap reuses it and Square returns that ORIGINAL (already-recorded) charge instead
+        # of charging the new balance. Confirm must raise the specific PaymentAlreadyChargedError —
+        # naming the prior charge and what is still due — not the generic mismatch error, and record
+        # nothing new.
+        from auctions.mobile.services.payments import PaymentAlreadyChargedError, PaymentService
+
+        # A prior $20 Square charge (external_id PAY1) is already on the invoice...
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        # ...then $30 more is added, so $30 is now due. Re-tapping deduped to the original $20 payment.
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=30, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+        seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=2000))
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state") as ensure,
+            patch("auctions.views._process_invoice_membership_renewal") as renew,
+        ):
+            with self.assertRaises(PaymentAlreadyChargedError) as cm:
+                PaymentService.confirm_mobile_payment(
+                    invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
+                )
+        # PaymentAlreadyChargedError is still a ValueError subclass (so generic handlers catch it too).
+        self.assertIsInstance(cm.exception, ValueError)
+        msg = str(cm.exception)
+        self.assertIn("20.00", msg)  # the amount already charged
+        self.assertIn("30.00", msg)  # the amount still due
+        # Nothing new recorded, no renewal side effects, invoice not flipped to PAID off the stale charge.
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
+        ensure.assert_not_called()
+        renew.assert_not_called()
+
     def test_confirm_square_error_raises_valueerror(self):
         from auctions.mobile.services.payments import PaymentService
 
@@ -22757,6 +23397,47 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(result["amount"], "20.00")
         # The client must charge with this reference_id; it matches the web convention (str(pk)).
         self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
+        # Every documented create field is present (and nothing extra leaks).
+        self.assertEqual(
+            set(result),
+            {
+                "invoice_pk",
+                "amount",
+                "currency",
+                "location_id",
+                "reference_id",
+                "access_token",
+                "idempotency_key",
+                "square_environment",
+            },
+        )
+
+    def test_create_idempotency_key_is_stable_and_invoice_derived(self):
+        # The on-device SDK keys the Tap to Pay charge with idempotency_key, so it must be stable
+        # across retries (not a fresh uuid per call) and differ between invoices — otherwise a retried
+        # create -> tap double-charges, or two invoices collide on Square's dedup.
+        from auctions.mobile.services.payments import PaymentService
+
+        other_tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("idembuyer", "idem@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        other_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=other_tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=other_invoice)
+        other_invoice.refresh_from_db()
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()[0]):
+            first = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+            again = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+            other = PaymentService.create_mobile_payment(invoice_pk=other_invoice.pk, user=self.admin_user)
+
+        # Deterministic: two creates for the same invoice yield the identical key (a uuid would not).
+        self.assertEqual(first["idempotency_key"], again["idempotency_key"])
+        self.assertIn(str(self.pay_invoice.pk), first["idempotency_key"])  # derived from the invoice pk
+        # Distinct invoices must not share an idempotency key.
+        self.assertNotEqual(first["idempotency_key"], other["idempotency_key"])
+        self.assertLessEqual(len(first["idempotency_key"]), 45)  # Square's idempotency_key length cap
 
     def test_create_blocks_seller_without_tap_to_pay_scope(self):
         # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device
@@ -22901,3 +23582,50 @@ class MobilePaymentEndpointTests(StandardTestCase):
             **self._bearer(self.buyer),
         )
         self.assertEqual(resp.status_code, 403)
+
+    def test_confirm_already_charged_returns_409_with_actionable_code(self):
+        # The idempotency-key-reuse footgun must reach the app as an actionable 409 (code
+        # "already_charged" + a cashier-facing detail), not the generic "couldn't verify" message.
+        from types import SimpleNamespace
+
+        from auctions.mobile.services.payments import PaymentService
+
+        # A prior $20 Square charge is on the invoice; then $30 more is added, so $30 is now due. The
+        # re-tap deduped to the original $20 charge (same payment_id), which no longer covers the due.
+        InvoicePayment.objects.create(
+            invoice=self.pay_invoice,
+            external_id="PAY1",
+            payment_method="Square",
+            amount=20,
+            amount_available_to_refund=20,
+            currency=self.pay_invoice.currency,
+        )
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=30, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+        seller = self._mock_seller()
+        client = MagicMock()
+        client.payments.get.return_value = SimpleNamespace(
+            errors=None,
+            payment=SimpleNamespace(
+                id="PAY1",
+                status="COMPLETED",
+                receipt_number="RC",
+                amount_money=SimpleNamespace(amount=2000, currency=self.pay_invoice.currency),
+                location_id="LOC1",
+                reference_id=str(self.pay_invoice.pk),
+            ),
+        )
+        seller.get_square_client.return_value = client
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
+            resp = self.client.post(
+                self.confirm_url,
+                {"invoice_pk": self.pay_invoice.pk, "payment_id": "PAY1", "idempotency_key": "i"},
+                **self._bearer(self.admin_user),
+            )
+        self.assertEqual(resp.status_code, 409)
+        body = resp.json()
+        self.assertEqual(body["code"], "already_charged")
+        self.assertIn("still due", body["detail"])
+        # No second payment was recorded off the stale charge.
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
