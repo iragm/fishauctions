@@ -58,7 +58,10 @@
         {% endif %}
         {% endif %}
         <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>
+        {% comment %} Print invoice needs the browser print dialog, which the app WebView has no UI for. {% endcomment %}
+        {% if not request.is_mobile_app %}
         <a href="{{ invoice.get_absolute_url }}?print" target="_blank"><i class="bi bi-printer-fill"></i> Print invoice</a>
+        {% endif %}
       {% endif %}
     {% endif %}
   {% endif %}

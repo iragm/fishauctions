@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% comment %}
+  FLAG (mobile): This is a label printing view (browser/PDF label sheet), which doesn't work inside
+  the native app WebView. The mobile app prints labels natively over Bluetooth, so links into this
+  page are hidden when request.is_mobile_app (see auction_ribbon, club_sidebar_nav, auction.html).
+  This page is left intact for the web.
+{% endcomment %}
 {% block title %}Print labels for {{ auction }}{% endblock %}
 {% load static %}
 {% block content %}

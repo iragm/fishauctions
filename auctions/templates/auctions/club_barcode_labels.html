@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% load static %}
+{% comment %}
+  FLAG (mobile): This is a barcode/label printing view. It generates a browser/PDF label sheet,
+  which doesn't work inside the native app WebView. The mobile app prints barcodes/labels natively
+  over Bluetooth, so links into this page are hidden when request.is_mobile_app (see club_sidebar_nav
+  and quick_check_in_users). This page is left intact for the web.
+{% endcomment %}
 {% block title %}Print Barcodes — {{ club.name }}{% endblock %}
 
 {% block extra_css %}

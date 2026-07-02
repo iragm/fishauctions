@@ -5,6 +5,18 @@
 <div class="container py-4">
   <h1 class="h4 mb-3">Accept payments with PayPal</h1>
 
+  {% comment %}
+    Connecting a PayPal account is a web OAuth redirect to PayPal, which is blocked inside the native
+    app WebView. Show a banner pointing to the website and hide the connect links below on mobile.
+  {% endcomment %}
+  {% if request.is_mobile_app %}
+    <div class="alert alert-warning" role="alert">
+      Connecting a PayPal account isn't available in the app. Open
+      <a href="https://{{ request.get_host }}{{ request.path }}" target="_blank" rel="noopener">this page on the website</a>
+      in your browser to connect your account.
+    </div>
+  {% endif %}
+
   {% if request.user.is_authenticated and not request.user.userdata.paypal_enabled %}
     <div class="alert alert-info" role="alert">
       PayPal is currently disabled for your account. A site administrator can re-enable it for you.  You can still connect your PayPal accout, but you won't be able to accept payments until it's enabled.
@@ -16,7 +28,7 @@
   </p>
 
   <ol class="mb-4">
-    <li>{% if seller %}Connect your PayPal account{% else %}<a href="{% url 'paypal_connect' %}">Connect your PayPal account</a>{% endif %}</li>
+    <li>{% if seller or request.is_mobile_app %}Connect your PayPal account{% else %}<a href="{% url 'paypal_connect' %}">Connect your PayPal account</a>{% endif %}</li>
     <li>That's it — users will see a Pay button on their invoices!</li>
   </ol>
 
@@ -84,6 +96,7 @@
     <li>There's no fine print here, no fees beyond the standard PayPal fees, and you can disable payments at any time.</li>
   </ul>
 
+  {% if not request.is_mobile_app %}
   <h4>Ready to get started?</h4>
   <div class="d-flex align-items-center gap-2 mb-4">
     <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}">Connect your PayPal account</a>
@@ -91,6 +104,7 @@
       <span class="small">and start accepting payments in {{ auction }} today!</span>
     {% endif %}
   </div>
+  {% endif %}
 
   {% if seller %}
     {% url 'paypal_seller_delete' as disconnect_url %}

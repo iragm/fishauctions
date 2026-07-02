@@ -9,11 +9,15 @@
 {% block content %}
     <h1>{% trans "Sign In" %}</h1>
 
-    {% if GOOGLE_LOGIN_ENABLED %}
+    {% comment %}
+      The native app has its own Google Sign-In path (see MobileGoogleAuthView); the web OAuth
+      redirect is blocked inside embedded WebViews ("disallowed_useragent"), so hide it in the app.
+    {% endcomment %}
+    {% if GOOGLE_LOGIN_ENABLED and not request.is_mobile_app %}
     <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
     {% endif %}
 
-      <br><br><h5>{% if GOOGLE_LOGIN_ENABLED %}Don't have a Google account?  {% endif %}Sign in with your account on this site:</h5>
+      <br><br><h5>{% if GOOGLE_LOGIN_ENABLED and not request.is_mobile_app %}Don't have a Google account?  {% endif %}Sign in with your account on this site:</h5>
 
     <form class="login" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}

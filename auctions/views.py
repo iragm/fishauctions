@@ -14742,7 +14742,9 @@ class AddToCalendarView(LoginRequiredMixin, View):
         #     )
         #     return redirect(self.auction.get_absolute_url())
 
-        if self.calendar_type not in ("google", "outlook", "ics"):
+        # "native" returns the event as JSON for the mobile app's native "add to device calendar"
+        # bridge; "google"/"outlook" redirect to web calendars; "ics" downloads an .ics file.
+        if self.calendar_type not in ("google", "outlook", "ics", "native"):
             messages.error(
                 request,
                 "Unknown calendar type requested",
@@ -14754,10 +14756,8 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         return super().dispatch(request, *args, **kwargs)
 
-    def get(self, request, *args, **kwargs):
-        """Handle GET: redirect user or return ICS"""
-
-        # Select pickup time
+    def _build_event(self):
+        """Return the shared event fields (title, details, start, end, location) for this pickup."""
         start = self.location.second_pickup_time if self.second else self.location.pickup_time
         if not start:
             msg = "Pickup time not available"
@@ -14773,6 +14773,25 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         details = f"{self.location.auction.title}\n{self.location.description or ''}".strip()
         loc = self.location.address or f"{self.location.latitude},{self.location.longitude}"
+        return title, details, start, end, loc
+
+    def get(self, request, *args, **kwargs):
+        """Handle GET: redirect user, return ICS, or return event JSON for the native app."""
+
+        title, details, start, end, loc = self._build_event()
+
+        if self.calendar_type == "native":
+            # Consumed by the mobile app's addToCalendar JS bridge (see location_fragment_short.html),
+            # which hands these fields to a native "add to device calendar" plugin.
+            return JsonResponse(
+                {
+                    "title": title,
+                    "details": details,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "location": loc,
+                }
+            )
 
         if self.calendar_type == "google":
             params = {

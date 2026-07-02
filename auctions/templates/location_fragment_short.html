@@ -1,4 +1,24 @@
 {% if not location.pickup_by_mail %}
+    {% if request.is_mobile_app %}
+    <script>
+      // Native app "add to device calendar": fetch the event JSON (type=native) and hand it to the
+      // Flutter addToCalendar bridge. If the app hasn't registered the handler yet, fall back to the
+      // .ics download (which the app's download interceptor opens into the OS calendar).
+      if (!window.fishAddToCalendar) {
+        window.fishAddToCalendar = function (nativeUrl, icsUrl) {
+          var bridge = window.flutter_inappwebview;
+          if (bridge && typeof bridge.callHandler === "function") {
+            fetch(nativeUrl, { credentials: "same-origin", headers: { Accept: "application/json" } })
+              .then(function (r) { if (!r.ok) { throw new Error("bad status"); } return r.json(); })
+              .then(function (data) { bridge.callHandler("addToCalendar", data); })
+              .catch(function () { window.location = icsUrl; });
+          } else {
+            window.location = icsUrl;
+          }
+        };
+      }
+    </script>
+    {% endif %}
     {%if location.has_coordinates %}
     <a href="{{location.directions_link}}" class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-geo-alt-fill"></i>Get directions</a>
 
@@ -7,7 +27,17 @@
         You must schedule your pickup time in advance.
     {% else %}
         <p><b>{{ location.pickup_time }}</b>
-            {% if hasChosenLocation == location.pk%}
+            {% comment %}
+              Web shows a Google/ICS/Outlook dropdown; the native app shows a single button that adds
+              the pickup straight to the device calendar (via fishAddToCalendar → addToCalendar bridge,
+              with an .ics-download fallback), since the web calendar links don't work in the WebView.
+            {% endcomment %}
+            {% if hasChosenLocation == location.pk %}
+            {% if request.is_mobile_app %}
+            <button type="button" class="btn btn-sm btn-primary" onclick="fishAddToCalendar('{% url 'add_to_calendar' %}?type=native&location={{location.pk}}&second=False', '{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False')">
+                <i class="bi bi-calendar-day"></i> Add to calendar
+            </button>
+            {% else %}
             <div class="dropdown d-inline">
             <button class="btn btn-sm btn-primary dropdown-toggle" type="button" id="calendarDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                 <i class="bi bi-calendar-day"></i> Add to calendar
@@ -31,9 +61,15 @@
             </ul>
             </div>
             {% endif %}
+            {% endif %}
             {% if location.second_pickup_time %}
                 <br>You must return on <b>{{ location.second_pickup_time }}</b> to pick up lots from other locations.<br>
-                {% if hasChosenLocation == location.pk%}
+                {% if hasChosenLocation == location.pk %}
+                {% if request.is_mobile_app %}
+                    <button type="button" class="btn btn-sm btn-primary" onclick="fishAddToCalendar('{% url 'add_to_calendar' %}?type=native&location={{location.pk}}&second=True', '{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True')">
+                        <i class="bi bi-calendar-day"></i> Add return pickup to calendar
+                    </button>
+                {% else %}
                     <div class="dropdown d-inline">
                     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" id="calendarDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="bi bi-calendar-day"></i> Add return pickup to calendar
@@ -56,6 +92,7 @@
                         </li>
                     </ul>
                     </div>
+                {% endif %}
                 {% endif %}
             {% endif %}
         </p>

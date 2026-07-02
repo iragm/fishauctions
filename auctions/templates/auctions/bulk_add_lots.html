@@ -17,7 +17,8 @@
     {% crispy formset helper %}
     <button class='btn btn-info' id="add-form" type="button">Add row</button>
 
-    <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
+    {% comment %} "Save and print labels" opens a browser print view; the mobile app prints natively over Bluetooth, so hide it there (the plain "Save lots" button remains). {% endcomment %}
+    {% if not request.is_mobile_app %}<input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">{% endif %}
     <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
 {% endblock %}
