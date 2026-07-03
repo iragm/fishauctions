@@ -59,7 +59,12 @@ services:
 
   db:
     container_name: db
-    image: mariadb:latest
+    # Track a single release series (security patches flow automatically) instead of
+    # :latest, which jumps release series on routine pulls and leaves system tables
+    # behind unless mariadb-upgrade runs. 11.4 is an LTS series (maintained to 2029).
+    # If an environment's data volume was created under a newer series, set
+    # MARIADB_VERSION in .env to that series -- MariaDB can't downgrade a data dir.
+    image: mariadb:${MARIADB_VERSION-11.4}
     restart: always
     command:
       - "--max_connections=10000"
@@ -74,6 +79,9 @@ services:
       MYSQL_USER: ${DATABASE_USER-mysqluser}
       MYSQL_PASSWORD: ${DATABASE_PASSWORD-unsecure}
       MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD-unsecure}
+      # Run mariadb-upgrade on startup after a server version change, so system
+      # tables (mysql.proc etc.) never drift out of step with the running server.
+      MARIADB_AUTO_UPGRADE: 1
     expose:
       - ${DATABASE_PORT-3306}
     volumes:

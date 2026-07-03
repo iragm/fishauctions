@@ -12332,12 +12332,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             # -- Google sign-in ---------------------------------------------------
             {
                 "section": "Google sign-in",
-                "name": "Google sign-in (OAuth)",
-                "hide_title": True,
+                "name": "Google sign-in on the website",
                 "configured": env_has_real_value(settings.GOOGLE_OAUTH_LINK),
                 "what_it_does": (
-                    "Adds one-click Google sign-in. The button stays hidden until a real client ID is set, "
-                    "so a placeholder degrades gracefully."
+                    "Adds one-click Google sign-in to the website. The button stays hidden until a real "
+                    "client ID is set, so a placeholder degrades gracefully."
                 ),
                 "where_to_get_it": (
                     "Create an OAuth web application and copy its client ID (ends in "
@@ -12352,6 +12351,44 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {
                         "label": "Setup guide (django-allauth)",
                         "url": "https://docs.allauth.org/en/latest/socialaccount/providers/google.html",
+                    },
+                ],
+            },
+            {
+                "section": "Google sign-in",
+                "name": "Google sign-in in the mobile app",
+                "configured": env_has_real_value(settings.GOOGLE_OAUTH_CLIENT_ID),
+                "what_it_does": (
+                    "Adds &ldquo;Continue with Google&rdquo; to the mobile app's login screen. The app reads "
+                    "this client ID at launch from the public <code>/api/mobile/config/</code> endpoint and "
+                    "hides the button while it is unset, so turning it on needs no app update. The backend "
+                    "also verifies the Google ID tokens the app sends to <code>/api/mobile/auth/google/</code> "
+                    "against this same ID. Independent of the website button above &mdash; Google blocks its "
+                    "OAuth pages inside embedded WebViews, so the app signs in natively instead."
+                ),
+                "setup_steps": [
+                    (
+                        "In the same Google Cloud project as the website button, create (or reuse) an OAuth "
+                        "client of type <strong>Web application</strong> and copy its client ID &mdash; this is "
+                        "the value for the snippet below. Reusing the website's <code>GOOGLE_OAUTH_LINK</code> "
+                        "client ID here is fine."
+                    ),
+                    (
+                        "Also create an OAuth client of type <strong>Android</strong> for each package name the "
+                        "app ships under (<code>com.fishauctions.app</code>, plus <code>.dev</code> / "
+                        "<code>.staging</code> for those builds), each with the SHA-1 fingerprint of the key "
+                        "that signs that build (<code>keytool -list -v -keystore ~/.android/debug.keystore "
+                        "-alias androiddebugkey -storepass android</code> for debug builds). These Android "
+                        "clients hold no secrets and nothing from them goes in <code>.env</code> &mdash; they "
+                        "just have to exist in the project, or Google refuses the sign-in on the device."
+                    ),
+                    "Set <code>GOOGLE_OAUTH_CLIENT_ID</code> in <code>.env</code> and restart.",
+                ],
+                "snippets": [{"code": 'GOOGLE_OAUTH_CLIENT_ID="your-client-id.apps.googleusercontent.com"'}],
+                "links": [
+                    {
+                        "label": "Google Cloud — OAuth credentials",
+                        "url": "https://console.cloud.google.com/apis/credentials",
                     },
                 ],
             },
