@@ -58,6 +58,14 @@ $(document).ready(function(){
   });
 });
 
+// Toggling the membership renewal checkbox can change the club member discount and
+// (in club member discount split mode) the seller's alternate fees, so reload to
+// update the entire invoice -- lot tables, payout, and totals.
+document.body.addEventListener('renewalToggled', function() {
+  isDirty = false;
+  window.location.reload();
+});
+
 </script>
 {% endif %}
 {% if print_label_link and not invoice.printed and not is_admin %}
@@ -291,6 +299,7 @@ document.addEventListener("DOMContentLoaded", function() {
       <td>{{ invoice.currency_symbol }}{{ invoice.first_bid_payout|floatformat:2 }}</td>
     </tr>
   {% endif %}
+  {% include "auctions/partials/invoice_club_member_discount_row.html" %}
   {% include "auctions/partials/invoice_tax_row.html" %}
   {% include "auctions/partials/invoice_membership_fee_row.html" %}
   {% for adjustment in invoice.changed_adjustments %}
@@ -309,7 +318,7 @@ document.addEventListener("DOMContentLoaded", function() {
 </table>
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>
-  {% if invoice.auctiontos_user.is_club_member %}
+  {% if invoice.auctiontos_user.is_club_member and invoice.auctiontos_user.auction.uses_alternate_split %}
     Note: {{ invoice.auctiontos_user.auction.alternative_split_label|capfirst }} fees have been applied<br>
   {% endif %}
   <table class="table">

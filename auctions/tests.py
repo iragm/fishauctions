@@ -1784,6 +1784,7 @@ class AuctionEditFormMinimumBidTests(TestCase):
             ),
             "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": auction.alternate_split_mode,
             "alternative_split_label": auction.alternative_split_label or "",
             "reserve_price": auction.reserve_price,
             "buy_now": auction.buy_now,
@@ -4715,6 +4716,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.online_auction.alternate_split_mode,
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
@@ -4752,6 +4754,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.online_auction.alternate_split_mode,
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
@@ -4789,6 +4792,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.in_person_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.in_person_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.in_person_auction.alternate_split_mode,
             "alternative_split_label": self.in_person_auction.alternative_split_label or "",
             "tax": str(self.in_person_auction.tax or "0"),
             "online_bidding": self.in_person_auction.online_bidding,
@@ -5866,6 +5870,228 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         response = self.client.get(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Apply Renewal Club membership fee")
+
+
+class ClubMemberDiscountTests(StandardTestCase):
+    """Tests for Auction.club_member_discount and Auction.alternate_split_mode.
+
+    In this class, self.invoiceB belongs to tosB/userB who bought 3 lots at $10 each
+    (its four adjustments cancel each other out), and self.invoice belongs to
+    online_tos/self.user who sold those 3 lots plus one unsold lot.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Discount Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+        )
+        self.online_auction.club = self.club
+        self.online_auction.club_member_discount = 5
+        self.online_auction.tax = 0
+        self.online_auction.invoice_rounding = False
+        self.online_auction.save()
+        self.invoice.refresh_from_db()
+        self.invoiceB.refresh_from_db()
+
+    def _make_member(self, user, paid=True):
+        days = 100 if paid else -100
+        return ClubMember.objects.create(
+            club=self.club,
+            user=user,
+            name=user.username,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=265),
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=days),
+        )
+
+    def test_no_discount_for_non_member(self):
+        self.assertEqual(self.invoiceB.club_member_discount, 0)
+        self.assertEqual(self.invoiceB.net, Decimal("-30.00"))
+
+    def test_discount_applies_for_paid_member(self):
+        self._make_member(self.userB)
+        self.assertTrue(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        self.assertEqual(self.invoiceB.net, Decimal("-25.00"))
+
+    def test_no_discount_for_expired_member(self):
+        self._make_member(self.userB, paid=False)
+        self.assertFalse(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 0)
+
+    def test_no_discount_when_no_lots_bought(self):
+        self._make_member(self.user)
+        self.assertTrue(self.invoice.treat_as_club_member)
+        self.assertEqual(self.invoice.club_member_discount, 0)
+
+    def test_checking_renewal_applies_discount_for_expired_member(self):
+        """An unpaid member's invoice shows club member pricing when the renewal box is checked"""
+        self._make_member(self.userB, paid=False)
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.assertTrue(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        # 30 for lots bought, less the 5 discount, plus the 25 membership fee
+        self.assertEqual(self.invoiceB.net, Decimal("-50.00"))
+
+    def test_renewal_toggle_only_adds_fee_for_active_member(self):
+        """An active member gets the discount either way; checking the box only adds the fee"""
+        self._make_member(self.userB)
+        self.assertEqual(self.invoiceB.net, Decimal("-25.00"))
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        self.assertEqual(self.invoiceB.net, Decimal("-50.00"))
+
+    def test_alternate_split_mode_off_ignores_manual_flag(self):
+        self.online_auction.winning_bid_percent_to_club_for_club_members = 10
+        self.online_auction.lot_entry_fee_for_club_members = 0
+        self.online_auction.save()
+        self.online_tos.is_club_member = True
+        self.online_tos.save()
+        # custom (the default for existing auctions) applies the alternate fees:
+        # 3 sold lots at 10 * 90% = 27, less the 10 unsold lot fee
+        self.assertEqual(self.invoice.total_sold, Decimal("17.00"))
+        self.online_auction.alternate_split_mode = "off"
+        self.online_auction.save()
+        # standard fees: 3 sold lots at (10 * 75% - 2) = 16.50, less the 10 unsold lot fee
+        self.assertEqual(self.invoice.total_sold, Decimal("6.50"))
+
+    def test_club_member_mode_sets_flag_from_membership(self):
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.user)
+        self.assertFalse(self.online_tos.is_club_member)
+        self.assertTrue(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.is_club_member)
+        # a second call is a no-op
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+
+    def test_club_member_mode_does_not_set_flag_for_expired_member(self):
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.user, paid=False)
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_custom_mode_does_not_touch_flag(self):
+        self._make_member(self.user)
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_renewal_toggle_updates_alternate_split_flag(self):
+        """Checking/unchecking renew membership updates the seller's alternate fees in club member mode"""
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.userB, paid=False)
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoiceB.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "invoice-club-member-discount-row")
+        self.tosB.refresh_from_db()
+        self.assertTrue(self.tosB.is_club_member)
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoiceB.pk}),
+            {"renewal_needed": "0"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.tosB.refresh_from_db()
+        self.assertFalse(self.tosB.is_club_member)
+
+    def test_paid_invoice_books_club_member_discount_in_ledger(self):
+        from django.db.models import Sum
+
+        self._make_member(self.userB)
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        entry = ClubMoney.objects.filter(invoice=self.invoiceB, category="club_member_discount").first()
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.amount, Decimal("-5.00"))
+        # all ledger entries for this invoice must reconcile to the cash that moved
+        total = ClubMoney.objects.filter(invoice=self.invoiceB).aggregate(total=Sum("amount"))["total"]
+        self.assertEqual(total, -self.invoiceB.rounded_net)
+
+    def _edit_form_data(self, overrides=None):
+        auction = self.online_auction
+        data = {
+            "summernote_description": auction.summernote_description or "",
+            "lot_entry_fee": str(auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": auction.alternate_split_mode,
+            "alternative_split_label": auction.alternative_split_label or "",
+            "club_member_discount": str(auction.club_member_discount or "0"),
+            "tax": str(auction.tax or "0"),
+            "online_bidding": auction.online_bidding,
+            "date_start": auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(auction.minimum_bid),
+        }
+        if overrides:
+            data.update(overrides)
+        return data
+
+    def test_edit_form_club_member_mode_requires_club(self):
+        form = AuctionEditForm(
+            data=self._edit_form_data({"alternate_split_mode": "club_member", "club": ""}),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertIn("alternate_split_mode", form.errors)
+
+    def test_edit_form_club_member_mode_forces_label_and_syncs_flags(self):
+        ClubMember.objects.create(club=self.club, user=self.user, name="admin member", permission_admin=True)
+        self._make_member(self.userB)
+        form = AuctionEditForm(
+            data=self._edit_form_data(
+                {
+                    "alternate_split_mode": "club_member",
+                    "club": str(self.club.pk),
+                    "alternative_split_label": "whatever",
+                }
+            ),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        auction = form.save()
+        self.assertEqual(auction.alternative_split_label, "Club member")
+        # everyone already in the auction gets the flag synced from their membership
+        self.tosB.refresh_from_db()
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.tosB.is_club_member)
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_edit_form_clearing_club_zeroes_discount(self):
+        form = AuctionEditForm(
+            data=self._edit_form_data({"club": "", "club_member_discount": "5"}),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        auction = form.save()
+        self.assertEqual(auction.club_member_discount, 0)
 
 
 class ClubMoneyRenewalConsistencyTests(StandardTestCase):
@@ -21026,6 +21252,7 @@ class ManageUsersThroughClubTests(TestCase):
             "pre_register_lot_discount_percent": self.auction.pre_register_lot_discount_percent,
             "winning_bid_percent_to_club_for_club_members": self.auction.winning_bid_percent_to_club_for_club_members,
             "lot_entry_fee_for_club_members": self.auction.lot_entry_fee_for_club_members,
+            "alternate_split_mode": self.auction.alternate_split_mode,
             "alternative_split_label": self.auction.alternative_split_label,
             "minimum_bid": self.auction.minimum_bid,
             "tax": self.auction.tax,

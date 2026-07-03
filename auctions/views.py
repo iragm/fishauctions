@@ -586,19 +586,25 @@ def _should_mark_invoice_renewal_needed(invoice):
     return expiration_date <= timezone.now().date() + timedelta(days=30)
 
 
+def _sync_tos_alternate_split(tos, invoice=None):
+    """See AuctionTOS.update_alternate_split_from_membership; this just adds a None guard."""
+    if tos:
+        tos.update_alternate_split_from_membership(invoice)
+
+
 def _ensure_invoice_renewal_state(invoice):
-    if not invoice or invoice.renewal_processed:
+    if not invoice:
         return
     if not invoice.auction:
         # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
         return
-    # An admin has explicitly set the checkbox — respect that choice.
-    if invoice.renewal_manually_set:
-        return
-    should_need = _should_mark_invoice_renewal_needed(invoice)
-    if invoice.renewal_needed != should_need:
-        invoice.renewal_needed = should_need
-        invoice.save(update_fields=["renewal_needed"])
+    # Skip processed renewals, and respect a checkbox an admin has explicitly set.
+    if not invoice.renewal_processed and not invoice.renewal_manually_set:
+        should_need = _should_mark_invoice_renewal_needed(invoice)
+        if invoice.renewal_needed != should_need:
+            invoice.renewal_needed = should_need
+            invoice.save(update_fields=["renewal_needed"])
+    _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
 
 
 def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
@@ -2383,15 +2389,20 @@ class InvoiceRenewalNeededToggleView(APIView):
         invoice.renewal_needed = renewal_needed
         invoice.renewal_manually_set = True
         invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
+        # Checking the box makes the user a club member for this invoice: apply the club
+        # member discount and (in club member discount split mode) the alternate split.
+        _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
-        # OOB swaps so the invoice fee row, tax row, final total, and quick-checkout summary
-        # all update in real time when the box is toggled.
+        # OOB swaps so the invoice fee row, discount row, tax row, final total, and quick-checkout
+        # summary all update in real time when the box is toggled.
         fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
+        discount_row = render_to_string("auctions/partials/invoice_club_member_discount_row.html", ctx, request=request)
         tax_row = render_to_string("auctions/partials/invoice_tax_row.html", ctx, request=request)
         total_row = render_to_string("auctions/partials/invoice_final_total_row.html", ctx, request=request)
         oob_fee = fee_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_discount = discount_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_tax = tax_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         # Wrap <tr> OOB swaps in <table> so the browser's HTML parser does not discard
@@ -2399,6 +2410,7 @@ class InvoiceRenewalNeededToggleView(APIView):
         # and process the hx-swap-oob attribute (unlike <template>, whose content is
         # inert and not reachable by querySelectorAll).
         oob_fee = f"<table>{oob_fee}</table>"
+        oob_discount = f"<table>{oob_discount}</table>"
         oob_tax = f"<table>{oob_tax}</table>"
         oob_total = f"<table>{oob_total}</table>"
         oob_summary_checkout = (
@@ -2413,7 +2425,14 @@ class InvoiceRenewalNeededToggleView(APIView):
         modal_name = invoice.invoice_summary
         oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
         response = HttpResponse(
-            body + oob_fee + oob_tax + oob_total + oob_summary_checkout + oob_summary_invoice + oob_modal_title
+            body
+            + oob_fee
+            + oob_discount
+            + oob_tax
+            + oob_total
+            + oob_summary_checkout
+            + oob_summary_invoice
+            + oob_modal_title
         )
         # Signal the quick-checkout page to regenerate QR codes now that the total has changed.
         response["HX-Trigger"] = "renewalToggled"
@@ -7974,6 +7993,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "unsold_lot_fee",
                 "winning_bid_percent_to_club",
                 "first_bid_payout",
+                "club_member_discount",
                 "sealed_bid",
                 "max_lots_per_user",
                 "allow_additional_lots_as_donation",
@@ -8019,6 +8039,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "enable_online_payments",
                 "enable_square_payments",
                 "add_membership_fee_to_invoices_for_expired_members",
+                "alternate_split_mode",
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
@@ -8038,6 +8059,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
+            # The model default ("custom") preserves behavior for pre-existing and cloned
+            # auctions; brand-new auctions start with the alternate split off.
+            auction.alternate_split_mode = "off"
             if not is_online:
                 # override default settings for new in-person auctions
                 auction.online_bidding = "disable"
@@ -16453,7 +16477,13 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                 if form.cleaned_data.get("pickup_location") is not None:
                     auctiontos.pickup_location = form.cleaned_data["pickup_location"]
                     tos_update_fields.append("pickup_location_id")
-                auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
+                if auction.alternate_split_mode == "club_member":
+                    # Auto-managed: paid club members (or an invoice renewing their
+                    # membership) get the alternate split.
+                    invoice = auctiontos.invoice
+                    auctiontos.is_club_member = invoice.treat_as_club_member if invoice else saved.is_paid_member
+                elif auction.alternate_split_mode == "custom":
+                    auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
                 # Sync bidding/selling permissions to AuctionTOS when the auction uses them
                 if auction.only_approved_sellers and "selling_allowed" in form.cleaned_data:
                     auctiontos.selling_allowed = form.cleaned_data["selling_allowed"]
@@ -16668,7 +16698,11 @@ class ClubMemberCreateView(APIView):
         pickup_location = form_cleaned_data.get("pickup_location") or _default_pickup_location_for_auction(auction)
         if not pickup_location:
             return None
-        is_club_member = form_cleaned_data.get("is_club_member", False)
+        if auction.alternate_split_mode == "club_member":
+            # The alternate split is applied automatically to paid club members.
+            is_club_member = member.is_paid_member
+        else:
+            is_club_member = form_cleaned_data.get("is_club_member", False)
         bidding_allowed = member.bidding_allowed
         selling_allowed = member.selling_allowed
         if auction.only_approved_bidders and "bidding_allowed" in form_cleaned_data:
