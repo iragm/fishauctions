@@ -2998,6 +2998,38 @@ class Auction(models.Model):
         return False
 
     @property
+    def wind_down_time(self):
+        """The moment the auction is fully wound down, before the pretty_much_over grace period.
+
+        Online: the latest pickup time across all locations (first or second pickup), falling back
+        to the bidding end date when no pickup times are set. In-person: the auction's start date
+        (the event itself). Returns None if the relevant date is missing."""
+        if not self.is_online:
+            return self.date_start
+        latest = None
+        for location in self.location_qs:
+            for pickup in (location.pickup_time, location.second_pickup_time):
+                if pickup and (latest is None or pickup > latest):
+                    latest = pickup
+        if latest is not None:
+            return latest
+        return self.date_end
+
+    @property
+    def pretty_much_over(self):
+        """True once the auction has been wound down for at least 24 hours.
+
+        Online auctions: 24h after the last pickup time (or after the bidding end date if there are
+        no pickup locations). In-person auctions: 24h after the start date. Unlike `closed` /
+        `in_person_closed` (which fire the moment bidding ends), this waits until pickups are done,
+        so it's used to stop surfacing the auction in the command palette and to deactivate its
+        stray lots via endauctions."""
+        reference = self.wind_down_time
+        if not reference:
+            return False
+        return timezone.now() > reference + datetime.timedelta(hours=24)
+
+    @property
     def ended_badge(self):
         if self.closed or self.in_person_closed:
             return mark_safe('<span class="badge bg-danger">Ended</span>')

@@ -8642,8 +8642,15 @@ class ToDefaultLandingPage(View):
             # if not, check and see if the user has been participating in an auction
             try:
                 auction = UserData.objects.get(user=request.user).last_auction_used
-                # Admins of an in-person auction land on the users list, not the lot list.
-                if auction and not auction.is_online and auction.permission_check(request.user):
+                # Admins of an in-person auction land on the users list, not the lot list — but only
+                # while the auction is still current. Once it's pretty_much_over (wound down 24h+),
+                # that redirect is stale, so fall through to the invoice/browse path instead.
+                if (
+                    auction
+                    and not auction.is_online
+                    and not auction.pretty_much_over
+                    and auction.permission_check(request.user)
+                ):
                     return redirect(auction.user_admin_link)
                 invoice = (
                     Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)

@@ -3610,6 +3610,73 @@ class AuctionPropertyTests(StandardTestCase):
             multi_location_auction.auction_type_as_str == "online auction with in-person pickup at multiple locations"
         )
 
+    def test_pretty_much_over_online_uses_last_pickup_time(self):
+        """An online auction is pretty_much_over 24h after its latest pickup time."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo online",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(days=8),
+        )
+        # Pickup still in the recent past (12h ago) -> not yet pretty_much_over.
+        loc = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=12)
+        )
+        self.assertFalse(auction.pretty_much_over)
+        # Move the pickup to 25h ago -> now pretty_much_over.
+        loc.pickup_time = timezone.now() - datetime.timedelta(hours=25)
+        loc.save()
+        self.assertTrue(auction.pretty_much_over)
+
+    def test_pretty_much_over_online_uses_latest_of_multiple_pickups(self):
+        """The latest pickup (incl. second_pickup_time) across locations drives wind-down."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo multi",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(days=8),
+        )
+        PickupLocation.objects.create(
+            name="early", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=48)
+        )
+        # A second pickup only 2h ago keeps the auction from being pretty_much_over.
+        PickupLocation.objects.create(
+            name="late",
+            auction=auction,
+            pickup_time=timezone.now() - datetime.timedelta(hours=50),
+            second_pickup_time=timezone.now() - datetime.timedelta(hours=2),
+        )
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_online_falls_back_to_date_end(self):
+        """With no pickup locations, an online auction winds down 24h after date_end."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo no pickup",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(hours=25),
+        )
+        self.assertTrue(auction.pretty_much_over)
+        auction.date_end = timezone.now() - datetime.timedelta(hours=12)
+        auction.save()
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_uses_date_start(self):
+        """In-person auctions are pretty_much_over 24h after date_start."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=12),
+        )
+        self.assertFalse(auction.pretty_much_over)
+        auction.date_start = timezone.now() - datetime.timedelta(hours=25)
+        auction.save()
+        self.assertTrue(auction.pretty_much_over)
+
     def test_auction_timing_properties(self):
         """Test auction start/end related properties"""
         # Create an auction that has started and is in progress
@@ -17972,6 +18039,161 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(award.cap_points, 0)
 
 
+class AuctionCalendarButtonTests(StandardTestCase):
+    """The auction page's add-to-calendar control renders a web dropdown, but a single native
+    button inside the mobile app (and never leaks raw calendar JS onto the page)."""
+
+    def setUp(self):
+        super().setUp()
+        # Keep the auction current so the join card / pickup block render normally.
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(days=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        self.location.pickup_time = timezone.now() + datetime.timedelta(days=3)
+        self.location.save()
+
+    def _get(self, user_agent):
+        self.client.force_login(self.user)
+        return self.client.get(self.online_auction.url, HTTP_USER_AGENT=user_agent).content.decode("utf-8")
+
+    def test_web_shows_provider_dropdown(self):
+        html = self._get("Mozilla/5.0")
+        self.assertIn("Add to calendar", html)
+        self.assertIn("Google Calendar", html)  # the web provider menu
+        self.assertNotIn("fishAddToCalendar", html)  # native bridge only in the app
+
+    def test_app_shows_single_native_button_not_dropdown(self):
+        html = self._get("FishAuctionsApp/1.0 (iOS)")
+        self.assertIn("Add to calendar", html)
+        self.assertIn("fishAddToCalendar", html)  # native single-button bridge
+        self.assertNotIn("Google Calendar", html)  # no web provider menu in the app
+
+    def test_map_info_window_fragment_has_no_script_tag(self):
+        # Regression: the map info-window interpolates a location fragment into a JS backtick
+        # string. In the app the old fragment emitted a <script>, whose </script> prematurely
+        # closed the map script and dumped initMap onto the page as visible text. The map
+        # fragment must never contain a script tag.
+        from django.template.loader import render_to_string
+
+        rendered = render_to_string(
+            "location_fragment_map.html",
+            {"location": self.location},
+        )
+        self.assertNotIn("<script", rendered)
+        self.assertNotIn("</script>", rendered)
+
+
+class EndauctionsPrettyMuchOverTests(TestCase):
+    """Tests for endauctions.deactivate_pretty_much_over_lots: deactivation + unsold BAP awards."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="pmo_seller", password="testpass", email="pmo@example.com")
+        self.club = Club.objects.create(
+            name="PMO Club",
+            enable_breeder_award_program=True,
+            auto_add_points=True,
+            only_sold_lots=False,
+            min_quantity=1,
+            points_per_lot=5,
+        )
+        self.category = Category.objects.create(name="PMO Livebearers", bap_points=5)
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+        # In-person auction started well over 24h ago -> pretty_much_over.
+        self.over_auction = Auction.objects.create(
+            title="Over Auction",
+            created_by=self.user,
+            club=self.club,
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+        )
+        self.location = PickupLocation.objects.create(
+            name="pmo loc", auction=self.over_auction, pickup_time=timezone.now() - datetime.timedelta(days=2)
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.over_auction, pickup_location=self.location)
+
+    def _make_lot(self, **kwargs):
+        defaults = {
+            "lot_name": "PMO Guppies",
+            "auction": self.over_auction,
+            "auctiontos_seller": self.tos,
+            "quantity": 5,
+            "i_bred_this_fish": True,
+            "species_category": self.category,
+            "active": True,
+        }
+        defaults.update(kwargs)
+        return Lot.objects.create(**defaults)
+
+    def test_active_lots_deactivated_when_pretty_much_over(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()
+        self.assertTrue(lot.active)
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+
+    def test_current_auction_lots_stay_active(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        current_auction = Auction.objects.create(
+            title="Current Auction",
+            created_by=self.user,
+            club=self.club,
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+        )
+        current_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=current_auction,
+            pickup_location=PickupLocation.objects.create(
+                name="cur", auction=current_auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+            ),
+        )
+        lot = Lot.objects.create(
+            lot_name="Current lot", auction=current_auction, auctiontos_seller=current_tos, quantity=5, active=True
+        )
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertTrue(lot.active)
+
+    def test_unsold_lot_awarded_bap_when_club_awards_unsold(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()  # unsold (no winner/price)
+        self.assertFalse(lot.sold)
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+        self.assertTrue(BapAward.objects.filter(lot=lot).exists())
+
+    def test_unsold_lot_not_awarded_when_only_sold_lots(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
+        lot = self._make_lot()  # unsold
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)  # still deactivated
+        self.assertFalse(BapAward.objects.filter(lot=lot).exists())  # but no points
+
+    def test_deactivated_lot_can_still_be_marked_sold(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+        # sold is independent of active: set a winner + price and it reads as sold.
+        lot.auctiontos_winner = self.tos
+        lot.winning_price = 15
+        lot.save()
+        lot.refresh_from_db()
+        self.assertTrue(lot.sold)
+
+
 class BapAwardRecalculateTests(TestCase):
     """Tests for BapAward.recalculate_member_points and its save/delete hooks."""
 
@@ -22523,6 +22745,64 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("invoice" in t.lower() for t in titles))
         self.assertFalse(any("View users" in t for t in titles))  # not an admin
 
+    def _make_last_auction_pretty_much_over(self):
+        """Push the online auction's pickup + end dates into the past so it's pretty_much_over."""
+        self.location.pickup_time = timezone.now() - datetime.timedelta(hours=48)
+        self.location.save()
+        self.online_auction.date_end = timezone.now() - datetime.timedelta(hours=48)
+        self.online_auction.save()
+        self.assertTrue(self.online_auction.pretty_much_over)
+
+    def test_default_items_pretty_much_over_shows_only_invoice(self):
+        # Once the last auction is pretty_much_over, the palette should surface only its invoice,
+        # not View lots / admin actions.
+        self.invoice.status = "UNPAID"
+        self.invoice.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("invoice" in t.lower() for t in titles))
+        self.assertFalse(any("View lots" in t for t in titles))
+        self.assertFalse(any("View users" in t for t in titles))
+        self.assertFalse(any("Quick checkout" in t for t in titles))
+
+    def test_view_lots_shortcut_hidden_when_pretty_much_over(self):
+        # The dynamic "view lots" shortcut must not resolve for a pretty_much_over auction.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "view lots"})
+        titles = self._all_item_titles(resp)
+        self.assertFalse(any("View lots" in t for t in titles))
+
+    def test_stats_shortcut_available_even_when_pretty_much_over(self):
+        # Stats stay reachable after the auction is over.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "stats"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Auction stats" in t for t in titles))
+
+    def test_create_auction_shortcut(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "create auction"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Create an auction" in t for t in titles))
+
+    def test_set_location_shortcut_for_admin(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set location"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Set auction location" in t for t in titles))
+
     def test_search_returns_auctions_and_lots(self):
         self._login(self.user)
         resp = self.client.get(reverse("command_palette"), {"q": "online"})
@@ -22659,12 +22939,29 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
 
     def test_landing_page_in_person_admin_redirects_to_users(self):
+        # A current in-person auction (not pretty_much_over) redirects its admin to the users list.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
         self.user.userdata.save()
         self._login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
+
+    def test_landing_page_pretty_much_over_in_person_admin_does_not_redirect_to_users(self):
+        # Once the in-person auction is pretty_much_over, the stale users-list redirect is skipped.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=3)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("home"))
+        # Not redirected to the users list; either falls through to browse or renders home.
+        if resp.status_code == 302:
+            self.assertNotEqual(resp.url, self.in_person_auction.user_admin_link)
 
     def test_email_search_is_exact_and_includes_auctiontos(self):
         # online_auction is created by self.user, so they administer it.
@@ -22762,6 +23059,11 @@ class CommandPaletteTests(StandardTestCase):
         self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
 
     def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
+        # Keep the auction current (started recently) so it isn't pretty_much_over, which would
+        # otherwise hide the add-lot shortcut. date_end must stay after date_start or the pre_save
+        # signal swaps them.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
         self.in_person_auction.allow_bulk_adding_lots = True
         self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
