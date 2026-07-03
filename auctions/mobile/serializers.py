@@ -1,3 +1,4 @@
+from django.urls import reverse
 from rest_framework import serializers
 
 from auctions.models import MobileDevice
@@ -32,6 +33,36 @@ class MobileUserSerializer(serializers.Serializer):
     last_name = serializers.CharField()
     is_staff = serializers.BooleanField()
     date_joined = serializers.DateTimeField()
+
+
+# ---------------------------------------------------------------------------
+# Clubs
+# ---------------------------------------------------------------------------
+
+
+class MobileClubSerializer(serializers.Serializer):
+    """A club the authenticated user belongs to, for GET /api/mobile/clubs/mine/.
+
+    ``url`` is the server-relative web club page (opened in the WebView); ``icon_url`` is an
+    absolute URL (or null) so the app can load the square club logo directly. ``is_admin`` reflects
+    a ClubMember row with permission_admin for this user — the view annotates each Club with it.
+    """
+
+    name = serializers.CharField()
+    slug = serializers.CharField()
+    url = serializers.SerializerMethodField()
+    icon_url = serializers.SerializerMethodField()
+    is_admin = serializers.BooleanField()
+
+    def get_url(self, club):
+        return reverse("club_detail", kwargs={"slug": club.slug})
+
+    def get_icon_url(self, club):
+        if not club.icon:
+            return None
+        url = club.icon.url
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request else url
 
 
 # ---------------------------------------------------------------------------

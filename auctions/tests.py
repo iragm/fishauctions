@@ -23051,6 +23051,67 @@ class MobileCommandPaletteTests(StandardTestCase):
         self.assertEqual(page.hits, 1)
 
 
+class MobileMyClubsTests(StandardTestCase):
+    """/api/mobile/clubs/mine/ — the clubs the JWT user belongs to, with the is_admin flag.
+
+    Mirrors the web ``user_clubs`` membership scoping (non-deleted ClubMember), so this covers
+    what differs on mobile: JWT (not session) auth, name ordering, the is_admin flag, and the
+    {name, slug, url, icon_url, is_admin} contract the app reads.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
+        self.url = reverse("mobile-clubs-mine")
+        # "Beta" sorts before "Alpha club" only by name, so ordering is observable regardless of pk.
+        self.admin_club = Club.objects.create(name="Alpha club")
+        self.member_club = Club.objects.create(name="Beta club")
+        # A club the user does NOT belong to must never appear.
+        self.other_club = Club.objects.create(name="Zeta club")
+        ClubMember.objects.create(club=self.admin_club, user=self.user, name="Me", permission_admin=True)
+        ClubMember.objects.create(club=self.member_club, user=self.user, name="Me")
+
+    def test_requires_jwt_not_session(self):
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+        # A web session must NOT grant access — IsMobileAuthenticated only accepts JWT.
+        self.client.force_login(self.user)
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+    def test_lists_only_my_clubs_sorted_with_admin_flag(self):
+        resp = self.client.get(self.url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        clubs = resp.json()["clubs"]
+        # Only the two clubs the user belongs to, sorted by name.
+        self.assertEqual([c["slug"] for c in clubs], [self.admin_club.slug, self.member_club.slug])
+        by_slug = {c["slug"]: c for c in clubs}
+        # is_admin follows permission_admin on the membership.
+        self.assertTrue(by_slug[self.admin_club.slug]["is_admin"])
+        self.assertFalse(by_slug[self.member_club.slug]["is_admin"])
+        # Full contract, and url is the server-relative web club page.
+        for club in clubs:
+            self.assertEqual(set(club), {"name", "slug", "url", "icon_url", "is_admin"})
+        self.assertEqual(
+            by_slug[self.admin_club.slug]["url"],
+            reverse("club_detail", kwargs={"slug": self.admin_club.slug}),
+        )
+        # No club icon set, so icon_url is null.
+        self.assertIsNone(by_slug[self.admin_club.slug]["icon_url"])
+
+    def test_deleted_membership_is_excluded(self):
+        ClubMember.objects.filter(club=self.member_club, user=self.user).update(is_deleted=True)
+        resp = self.client.get(self.url, **self.bearer)
+        slugs = [c["slug"] for c in resp.json()["clubs"]]
+        self.assertEqual(slugs, [self.admin_club.slug])
+
+    def test_no_memberships_returns_empty_list(self):
+        ClubMember.objects.filter(user=self.user).delete()
+        resp = self.client.get(self.url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"clubs": []})
+
+
 class MobileLabelTests(StandardTestCase):
     """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
 

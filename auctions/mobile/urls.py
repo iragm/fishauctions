@@ -8,6 +8,7 @@ from .views import (
     MobileGoogleAuthView,
     MobileLoginView,
     MobileLotLabelView,
+    MobileMyClubsView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
     MobileTokenRefreshView,
@@ -31,6 +32,8 @@ urlpatterns = [
         MobileWebSessionConsumeView.as_view(),
         name="mobile-auth-web-session-consume",
     ),
+    # Clubs
+    path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
     # Labels
