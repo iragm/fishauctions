@@ -285,6 +285,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth import login
 from django.http import HttpResponse, HttpResponseRedirect
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from rest_framework import status
@@ -564,6 +565,8 @@ class MobileConfigView(APIView):
                 # /api/mobile/auth/google/; the app passes it as the Google Sign-In serverClientId.
                 "google_server_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
                 "brand_name": settings.NAVBAR_BRAND,
+                # Absolute URL so the app can load the site icon without knowing the static layout.
+                "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
             }
         )
 

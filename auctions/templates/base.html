@@ -50,7 +50,11 @@ window.onload = function() {
                 {% endwith %}
             {% endblock %}
         </title>
-        <link rel="shortcut icon" type="image/png" href="{% static 'favicon.ico' %}"/>
+        <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}"/>
+        <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}"/>
+        <link rel="shortcut icon" href="{% static 'favicon.ico' %}"/>
+        <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}"/>
+        <link rel="manifest" href="{% url 'site_webmanifest' %}"/>
         <meta name="description" content="" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
@@ -442,7 +446,7 @@ window.onload = function() {
         </div>
         {% block undiv_content %}{% endblock %}
         {% if not request.is_mobile_app %}
-        <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{{ copyright_message | safe }}</small></div>
+        <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{% if show_footer_icon %}<img src="{% static 'icon-footer.png' %}" alt="" class="me-1" style="height:1.2em;width:auto;vertical-align:text-bottom;">{% endif %}{{ copyright_message | safe }}</small></div>
         {% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}

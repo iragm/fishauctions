@@ -565,6 +565,7 @@ COPYRIGHT_MESSAGE = os.environ.get(
     "COPYRIGHT_MESSAGE",
     "bottom text",
 )
+SHOW_FOOTER_ICON = parse_bool_env(os.environ.get("SHOW_FOOTER_ICON") or None, default=True)
 I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this fish/propagated this plant")
 ALLOW_USERS_TO_CREATE_AUCTIONS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS") or None, default=True)
 ALLOW_USERS_TO_CREATE_LOTS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_LOTS") or None, default=True)

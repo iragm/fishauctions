@@ -12243,10 +12243,38 @@ class ContextProcessorsTestCase(TestCase):
         context = site_config(request)
         self.assertIn("navbar_brand", context)
         self.assertIn("copyright_message", context)
+        self.assertIn("show_footer_icon", context)
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
         self.assertIn("recaptcha_enabled", context)
+
+
+class FooterIconTests(TestCase):
+    def test_footer_icon_shown_by_default(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "icon-footer.png")
+
+    @override_settings(SHOW_FOOTER_ICON=False)
+    def test_footer_icon_hidden_when_disabled(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "icon-footer.png")
+
+
+class SiteWebmanifestTests(TestCase):
+    @override_settings(NAVBAR_BRAND="Test Auctions")
+    def test_manifest_returns_brand_and_icons(self):
+        response = self.client.get(reverse("site_webmanifest"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/manifest+json")
+        data = json.loads(response.content)
+        self.assertEqual(data["name"], "Test Auctions")
+        sources = {icon["src"] for icon in data["icons"]}
+        self.assertIn("/static/android-chrome-512x512.png", sources)
+        # Maskable variants keep their art inside the launcher-crop safe zone
+        self.assertIn("/static/android-chrome-maskable-512x512.png", sources)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):
@@ -23514,6 +23542,7 @@ class MobileConfigTests(TestCase):
                 "square_environment": "sandbox",
                 "google_server_client_id": "123.apps.googleusercontent.com",
                 "brand_name": "Test Auctions",
+                "icon_url": "http://testserver/static/android-chrome-512x512.png",
             },
         )
 
@@ -23528,7 +23557,7 @@ class MobileConfigTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             set(resp.json().keys()),
-            {"square_application_id", "square_environment", "google_server_client_id", "brand_name"},
+            {"square_application_id", "square_environment", "google_server_client_id", "brand_name", "icon_url"},
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)

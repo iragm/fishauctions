@@ -150,6 +150,7 @@ urlpatterns = [
         "ads.txt",
         TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),
     ),
+    path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),

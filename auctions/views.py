@@ -68,6 +68,7 @@ from django.http import (
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -13190,6 +13191,39 @@ class UserAgreement(TemplateView):
             msg = "No TOS found.  You must place a file called tos.html in the root project directory (next to the .env file)"
             raise ImproperlyConfigured(msg)
         return context
+
+
+def site_webmanifest(request):
+    """Web app manifest so Android/Chrome use the real icons when adding to the home screen.
+
+    Served from a view rather than a static file so the name follows NAVBAR_BRAND.
+    """
+    return JsonResponse(
+        {
+            "name": settings.NAVBAR_BRAND,
+            "short_name": settings.NAVBAR_BRAND,
+            "icons": [
+                {"src": static("android-chrome-192x192.png"), "sizes": "192x192", "type": "image/png"},
+                {"src": static("android-chrome-512x512.png"), "sizes": "512x512", "type": "image/png"},
+                {
+                    "src": static("android-chrome-maskable-192x192.png"),
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "maskable",
+                },
+                {
+                    "src": static("android-chrome-maskable-512x512.png"),
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "maskable",
+                },
+            ],
+            "theme_color": "#212529",
+            "background_color": "#212529",
+            "display": "browser",
+        },
+        content_type="application/manifest+json",
+    )
 
 
 class IgnoreCategoriesView(TemplateView):
