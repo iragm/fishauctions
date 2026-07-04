@@ -12050,11 +12050,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 # A preference, not a credential: either value is valid, so always "Done".
                 "configured": True,
                 "what_it_does": (
-                    "On by default. The site runs as one club named after <code>NAVBAR_BRAND</code> (there is no "
-                    "separate <code>SINGLE_CLUB_NAME</code>), every user is auto-added as a member, and auctions are "
-                    "tied to it. Set to <code>False</code> only if you host multiple clubs on one install (like "
-                    "auction.fish). Can be toggled later without data loss &mdash; the club, memberships, and auctions "
-                    "created while it was on remain intact. "
+                    "On by default: the site runs as one club (named after <code>NAVBAR_BRAND</code>) with every user "
+                    "auto-added as a member. Set to <code>False</code> only if you host multiple clubs on one install. "
                     f"Currently <strong>{'on' if getattr(settings, 'SINGLE_CLUB_MODE', False) else 'off'}</strong>."
                 ),
                 "snippets": [
@@ -12137,11 +12134,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "section": "Core setup",
                 "name": "Email delivery",
                 "configured": email_configured,
-                "what_it_does": (
-                    "Sends sign-in, invoice, and notification emails. Pick one of the two options below. "
-                    "For Gmail, the app password is a special 16-character password (not your normal Google password) "
-                    "and only appears after you turn on 2-step verification."
-                ),
+                "what_it_does": "Sends sign-in, invoice, and notification emails. Pick one of the two options below.",
                 "snippets": [
                     {
                         "label": "Option A — Gmail (simplest). Turn on 2-step verification first, then create an app password.",
@@ -12190,9 +12183,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "configured": Path(settings.BASE_DIR / "tos.html").exists(),
                 "what_it_does": (
                     "Your site needs a terms-of-service page at <code>/tos/</code>. Create a <code>tos.html</code> file "
-                    "in the project root (next to your <code>.env</code>) containing your terms &mdash; the contents are "
-                    "rendered inside the site's normal layout. Until the file exists, visiting <code>/tos/</code> raises "
-                    "an error."
+                    "in the project root (next to your <code>.env</code>) with your terms."
                 ),
                 "snippets": [
                     {
@@ -12209,17 +12200,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "configured": env_has_real_value(settings.PAYPAL_CLIENT_ID)
                 and env_has_real_value(settings.PAYPAL_SECRET),
                 "what_it_does": (
-                    "Lets your club collect online payments with the site's own PayPal credentials. "
-                    "Use your <strong>Live</strong> keys, not Sandbox. "
-                    "When <code>PAYPAL_ENABLED_FOR_USERS</code> is enabled, sellers link their accounts via a PayPal "
-                    "OAuth flow; the return URL below is the OAuth callback. "
-                    "<strong>Heads up:</strong> PayPal requires platform-seller approval that is hard to get, so this "
-                    "integration has been built but never used in production. If you just want to take payments, set up "
-                    "Square instead."
+                    "Lets your club collect online payments via PayPal (use Square instead unless you have PayPal "
+                    "platform-seller approval)."
                 ),
                 "where_to_get_it": (
-                    "Create a REST app under <code>Apps &amp; Credentials</code> (Live tab), copy its client ID and "
-                    "secret, then set the return URL and subscribe a webhook to the URLs below."
+                    "Create a Live REST app under <code>Apps &amp; Credentials</code>, copy its client ID and secret, then "
+                    "set the return/webhook URLs below."
                 ),
                 "snippets": [
                     {"code": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"'},
@@ -12270,14 +12256,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 and env_has_real_value(settings.SQUARE_CLIENT_SECRET),
                 "what_it_does": (
                     "Lets sellers connect Square accounts to collect online payments &mdash; the recommended option. "
-                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox). "
-                    "<code>SQUARE_ENABLED_FOR_USERS</code> only controls whether <em>newly created</em> users can link an "
-                    "account. <code>FIELD_ENCRYPTION_KEY</code> encrypts stored payment tokens and is normally generated "
-                    "for you by <code>update.sh</code>."
+                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (blank uses the sandbox)."
                 ),
                 "where_to_get_it": (
-                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key. "
-                    "Set the redirect and webhook URLs below in the app's OAuth and Webhooks sections."
+                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key, and set the "
+                    "redirect/webhook URLs below."
                 ),
                 "snippets": [
                     {
@@ -12366,31 +12349,13 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "name": "Google sign-in in the mobile app",
                 "configured": env_has_real_value(settings.GOOGLE_OAUTH_CLIENT_ID),
                 "what_it_does": (
-                    "Adds &ldquo;Continue with Google&rdquo; to the mobile app's login screen. The app reads "
-                    "this client ID at launch from the public <code>/api/mobile/config/</code> endpoint and "
-                    "hides the button while it is unset, so turning it on needs no app update. The backend "
-                    "also verifies the Google ID tokens the app sends to <code>/api/mobile/auth/google/</code> "
-                    "against this same ID. Independent of the website button above &mdash; Google blocks its "
-                    "OAuth pages inside embedded WebViews, so the app signs in natively instead."
+                    "Adds &ldquo;Continue with Google&rdquo; to the mobile app's login screen (separate from the "
+                    "website button, since Google blocks OAuth in WebViews)."
                 ),
-                "setup_steps": [
-                    (
-                        "In the same Google Cloud project as the website button, create (or reuse) an OAuth "
-                        "client of type <strong>Web application</strong> and copy its client ID &mdash; this is "
-                        "the value for the snippet below. Reusing the website's <code>GOOGLE_OAUTH_LINK</code> "
-                        "client ID here is fine."
-                    ),
-                    (
-                        "Also create an OAuth client of type <strong>Android</strong> for each package name the "
-                        "app ships under (<code>com.fishauctions.app</code>, plus <code>.dev</code> / "
-                        "<code>.staging</code> for those builds), each with the SHA-1 fingerprint of the key "
-                        "that signs that build (<code>keytool -list -v -keystore ~/.android/debug.keystore "
-                        "-alias androiddebugkey -storepass android</code> for debug builds). These Android "
-                        "clients hold no secrets and nothing from them goes in <code>.env</code> &mdash; they "
-                        "just have to exist in the project, or Google refuses the sign-in on the device."
-                    ),
-                    "Set <code>GOOGLE_OAUTH_CLIENT_ID</code> in <code>.env</code> and restart.",
-                ],
+                "where_to_get_it": (
+                    "Reuse the website's Web-application OAuth client ID, and create an Android OAuth client for each app "
+                    "package name (no secret, just has to exist in the project)."
+                ),
                 "snippets": [{"code": 'GOOGLE_OAUTH_CLIENT_ID="your-client-id.apps.googleusercontent.com"'}],
                 "links": [
                     {
@@ -12424,14 +12389,9 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 or env_has_real_value(settings.GOOGLE_TAG_ID)
                 or env_has_real_value(settings.GOOGLE_ADSENSE_ID),
                 "what_it_does": (
-                    "Optional Google tracking and ads, all independent of each other:"
-                    "<ul class='mb-0'>"
-                    "<li><code>GOOGLE_MEASUREMENT_ID</code> &mdash; Google Analytics 4 (starts with <code>G-</code>).</li>"
-                    "<li><code>GOOGLE_TAG_ID</code> &mdash; Google Tag Manager container (starts with <code>GTM-</code>).</li>"
-                    "<li><code>GOOGLE_ADSENSE_ID</code> &mdash; AdSense publisher ID (starts with <code>ca-pub-</code>).</li>"
-                    "<li><code>SHOW_ADS</code> &mdash; master on/off switch for all ads (default True). "
-                    "Set it to False to remove ads site-wide regardless of the AdSense ID.</li>"
-                    "</ul>"
+                    "Optional Google Analytics (<code>GOOGLE_MEASUREMENT_ID</code>), Tag Manager "
+                    "(<code>GOOGLE_TAG_ID</code>), and AdSense (<code>GOOGLE_ADSENSE_ID</code>); "
+                    "<code>SHOW_ADS</code> is the master ad on/off switch."
                 ),
                 "snippets": [
                     {
@@ -12537,45 +12497,15 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
                 ),
                 "what_it_does": (
-                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on each club member's page so members can save "
-                    "their membership card (QR code and barcode) to their phone. Only the signed-in account that matches "
-                    "the membership can save it &mdash; UUID renewal links cannot. A Wallet class is created automatically "
-                    "for each club; if the keyfile is missing or invalid the integration disables itself (warning logged) "
-                    "so the site still boots."
+                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on member cards so members can save their "
+                    "membership card to their phone; anyone with a member's UUID link can add it."
                 ),
                 "where_to_get_it": (
-                    "Apply for a Wallet issuer account for the Issuer ID, then drop the Google Cloud service-account key "
-                    "JSON file next to your <code>.env</code> (it's gitignored). <code>GOOGLE_WALLET_KEYFILE</code> is just "
-                    "the filename &mdash; settings.py joins it to <code>BASE_DIR</code>."
+                    "Get a Wallet Issuer ID from the issuer console, then drop the Google Cloud service-account key JSON "
+                    "next to your <code>.env</code> and set the two vars below."
                 ),
-                "setup_steps": [
-                    "Create a Google Cloud project at console.cloud.google.com.",
-                    "Enable the <strong>Google Wallet API</strong> for that project (APIs &amp; Services &rarr; Library).",
-                    (
-                        "Apply for a Wallet issuer account at the issuer console (Google Wallet API &rarr; Get started). "
-                        "After approval Google gives you a numeric <strong>Issuer ID</strong>."
-                    ),
-                    (
-                        "In Cloud IAM &amp; Admin &rarr; Service Accounts, create a service account, then under its "
-                        "<strong>Keys</strong> tab add a new <strong>JSON</strong> key and download it. In the Wallet "
-                        "console, invite that service account email as a <em>Developer</em>."
-                    ),
-                    (
-                        "Drop the JSON keyfile next to your <code>.env</code> (JSON files at the repo root are "
-                        "gitignored) and add the snippet below."
-                    ),
-                    (
-                        "<strong>Note:</strong> Google caps unapproved issuers at ~5 generic classes total, so "
-                        "auto-creation starts failing past that &mdash; wait until your issuer is approved before "
-                        "enabling this site-wide."
-                    ),
-                ],
                 "snippets": [
                     {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'},
-                    {
-                        "label": "To backfill Wallet classes for clubs that already exist, run (idempotent):",
-                        "code": "docker exec -it django python3 manage.py sync_google_wallet_classes",
-                    },
                 ],
                 "links": [
                     {"label": "Google Wallet issuer console", "url": "https://pay.google.com/business/console"},
@@ -12593,32 +12523,13 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.APPLE_WALLET_TEAM_IDENTIFIER
                 ),
                 "what_it_does": (
-                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one. Same security model "
-                    "&mdash; only the signed-in account that matches the membership can download the pass. Passes are "
-                    "signed <code>.pkpass</code> files generated on each download (no REST API, no class to pre-create). "
-                    "If any setting below is missing the button is hidden and downloads return 404. Requires a paid "
-                    "Apple Developer account ($99/yr)."
+                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one; anyone with a "
+                    "member's UUID link can add it. Requires a paid Apple Developer account ($99/yr)."
                 ),
                 "where_to_get_it": (
-                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop both files next to "
-                    "your <code>.env</code> (they're gitignored)."
+                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop the <code>.p12</code> "
+                    "and <code>.pem</code> next to your <code>.env</code>, then set the vars below."
                 ),
-                "setup_steps": [
-                    (
-                        "In the Apple Developer portal, create a <strong>Pass Type ID</strong> (reverse-DNS form, e.g. "
-                        "<code>pass.com.yourdomain.membership</code>) and note your <strong>Team ID</strong>."
-                    ),
-                    (
-                        "Create a certificate for that Pass Type ID (generate a CSR with Keychain Access), download the "
-                        "<code>.cer</code>, install it, then export it as a password-protected <code>.p12</code>. Drop "
-                        "the <code>.p12</code> next to your <code>.env</code>."
-                    ),
-                    (
-                        "Download the Apple WWDR intermediate cert (<em>Worldwide Developer Relations - G4</em>) as a "
-                        "<code>.pem</code> and drop it next to your <code>.env</code> too."
-                    ),
-                    "Add the snippet below (.p12 and .pem files at the repo root are gitignored).",
-                ],
                 "snippets": [
                     {
                         "code": (

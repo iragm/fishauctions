@@ -12315,6 +12315,16 @@ class AdminSetupChecklistViewTests(TestCase):
         email_item = next(item for item in setup_items if item["name"] == "Email delivery")
         self.assertFalse(email_item["configured"])
 
+    def test_wallet_items_say_uuid_links_can_add_and_not_owner_only(self):
+        # The wallet cards are reachable by UUID link, not just the signed-in owner. The help text
+        # must reflect that and must not repeat the old owner-only claim.
+        response = self.client.get(reverse("admin_setup_checklist"))
+        setup_items = response.context["setup_items"]
+        for name in ("Google Wallet membership cards", "Apple Wallet membership cards"):
+            item = next(i for i in setup_items if i["name"] == name)
+            self.assertIn("UUID link", item["what_it_does"])
+            self.assertNotIn("only the signed-in account", item["what_it_does"].lower())
+
 
 class MiddlewareTestCase(TestCase):
     """Test cases for middleware"""
