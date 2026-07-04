@@ -109,6 +109,7 @@
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if auction.use_check_in_mode and can_manage_check_in %}
           <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
+          <a class="dropdown-item" href="{% url 'auction_self_check_in' slug=auction.slug %}"><i class="bi bi-person-check"></i> Self-checkin</a>
           {% endif %}
           {% if can_scan_club_barcodes %}
           <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> {% if auction.use_check_in_mode %}Check in{% else %}Scan club cards{% endif %}</a>
@@ -124,5 +125,7 @@
         </ul>
     </li>
 </ul>
+{% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}
+{% include 'auctions/barcode_scanner.html' %}
 
 {% endif %}

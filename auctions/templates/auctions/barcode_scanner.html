@@ -1,0 +1,26 @@
+{% load static %}
+{% comment %}
+USB HID barcode scanner support. Included automatically by auction_ribbon.html on every
+auction admin page, and directly by pages that are also open to club permission_add_edit
+users (who don't see the ribbon's admin block). Safe to include more than once: the config
+assignment and the JS module both guard against re-initialization, and the first include
+on the page wins.
+
+Context:
+  auction                 -- required; nothing renders without auction.club_id
+  barcode_scanner_prefix  -- optional prefix keystroke the scanner sends before each
+                             barcode (a KeyboardEvent.key value; default "F9")
+  barcode_check_in_only   -- optional; True on the self check-in kiosk to restrict
+                             scans to membership cards only
+{% endcomment %}
+{% if auction.club_id %}
+<script>
+  window.AUCTION_BARCODE_CONFIG = window.AUCTION_BARCODE_CONFIG || {
+    scanUrl: "{% url 'auction_barcode_scan' slug=auction.slug %}",
+    csrfToken: "{{ csrf_token }}",
+    prefixKey: "{{ barcode_scanner_prefix|default:'F9'|escapejs }}",
+    checkInOnly: {% if barcode_check_in_only %}true{% else %}false{% endif %},
+  };
+</script>
+<script src="{% static 'js/barcode_scanner.js' %}"></script>
+{% endif %}

@@ -21909,7 +21909,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
         self.client.force_login(self.creator)
         response = self.client.post(
-            reverse("auction_quick_check_in_scan", kwargs={"slug": self.auction.slug}),
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
             {"barcode": str(member.membership_number), "assign_bidder_number": "456"},
         )
         self.assertEqual(response.status_code, 200)
@@ -21921,6 +21921,78 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(tos.bidder_number, "456")
         self.assertIsNotNone(tos.checked_in)
         self.assertTrue(tos.bidding_allowed)
+
+    def test_barcode_scan_check_in_only_ignores_side_effects(self):
+        """The self check-in kiosk posts check_in_only; bidder number assignment and
+        invoice adjustments must be ignored no matter what the client sends."""
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "barcode": str(member.membership_number),
+                "check_in_only": "1",
+                "assign_bidder_number": "456",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "10",
+                "adjustment_label": "sneaky",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        member.refresh_from_db()
+        self.assertNotEqual(member.bidder_number, "456")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertNotEqual(tos.bidder_number, "456")
+        self.assertIsNotNone(tos.checked_in)
+        self.assertFalse(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists())
+
+    def test_barcode_scan_check_in_only_unrecognized_barcode(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        for bad_barcode in ["111112345", "0105raffle", "not-a-number"]:
+            response = self.client.post(
+                reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+                {"barcode": bad_barcode, "check_in_only": "1"},
+            )
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(response.json()["message"], "Unrecognized barcode")
+
+    def test_barcode_scan_denied_for_outsider(self):
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        self.client.force_login(self.outsider)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {"barcode": str(member.membership_number)},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_self_check_in_page(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Self-checkin")
+        self.assertContains(response, "checkInOnly: true")
+
+    def test_self_check_in_page_requires_checkin_mode(self):
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_self_check_in_page_denied_for_outsider(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.outsider)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 403)
 
     def test_clubmember_generate_bidder_number_unique_per_club(self):
         cm1 = ClubMember.objects.create(

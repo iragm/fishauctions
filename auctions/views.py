@@ -4067,7 +4067,40 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return context
 
 
-class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
+class AuctionSelfCheckIn(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Kiosk page: members scan their own membership card to check themselves in.
+
+    This page runs under the signed-in admin's session, so scans are posted with
+    check_in_only -- the scan endpoint will only check people in, never assign bidder
+    numbers or touch invoices."""
+
+    template_name = "auctions/self_check_in.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.use_check_in_mode:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["can_manage_check_in"] = True
+        context["can_scan_club_barcodes"] = True
+        context["barcode_check_in_only"] = True
+        context["active_tab"] = "users"
+        return context
+
+
+class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
+    """POST-only API for barcode scans from auction admin pages (camera or USB HID scanner).
+
+    Pass check_in_only=1 (used by the self check-in kiosk) to accept only membership card
+    barcodes and ignore bidder number / invoice adjustment side effects, no matter what the
+    client sends."""
+
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
@@ -4079,21 +4112,29 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
 
     def post(self, request, *args, **kwargs):
         barcode = (request.POST.get("barcode") or "").strip()
+        check_in_only = (request.POST.get("check_in_only") or "").strip().lower() in ("1", "true", "on", "yes")
         assign_bidder_number = (request.POST.get("assign_bidder_number") or "").strip()
         adjustment_type = (request.POST.get("adjustment_type") or "").strip()
         adjustment_amount = (request.POST.get("adjustment_amount") or "").strip()
         adjustment_label = (request.POST.get("adjustment_label") or "").strip()
+        if check_in_only:
+            assign_bidder_number = ""
+            adjustment_type = ""
+            adjustment_amount = ""
+            adjustment_label = ""
         if not barcode:
             return JsonResponse({"ok": False, "message": "Scan a membership card barcode."}, status=400)
         if not barcode.isdigit():
-            return JsonResponse({"ok": False, "message": "That barcode is not recognized."}, status=404)
+            message = "Unrecognized barcode" if check_in_only else "That barcode is not recognized."
+            return JsonResponse({"ok": False, "message": message}, status=404)
         member = ClubMember.objects.filter(
             club=self.auction.club,
             membership_number=int(barcode),
             is_deleted=False,
         ).first()
         if not member:
-            return JsonResponse({"ok": False, "message": "No club member matches that barcode."}, status=404)
+            message = "Unrecognized barcode" if check_in_only else "No club member matches that barcode."
+            return JsonResponse({"ok": False, "message": message}, status=404)
         adjustment_desc = ""
         with transaction.atomic():
             tos = _upsert_clubmember_shadow_tos(
@@ -4136,7 +4177,7 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 except (ValueError, TypeError):
                     pass
         verb = "Checked in" if self.auction.use_check_in_mode else "Added"
-        history_action = f"{verb} {tos.name} via barcode"
+        history_action = f"{verb} {tos.name} via {'self check-in scan' if check_in_only else 'barcode'}"
         if assign_bidder_number:
             history_action += f" and assigned bidder number {assign_bidder_number}"
         if adjustment_desc:
