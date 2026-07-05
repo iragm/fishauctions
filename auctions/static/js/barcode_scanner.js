@@ -140,6 +140,40 @@
     announce({ ok: true, payload: payload });
   }
 
+  async function applyAdjustmentToBidder(bidderNumber) {
+    var adjustment = pendingAdjustment;
+    var formData = new FormData();
+    formData.append("apply_to_bidder_number", bidderNumber);
+    formData.append("adjustment_type", adjustment.adjustmentType);
+    formData.append("adjustment_amount", adjustment.amount);
+    formData.append("adjustment_label", adjustment.label);
+    var payload = null;
+    try {
+      var response = await fetch(scanUrl, {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken },
+        body: formData,
+      });
+      payload = await response.json();
+    } catch (e) {
+      payload = null;
+    }
+    if (!payload || !payload.ok) {
+      beep("error");
+      var errMessage = (payload && payload.message) || "Scan failed -- check your connection and try again.";
+      showToast(errMessage, "danger");
+      announce({ ok: false, message: errMessage });
+      return;
+    }
+    beep("checkin");
+    // Clear both the adjustment and any pending bidder number from the form
+    pendingAdjustment = null;
+    pendingBidderNumber = "";
+    var adjSuffix = payload.adjustment_desc ? " | " + payload.adjustment_desc + " applied" : "";
+    showToast("Adjusted " + payload.name + " (bidder " + payload.bidder_number + ")" + adjSuffix, "success");
+    announce({ ok: true, payload: payload });
+  }
+
   async function handleCode(rawValue) {
     var value = String(rawValue || "").trim();
     if (!value) {
@@ -159,6 +193,13 @@
     }
     var paddleBidderNumber = parsePaddleBarcode(value);
     if (paddleBidderNumber) {
+      if (pendingAdjustment) {
+        // Adjustment scanned first, now a paddle: look up the bidder holding that number and
+        // apply the pending adjustment straight to their invoice (no member card, no check-in).
+        beep("scan");
+        await applyAdjustmentToBidder(paddleBidderNumber);
+        return;
+      }
       beep("scan");
       pendingBidderNumber = paddleBidderNumber;
       showToast("Scan the user to assign bidder number " + pendingBidderNumber + " to.", "warning");
@@ -169,7 +210,7 @@
       beep("scan");
       pendingAdjustment = adjustment;
       var sign = adjustment.adjustmentType === "ADD" ? "+" : "-";
-      showToast("Scan the member card to apply " + sign + "$" + adjustment.amount + " " + adjustment.label + " to their invoice.", "warning");
+      showToast("Scan a member card or bidder number to apply " + sign + "$" + adjustment.amount + " " + adjustment.label + " to their invoice.", "warning");
       return;
     }
     await postScan(value);

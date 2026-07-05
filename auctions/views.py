@@ -4110,18 +4110,97 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
+    def _apply_adjustment(self, tos, adjustment_type, adjustment_amount, adjustment_label, acting_user):
+        """Apply a pending invoice adjustment to tos's (draft) invoice.
+
+        Returns (adjustment_desc, error_response). error_response is a JsonResponse when the
+        invoice can't be adjusted (already closed); otherwise None and adjustment_desc describes
+        what was applied (empty string if nothing was)."""
+        try:
+            amount_val = round(float(adjustment_amount))
+        except (ValueError, TypeError):
+            return "", None
+        if amount_val <= 0:
+            return "", None
+        invoice = Invoice.objects.filter(auctiontos_user=tos).first()
+        if invoice and invoice.status != "DRAFT":
+            return "", JsonResponse(
+                {"ok": False, "message": f"Invoice for {tos.name} is not open and cannot be adjusted."},
+                status=400,
+            )
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+        InvoiceAdjustment.objects.create(
+            invoice=invoice,
+            user=acting_user,
+            adjustment_type=adjustment_type,
+            amount=amount_val,
+            notes=adjustment_label[:150],
+        )
+        sign = "+" if adjustment_type == "ADD" else "-"
+        return f"{sign}${amount_val} {adjustment_label}".strip(), None
+
     def post(self, request, *args, **kwargs):
         barcode = (request.POST.get("barcode") or "").strip()
         check_in_only = (request.POST.get("check_in_only") or "").strip().lower() in ("1", "true", "on", "yes")
         assign_bidder_number = (request.POST.get("assign_bidder_number") or "").strip()
+        apply_to_bidder_number = (request.POST.get("apply_to_bidder_number") or "").strip()
         adjustment_type = (request.POST.get("adjustment_type") or "").strip()
         adjustment_amount = (request.POST.get("adjustment_amount") or "").strip()
         adjustment_label = (request.POST.get("adjustment_label") or "").strip()
         if check_in_only:
             assign_bidder_number = ""
+            apply_to_bidder_number = ""
             adjustment_type = ""
             adjustment_amount = ""
             adjustment_label = ""
+        has_adjustment = adjustment_type in ("ADD", "DISCOUNT") and bool(adjustment_amount)
+
+        # Paddle-barcode lookup: a bidder number scanned to receive a pending invoice adjustment.
+        # Resolves an existing AuctionTOS directly (no membership card, no check-in change).
+        if apply_to_bidder_number:
+            if not has_adjustment:
+                return JsonResponse(
+                    {"ok": False, "message": "Scan an invoice adjustment barcode before the bidder number."},
+                    status=400,
+                )
+            tos = (
+                AuctionTOS.objects.filter(auction=self.auction, bidder_number=apply_to_bidder_number)
+                .order_by("-createdon")
+                .first()
+            )
+            if not tos:
+                return JsonResponse(
+                    {"ok": False, "message": f"No one is using bidder number {apply_to_bidder_number}."}, status=404
+                )
+            if self.auction.use_check_in_mode and not tos.checked_in:
+                return JsonResponse(
+                    {"ok": False, "message": f"{tos.name} (bidder {apply_to_bidder_number}) is not checked in yet."},
+                    status=400,
+                )
+            with transaction.atomic():
+                adjustment_desc, error_response = self._apply_adjustment(
+                    tos, adjustment_type, adjustment_amount, adjustment_label, request.user
+                )
+                if error_response:
+                    return error_response
+                if adjustment_desc:
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Applied invoice adjustment {adjustment_desc} to {tos.name} via barcode",
+                        user=request.user,
+                    )
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "message": f"Adjusted {tos.name}",
+                    "name": tos.name,
+                    "bidder_number": tos.bidder_number,
+                    "verb": "Adjusted",
+                    "adjustment_desc": adjustment_desc,
+                }
+            )
+
         if not barcode:
             return JsonResponse({"ok": False, "message": "Scan a membership card barcode."}, status=400)
         if not barcode.isdigit():
@@ -4137,12 +4216,25 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             return JsonResponse({"ok": False, "message": message}, status=404)
         adjustment_desc = ""
         with transaction.atomic():
+            # Decide the check-in timestamp before upserting. In check-in mode a bare card scan
+            # (re)checks the member in, but when the scan is really about applying a pending invoice
+            # adjustment or bidder number to a member who is *already* checked in, we leave their
+            # original check-in time alone rather than clobbering it — the intent was the adjustment,
+            # not a fresh check-in.
+            checked_in_at = _UNSET
+            if self.auction.use_check_in_mode:
+                existing_tos = (
+                    AuctionTOS.objects.filter(auction=self.auction, clubmember=member).order_by("-createdon").first()
+                )
+                already_checked_in = bool(existing_tos and existing_tos.checked_in)
+                if not (already_checked_in and (has_adjustment or assign_bidder_number)):
+                    checked_in_at = timezone.now()
             tos = _upsert_clubmember_shadow_tos(
                 self.auction,
                 member,
                 bidding_allowed=True,
                 selling_allowed=member.selling_allowed,
-                checked_in_at=timezone.now() if self.auction.use_check_in_mode else _UNSET,
+                checked_in_at=checked_in_at,
             )
             if not tos:
                 return JsonResponse(
@@ -4153,29 +4245,12 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
                 # Propagate the assigned number back to the ClubMember so it sticks for next time.
                 # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
                 ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
-            if adjustment_type in ("ADD", "DISCOUNT") and adjustment_amount:
-                try:
-                    amount_val = round(float(adjustment_amount))
-                    if amount_val > 0:
-                        invoice = Invoice.objects.filter(auctiontos_user=tos).first()
-                        if invoice and invoice.status != "DRAFT":
-                            return JsonResponse(
-                                {"ok": False, "message": f"Invoice for {tos.name} is not open and cannot be adjusted."},
-                                status=400,
-                            )
-                        if not invoice:
-                            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-                        InvoiceAdjustment.objects.create(
-                            invoice=invoice,
-                            user=request.user,
-                            adjustment_type=adjustment_type,
-                            amount=amount_val,
-                            notes=adjustment_label[:150],
-                        )
-                        sign = "+" if adjustment_type == "ADD" else "-"
-                        adjustment_desc = f"{sign}${amount_val} {adjustment_label}".strip()
-                except (ValueError, TypeError):
-                    pass
+            if has_adjustment:
+                adjustment_desc, error_response = self._apply_adjustment(
+                    tos, adjustment_type, adjustment_amount, adjustment_label, request.user
+                )
+                if error_response:
+                    return error_response
         verb = "Checked in" if self.auction.use_check_in_mode else "Added"
         history_action = f"{verb} {tos.name} via {'self check-in scan' if check_in_only else 'barcode'}"
         if assign_bidder_number:
@@ -15603,6 +15678,12 @@ class QuickCheckout(AuctionViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
+        # The camera scanner (scan a bidder number or member card to pull up the invoice) is meant
+        # for small-screen devices and the native app -- not desktop. The server can't see the
+        # browser viewport, so we always ship the script and let a Bootstrap responsive class hide
+        # the camera on larger screens (see the d-md-none wrapper in the template). The app's WebView
+        # reports a phone-sized viewport, so it's covered by the same small-screen rule.
+        context["show_camera_scanner"] = True
         return context
 
 
@@ -15611,11 +15692,37 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
 
     template_name = "auctions/quick_checkout_htmx.html"
 
+    def _normalize_scanned_term(self, term):
+        """Translate a scanned barcode into something the checkout search can match.
+
+        The checkout search matches a bidder number directly but knows nothing about paddle
+        barcodes (11111 + bidder number) or membership card numbers, so map those to the
+        bidder number here. Returns the term unchanged if it isn't a recognizable barcode."""
+        term = (term or "").strip()
+        if not term:
+            return term
+        # Paddle barcode: 11111 followed by the bidder number
+        if term.startswith("11111") and len(term) > 5 and term[5:].isdigit():
+            return term[5:]
+        # Membership card: a bare number matching a ClubMember in this auction's club
+        if term.isdigit() and self.auction.club_id:
+            member = ClubMember.objects.filter(
+                club=self.auction.club, membership_number=int(term), is_deleted=False
+            ).first()
+            if member and member.bidder_number:
+                return member.bidder_number
+        return term
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
         qs = AuctionTOS.objects.filter(auction=self.auction)
-        filtered_qs = AuctionTOSFilter.generic(self, qs, kwargs.get("filter"))
+        search_term = kwargs.get("filter")
+        # The camera scanner posts ?barcode=1 so paddle/membership-card barcodes get translated to a
+        # bidder number; typed searches are left alone so a numeric name search still behaves normally.
+        if self.request.GET.get("barcode"):
+            search_term = self._normalize_scanned_term(search_term)
+        filtered_qs = AuctionTOSFilter.generic(self, qs, search_term)
         invoice = None
         if filtered_qs.count() > 1:
             context["multiple_tos"] = True

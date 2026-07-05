@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}{% if auction.use_check_in_mode %}Quick check in users{% else %}Scan club members{% endif %} for {{ auction }}{% endblock %}
 {% block content %}
   {% include "auction_ribbon.html" %}
@@ -20,133 +21,45 @@
 {% block extra_js %}
 {% comment %} Included directly (not only via the ribbon) because club permission_add_edit users can use this page without seeing the ribbon's admin block. {% endcomment %}
 {% include "auctions/barcode_scanner.html" %}
+<script src="{% static 'js/camera_scanner.js' %}"></script>
 <script>
   (() => {
     const toggleButton = document.getElementById("scan-toggle");
     const wrapper = document.getElementById("scanner-wrapper");
     const video = document.getElementById("scanner-video");
     const statusBox = document.getElementById("scan-status");
-    let stream = null;
-    let detector = null;
-    let animationFrameId = null;
-    let zxingReader = null;
-    let isScanning = false;
-    let lastProcessedValue = "";
 
     function setStatus(message, level = "secondary") {
       statusBox.className = `alert alert-${level} mt-3 mb-2`;
       statusBox.textContent = message;
     }
 
-    function shouldIgnoreDuplicate(value) {
-      // The camera decodes the same barcode on every frame; silently ignore repeats
-      // of the same value until a new one is detected
-      if (value === lastProcessedValue) {
-        return true;
-      }
-      lastProcessedValue = value;
-      return false;
-    }
-
-    async function handleCode(rawValue) {
-      const value = String(rawValue || "").trim();
-      if (!value || shouldIgnoreDuplicate(value)) {
-        return;
-      }
+    const scanner = window.createCameraScanner({
+      video: video,
       // Shared pipeline: posts to the barcode API and reports results via toasts
-      await window.auctionBarcodeScanner.handleCode(value);
+      onCode: (value) => window.auctionBarcodeScanner.handleCode(value),
+      onStatus: setStatus,
+    });
+
+    async function startScanner() {
+      wrapper.classList.remove("d-none");
+      toggleButton.innerHTML = '<i class="bi bi-camera-video-off"></i> Stop camera';
+      try {
+        await scanner.start();
+      } catch (error) {
+        wrapper.classList.add("d-none");
+        toggleButton.innerHTML = '<i class="bi bi-camera-video"></i> Activate camera to scan membership cards';
+      }
     }
 
     async function stopScanner() {
-      isScanning = false;
-      toggleButton.innerHTML = '<i class="bi bi-camera-video"></i> Activate camera to scan membership cards';
+      await scanner.stop();
       wrapper.classList.add("d-none");
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-        animationFrameId = null;
-      }
-      if (zxingReader) {
-        zxingReader.reset();
-        zxingReader = null;
-      }
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
-      }
-      video.srcObject = null;
-      setStatus("Camera is off.");
-    }
-
-    async function startNativeScanner() {
-      detector = new BarcodeDetector({ formats: ["code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"] });
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-      video.srcObject = stream;
-      await video.play();
-      const scanFrame = async () => {
-        if (!isScanning) {
-          return;
-        }
-        try {
-          const barcodes = await detector.detect(video);
-          if (barcodes.length) {
-            await handleCode(barcodes[0].rawValue);
-          }
-        } catch (error) {
-          console.error(error);
-        }
-        animationFrameId = requestAnimationFrame(scanFrame);
-      };
-      animationFrameId = requestAnimationFrame(scanFrame);
-    }
-
-    async function loadZxing() {
-      if (window.ZXing) {
-        return window.ZXing;
-      }
-      await new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-      });
-      return window.ZXing;
-    }
-
-    async function startFallbackScanner() {
-      const ZXing = await loadZxing();
-      zxingReader = new ZXing.BrowserMultiFormatReader();
-      wrapper.classList.remove("d-none");
-      await zxingReader.decodeFromVideoDevice(null, video, (result, error) => {
-        if (result) {
-          handleCode(result.getText());
-        } else if (error && !(error instanceof ZXing.NotFoundException)) {
-          console.error(error);
-        }
-      });
-      stream = video.srcObject;
-    }
-
-    async function startScanner() {
-      isScanning = true;
-      wrapper.classList.remove("d-none");
-      toggleButton.innerHTML = '<i class="bi bi-camera-video-off"></i> Stop camera';
-      setStatus("Scanning...", "info");
-      try {
-        if ("BarcodeDetector" in window) {
-          await startNativeScanner();
-        } else {
-          await startFallbackScanner();
-        }
-      } catch (error) {
-        console.error(error);
-        await stopScanner();
-        setStatus(`Unable to start the camera: ${error.message || error}`, "danger");
-      }
+      toggleButton.innerHTML = '<i class="bi bi-camera-video"></i> Activate camera to scan membership cards';
     }
 
     toggleButton.addEventListener("click", async () => {
-      if (isScanning) {
+      if (scanner.isScanning()) {
         await stopScanner();
       } else {
         await startScanner();

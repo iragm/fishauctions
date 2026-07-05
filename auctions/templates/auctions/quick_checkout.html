@@ -1,7 +1,9 @@
 {% extends "base.html" %}
+{% load static %}
 {% load i18n %}
 {% block title %}Quick checkout for {{ auction }}{% endblock %}
 {% block extra_js %}
+{% if show_camera_scanner %}<script src="{% static 'js/camera_scanner.js' %}"></script>{% endif %}
 <script>
 $(document).ready(function() {
   (function(){
@@ -19,8 +21,11 @@ $(document).ready(function() {
       lastTosValue = value;
       if (!value) {
         $('#result').empty();
+        if (window.checkoutCamera) { window.checkoutCamera.showIdleCamera(); }
         return;
       }
+      // A typed search will swap #result and tear down the camera preview; release the device first.
+      if (window.checkoutCamera) { window.checkoutCamera.stopForSearch(); }
       const searchTerm = encodeURIComponent(value);
       htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + searchTerm, { target: '#result' });
     }
@@ -113,8 +118,151 @@ function paymentCompleted(pk) {
       }
     });
   }
+  // The invoice is settled -- after a short grace period (to allow an undo) reset the
+  // screen and restart the camera so the next person can scan themselves in.
+  if (window.checkoutCamera) { window.checkoutCamera.scheduleRestartAfterPayment(); }
 }
 </script>
+{% if show_camera_scanner %}
+<script>
+$(document).ready(function() {
+  (function(){
+    const resultEl = document.getElementById('result');
+    let restartTimer = null;
+
+    // The camera is only for small screens (phones + the app's WebView, which reports a phone-sized
+    // viewport). On larger screens the d-md-none wrapper below hides it and getUserMedia is never
+    // called, so the text search is the only input on desktop.
+    const smallScreen = window.matchMedia('(max-width: 767px)');
+    function cameraEnabled() {
+      return smallScreen.matches;
+    }
+
+    // Show the live camera preview inside #result. htmx swaps #result with invoice controls
+    // when a match is found, which tears the video down; we rebuild it here when we go idle.
+    function renderCameraShell() {
+      // d-md-none: only shown on small screens (phones + the app WebView); hidden on desktop.
+      resultEl.innerHTML =
+        '<div id="checkout-camera-wrapper" class="mt-3 d-md-none">' +
+        '  <div class="rounded border overflow-hidden w-100" style="aspect-ratio: 3 / 1;">' +
+        '    <video id="checkout-scanner-video" playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>' +
+        '  </div>' +
+        '  <div id="checkout-scan-status" class="alert alert-info mt-2 mb-0 py-2">Point the camera at a bidder number or membership card.</div>' +
+        '</div>';
+      return document.getElementById('checkout-scanner-video');
+    }
+
+    function setStatus(message, level) {
+      const box = document.getElementById('checkout-scan-status');
+      if (box) {
+        box.className = 'alert alert-' + (level || 'info') + ' mt-2 mb-0 py-2';
+        box.textContent = message;
+      }
+    }
+
+    let scanner = null;
+    let expectingScanResult = false;
+
+    async function onCode(value) {
+      // Stop the camera and run the same search the text box uses, flagged as a barcode so
+      // paddle / membership-card numbers get translated to a bidder number server-side.
+      setStatus('Looking up ' + value + '...', 'secondary');
+      expectingScanResult = true;
+      await scanner.stop();
+      htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent(value) + '?barcode=1', { target: '#result' });
+    }
+
+    async function showIdleCamera() {
+      cancelRestart();
+      expectingScanResult = false;
+      // On a wide desktop browser the camera is never offered; make sure nothing lingers in #result.
+      if (!cameraEnabled()) {
+        if (scanner) { await scanner.stop(); scanner = null; }
+        return;
+      }
+      // Release any previous camera before rebuilding the preview so we never hold two streams.
+      if (scanner) { await scanner.stop(); }
+      const video = renderCameraShell();
+      // The freshly-created controller binds to the new <video> element each time.
+      scanner = window.createCameraScanner({ video: video, onCode: onCode, onStatus: setStatus });
+      scanner.resetDuplicate();
+      try {
+        await scanner.start();
+      } catch (e) {
+        setStatus('Unable to start the camera: ' + (e.message || e), 'danger');
+      }
+    }
+
+    function cancelRestart() {
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+    }
+
+    function scheduleRestartAfterPayment() {
+      cancelRestart();
+      // 10s grace period so the cashier can undo (re-open the invoice) before the screen resets.
+      restartTimer = setTimeout(function() {
+        const $tos = $('#tos');
+        if ($tos.length) { $tos.val(''); }
+        showIdleCamera();
+      }, 10000);
+    }
+
+    // A manual "Paid" click posts to /api/payinvoice/<pk>/PAID (swapping just the button group,
+    // not #result, so no capture websocket fires). Watch for that specific successful POST and
+    // schedule the same post-payment camera restart.
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+      const cfg = evt.detail && evt.detail.requestConfig;
+      if (!cfg || (cfg.verb || '').toLowerCase() !== 'post') {
+        return;
+      }
+      if (evt.detail.successful && /\/payinvoice\/[^/]+\/PAID$/.test(cfg.path || '')) {
+        scheduleRestartAfterPayment();
+      }
+    });
+
+    // After a *scan* swaps #result: if an invoice came back the camera stays down; if the scan
+    // matched nothing (no invoice / multiple users), fall back to the live camera so the next
+    // person can try again. Typed searches are left alone -- their results stay on screen.
+    resultEl.addEventListener('htmx:afterSwap', function() {
+      if (!expectingScanResult) {
+        return;
+      }
+      expectingScanResult = false;
+      const hasInvoice = resultEl.querySelector('[id^="invoice-buttons-"]');
+      if (!hasInvoice) {
+        showIdleCamera();
+      }
+    });
+
+    async function stopForSearch() {
+      // A typed search is taking over #result; cancel any pending restart and free the camera.
+      cancelRestart();
+      expectingScanResult = false;
+      if (scanner) { await scanner.stop(); }
+    }
+
+    window.checkoutCamera = {
+      showIdleCamera: showIdleCamera,
+      scheduleRestartAfterPayment: scheduleRestartAfterPayment,
+      stopForSearch: stopForSearch,
+    };
+
+    // If the viewport crosses the small-screen threshold (rotate / resize), re-evaluate: bring the
+    // camera up when we become eligible and nothing is on screen, or tear it down if we grow wide.
+    smallScreen.addEventListener('change', function() {
+      const idle = !($('#tos').val() || '').trim() && !resultEl.querySelector('[id^="invoice-buttons-"]');
+      if (idle) { showIdleCamera(); }
+    });
+
+    // Start with the camera live (no-op on wide desktop browsers).
+    showIdleCamera();
+  })();
+});
+</script>
+{% endif %}
 {% endblock %}
 {% block content %}
 {% include 'auction_ribbon.html' %}

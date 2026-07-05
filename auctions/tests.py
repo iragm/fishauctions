@@ -6484,6 +6484,30 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertNotIn(deep_link, app_html)
         self.assertNotIn("Tap to Pay with card", app_html)
 
+    def test_quick_checkout_camera_hidden_on_large_screens(self):
+        """The self-scan camera ships on every checkout page but is hidden on large screens with a
+        Bootstrap responsive class, so it only shows on small screens (phones + the app WebView).
+        The server can't see the viewport, so gating is done client-side, not by User-Agent."""
+        self.client.force_login(self.admin_user)
+        url = reverse("auction_quick_checkout", kwargs={"slug": self.in_person_auction.slug})
+        html = self.client.get(url).content.decode("utf-8")
+        # The camera module is always shipped...
+        self.assertIn("camera_scanner.js", html)
+        # ...and the live-preview wrapper carries d-md-none so desktop never shows (or grabs) it.
+        self.assertIn("d-md-none", html)
+
+    def test_quick_checkout_scan_translates_paddle_barcode(self):
+        """A scanned paddle barcode (11111 + bidder number) posted with ?barcode=1 resolves to the
+        bidder holding that number, just as if the number had been typed in."""
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "11111555"},
+        )
+        content = self.client.get(url, {"barcode": "1"}).content.decode("utf-8")
+        self.assertIn(f"invoice-buttons-{invoice.pk}", content)
+
 
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
@@ -21974,6 +21998,128 @@ class ManageUsersThroughClubTests(TestCase):
             {"barcode": str(member.membership_number)},
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_barcode_scan_adjustment_on_checked_in_card_keeps_checkin_time(self):
+        """Scanning an adjustment then an already-checked-in member card applies the adjustment
+        without clobbering the original check-in timestamp or re-checking them in."""
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        self.client.force_login(self.creator)
+        # First scan checks them in
+        self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {"barcode": str(member.membership_number)},
+        )
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        original_checked_in = tos.checked_in
+        self.assertIsNotNone(original_checked_in)
+        # Second scan carries an adjustment
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "barcode": str(member.membership_number),
+                "adjustment_type": "ADD",
+                "adjustment_amount": "7",
+                "adjustment_label": "raffle",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        tos.refresh_from_db()
+        self.assertEqual(tos.checked_in, original_checked_in)
+        self.assertTrue(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos, amount=7).exists())
+
+    def test_barcode_scan_adjustment_applied_to_bidder_number(self):
+        """Scanning an adjustment then a paddle (bidder number) applies the adjustment to the
+        AuctionTOS holding that bidder number, without a membership card."""
+        self._enable_checkin_mode()
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="222",
+            checked_in=timezone.now(),
+            name="Bidder Person",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "222",
+                "adjustment_type": "DISCOUNT",
+                "adjustment_amount": "5",
+                "adjustment_label": "coupon",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["verb"], "Adjusted")
+        adj = InvoiceAdjustment.objects.get(invoice__auctiontos_user=tos)
+        self.assertEqual(adj.amount, 5)
+        self.assertEqual(adj.adjustment_type, "DISCOUNT")
+
+    def test_barcode_scan_adjustment_to_bidder_requires_checked_in(self):
+        """In check-in mode, applying an adjustment to a bidder number that isn't checked in errors."""
+        self._enable_checkin_mode()
+        AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="333",
+            name="Not Yet Here",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "333",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "5",
+                "adjustment_label": "late fee",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not checked in", response.json()["message"])
+        self.assertFalse(InvoiceAdjustment.objects.exists())
+
+    def test_barcode_scan_adjustment_to_bidder_no_checkin_mode(self):
+        """Outside check-in mode, applying an adjustment to a bidder number works without a
+        check-in requirement (scanning is available in all club auctions)."""
+        self._enable_club_managed()  # "all" mode, not check-in
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="444",
+            name="Regular Bidder",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "444",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "8",
+                "adjustment_label": "extra",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos, amount=8).exists())
+
+    def test_barcode_scan_adjustment_to_unknown_bidder_number(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "999",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "5",
+                "adjustment_label": "x",
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("999", response.json()["message"])
 
     def test_self_check_in_page(self):
         self._enable_checkin_mode()
