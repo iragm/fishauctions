@@ -3001,29 +3001,36 @@ class Auction(models.Model):
     def wind_down_time(self):
         """The moment the auction is fully wound down, before the pretty_much_over grace period.
 
-        Online: the latest pickup time across all locations (first or second pickup), falling back
-        to the bidding end date when no pickup times are set. In-person: the auction's start date
-        (the event itself). Returns None if the relevant date is missing."""
+        Online: the latest of the bidding end date or any pickup time across all locations (first or
+        second pickup). Pickup times are supposed to be after date_end, but nothing enforces that
+        (see pickup_locations_before_end), so date_end is always included as a floor to avoid firing
+        pretty_much_over while bidding is still open. In-person: the latest of the auction's start
+        date, the online bidding end date, and the lot submission end date, since in-person auctions
+        can run long after date_start and still have those windows open. Returns None if the relevant
+        date is missing."""
         if not self.is_online:
-            return self.date_start
-        latest = None
+            return max(
+                self.date_start,
+                self.date_online_bidding_ends or self.date_start,
+                self.lot_submission_end_date or self.date_start,
+            )
+        latest = self.date_end
         for location in self.location_qs:
             for pickup in (location.pickup_time, location.second_pickup_time):
                 if pickup and (latest is None or pickup > latest):
                     latest = pickup
-        if latest is not None:
-            return latest
-        return self.date_end
+        return latest
 
     @property
     def pretty_much_over(self):
         """True once the auction has been wound down for at least 24 hours.
 
-        Online auctions: 24h after the last pickup time (or after the bidding end date if there are
-        no pickup locations). In-person auctions: 24h after the start date. Unlike `closed` /
-        `in_person_closed` (which fire the moment bidding ends), this waits until pickups are done,
-        so it's used to stop surfacing the auction in the command palette and to deactivate its
-        stray lots via endauctions."""
+        Online auctions: 24h after the later of the bidding end date or the last pickup time.
+        In-person auctions: 24h after the latest of the start date, the online bidding end date, and
+        the lot submission end date. Unlike `closed` / `in_person_closed` (which fire the moment
+        bidding ends), this waits until pickups/extra windows are done, so it's used to stop
+        surfacing the auction in the command palette and to deactivate its stray lots via
+        endauctions."""
         reference = self.wind_down_time
         if not reference:
             return False

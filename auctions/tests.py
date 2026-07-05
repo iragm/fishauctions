@@ -3665,7 +3665,8 @@ class AuctionPropertyTests(StandardTestCase):
         self.assertFalse(auction.pretty_much_over)
 
     def test_pretty_much_over_in_person_uses_date_start(self):
-        """In-person auctions are pretty_much_over 24h after date_start."""
+        """In-person auctions are pretty_much_over 24h after date_start, once the online bidding
+        and lot submission windows (which default to date_start) are moved along with it."""
         auction = Auction.objects.create(
             created_by=self.user,
             title="pmo in person",
@@ -3674,8 +3675,35 @@ class AuctionPropertyTests(StandardTestCase):
         )
         self.assertFalse(auction.pretty_much_over)
         auction.date_start = timezone.now() - datetime.timedelta(hours=25)
+        auction.date_online_bidding_ends = auction.date_start
+        auction.lot_submission_end_date = auction.date_start
         auction.save()
         self.assertTrue(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_waits_for_online_bidding_end(self):
+        """An in-person auction with online bidding enabled isn't pretty_much_over until the online
+        bidding window closes, even if the in-person event (date_start) was 24h+ ago."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person online bidding",
+            is_online=False,
+            online_bidding="allow",
+            date_start=timezone.now() - datetime.timedelta(hours=25),
+            date_online_bidding_ends=timezone.now() + datetime.timedelta(hours=1),
+        )
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_waits_for_lot_submission_end(self):
+        """An in-person auction isn't pretty_much_over until lot submission closes, even if the
+        event (date_start) was 24h+ ago."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person lot submission",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=25),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(hours=1),
+        )
+        self.assertFalse(auction.pretty_much_over)
 
     def test_auction_timing_properties(self):
         """Test auction start/end related properties"""
@@ -18254,6 +18282,55 @@ class EndauctionsPrettyMuchOverTests(TestCase):
         lot.save()
         lot.refresh_from_db()
         self.assertTrue(lot.sold)
+
+
+class LotFilterRegardingAuctionStatusTests(TestCase):
+    """LotFilter.status must stay "open" (active=True lots only) by default when scoped to a
+    still-running auction via regardingAuction/?auction=slug, unless the caller explicitly passes
+    ?status= or the auction is already closed (filter_by_auction already forces "all" once
+    auction.closed is True -- that part is existing, intentional behavior and out of scope here).
+
+    This covers the /lots/?auction=slug path used by AllLots (e.g. the "last auction you used"
+    redirect in ToDefaultLandingPage) and AuctionInfo's embedded lot list, while the auction is
+    still live. Forcing status="all" unconditionally for any regardingAuction scope would make
+    already-ended lots reappear in that default view even for a running auction, which is the
+    exact regression a prior "fix lot list showing closed lots" commit avoided."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="lf_seller", password="testpass", email="lf@example.com")
+        self.auction = Auction.objects.create(
+            title="LF Auction",
+            created_by=self.user,
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.location = PickupLocation.objects.create(
+            name="lf loc", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.active_lot = Lot.objects.create(
+            lot_name="Active lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, active=True
+        )
+        self.ended_lot = Lot.objects.create(
+            lot_name="Ended lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, active=False
+        )
+        # LotFilter excludes lots posted in the last 20 minutes ("very new lot") for online auctions;
+        # backdate so both lots are eligible to show up regardless of that unrelated exclusion.
+        Lot.objects.filter(pk__in=[self.active_lot.pk, self.ended_lot.pk]).update(
+            date_posted=timezone.now() - datetime.timedelta(hours=1)
+        )
+        self.assertFalse(self.auction.closed)
+
+    def test_all_lots_view_scoped_to_auction_hides_ended_lots_by_default(self):
+        response = self.client.get(reverse("allLots"), {"auction": self.auction.slug})
+        self.assertContains(response, "Active lot")
+        self.assertNotContains(response, "Ended lot")
+
+    def test_all_lots_view_scoped_to_auction_shows_ended_lots_with_explicit_status(self):
+        response = self.client.get(reverse("allLots"), {"auction": self.auction.slug, "status": "all"})
+        self.assertContains(response, "Active lot")
+        self.assertContains(response, "Ended lot")
 
 
 class BapAwardRecalculateTests(TestCase):
