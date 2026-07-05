@@ -40,6 +40,8 @@
           <i class="bi bi-person-fill-up"></i> Import from CSV
         </a>
       </li>
+      {% comment %} Google Drive sync setup/management is hidden in the mobile app (per product decision). {% endcomment %}
+      {% if not request.is_mobile_app %}
       <li><hr class="dropdown-divider"></li>
       <li>
         <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-gear"></i> {% if auction.google_drive_link %}Manage{% else %}Set up{% endif %} Google Drive sync</a>
@@ -54,6 +56,7 @@
         {% if auction.last_sync_time %}
           <li><span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span></li>
         {% endif %}
+      {% endif %}
       {% endif %}
     </ul>
   </div>

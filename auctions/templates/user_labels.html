@@ -27,7 +27,7 @@ var form_id = '#printing-prefs';
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-<br>{% if last_auction_used %}<a href="{% url 'print_my_labels' slug=last_auction_used.slug %}" class="btn-sm btn btn-primary">Print labels for {{last_auction_used}}</a>{% endif %}
+<br>{% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels button there. {% endcomment %}{% if last_auction_used and not request.is_mobile_app %}<a href="{% url 'print_my_labels' slug=last_auction_used.slug %}" class="btn-sm btn btn-primary">Print labels for {{last_auction_used}}</a>{% endif %}
     <ol>
         <li>Print your labels on regular paper</li>
         <li>Cut them out with scissors</li>

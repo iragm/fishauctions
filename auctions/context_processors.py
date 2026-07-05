@@ -141,6 +141,7 @@ def site_config(request):
     return {
         "navbar_brand": settings.NAVBAR_BRAND,
         "copyright_message": settings.COPYRIGHT_MESSAGE,
+        "show_footer_icon": settings.SHOW_FOOTER_ICON,
         "enable_club_finder": settings.ENABLE_CLUB_FINDER,
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,

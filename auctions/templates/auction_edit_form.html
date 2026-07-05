@@ -34,6 +34,7 @@ function update_club_fields(club_val) {
     var club_fields = [
         '#div_id_add_membership_fee_to_invoices_for_expired_members',
         '#div_id_manage_users_through_club',
+        '#div_id_club_member_discount',
     ];
     club_fields.forEach(function(sel) {
         var $el = $(sel);
@@ -45,7 +46,29 @@ function update_club_fields(club_val) {
             }
         }
     });
+    update_alternate_split_fields();
 }
+function update_alternate_split_fields() {
+    var club_val = $('#id_club').val();
+    var $mode = $('#id_alternate_split_mode');
+    // The club member discount option only makes sense with a connected club
+    var $memberOption = $mode.find('option[value="club_member"]');
+    $memberOption.prop('disabled', !club_val).toggle(!!club_val);
+    if (!club_val && $mode.val() == 'club_member') {
+        $mode.val('off');
+    }
+    var mode = $mode.val();
+    [
+        '#div_id_lot_entry_fee_for_club_members',
+        '#div_id_winning_bid_percent_to_club_for_club_members',
+        '#div_id_club_member_cut',
+    ].forEach(function(sel) {
+        $(sel).toggle(mode != 'off');
+    });
+    // In club member discount mode the label is always "Club member", so hide the name field
+    $('#div_id_alternative_split_label').toggle(mode == 'custom');
+}
+$('#id_alternate_split_mode').on('change', update_alternate_split_fields);
 // Native select change (covers plain <select> and select2 hidden input)
 $('#id_club').on('change', function() {
     update_club_fields($(this).val());

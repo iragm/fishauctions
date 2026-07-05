@@ -58,6 +58,14 @@ $(document).ready(function(){
   });
 });
 
+// Toggling the membership renewal checkbox can change the club member discount and
+// (in club member discount split mode) the seller's alternate fees, so reload to
+// update the entire invoice -- lot tables, payout, and totals.
+document.body.addEventListener('renewalToggled', function() {
+  isDirty = false;
+  window.location.reload();
+});
+
 </script>
 {% endif %}
 {% if print_label_link and not invoice.printed and not is_admin %}
@@ -132,7 +140,12 @@ document.addEventListener("DOMContentLoaded", function() {
                 Pay now
               </button>
           {% else %}
-            {% if invoice.show_paypal_button %}
+            {% comment %}
+              Web PayPal/Square pay buttons redirect to the provider's hosted checkout, which doesn't
+              work inside the native app WebView. PayPal is removed from the app entirely; Square is
+              collected via on-device Tap to Pay (see quick_checkout_htmx.html), so hide both here.
+            {% endcomment %}
+            {% if invoice.show_paypal_button and not request.is_mobile_app %}
             <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
                 {% csrf_token %}
                 <button
@@ -150,7 +163,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 </button>
             </form>
             {% endif %}
-            {% if invoice.show_square_button %}
+            {% if invoice.show_square_button and not request.is_mobile_app %}
             <form action="{% url 'create_square_payment_link' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
                 {% csrf_token %}
                 <button
@@ -171,9 +184,15 @@ document.addEventListener("DOMContentLoaded", function() {
           {% endif %}
         {% endif %}
       {% endif %}
+      {% comment %}
+        Print invoice relies on the browser print dialog (none in the app WebView) and label printing
+        is handled natively over Bluetooth in the mobile app, so hide both print buttons on mobile.
+      {% endcomment %}
+      {% if not request.is_mobile_app %}
       <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 ">Print invoice</a>
       {% if show_links and print_label_link %}
         <a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 ">Print labels for your lots</a>
+      {% endif %}
       {% endif %}
   </div>
   <div class="col">
@@ -280,6 +299,7 @@ document.addEventListener("DOMContentLoaded", function() {
       <td>{{ invoice.currency_symbol }}{{ invoice.first_bid_payout|floatformat:2 }}</td>
     </tr>
   {% endif %}
+  {% include "auctions/partials/invoice_club_member_discount_row.html" %}
   {% include "auctions/partials/invoice_tax_row.html" %}
   {% include "auctions/partials/invoice_membership_fee_row.html" %}
   {% for adjustment in invoice.changed_adjustments %}
@@ -298,7 +318,7 @@ document.addEventListener("DOMContentLoaded", function() {
 </table>
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>
-  {% if invoice.auctiontos_user.is_club_member %}
+  {% if invoice.auctiontos_user.is_club_member and invoice.auctiontos_user.auction.uses_alternate_split %}
     Note: {{ invoice.auctiontos_user.auction.alternative_split_label|capfirst }} fees have been applied<br>
   {% endif %}
   <table class="table">

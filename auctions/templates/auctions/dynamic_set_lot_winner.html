@@ -28,7 +28,13 @@
 
 {% block extra_js %}
 {# Use self-hosted Vosklet instead of CDN for cross-origin isolation #}
+{% comment %}
+  Voice input (microphone) isn't wired up for the native app WebView yet and isn't used on the web
+  either (the button below is commented out), so skip loading the speech WASM in the mobile app.
+{% endcomment %}
+{% if not request.is_mobile_app %}
 <script src="{% static 'js/vendor/Vosklet.js' %}" async defer></script>
+{% endif %}
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {
@@ -572,8 +578,10 @@ $(document).ready(function() {
 
 <small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
 <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+{% if not request.is_mobile_app %}
 <!-- <button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleWebSpeechRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button> -->
 <small id="voice-status" class="ms-2 text-muted"></small>
+{% endif %}
 
 </span>
 {% endblock %}

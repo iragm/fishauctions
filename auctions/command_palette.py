@@ -62,6 +62,18 @@ def _last_auction(user):
         return None
 
 
+def _last_auction_active(user):
+    """The user's most recent auction, but only while it's still worth acting on.
+
+    Once an auction is ``pretty_much_over`` (wound down for 24h+), its palette shortcuts stop
+    being useful, so most ``last_auction:*`` resolvers route through this and return nothing.
+    The invoice shortcut deliberately does *not* use this — an invoice stays relevant afterwards."""
+    auction = _last_auction(user)
+    if auction and auction.pretty_much_over:
+        return None
+    return auction
+
+
 def _last_club(user):
     try:
         return user.userdata.last_club_used
@@ -192,15 +204,20 @@ def _invoice_status_label(invoice):
 # (empty when nothing applies). Returning lists lets a target fan out (e.g. several recent invoices).
 
 
-def _last_auction_admin(user):
-    auction = _last_auction(user)
+def _last_auction_admin(user, *, include_over=False):
+    """The user's most recent auction if they can administer it.
+
+    By default this hides once the auction is ``pretty_much_over`` (so "set winners", "checkout",
+    etc. stop appearing). Pass ``include_over=True`` for shortcuts that stay useful after the
+    auction is over, such as auction stats."""
+    auction = _last_auction(user) if include_over else _last_auction_active(user)
     if auction and auction.permission_check(user):
         return auction
     return None
 
 
 def _t_view_lots(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not auction:
         return []
     return [
@@ -214,7 +231,7 @@ def _t_view_lots(user):
 
 
 def _t_auction_self(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not auction:
         return []
     return [
@@ -271,7 +288,7 @@ def _t_quick_checkout(user):
 
 
 def _t_add_lot(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not auction or _use_bulk_add_lots(auction):
         return []
     return [
@@ -285,7 +302,7 @@ def _t_add_lot(user):
 
 
 def _t_bulk_add_lots(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not _use_bulk_add_lots(auction):
         return []
     return [
@@ -327,7 +344,7 @@ def _t_auction_custom_fields(user):
 
 
 def _t_print_labels(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not auction:
         return []
     return [
@@ -355,7 +372,7 @@ def _t_label_setup(user):
 
 
 def _t_bap(user):
-    auction = _last_auction(user)
+    auction = _last_auction_active(user)
     if not auction or not auction.club:
         return []
     club = auction.club
@@ -367,6 +384,69 @@ def _t_bap(user):
             "title": f"BAP — {club.name}",
             "description": "Breeder Award Program points for your most recent auction",
             "icon": "bi-award",
+        }
+    ]
+
+
+def _t_auction_help(user):
+    """In-auction help for the user's most recent admin auction (only when help is enabled)."""
+    from django.conf import settings
+
+    if not settings.ENABLE_HELP:
+        return []
+    auction = _last_auction_admin(user)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("auction_help", kwargs={"slug": auction.slug}),
+            "title": f"Auction help — {auction.title}",
+            "description": "Help and tutorials for your most recent auction",
+            "icon": "bi-life-preserver",
+        }
+    ]
+
+
+def _t_auction_stats(user):
+    """Stats for the user's most recent admin auction. Stays available after the auction is over."""
+    auction = _last_auction_admin(user, include_over=True)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("auction_stats", kwargs={"slug": auction.slug}),
+            "title": f"Auction stats — {auction.title}",
+            "description": "Charts and numbers for your most recent auction",
+            "icon": "bi-graph-up",
+        }
+    ]
+
+
+def _t_club_stats(user):
+    return _clubs_items(
+        user, "club_stats", "Club stats", "bi-graph-up", "permission_view", "Auction and membership trends"
+    )
+
+
+def _t_auction_set_location(user):
+    """Set/adjust the location of the user's most recent admin auction on a map.
+
+    Links to editing the first physical pickup location (whose form carries the map for setting
+    coordinates), or to creating one when the auction has none yet."""
+    auction = _last_auction_admin(user, include_over=True)
+    if not auction:
+        return []
+    location = auction.physical_location_qs.first()
+    if location:
+        url = reverse("edit_pickup", kwargs={"pk": location.pk})
+    else:
+        url = reverse("create_auction_pickup_location", kwargs={"slug": auction.slug})
+    return [
+        {
+            "url": url,
+            "title": f"Set auction location — {auction.title}",
+            "description": "Set where your most recent auction takes place",
+            "icon": "bi-geo-alt",
         }
     ]
 
@@ -537,8 +617,12 @@ DYNAMIC_TARGETS = {
     "last_auction:label_setup": _t_label_setup,
     "last_auction:bap": _t_bap,
     "last_auction:invoice": _t_invoice,
+    "last_auction:help": _t_auction_help,
+    "last_auction:stats": _t_auction_stats,
+    "last_auction:set_location": _t_auction_set_location,
     "clubs:members": _t_club_members,
     "clubs:map": _t_club_map,
+    "clubs:stats": _t_club_stats,
     "clubs:brevo": _t_club_brevo,
     "clubs:mailchimp": _t_club_mailchimp,
     "clubs:discord": _t_club_discord,
@@ -985,6 +1069,19 @@ def _auction_member_items(user, auction, tos):
 
 def _auction_default_items(request, user, auction):
     """Defaults for the user's most recent auction, ordered by the role/state they're in."""
+    # Once the auction is pretty much over (wound down for 24h+), nothing about it is worth acting
+    # on anymore except the invoice, so surface only that and drop the rest.
+    if auction.pretty_much_over:
+        invoice = (
+            _ready_invoice(user, auction)
+            or Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
+            .exclude(status="DRAFT")
+            .first()
+        )
+        if invoice:
+            return [_invoice_item(invoice, auction, "bi-bag", _invoice_status_label(invoice))]
+        return []
+
     items = []
     is_admin = auction.permission_check(user)
     ended = _auction_ended(auction)

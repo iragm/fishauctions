@@ -109,6 +109,7 @@
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if auction.use_check_in_mode and can_manage_check_in %}
           <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
+          <a class="dropdown-item" href="{% url 'auction_self_check_in' slug=auction.slug %}"><i class="bi bi-person-check"></i> Self-checkin</a>
           {% endif %}
           {% if can_scan_club_barcodes %}
           <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> {% if auction.use_check_in_mode %}Check in{% else %}Scan club cards{% endif %}</a>
@@ -116,12 +117,15 @@
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
           <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
-          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
+          {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels link there. {% endcomment %}
+          {% if not auction.is_online and not request.is_mobile_app %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>
           <a class="dropdown-item" href="{% url 'auction_delete' slug=auction.slug %}"><i class="bi bi-x-circle"></i> Delete auction</a>
 
         </ul>
     </li>
 </ul>
+{% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}
+{% include 'auctions/barcode_scanner.html' %}
 
 {% endif %}

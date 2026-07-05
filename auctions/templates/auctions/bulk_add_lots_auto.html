@@ -309,12 +309,15 @@
               </a>
             {% endif %}
           </div>
+          {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels button there. {% endcomment %}
+          {% if not request.is_mobile_app %}
           <div>
             <a href="{% url 'print_labels_by_bidder_number' slug=auction.slug bidder_number=tos.bidder_number %}"
                class="btn btn-info" target="_blank">
               <i class="bi bi-printer"></i> Print labels
             </a>
           </div>
+          {% endif %}
         </div>
       </div>
     </div>

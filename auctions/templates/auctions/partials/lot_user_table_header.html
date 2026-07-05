@@ -13,5 +13,6 @@
     <a href="{% url 'bulk_add_lots_auto_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Bulk add lots to {{userdata.last_auction_used}}</a>
   {% endif %}
   <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-bag"></i> Invoice for {{userdata.last_auction_used}}</a>
-  <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-tags"></i> Print labels for {{userdata.last_auction_used}}</a>
+  {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels button there. {% endcomment %}
+  {% if not request.is_mobile_app %}<a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-tags"></i> Print labels for {{userdata.last_auction_used}}</a>{% endif %}
 {% endif %}

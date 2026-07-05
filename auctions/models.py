@@ -136,7 +136,8 @@ def add_price_info(qs):
                             F("winning_price")
                             * Case(
                                 When(
-                                    auctiontos_seller__is_club_member=True,
+                                    Q(auctiontos_seller__is_club_member=True)
+                                    & ~Q(auctiontos_seller__auction__alternate_split_mode="off"),
                                     then=(
                                         (
                                             100
@@ -168,7 +169,8 @@ def add_price_info(qs):
                         - Cast(
                             Case(
                                 When(
-                                    auctiontos_seller__is_club_member=True,
+                                    Q(auctiontos_seller__is_club_member=True)
+                                    & ~Q(auctiontos_seller__auction__alternate_split_mode="off"),
                                     then=F("auction__lot_entry_fee_for_club_members"),
                                 ),
                                 default=F("auction__lot_entry_fee"),
@@ -2192,6 +2194,8 @@ class Auction(models.Model):
     lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
+    club_member_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    club_member_discount.help_text = "Automatically add a discount in this amount if a paid club member has purchased at least one lot in this auction"
     promote_this_auction = models.BooleanField(default=True)
     promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
@@ -2258,6 +2262,19 @@ class Auction(models.Model):
     winning_bid_percent_to_club_for_club_members.help_text = (
         "Used instead of the standard split, when you mark someone as using alternative fees"
     )
+    ALTERNATE_SPLIT_MODE_CHOICES = (
+        ("off", "Off"),
+        ("club_member", "Club member discount"),
+        ("custom", "Custom"),
+    )
+    alternate_split_mode = models.CharField(
+        max_length=20,
+        choices=ALTERNATE_SPLIT_MODE_CHOICES,
+        blank=False,
+        default="custom",
+        verbose_name="Alternate split",
+    )
+    alternate_split_mode.help_text = "Charge some sellers different fees.  Club member discount automatically applies the alternate fees to paid club members; custom lets you mark users yourself."
     alternative_split_label = models.CharField(
         max_length=50, default="Alternate fees", blank=False, verbose_name="Alternate split label"
     )
@@ -2792,6 +2809,11 @@ class Auction(models.Model):
         """only for templates, winning_bid_percent_to_club - pre_register_lot_discount_percent"""
         return self.winning_bid_percent_to_club - self.pre_register_lot_discount_percent
 
+    @property
+    def uses_alternate_split(self):
+        """True when some users (marked with AuctionTOS.is_club_member) get the alternate fees"""
+        return self.alternate_split_mode != "off"
+
     def get_absolute_url(self):
         return self.url
 
@@ -2974,6 +2996,45 @@ class Auction(models.Model):
         ):
             return True
         return False
+
+    @property
+    def wind_down_time(self):
+        """The moment the auction is fully wound down, before the pretty_much_over grace period.
+
+        Online: the latest of the bidding end date or any pickup time across all locations (first or
+        second pickup). Pickup times are supposed to be after date_end, but nothing enforces that
+        (see pickup_locations_before_end), so date_end is always included as a floor to avoid firing
+        pretty_much_over while bidding is still open. In-person: the latest of the auction's start
+        date, the online bidding end date, and the lot submission end date, since in-person auctions
+        can run long after date_start and still have those windows open. Returns None if the relevant
+        date is missing."""
+        if not self.is_online:
+            return max(
+                self.date_start,
+                self.date_online_bidding_ends or self.date_start,
+                self.lot_submission_end_date or self.date_start,
+            )
+        latest = self.date_end
+        for location in self.location_qs:
+            for pickup in (location.pickup_time, location.second_pickup_time):
+                if pickup and (latest is None or pickup > latest):
+                    latest = pickup
+        return latest
+
+    @property
+    def pretty_much_over(self):
+        """True once the auction has been wound down for at least 24 hours.
+
+        Online auctions: 24h after the later of the bidding end date or the last pickup time.
+        In-person auctions: 24h after the latest of the start date, the online bidding end date, and
+        the lot submission end date. Unlike `closed` / `in_person_closed` (which fire the moment
+        bidding ends), this waits until pickups/extra windows are done, so it's used to stop
+        surfacing the auction in the command palette and to deactivate its stray lots via
+        endauctions."""
+        reference = self.wind_down_time
+        if not reference:
+            return False
+        return timezone.now() > reference + datetime.timedelta(hours=24)
 
     @property
     def ended_badge(self):
@@ -4615,6 +4676,47 @@ class AuctionTOS(models.Model):
     @property
     def invoice(self):
         return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
+
+    @property
+    def club_member_record(self):
+        """The ClubMember for this user in the auction's club, or None.
+        Uses the direct clubmember link first, then falls back to matching by user and email."""
+        if not self.auction.club_id:
+            return None
+        if self.clubmember and not self.clubmember.is_deleted:
+            return self.clubmember
+        member = None
+        if self.user_id:
+            member = ClubMember.objects.filter(
+                club_id=self.auction.club_id, user_id=self.user_id, is_deleted=False
+            ).first()
+        email = (self.email or "").strip()
+        if not member and email:
+            member = ClubMember.objects.filter(
+                club_id=self.auction.club_id, email__iexact=email, is_deleted=False
+            ).first()
+        return member
+
+    def update_alternate_split_from_membership(self, invoice=None):
+        """When the auction's alternate split is in club member discount mode, is_club_member is
+        managed automatically: paid club members (and users whose invoice will renew their
+        membership) get the alternate split.  Recalculates the invoice when the flag changes,
+        since the alternate split changes the seller's payout.  Returns True if the flag changed."""
+        if self.auction.alternate_split_mode != "club_member":
+            return False
+        invoice = invoice or self.invoice
+        if invoice:
+            should_apply = invoice.treat_as_club_member
+        else:
+            member = self.club_member_record
+            should_apply = bool(member and member.is_paid_member)
+        if self.is_club_member != should_apply:
+            self.is_club_member = should_apply
+            self.save(update_fields=["is_club_member"])
+            if invoice:
+                invoice.recalculate()
+            return True
+        return False
 
     @property
     def requires_check_in_before_bidding(self):
@@ -7446,18 +7548,31 @@ class Invoice(models.Model):
         return Decimal(club.membership_annual_fee)
 
     @property
+    def club_member_for_auction(self):
+        """The ClubMember record for this invoice's user in the auction's club, or None."""
+        if not self.auction or not self.auction.club or not self.auctiontos_user:
+            return None
+        return self.auctiontos_user.club_member_record
+
+    @property
+    def treat_as_club_member(self):
+        """True when club member benefits (club member discount, automatic alternate split) apply
+        to this invoice's user: either their membership is current, or this invoice will renew it
+        (the renew membership checkbox is checked)."""
+        if not self.auction or not self.auction.club:
+            return False
+        if self.renewal_needed:
+            return True
+        member = self.club_member_for_auction
+        return bool(member and member.is_paid_member)
+
+    @property
     def membership_status_for_invoice(self):
         if not self.auction or not self.auction.club:
             return "No club"
         if not self.auctiontos_user:
             return "No bidder"
-        user = self.auctiontos_user.user
-        email = (self.auctiontos_user.email or "").strip()
-        member = None
-        if user:
-            member = ClubMember.objects.filter(club=self.auction.club, user=user, is_deleted=False).first()
-        if not member and email:
-            member = ClubMember.objects.filter(club=self.auction.club, email__iexact=email, is_deleted=False).first()
+        member = self.club_member_for_auction
         if not member:
             return "No membership"
         if not member.membership_last_paid:
@@ -7503,6 +7618,18 @@ class Invoice(models.Model):
         return 0
 
     @property
+    def club_member_discount(self):
+        """Like first_bid_payout, but only for paid club members (or a user whose membership
+        will be renewed by this invoice) who have purchased at least one lot."""
+        if not self.auction or not self.auction.club_member_discount:
+            return 0
+        if not self.lots_bought:
+            return 0
+        if not self.treat_as_club_member:
+            return 0
+        return self.auction.club_member_discount
+
+    @property
     def tax(self):
         totals = self.bought_lots_queryset.aggregate(
             total_final=Coalesce(
@@ -7530,6 +7657,8 @@ class Invoice(models.Model):
         subtotal = Decimal(self.subtotal)
         # if this auction is using the first bid payout system to encourage people to bid
         subtotal += Decimal(self.first_bid_payout)
+        # if this auction gives paid club members a discount on their purchases
+        subtotal += Decimal(self.club_member_discount)
         subtotal += Decimal(self.flat_value_adjustments)
         subtotal += Decimal(subtotal * self.percent_value_adjustments / 100)
         subtotal -= Decimal(self.membership_fee_amount)
@@ -7919,6 +8048,7 @@ class Invoice(models.Model):
             + membership dues ...... renewal fee collected on the invoice
             +/- invoice adjustment . manual surcharges (+) and discounts (-)
             - first-bid payout ..... promotional payout to the bidder
+            - club member discount . automatic discount for paid club members
             +/- rounding ........... the whole-dollar rounding applied to the invoice
 
         These sum to the cash that moves (the rounded invoice total). The club's auction
@@ -7962,11 +8092,14 @@ class Invoice(models.Model):
             tax = _q(self.tax)
             membership = _q(self.membership_fee_amount)
             first_bid = -_q(self.first_bid_payout)
+            member_discount = -_q(self.club_member_discount)
             adjustment_to_net = Decimal(self.flat_value_adjustments) + (
                 Decimal(self.subtotal) * Decimal(self.percent_value_adjustments) / Decimal(100)
             )
             adjustment = -_q(adjustment_to_net)
-            rounding = -_q(self.rounded_net) - (sale + payout + tax + membership + first_bid + adjustment)
+            rounding = -_q(self.rounded_net) - (
+                sale + payout + tax + membership + first_bid + member_discount + adjustment
+            )
             desired = {
                 ClubMoney.CATEGORY_AUCTION_SALE: sale,
                 ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT: payout,
@@ -7974,6 +8107,7 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_MEMBERSHIP: membership,
                 ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: adjustment,
                 ClubMoney.CATEGORY_FIRST_BID_PAYOUT: first_bid,
+                ClubMoney.CATEGORY_CLUB_MEMBER_DISCOUNT: member_discount,
                 ClubMoney.CATEGORY_ROUNDING: rounding,
             }
             descriptions = {
@@ -7983,6 +8117,7 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_MEMBERSHIP: f"Membership dues from {who} in {auction}",
                 ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: f"Invoice adjustment for {who} in {auction}",
                 ClubMoney.CATEGORY_FIRST_BID_PAYOUT: f"First-bid payout to {who} in {auction}",
+                ClubMoney.CATEGORY_CLUB_MEMBER_DISCOUNT: f"Club member discount for {who} in {auction}",
                 ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
             }
 
@@ -8113,6 +8248,7 @@ class ClubMoney(models.Model):
     CATEGORY_MEMBERSHIP = "membership"
     CATEGORY_INVOICE_ADJUSTMENT = "invoice_adjustment"
     CATEGORY_FIRST_BID_PAYOUT = "first_bid_payout"
+    CATEGORY_CLUB_MEMBER_DISCOUNT = "club_member_discount"
     CATEGORY_ROUNDING = "rounding"
     # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
@@ -8129,6 +8265,7 @@ class ClubMoney(models.Model):
         CATEGORY_TAX,
         CATEGORY_INVOICE_ADJUSTMENT,
         CATEGORY_FIRST_BID_PAYOUT,
+        CATEGORY_CLUB_MEMBER_DISCOUNT,
         CATEGORY_ROUNDING,
     )
 
@@ -8139,6 +8276,7 @@ class ClubMoney(models.Model):
         (CATEGORY_MEMBERSHIP, "Membership dues"),
         (CATEGORY_INVOICE_ADJUSTMENT, "Invoice adjustment"),
         (CATEGORY_FIRST_BID_PAYOUT, "First-bid payout"),
+        (CATEGORY_CLUB_MEMBER_DISCOUNT, "Club member discount"),
         (CATEGORY_ROUNDING, "Invoice rounding"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),

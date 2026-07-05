@@ -130,6 +130,27 @@ POST /api/mobile/devices/register/
           "last_seen":  "2024-06-01T12:00:00Z"
         }
 
+Clubs
+-----
+GET /api/mobile/clubs/mine/
+    Clubs the authenticated user belongs to (same membership scoping as the web nav), sorted by
+    name. ``url`` is the server-relative web club page for the WebView; ``icon_url`` is an absolute
+    URL or null; ``is_admin`` is true when the user's membership has permission_admin.
+
+    Response 200::
+
+        {
+          "clubs": [
+            {
+              "name": "My Club",
+              "slug": "my-club",
+              "url": "/clubs/my-club/",
+              "icon_url": "https://auction.fish/media/club_icons/logo.png",
+              "is_admin": true
+            }
+          ]
+        }
+
 Labels
 ------
 GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
@@ -264,6 +285,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth import login
 from django.http import HttpResponse, HttpResponseRedirect
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from rest_framework import status
@@ -273,11 +295,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Lot
+from auctions.models import Club, ClubMember, Lot
 
 from .permissions import IsMobileAuthenticated
 from .serializers import (
     CommandPaletteLogSerializer,
+    MobileClubSerializer,
     MobileDeviceSerializer,
     MobileGoogleAuthSerializer,
     MobileLoginSerializer,
@@ -542,6 +565,8 @@ class MobileConfigView(APIView):
                 # /api/mobile/auth/google/; the app passes it as the Google Sign-In serverClientId.
                 "google_server_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
                 "brand_name": settings.NAVBAR_BRAND,
+                # Absolute URL so the app can load the site icon without knowing the static layout.
+                "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
             }
         )
 
@@ -582,6 +607,35 @@ class MobileDeviceRegisterView(APIView):
         response_serializer = MobileDeviceSerializer(device)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(response_serializer.data, status=http_status)
+
+
+# ---------------------------------------------------------------------------
+# Clubs
+# ---------------------------------------------------------------------------
+
+
+class MobileMyClubsView(APIView):
+    """GET /api/mobile/clubs/mine/ — clubs the authenticated user belongs to.
+
+    Reuses the same membership scoping as the web ``user_clubs`` context processor
+    (a non-deleted ClubMember row), sorted by name, and flags ``is_admin`` for clubs
+    where the user's membership carries permission_admin.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        memberships = ClubMember.objects.filter(user=request.user, is_deleted=False)
+        club_ids = memberships.values_list("club_id", flat=True)
+        admin_club_ids = set(memberships.filter(permission_admin=True).values_list("club_id", flat=True))
+        clubs = list(Club.objects.filter(pk__in=club_ids).order_by("name"))
+        for club in clubs:
+            club.is_admin = club.pk in admin_club_ids
+
+        serializer = MobileClubSerializer(clubs, many=True, context={"request": request})
+        return Response({"clubs": serializer.data})
 
 
 # ---------------------------------------------------------------------------

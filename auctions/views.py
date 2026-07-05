@@ -68,6 +68,7 @@ from django.http import (
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -586,19 +587,25 @@ def _should_mark_invoice_renewal_needed(invoice):
     return expiration_date <= timezone.now().date() + timedelta(days=30)
 
 
+def _sync_tos_alternate_split(tos, invoice=None):
+    """See AuctionTOS.update_alternate_split_from_membership; this just adds a None guard."""
+    if tos:
+        tos.update_alternate_split_from_membership(invoice)
+
+
 def _ensure_invoice_renewal_state(invoice):
-    if not invoice or invoice.renewal_processed:
+    if not invoice:
         return
     if not invoice.auction:
         # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
         return
-    # An admin has explicitly set the checkbox — respect that choice.
-    if invoice.renewal_manually_set:
-        return
-    should_need = _should_mark_invoice_renewal_needed(invoice)
-    if invoice.renewal_needed != should_need:
-        invoice.renewal_needed = should_need
-        invoice.save(update_fields=["renewal_needed"])
+    # Skip processed renewals, and respect a checkbox an admin has explicitly set.
+    if not invoice.renewal_processed and not invoice.renewal_manually_set:
+        should_need = _should_mark_invoice_renewal_needed(invoice)
+        if invoice.renewal_needed != should_need:
+            invoice.renewal_needed = should_need
+            invoice.save(update_fields=["renewal_needed"])
+    _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
 
 
 def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
@@ -2383,15 +2390,20 @@ class InvoiceRenewalNeededToggleView(APIView):
         invoice.renewal_needed = renewal_needed
         invoice.renewal_manually_set = True
         invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
+        # Checking the box makes the user a club member for this invoice: apply the club
+        # member discount and (in club member discount split mode) the alternate split.
+        _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
-        # OOB swaps so the invoice fee row, tax row, final total, and quick-checkout summary
-        # all update in real time when the box is toggled.
+        # OOB swaps so the invoice fee row, discount row, tax row, final total, and quick-checkout
+        # summary all update in real time when the box is toggled.
         fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
+        discount_row = render_to_string("auctions/partials/invoice_club_member_discount_row.html", ctx, request=request)
         tax_row = render_to_string("auctions/partials/invoice_tax_row.html", ctx, request=request)
         total_row = render_to_string("auctions/partials/invoice_final_total_row.html", ctx, request=request)
         oob_fee = fee_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
+        oob_discount = discount_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_tax = tax_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         # Wrap <tr> OOB swaps in <table> so the browser's HTML parser does not discard
@@ -2399,6 +2411,7 @@ class InvoiceRenewalNeededToggleView(APIView):
         # and process the hx-swap-oob attribute (unlike <template>, whose content is
         # inert and not reachable by querySelectorAll).
         oob_fee = f"<table>{oob_fee}</table>"
+        oob_discount = f"<table>{oob_discount}</table>"
         oob_tax = f"<table>{oob_tax}</table>"
         oob_total = f"<table>{oob_total}</table>"
         oob_summary_checkout = (
@@ -2413,7 +2426,14 @@ class InvoiceRenewalNeededToggleView(APIView):
         modal_name = invoice.invoice_summary
         oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
         response = HttpResponse(
-            body + oob_fee + oob_tax + oob_total + oob_summary_checkout + oob_summary_invoice + oob_modal_title
+            body
+            + oob_fee
+            + oob_discount
+            + oob_tax
+            + oob_total
+            + oob_summary_checkout
+            + oob_summary_invoice
+            + oob_modal_title
         )
         # Signal the quick-checkout page to regenerate QR codes now that the total has changed.
         response["HX-Trigger"] = "renewalToggled"
@@ -4047,7 +4067,40 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return context
 
 
-class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
+class AuctionSelfCheckIn(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Kiosk page: members scan their own membership card to check themselves in.
+
+    This page runs under the signed-in admin's session, so scans are posted with
+    check_in_only -- the scan endpoint will only check people in, never assign bidder
+    numbers or touch invoices."""
+
+    template_name = "auctions/self_check_in.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people
+        if not self.auction.use_check_in_mode:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["can_manage_check_in"] = True
+        context["can_scan_club_barcodes"] = True
+        context["barcode_check_in_only"] = True
+        context["active_tab"] = "users"
+        return context
+
+
+class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
+    """POST-only API for barcode scans from auction admin pages (camera or USB HID scanner).
+
+    Pass check_in_only=1 (used by the self check-in kiosk) to accept only membership card
+    barcodes and ignore bidder number / invoice adjustment side effects, no matter what the
+    client sends."""
+
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
@@ -4057,31 +4110,131 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
+    def _apply_adjustment(self, tos, adjustment_type, adjustment_amount, adjustment_label, acting_user):
+        """Apply a pending invoice adjustment to tos's (draft) invoice.
+
+        Returns (adjustment_desc, error_response). error_response is a JsonResponse when the
+        invoice can't be adjusted (already closed); otherwise None and adjustment_desc describes
+        what was applied (empty string if nothing was)."""
+        try:
+            amount_val = round(float(adjustment_amount))
+        except (ValueError, TypeError):
+            return "", None
+        if amount_val <= 0:
+            return "", None
+        invoice = Invoice.objects.filter(auctiontos_user=tos).first()
+        if invoice and invoice.status != "DRAFT":
+            return "", JsonResponse(
+                {"ok": False, "message": f"Invoice for {tos.name} is not open and cannot be adjusted."},
+                status=400,
+            )
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+        InvoiceAdjustment.objects.create(
+            invoice=invoice,
+            user=acting_user,
+            adjustment_type=adjustment_type,
+            amount=amount_val,
+            notes=adjustment_label[:150],
+        )
+        sign = "+" if adjustment_type == "ADD" else "-"
+        return f"{sign}${amount_val} {adjustment_label}".strip(), None
+
     def post(self, request, *args, **kwargs):
         barcode = (request.POST.get("barcode") or "").strip()
+        check_in_only = (request.POST.get("check_in_only") or "").strip().lower() in ("1", "true", "on", "yes")
         assign_bidder_number = (request.POST.get("assign_bidder_number") or "").strip()
+        apply_to_bidder_number = (request.POST.get("apply_to_bidder_number") or "").strip()
         adjustment_type = (request.POST.get("adjustment_type") or "").strip()
         adjustment_amount = (request.POST.get("adjustment_amount") or "").strip()
         adjustment_label = (request.POST.get("adjustment_label") or "").strip()
+        if check_in_only:
+            assign_bidder_number = ""
+            apply_to_bidder_number = ""
+            adjustment_type = ""
+            adjustment_amount = ""
+            adjustment_label = ""
+        has_adjustment = adjustment_type in ("ADD", "DISCOUNT") and bool(adjustment_amount)
+
+        # Paddle-barcode lookup: a bidder number scanned to receive a pending invoice adjustment.
+        # Resolves an existing AuctionTOS directly (no membership card, no check-in change).
+        if apply_to_bidder_number:
+            if not has_adjustment:
+                return JsonResponse(
+                    {"ok": False, "message": "Scan an invoice adjustment barcode before the bidder number."},
+                    status=400,
+                )
+            tos = (
+                AuctionTOS.objects.filter(auction=self.auction, bidder_number=apply_to_bidder_number)
+                .order_by("-createdon")
+                .first()
+            )
+            if not tos:
+                return JsonResponse(
+                    {"ok": False, "message": f"No one is using bidder number {apply_to_bidder_number}."}, status=404
+                )
+            if self.auction.use_check_in_mode and not tos.checked_in:
+                return JsonResponse(
+                    {"ok": False, "message": f"{tos.name} (bidder {apply_to_bidder_number}) is not checked in yet."},
+                    status=400,
+                )
+            with transaction.atomic():
+                adjustment_desc, error_response = self._apply_adjustment(
+                    tos, adjustment_type, adjustment_amount, adjustment_label, request.user
+                )
+                if error_response:
+                    return error_response
+                if adjustment_desc:
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Applied invoice adjustment {adjustment_desc} to {tos.name} via barcode",
+                        user=request.user,
+                    )
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "message": f"Adjusted {tos.name}",
+                    "name": tos.name,
+                    "bidder_number": tos.bidder_number,
+                    "verb": "Adjusted",
+                    "adjustment_desc": adjustment_desc,
+                }
+            )
+
         if not barcode:
             return JsonResponse({"ok": False, "message": "Scan a membership card barcode."}, status=400)
         if not barcode.isdigit():
-            return JsonResponse({"ok": False, "message": "That barcode is not recognized."}, status=404)
+            message = "Unrecognized barcode" if check_in_only else "That barcode is not recognized."
+            return JsonResponse({"ok": False, "message": message}, status=404)
         member = ClubMember.objects.filter(
             club=self.auction.club,
             membership_number=int(barcode),
             is_deleted=False,
         ).first()
         if not member:
-            return JsonResponse({"ok": False, "message": "No club member matches that barcode."}, status=404)
+            message = "Unrecognized barcode" if check_in_only else "No club member matches that barcode."
+            return JsonResponse({"ok": False, "message": message}, status=404)
         adjustment_desc = ""
         with transaction.atomic():
+            # Decide the check-in timestamp before upserting. In check-in mode a bare card scan
+            # (re)checks the member in, but when the scan is really about applying a pending invoice
+            # adjustment or bidder number to a member who is *already* checked in, we leave their
+            # original check-in time alone rather than clobbering it — the intent was the adjustment,
+            # not a fresh check-in.
+            checked_in_at = _UNSET
+            if self.auction.use_check_in_mode:
+                existing_tos = (
+                    AuctionTOS.objects.filter(auction=self.auction, clubmember=member).order_by("-createdon").first()
+                )
+                already_checked_in = bool(existing_tos and existing_tos.checked_in)
+                if not (already_checked_in and (has_adjustment or assign_bidder_number)):
+                    checked_in_at = timezone.now()
             tos = _upsert_clubmember_shadow_tos(
                 self.auction,
                 member,
                 bidding_allowed=True,
                 selling_allowed=member.selling_allowed,
-                checked_in_at=timezone.now() if self.auction.use_check_in_mode else _UNSET,
+                checked_in_at=checked_in_at,
             )
             if not tos:
                 return JsonResponse(
@@ -4092,31 +4245,14 @@ class QuickCheckInScan(LoginRequiredMixin, AuctionViewMixin, View):
                 # Propagate the assigned number back to the ClubMember so it sticks for next time.
                 # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
                 ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
-            if adjustment_type in ("ADD", "DISCOUNT") and adjustment_amount:
-                try:
-                    amount_val = round(float(adjustment_amount))
-                    if amount_val > 0:
-                        invoice = Invoice.objects.filter(auctiontos_user=tos).first()
-                        if invoice and invoice.status != "DRAFT":
-                            return JsonResponse(
-                                {"ok": False, "message": f"Invoice for {tos.name} is not open and cannot be adjusted."},
-                                status=400,
-                            )
-                        if not invoice:
-                            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-                        InvoiceAdjustment.objects.create(
-                            invoice=invoice,
-                            user=request.user,
-                            adjustment_type=adjustment_type,
-                            amount=amount_val,
-                            notes=adjustment_label[:150],
-                        )
-                        sign = "+" if adjustment_type == "ADD" else "-"
-                        adjustment_desc = f"{sign}${amount_val} {adjustment_label}".strip()
-                except (ValueError, TypeError):
-                    pass
+            if has_adjustment:
+                adjustment_desc, error_response = self._apply_adjustment(
+                    tos, adjustment_type, adjustment_amount, adjustment_label, request.user
+                )
+                if error_response:
+                    return error_response
         verb = "Checked in" if self.auction.use_check_in_mode else "Added"
-        history_action = f"{verb} {tos.name} via barcode"
+        history_action = f"{verb} {tos.name} via {'self check-in scan' if check_in_only else 'barcode'}"
         if assign_bidder_number:
             history_action += f" and assigned bidder number {assign_bidder_number}"
         if adjustment_desc:
@@ -7974,6 +8110,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "unsold_lot_fee",
                 "winning_bid_percent_to_club",
                 "first_bid_payout",
+                "club_member_discount",
                 "sealed_bid",
                 "max_lots_per_user",
                 "allow_additional_lots_as_donation",
@@ -8019,6 +8156,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "enable_online_payments",
                 "enable_square_payments",
                 "add_membership_fee_to_invoices_for_expired_members",
+                "alternate_split_mode",
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
@@ -8038,6 +8176,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
+            # The model default ("custom") preserves behavior for pre-existing and cloned
+            # auctions; brand-new auctions start with the alternate split off.
+            auction.alternate_split_mode = "off"
             if not is_online:
                 # override default settings for new in-person auctions
                 auction.online_bidding = "disable"
@@ -8618,8 +8759,15 @@ class ToDefaultLandingPage(View):
             # if not, check and see if the user has been participating in an auction
             try:
                 auction = UserData.objects.get(user=request.user).last_auction_used
-                # Admins of an in-person auction land on the users list, not the lot list.
-                if auction and not auction.is_online and auction.permission_check(request.user):
+                # Admins of an in-person auction land on the users list, not the lot list — but only
+                # while the auction is still current. Once it's pretty_much_over (wound down 24h+),
+                # that redirect is stale, so fall through to the invoice/browse path instead.
+                if (
+                    auction
+                    and not auction.is_online
+                    and not auction.pretty_much_over
+                    and auction.permission_check(request.user)
+                ):
                     return redirect(auction.user_admin_link)
                 invoice = (
                     Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
@@ -12019,11 +12167,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 # A preference, not a credential: either value is valid, so always "Done".
                 "configured": True,
                 "what_it_does": (
-                    "On by default. The site runs as one club named after <code>NAVBAR_BRAND</code> (there is no "
-                    "separate <code>SINGLE_CLUB_NAME</code>), every user is auto-added as a member, and auctions are "
-                    "tied to it. Set to <code>False</code> only if you host multiple clubs on one install (like "
-                    "auction.fish). Can be toggled later without data loss &mdash; the club, memberships, and auctions "
-                    "created while it was on remain intact. "
+                    "On by default: the site runs as one club (named after <code>NAVBAR_BRAND</code>) with every user "
+                    "auto-added as a member. Set to <code>False</code> only if you host multiple clubs on one install. "
                     f"Currently <strong>{'on' if getattr(settings, 'SINGLE_CLUB_MODE', False) else 'off'}</strong>."
                 ),
                 "snippets": [
@@ -12106,11 +12251,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "section": "Core setup",
                 "name": "Email delivery",
                 "configured": email_configured,
-                "what_it_does": (
-                    "Sends sign-in, invoice, and notification emails. Pick one of the two options below. "
-                    "For Gmail, the app password is a special 16-character password (not your normal Google password) "
-                    "and only appears after you turn on 2-step verification."
-                ),
+                "what_it_does": "Sends sign-in, invoice, and notification emails. Pick one of the two options below.",
                 "snippets": [
                     {
                         "label": "Option A — Gmail (simplest). Turn on 2-step verification first, then create an app password.",
@@ -12159,9 +12300,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "configured": Path(settings.BASE_DIR / "tos.html").exists(),
                 "what_it_does": (
                     "Your site needs a terms-of-service page at <code>/tos/</code>. Create a <code>tos.html</code> file "
-                    "in the project root (next to your <code>.env</code>) containing your terms &mdash; the contents are "
-                    "rendered inside the site's normal layout. Until the file exists, visiting <code>/tos/</code> raises "
-                    "an error."
+                    "in the project root (next to your <code>.env</code>) with your terms."
                 ),
                 "snippets": [
                     {
@@ -12178,17 +12317,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "configured": env_has_real_value(settings.PAYPAL_CLIENT_ID)
                 and env_has_real_value(settings.PAYPAL_SECRET),
                 "what_it_does": (
-                    "Lets your club collect online payments with the site's own PayPal credentials. "
-                    "Use your <strong>Live</strong> keys, not Sandbox. "
-                    "When <code>PAYPAL_ENABLED_FOR_USERS</code> is enabled, sellers link their accounts via a PayPal "
-                    "OAuth flow; the return URL below is the OAuth callback. "
-                    "<strong>Heads up:</strong> PayPal requires platform-seller approval that is hard to get, so this "
-                    "integration has been built but never used in production. If you just want to take payments, set up "
-                    "Square instead."
+                    "Lets your club collect online payments via PayPal (use Square instead unless you have PayPal "
+                    "platform-seller approval)."
                 ),
                 "where_to_get_it": (
-                    "Create a REST app under <code>Apps &amp; Credentials</code> (Live tab), copy its client ID and "
-                    "secret, then set the return URL and subscribe a webhook to the URLs below."
+                    "Create a Live REST app under <code>Apps &amp; Credentials</code>, copy its client ID and secret, then "
+                    "set the return/webhook URLs below."
                 ),
                 "snippets": [
                     {"code": 'PAYPAL_CLIENT_ID="your-client-id"\nPAYPAL_SECRET="your-secret"'},
@@ -12239,14 +12373,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 and env_has_real_value(settings.SQUARE_CLIENT_SECRET),
                 "what_it_does": (
                     "Lets sellers connect Square accounts to collect online payments &mdash; the recommended option. "
-                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (leave it blank to use the sandbox). "
-                    "<code>SQUARE_ENABLED_FOR_USERS</code> only controls whether <em>newly created</em> users can link an "
-                    "account. <code>FIELD_ENCRYPTION_KEY</code> encrypts stored payment tokens and is normally generated "
-                    "for you by <code>update.sh</code>."
+                    "Set <code>SQUARE_ENVIRONMENT=production</code> for live payments (blank uses the sandbox)."
                 ),
                 "where_to_get_it": (
-                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key. "
-                    "Set the redirect and webhook URLs below in the app's OAuth and Webhooks sections."
+                    "Create an app, then copy the Application ID, OAuth secret, and webhook signature key, and set the "
+                    "redirect/webhook URLs below."
                 ),
                 "snippets": [
                     {
@@ -12308,12 +12439,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             # -- Google sign-in ---------------------------------------------------
             {
                 "section": "Google sign-in",
-                "name": "Google sign-in (OAuth)",
-                "hide_title": True,
+                "name": "Google sign-in on the website",
                 "configured": env_has_real_value(settings.GOOGLE_OAUTH_LINK),
                 "what_it_does": (
-                    "Adds one-click Google sign-in. The button stays hidden until a real client ID is set, "
-                    "so a placeholder degrades gracefully."
+                    "Adds one-click Google sign-in to the website. The button stays hidden until a real "
+                    "client ID is set, so a placeholder degrades gracefully."
                 ),
                 "where_to_get_it": (
                     "Create an OAuth web application and copy its client ID (ends in "
@@ -12328,6 +12458,26 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {
                         "label": "Setup guide (django-allauth)",
                         "url": "https://docs.allauth.org/en/latest/socialaccount/providers/google.html",
+                    },
+                ],
+            },
+            {
+                "section": "Google sign-in",
+                "name": "Google sign-in in the mobile app",
+                "configured": env_has_real_value(settings.GOOGLE_OAUTH_CLIENT_ID),
+                "what_it_does": (
+                    "Adds &ldquo;Continue with Google&rdquo; to the mobile app's login screen (separate from the "
+                    "website button, since Google blocks OAuth in WebViews)."
+                ),
+                "where_to_get_it": (
+                    "Reuse the website's Web-application OAuth client ID, and create an Android OAuth client for each app "
+                    "package name (no secret, just has to exist in the project)."
+                ),
+                "snippets": [{"code": 'GOOGLE_OAUTH_CLIENT_ID="your-client-id.apps.googleusercontent.com"'}],
+                "links": [
+                    {
+                        "label": "Google Cloud — OAuth credentials",
+                        "url": "https://console.cloud.google.com/apis/credentials",
                     },
                 ],
             },
@@ -12356,14 +12506,9 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 or env_has_real_value(settings.GOOGLE_TAG_ID)
                 or env_has_real_value(settings.GOOGLE_ADSENSE_ID),
                 "what_it_does": (
-                    "Optional Google tracking and ads, all independent of each other:"
-                    "<ul class='mb-0'>"
-                    "<li><code>GOOGLE_MEASUREMENT_ID</code> &mdash; Google Analytics 4 (starts with <code>G-</code>).</li>"
-                    "<li><code>GOOGLE_TAG_ID</code> &mdash; Google Tag Manager container (starts with <code>GTM-</code>).</li>"
-                    "<li><code>GOOGLE_ADSENSE_ID</code> &mdash; AdSense publisher ID (starts with <code>ca-pub-</code>).</li>"
-                    "<li><code>SHOW_ADS</code> &mdash; master on/off switch for all ads (default True). "
-                    "Set it to False to remove ads site-wide regardless of the AdSense ID.</li>"
-                    "</ul>"
+                    "Optional Google Analytics (<code>GOOGLE_MEASUREMENT_ID</code>), Tag Manager "
+                    "(<code>GOOGLE_TAG_ID</code>), and AdSense (<code>GOOGLE_ADSENSE_ID</code>); "
+                    "<code>SHOW_ADS</code> is the master ad on/off switch."
                 ),
                 "snippets": [
                     {
@@ -12469,45 +12614,15 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY
                 ),
                 "what_it_does": (
-                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on each club member's page so members can save "
-                    "their membership card (QR code and barcode) to their phone. Only the signed-in account that matches "
-                    "the membership can save it &mdash; UUID renewal links cannot. A Wallet class is created automatically "
-                    "for each club; if the keyfile is missing or invalid the integration disables itself (warning logged) "
-                    "so the site still boots."
+                    "Adds an &ldquo;Add to Google Wallet&rdquo; button on member cards so members can save their "
+                    "membership card to their phone; anyone with a member's UUID link can add it."
                 ),
                 "where_to_get_it": (
-                    "Apply for a Wallet issuer account for the Issuer ID, then drop the Google Cloud service-account key "
-                    "JSON file next to your <code>.env</code> (it's gitignored). <code>GOOGLE_WALLET_KEYFILE</code> is just "
-                    "the filename &mdash; settings.py joins it to <code>BASE_DIR</code>."
+                    "Get a Wallet Issuer ID from the issuer console, then drop the Google Cloud service-account key JSON "
+                    "next to your <code>.env</code> and set the two vars below."
                 ),
-                "setup_steps": [
-                    "Create a Google Cloud project at console.cloud.google.com.",
-                    "Enable the <strong>Google Wallet API</strong> for that project (APIs &amp; Services &rarr; Library).",
-                    (
-                        "Apply for a Wallet issuer account at the issuer console (Google Wallet API &rarr; Get started). "
-                        "After approval Google gives you a numeric <strong>Issuer ID</strong>."
-                    ),
-                    (
-                        "In Cloud IAM &amp; Admin &rarr; Service Accounts, create a service account, then under its "
-                        "<strong>Keys</strong> tab add a new <strong>JSON</strong> key and download it. In the Wallet "
-                        "console, invite that service account email as a <em>Developer</em>."
-                    ),
-                    (
-                        "Drop the JSON keyfile next to your <code>.env</code> (JSON files at the repo root are "
-                        "gitignored) and add the snippet below."
-                    ),
-                    (
-                        "<strong>Note:</strong> Google caps unapproved issuers at ~5 generic classes total, so "
-                        "auto-creation starts failing past that &mdash; wait until your issuer is approved before "
-                        "enabling this site-wide."
-                    ),
-                ],
                 "snippets": [
                     {"code": 'GOOGLE_WALLET_ISSUER_ID="issuer-id"\nGOOGLE_WALLET_KEYFILE="google-wallet-key.json"'},
-                    {
-                        "label": "To backfill Wallet classes for clubs that already exist, run (idempotent):",
-                        "code": "docker exec -it django python3 manage.py sync_google_wallet_classes",
-                    },
                 ],
                 "links": [
                     {"label": "Google Wallet issuer console", "url": "https://pay.google.com/business/console"},
@@ -12525,32 +12640,13 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     and settings.APPLE_WALLET_TEAM_IDENTIFIER
                 ),
                 "what_it_does": (
-                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one. Same security model "
-                    "&mdash; only the signed-in account that matches the membership can download the pass. Passes are "
-                    "signed <code>.pkpass</code> files generated on each download (no REST API, no class to pre-create). "
-                    "If any setting below is missing the button is hidden and downloads return 404. Requires a paid "
-                    "Apple Developer account ($99/yr)."
+                    "Adds an &ldquo;Add to Apple Wallet&rdquo; button next to the Google Wallet one; anyone with a "
+                    "member's UUID link can add it. Requires a paid Apple Developer account ($99/yr)."
                 ),
                 "where_to_get_it": (
-                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop both files next to "
-                    "your <code>.env</code> (they're gitignored)."
+                    "Create a Pass Type ID and certificate, download the Apple WWDR cert, and drop the <code>.p12</code> "
+                    "and <code>.pem</code> next to your <code>.env</code>, then set the vars below."
                 ),
-                "setup_steps": [
-                    (
-                        "In the Apple Developer portal, create a <strong>Pass Type ID</strong> (reverse-DNS form, e.g. "
-                        "<code>pass.com.yourdomain.membership</code>) and note your <strong>Team ID</strong>."
-                    ),
-                    (
-                        "Create a certificate for that Pass Type ID (generate a CSR with Keychain Access), download the "
-                        "<code>.cer</code>, install it, then export it as a password-protected <code>.p12</code>. Drop "
-                        "the <code>.p12</code> next to your <code>.env</code>."
-                    ),
-                    (
-                        "Download the Apple WWDR intermediate cert (<em>Worldwide Developer Relations - G4</em>) as a "
-                        "<code>.pem</code> and drop it next to your <code>.env</code> too."
-                    ),
-                    "Add the snippet below (.p12 and .pem files at the repo root are gitignored).",
-                ],
                 "snippets": [
                     {
                         "code": (
@@ -13211,6 +13307,39 @@ class UserAgreement(TemplateView):
             msg = "No TOS found.  You must place a file called tos.html in the root project directory (next to the .env file)"
             raise ImproperlyConfigured(msg)
         return context
+
+
+def site_webmanifest(request):
+    """Web app manifest so Android/Chrome use the real icons when adding to the home screen.
+
+    Served from a view rather than a static file so the name follows NAVBAR_BRAND.
+    """
+    return JsonResponse(
+        {
+            "name": settings.NAVBAR_BRAND,
+            "short_name": settings.NAVBAR_BRAND,
+            "icons": [
+                {"src": static("android-chrome-192x192.png"), "sizes": "192x192", "type": "image/png"},
+                {"src": static("android-chrome-512x512.png"), "sizes": "512x512", "type": "image/png"},
+                {
+                    "src": static("android-chrome-maskable-192x192.png"),
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "maskable",
+                },
+                {
+                    "src": static("android-chrome-maskable-512x512.png"),
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "maskable",
+                },
+            ],
+            "theme_color": "#212529",
+            "background_color": "#212529",
+            "display": "browser",
+        },
+        content_type="application/manifest+json",
+    )
 
 
 class IgnoreCategoriesView(TemplateView):
@@ -14742,7 +14871,9 @@ class AddToCalendarView(LoginRequiredMixin, View):
         #     )
         #     return redirect(self.auction.get_absolute_url())
 
-        if self.calendar_type not in ("google", "outlook", "ics"):
+        # "native" returns the event as JSON for the mobile app's native "add to device calendar"
+        # bridge; "google"/"outlook" redirect to web calendars; "ics" downloads an .ics file.
+        if self.calendar_type not in ("google", "outlook", "ics", "native"):
             messages.error(
                 request,
                 "Unknown calendar type requested",
@@ -14754,10 +14885,8 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         return super().dispatch(request, *args, **kwargs)
 
-    def get(self, request, *args, **kwargs):
-        """Handle GET: redirect user or return ICS"""
-
-        # Select pickup time
+    def _build_event(self):
+        """Return the shared event fields (title, details, start, end, location) for this pickup."""
         start = self.location.second_pickup_time if self.second else self.location.pickup_time
         if not start:
             msg = "Pickup time not available"
@@ -14773,6 +14902,25 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         details = f"{self.location.auction.title}\n{self.location.description or ''}".strip()
         loc = self.location.address or f"{self.location.latitude},{self.location.longitude}"
+        return title, details, start, end, loc
+
+    def get(self, request, *args, **kwargs):
+        """Handle GET: redirect user, return ICS, or return event JSON for the native app."""
+
+        title, details, start, end, loc = self._build_event()
+
+        if self.calendar_type == "native":
+            # Consumed by the mobile app's addToCalendar JS bridge (see location_fragment_short.html),
+            # which hands these fields to a native "add to device calendar" plugin.
+            return JsonResponse(
+                {
+                    "title": title,
+                    "details": details,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "location": loc,
+                }
+            )
 
         if self.calendar_type == "google":
             params = {
@@ -15530,6 +15678,12 @@ class QuickCheckout(AuctionViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
+        # The camera scanner (scan a bidder number or member card to pull up the invoice) is meant
+        # for small-screen devices and the native app -- not desktop. The server can't see the
+        # browser viewport, so we always ship the script and let a Bootstrap responsive class hide
+        # the camera on larger screens (see the d-md-none wrapper in the template). The app's WebView
+        # reports a phone-sized viewport, so it's covered by the same small-screen rule.
+        context["show_camera_scanner"] = True
         return context
 
 
@@ -15538,11 +15692,37 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
 
     template_name = "auctions/quick_checkout_htmx.html"
 
+    def _normalize_scanned_term(self, term):
+        """Translate a scanned barcode into something the checkout search can match.
+
+        The checkout search matches a bidder number directly but knows nothing about paddle
+        barcodes (11111 + bidder number) or membership card numbers, so map those to the
+        bidder number here. Returns the term unchanged if it isn't a recognizable barcode."""
+        term = (term or "").strip()
+        if not term:
+            return term
+        # Paddle barcode: 11111 followed by the bidder number
+        if term.startswith("11111") and len(term) > 5 and term[5:].isdigit():
+            return term[5:]
+        # Membership card: a bare number matching a ClubMember in this auction's club
+        if term.isdigit() and self.auction.club_id:
+            member = ClubMember.objects.filter(
+                club=self.auction.club, membership_number=int(term), is_deleted=False
+            ).first()
+            if member and member.bidder_number:
+                return member.bidder_number
+        return term
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
         qs = AuctionTOS.objects.filter(auction=self.auction)
-        filtered_qs = AuctionTOSFilter.generic(self, qs, kwargs.get("filter"))
+        search_term = kwargs.get("filter")
+        # The camera scanner posts ?barcode=1 so paddle/membership-card barcodes get translated to a
+        # bidder number; typed searches are left alone so a numeric name search still behaves normally.
+        if self.request.GET.get("barcode"):
+            search_term = self._normalize_scanned_term(search_term)
+        filtered_qs = AuctionTOSFilter.generic(self, qs, search_term)
         invoice = None
         if filtered_qs.count() > 1:
             context["multiple_tos"] = True
@@ -16434,7 +16614,13 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                 if form.cleaned_data.get("pickup_location") is not None:
                     auctiontos.pickup_location = form.cleaned_data["pickup_location"]
                     tos_update_fields.append("pickup_location_id")
-                auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
+                if auction.alternate_split_mode == "club_member":
+                    # Auto-managed: paid club members (or an invoice renewing their
+                    # membership) get the alternate split.
+                    invoice = auctiontos.invoice
+                    auctiontos.is_club_member = invoice.treat_as_club_member if invoice else saved.is_paid_member
+                elif auction.alternate_split_mode == "custom":
+                    auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
                 # Sync bidding/selling permissions to AuctionTOS when the auction uses them
                 if auction.only_approved_sellers and "selling_allowed" in form.cleaned_data:
                     auctiontos.selling_allowed = form.cleaned_data["selling_allowed"]
@@ -16649,7 +16835,11 @@ class ClubMemberCreateView(APIView):
         pickup_location = form_cleaned_data.get("pickup_location") or _default_pickup_location_for_auction(auction)
         if not pickup_location:
             return None
-        is_club_member = form_cleaned_data.get("is_club_member", False)
+        if auction.alternate_split_mode == "club_member":
+            # The alternate split is applied automatically to paid club members.
+            is_club_member = member.is_paid_member
+        else:
+            is_club_member = form_cleaned_data.get("is_club_member", False)
         bidding_allowed = member.bidding_allowed
         selling_allowed = member.selling_allowed
         if auction.only_approved_bidders and "bidding_allowed" in form_cleaned_data:

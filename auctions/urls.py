@@ -150,6 +150,7 @@ urlpatterns = [
         "ads.txt",
         TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),
     ),
+    path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
@@ -373,9 +374,14 @@ urlpatterns = [
         name="auction_quick_check_in",
     ),
     path(
-        "api/auctions/<slug:slug>/quick-check-in/scan/",
-        views.QuickCheckInScan.as_view(),
-        name="auction_quick_check_in_scan",
+        "auctions/<slug:slug>/self-check-in/",
+        views.AuctionSelfCheckIn.as_view(),
+        name="auction_self_check_in",
+    ),
+    path(
+        "api/auctions/<slug:slug>/barcode/",
+        views.AuctionBarcodeScan.as_view(),
+        name="auction_barcode_scan",
     ),
     path(
         "api/auctions/<slug:slug>/checkout/<path:filter>/",

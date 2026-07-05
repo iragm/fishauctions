@@ -1,0 +1,23 @@
+{% comment %}
+Minimal, script-free pickup-location summary for the Google Maps info-window popup.
+
+This is interpolated into a JavaScript template literal in auction.html, so it must NOT
+contain a <script> block or anything that would break a backtick string. In particular the
+full location_fragment_short.html emits a <script> in the mobile app; its </script> would
+prematurely close the map's own <script> tag and dump the rest of initMap onto the page as
+visible text (the "runoff" seen in the app). The popup only needs the pickup time and a
+directions link — the add-to-calendar buttons live on the page body, not the map popup.
+{% endcomment %}
+{% if not location.pickup_by_mail %}
+    {% if location.users_must_coordinate_pickup %}
+        You must schedule your pickup time in advance.
+    {% else %}
+        <p><b>{{ location.pickup_time }}</b></p>
+        {% if location.second_pickup_time %}
+            <p>You must return on <b>{{ location.second_pickup_time }}</b> to pick up lots from other locations.</p>
+        {% endif %}
+    {% endif %}
+    {% if location.has_coordinates %}
+        <a href="{{ location.directions_link }}" class="btn btn-sm mt-2 btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
+    {% endif %}
+{% endif %}

@@ -1,0 +1,44 @@
+{% comment %}
+Add-to-calendar control for a pickup time on the auction page body.
+
+Params (set via {% include ... with %}):
+  location : the PickupLocation
+  second   : "True" for the return/second pickup, "False" for the first pickup
+  label    : button text (e.g. "Add to calendar" / "Add return pickup to calendar")
+
+Web shows a Google/Apple/Outlook dropdown. The native app can't open the web calendar links
+in its WebView, so it shows a single button that hands the event to the device calendar via the
+fishAddToCalendar bridge (defined once below), with an .ics download as a fallback.
+{% endcomment %}
+{% if request.is_mobile_app %}
+<script>
+  // Define the native add-to-calendar bridge once per page (idempotent).
+  if (!window.fishAddToCalendar) {
+    window.fishAddToCalendar = function (nativeUrl, icsUrl) {
+      var bridge = window.flutter_inappwebview;
+      if (bridge && typeof bridge.callHandler === "function") {
+        fetch(nativeUrl, { credentials: "same-origin", headers: { Accept: "application/json" } })
+          .then(function (r) { if (!r.ok) { throw new Error("bad status"); } return r.json(); })
+          .then(function (data) { bridge.callHandler("addToCalendar", data); })
+          .catch(function () { window.location = icsUrl; });
+      } else {
+        window.location = icsUrl;
+      }
+    };
+  }
+</script>
+<button type="button" class="btn btn-sm btn-primary" onclick="fishAddToCalendar('{% url 'add_to_calendar' %}?type=native&location={{ location.pk }}&second={{ second }}', '{% url 'add_to_calendar' %}?type=ics&location={{ location.pk }}&second={{ second }}')">
+    <i class="bi bi-calendar-day"></i> {{ label }}
+</button>
+{% else %}
+<div class="btn-group">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-calendar-day"></i> {{ label }}
+    </button>
+    <ul class="dropdown-menu">
+        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{ location.pk }}&second={{ second }}" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
+        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{ location.pk }}&second={{ second }}"><i class="bi bi-apple"></i> Apple Calendar</a></li>
+        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{ location.pk }}&second={{ second }}" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
+    </ul>
+</div>
+{% endif %}

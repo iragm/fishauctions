@@ -102,7 +102,7 @@ function initMap() {
         {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
-        `{% include 'location_fragment_short.html' %}</div>`],
+        `{% include 'location_fragment_map.html' %}</div>`],
         {% endif %}
         {% endfor %}
     ];
@@ -177,7 +177,8 @@ function initMap() {
                             <a href="mailto:{{ auction_contact_email }}" class="btn btn-secondary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
                         </div>
                         {% endif %}
-                        {% if request.user.is_authenticated and user_has_lots %}
+                        {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels button there. {% endcomment %}
+                        {% if request.user.is_authenticated and user_has_lots and not request.is_mobile_app %}
                         <div class="col-12 col-md-auto">
                             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
                         </div>
@@ -208,9 +209,11 @@ function initMap() {
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "auction_quick_checkout" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-bag-heart"></i> Quick checkout</a>
                             </div>
+                            {% if not request.is_mobile_app %}
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "auction_printing" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print labels</a>
                             </div>
+                            {% endif %}
                             {% endif %}
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "all_my_users" %}' class="btn btn-primary btn-sm w-100" data-bs-toggle="tooltip" title="All contacts for all auctions where you're an admin"><i class="bi bi-person-fill-down"></i> Marketing List</a>
@@ -361,16 +364,7 @@ function initMap() {
                                 <a href="{{location.directions_link}}" class="btn btn-sm btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
                                 {% endif %}
                                 {% if hasChosenLocation == location.pk and not location.users_must_coordinate_pickup %}
-                                <div class="btn-group">
-                                    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                        <i class="bi bi-calendar-day"></i> Add to calendar
-                                    </button>
-                                    <ul class="dropdown-menu">
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False"><i class="bi bi-apple"></i> Apple Calendar</a></li>
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
-                                    </ul>
-                                </div>
+                                {% include 'auction_calendar_button.html' with location=location second="False" label="Add to calendar" %}
                                 {% endif %}
                                 {% if view.is_auction_admin %}
                                 <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
@@ -379,16 +373,7 @@ function initMap() {
                             {% if location.second_pickup_time %}
                                 <p class="mt-3">You must return on <strong>{{ location.second_pickup_time }}</strong> to pick up lots from other locations.</p>
                                 {% if hasChosenLocation == location.pk%}
-                                <div class="btn-group">
-                                    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                        <i class="bi bi-calendar-day"></i> Add return pickup to calendar
-                                    </button>
-                                    <ul class="dropdown-menu">
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True"><i class="bi bi-apple"></i> Apple Calendar</a></li>
-                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
-                                    </ul>
-                                </div>
+                                {% include 'auction_calendar_button.html' with location=location second="True" label="Add return pickup to calendar" %}
                                 {% endif %}
                             {% endif %}
                         {% endif %}
@@ -454,16 +439,7 @@ function initMap() {
                                     <a href="{{location.directions_link}}" class="btn btn-sm btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
                                     {% endif %}
                                     {% if hasChosenLocation == location.pk and not location.users_must_coordinate_pickup %}
-                                    <div class="btn-group">
-                                        <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                            <i class="bi bi-calendar-day"></i> Add to calendar
-                                        </button>
-                                        <ul class="dropdown-menu">
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False"><i class="bi bi-apple"></i> Apple Calendar</a></li>
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
-                                        </ul>
-                                    </div>
+                                    {% include 'auction_calendar_button.html' with location=location second="False" label="Add to calendar" %}
                                     {% endif %}
                                     {% if view.is_auction_admin %}
                                     <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
@@ -478,16 +454,7 @@ function initMap() {
                                 {% if location.second_pickup_time %}
                                     <p>You must return on <strong>{{ location.second_pickup_time }}</strong> to pick up lots from other locations.</p>
                                     {% if hasChosenLocation == location.pk%}
-                                    <div class="btn-group">
-                                        <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                            <i class="bi bi-calendar-day"></i> Add return pickup to calendar
-                                        </button>
-                                        <ul class="dropdown-menu">
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True"><i class="bi bi-apple"></i> Apple Calendar</a></li>
-                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
-                                        </ul>
-                                    </div>
+                                    {% include 'auction_calendar_button.html' with location=location second="True" label="Add return pickup to calendar" %}
                                     {% endif %}
                                 {% endif %}
                             {% endif %}

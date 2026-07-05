@@ -155,6 +155,11 @@ class QuickAddTOS(forms.ModelForm):
             self.fields["pickup_location"].initial = self.auction.location_qs.first()
             self.fields["pickup_location"].widget = HiddenInput()
         self.fields["is_club_member"].label = self.auction.alternative_split_label
+        if self.auction.alternate_split_mode != "custom":
+            # Off: the alternate split doesn't apply.  Club member discount: the flag is
+            # managed automatically based on club membership.
+            self.fields["is_club_member"].disabled = True
+            self.fields["is_club_member"].widget = HiddenInput()
 
     def clean(self):
         cleaned_data = super().clean()
@@ -1207,6 +1212,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.fields["bidder_number"].help_text = None
         self.fields["memo"].widget.attrs["placeholder"] = "Only visible to admins"
         self.fields["bidder_number"].widget.attrs["placeholder"] = "Auto generate"
+        if self.auction.alternate_split_mode != "custom":
+            # Off: the alternate split doesn't apply.  Club member discount: the flag is
+            # managed automatically based on club membership.
+            self.fields["is_club_member"].disabled = True
+            self.fields["is_club_member"].widget = HiddenInput()
         if self.auction.is_club_managed:
             # In club-managed mode, these fields live on ClubMember and are managed via the club admin.
             for field_name in ("bidder_number", "bidding_allowed", "selling_allowed", "is_admin", "is_club_member"):
@@ -1942,9 +1952,11 @@ class AuctionEditForm(forms.ModelForm):
             "invoice_rounding",
             "only_whole_dollar_bids",
             "minimum_bid",
+            "alternate_split_mode",
             "winning_bid_percent_to_club_for_club_members",
             "lot_entry_fee_for_club_members",
             "alternative_split_label",
+            "club_member_discount",
             "force_donation_threshold",
             "require_phone_number",
             "tax",
@@ -1986,6 +1998,8 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
+        # Hidden via js unless a club is selected; don't block submission when it's not shown.
+        self.fields["club_member_discount"].required = False
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
 
         # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
@@ -2202,8 +2216,12 @@ class AuctionEditForm(forms.ModelForm):
             HTML("<h4>Lot fee discounts</h4>"),
             Div(
                 Div(
+                    "alternate_split_mode",
+                    css_class="col-lg-3",
+                ),
+                Div(
                     "alternative_split_label",
-                    css_class="col-lg-12",
+                    css_class="col-lg-9",
                 ),
                 css_class="row",
             ),
@@ -2292,6 +2310,12 @@ class AuctionEditForm(forms.ModelForm):
                     "manage_users_through_club",
                     css_class="col-md-6",
                 ),
+                PrependedAppendedText(
+                    "club_member_discount",
+                    currency_symbol,
+                    ".00",
+                    wrapper_class="col-md-6",
+                ),
                 css_class="row",
             ),
             HTML("<h4>General</h4>"),
@@ -2378,6 +2402,20 @@ class AuctionEditForm(forms.ModelForm):
         if cleaned_data.get("club"):
             cleaned_data["enable_online_payments"] = False
             cleaned_data["enable_square_payments"] = False
+            cleaned_data["club_member_discount"] = cleaned_data.get("club_member_discount") or 0
+        else:
+            # The club member discount only applies to paid club members
+            cleaned_data["club_member_discount"] = 0
+        if cleaned_data.get("alternate_split_mode") == "club_member":
+            if not cleaned_data.get("club"):
+                self.add_error(
+                    "alternate_split_mode",
+                    "Associate this auction with a club to use the club member discount.",
+                )
+            else:
+                # The label field is hidden in this mode; the people getting the alternate
+                # split are always club members.
+                cleaned_data["alternative_split_label"] = "Club member"
 
         if existing_instance and existing_instance.pk:
             if use_seller_dash_lot_numbering is not existing_instance.use_seller_dash_lot_numbering:
@@ -2480,6 +2518,7 @@ class AuctionEditForm(forms.ModelForm):
                     bidder_number=club_member.bidder_number,
                     bidding_allowed=bidding,
                     selling_allowed=club_member.selling_allowed,
+                    is_club_member=(auction.alternate_split_mode == "club_member" and club_member.is_paid_member),
                     name=club_member.name or "",
                     email=club_member.email or "",
                     phone_number=club_member.phone_number or "",
@@ -2608,6 +2647,15 @@ class AuctionEditForm(forms.ModelForm):
                     lots_to_update.append(lot)
             if lots_to_update:
                 Lot.objects.bulk_update(lots_to_update, ["reserve_price", "buy_now_price", "winning_price"])
+        if (
+            commit
+            and auction.alternate_split_mode == "club_member"
+            and (self.initial.get("alternate_split_mode") or "") != "club_member"
+        ):
+            # Switching to the automatic club member mode: sync the flag for everyone
+            # already in the auction so paid members immediately get the alternate split.
+            for tos in AuctionTOS.objects.filter(auction=auction).select_related("clubmember", "user"):
+                tos.update_alternate_split_from_membership()
         return auction
 
 
@@ -4302,7 +4350,9 @@ class ClubMemberAdminForm(forms.ModelForm):
         # auctiontos is set when editing; auction is set when creating in check-in mode
         auction = auctiontos.auction if auctiontos else auction
         show_pickup = bool(auction and auction.multi_location)
-        show_alt_fees = bool(auction)  # show whenever we have auction context, create or edit
+        # Only offer the manual alternate-fees checkbox for auctions using the custom split;
+        # off = never applies, club member discount = applied automatically to paid members.
+        show_alt_fees = bool(auction and auction.alternate_split_mode == "custom")
         in_auction_context = bool(auctiontos or auction)
 
         if show_pickup:

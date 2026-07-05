@@ -1784,6 +1784,7 @@ class AuctionEditFormMinimumBidTests(TestCase):
             ),
             "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": auction.alternate_split_mode,
             "alternative_split_label": auction.alternative_split_label or "",
             "reserve_price": auction.reserve_price,
             "buy_now": auction.buy_now,
@@ -3609,6 +3610,101 @@ class AuctionPropertyTests(StandardTestCase):
             multi_location_auction.auction_type_as_str == "online auction with in-person pickup at multiple locations"
         )
 
+    def test_pretty_much_over_online_uses_last_pickup_time(self):
+        """An online auction is pretty_much_over 24h after its latest pickup time."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo online",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(days=8),
+        )
+        # Pickup still in the recent past (12h ago) -> not yet pretty_much_over.
+        loc = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=12)
+        )
+        self.assertFalse(auction.pretty_much_over)
+        # Move the pickup to 25h ago -> now pretty_much_over.
+        loc.pickup_time = timezone.now() - datetime.timedelta(hours=25)
+        loc.save()
+        self.assertTrue(auction.pretty_much_over)
+
+    def test_pretty_much_over_online_uses_latest_of_multiple_pickups(self):
+        """The latest pickup (incl. second_pickup_time) across locations drives wind-down."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo multi",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(days=8),
+        )
+        PickupLocation.objects.create(
+            name="early", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=48)
+        )
+        # A second pickup only 2h ago keeps the auction from being pretty_much_over.
+        PickupLocation.objects.create(
+            name="late",
+            auction=auction,
+            pickup_time=timezone.now() - datetime.timedelta(hours=50),
+            second_pickup_time=timezone.now() - datetime.timedelta(hours=2),
+        )
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_online_falls_back_to_date_end(self):
+        """With no pickup locations, an online auction winds down 24h after date_end."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo no pickup",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=10),
+            date_end=timezone.now() - datetime.timedelta(hours=25),
+        )
+        self.assertTrue(auction.pretty_much_over)
+        auction.date_end = timezone.now() - datetime.timedelta(hours=12)
+        auction.save()
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_uses_date_start(self):
+        """In-person auctions are pretty_much_over 24h after date_start, once the online bidding
+        and lot submission windows (which default to date_start) are moved along with it."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=12),
+        )
+        self.assertFalse(auction.pretty_much_over)
+        auction.date_start = timezone.now() - datetime.timedelta(hours=25)
+        auction.date_online_bidding_ends = auction.date_start
+        auction.lot_submission_end_date = auction.date_start
+        auction.save()
+        self.assertTrue(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_waits_for_online_bidding_end(self):
+        """An in-person auction with online bidding enabled isn't pretty_much_over until the online
+        bidding window closes, even if the in-person event (date_start) was 24h+ ago."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person online bidding",
+            is_online=False,
+            online_bidding="allow",
+            date_start=timezone.now() - datetime.timedelta(hours=25),
+            date_online_bidding_ends=timezone.now() + datetime.timedelta(hours=1),
+        )
+        self.assertFalse(auction.pretty_much_over)
+
+    def test_pretty_much_over_in_person_waits_for_lot_submission_end(self):
+        """An in-person auction isn't pretty_much_over until lot submission closes, even if the
+        event (date_start) was 24h+ ago."""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="pmo in person lot submission",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=25),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(hours=1),
+        )
+        self.assertFalse(auction.pretty_much_over)
+
     def test_auction_timing_properties(self):
         """Test auction start/end related properties"""
         # Create an auction that has started and is in progress
@@ -4715,6 +4811,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.online_auction.alternate_split_mode,
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
@@ -4752,6 +4849,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.online_auction.alternate_split_mode,
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
@@ -4789,6 +4887,7 @@ class AuctionEditViewTests(StandardTestCase):
             ),
             "lot_entry_fee_for_club_members": str(self.in_person_auction.lot_entry_fee_for_club_members or "0"),
             "pre_register_lot_discount_percent": str(self.in_person_auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": self.in_person_auction.alternate_split_mode,
             "alternative_split_label": self.in_person_auction.alternative_split_label or "",
             "tax": str(self.in_person_auction.tax or "0"),
             "online_bidding": self.in_person_auction.online_bidding,
@@ -5868,6 +5967,228 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
+class ClubMemberDiscountTests(StandardTestCase):
+    """Tests for Auction.club_member_discount and Auction.alternate_split_mode.
+
+    In this class, self.invoiceB belongs to tosB/userB who bought 3 lots at $10 each
+    (its four adjustments cancel each other out), and self.invoice belongs to
+    online_tos/self.user who sold those 3 lots plus one unsold lot.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Discount Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+        )
+        self.online_auction.club = self.club
+        self.online_auction.club_member_discount = 5
+        self.online_auction.tax = 0
+        self.online_auction.invoice_rounding = False
+        self.online_auction.save()
+        self.invoice.refresh_from_db()
+        self.invoiceB.refresh_from_db()
+
+    def _make_member(self, user, paid=True):
+        days = 100 if paid else -100
+        return ClubMember.objects.create(
+            club=self.club,
+            user=user,
+            name=user.username,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=265),
+            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=days),
+        )
+
+    def test_no_discount_for_non_member(self):
+        self.assertEqual(self.invoiceB.club_member_discount, 0)
+        self.assertEqual(self.invoiceB.net, Decimal("-30.00"))
+
+    def test_discount_applies_for_paid_member(self):
+        self._make_member(self.userB)
+        self.assertTrue(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        self.assertEqual(self.invoiceB.net, Decimal("-25.00"))
+
+    def test_no_discount_for_expired_member(self):
+        self._make_member(self.userB, paid=False)
+        self.assertFalse(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 0)
+
+    def test_no_discount_when_no_lots_bought(self):
+        self._make_member(self.user)
+        self.assertTrue(self.invoice.treat_as_club_member)
+        self.assertEqual(self.invoice.club_member_discount, 0)
+
+    def test_checking_renewal_applies_discount_for_expired_member(self):
+        """An unpaid member's invoice shows club member pricing when the renewal box is checked"""
+        self._make_member(self.userB, paid=False)
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.assertTrue(self.invoiceB.treat_as_club_member)
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        # 30 for lots bought, less the 5 discount, plus the 25 membership fee
+        self.assertEqual(self.invoiceB.net, Decimal("-50.00"))
+
+    def test_renewal_toggle_only_adds_fee_for_active_member(self):
+        """An active member gets the discount either way; checking the box only adds the fee"""
+        self._make_member(self.userB)
+        self.assertEqual(self.invoiceB.net, Decimal("-25.00"))
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.save(update_fields=["renewal_needed"])
+        self.assertEqual(self.invoiceB.club_member_discount, 5)
+        self.assertEqual(self.invoiceB.net, Decimal("-50.00"))
+
+    def test_alternate_split_mode_off_ignores_manual_flag(self):
+        self.online_auction.winning_bid_percent_to_club_for_club_members = 10
+        self.online_auction.lot_entry_fee_for_club_members = 0
+        self.online_auction.save()
+        self.online_tos.is_club_member = True
+        self.online_tos.save()
+        # custom (the default for existing auctions) applies the alternate fees:
+        # 3 sold lots at 10 * 90% = 27, less the 10 unsold lot fee
+        self.assertEqual(self.invoice.total_sold, Decimal("17.00"))
+        self.online_auction.alternate_split_mode = "off"
+        self.online_auction.save()
+        # standard fees: 3 sold lots at (10 * 75% - 2) = 16.50, less the 10 unsold lot fee
+        self.assertEqual(self.invoice.total_sold, Decimal("6.50"))
+
+    def test_club_member_mode_sets_flag_from_membership(self):
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.user)
+        self.assertFalse(self.online_tos.is_club_member)
+        self.assertTrue(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.is_club_member)
+        # a second call is a no-op
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+
+    def test_club_member_mode_does_not_set_flag_for_expired_member(self):
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.user, paid=False)
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_custom_mode_does_not_touch_flag(self):
+        self._make_member(self.user)
+        self.assertFalse(self.online_tos.update_alternate_split_from_membership())
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_renewal_toggle_updates_alternate_split_flag(self):
+        """Checking/unchecking renew membership updates the seller's alternate fees in club member mode"""
+        self.online_auction.alternate_split_mode = "club_member"
+        self.online_auction.save()
+        self._make_member(self.userB, paid=False)
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoiceB.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "invoice-club-member-discount-row")
+        self.tosB.refresh_from_db()
+        self.assertTrue(self.tosB.is_club_member)
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoiceB.pk}),
+            {"renewal_needed": "0"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.tosB.refresh_from_db()
+        self.assertFalse(self.tosB.is_club_member)
+
+    def test_paid_invoice_books_club_member_discount_in_ledger(self):
+        from django.db.models import Sum
+
+        self._make_member(self.userB)
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        entry = ClubMoney.objects.filter(invoice=self.invoiceB, category="club_member_discount").first()
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.amount, Decimal("-5.00"))
+        # all ledger entries for this invoice must reconcile to the cash that moved
+        total = ClubMoney.objects.filter(invoice=self.invoiceB).aggregate(total=Sum("amount"))["total"]
+        self.assertEqual(total, -self.invoiceB.rounded_net)
+
+    def _edit_form_data(self, overrides=None):
+        auction = self.online_auction
+        data = {
+            "summernote_description": auction.summernote_description or "",
+            "lot_entry_fee": str(auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternate_split_mode": auction.alternate_split_mode,
+            "alternative_split_label": auction.alternative_split_label or "",
+            "club_member_discount": str(auction.club_member_discount or "0"),
+            "tax": str(auction.tax or "0"),
+            "online_bidding": auction.online_bidding,
+            "date_start": auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(auction.minimum_bid),
+        }
+        if overrides:
+            data.update(overrides)
+        return data
+
+    def test_edit_form_club_member_mode_requires_club(self):
+        form = AuctionEditForm(
+            data=self._edit_form_data({"alternate_split_mode": "club_member", "club": ""}),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        form.is_valid()
+        self.assertIn("alternate_split_mode", form.errors)
+
+    def test_edit_form_club_member_mode_forces_label_and_syncs_flags(self):
+        ClubMember.objects.create(club=self.club, user=self.user, name="admin member", permission_admin=True)
+        self._make_member(self.userB)
+        form = AuctionEditForm(
+            data=self._edit_form_data(
+                {
+                    "alternate_split_mode": "club_member",
+                    "club": str(self.club.pk),
+                    "alternative_split_label": "whatever",
+                }
+            ),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        auction = form.save()
+        self.assertEqual(auction.alternative_split_label, "Club member")
+        # everyone already in the auction gets the flag synced from their membership
+        self.tosB.refresh_from_db()
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.tosB.is_club_member)
+        self.assertFalse(self.online_tos.is_club_member)
+
+    def test_edit_form_clearing_club_zeroes_discount(self):
+        form = AuctionEditForm(
+            data=self._edit_form_data({"club": "", "club_member_discount": "5"}),
+            instance=self.online_auction,
+            user=self.user,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        auction = form.save()
+        self.assertEqual(auction.club_member_discount, 0)
+
+
 class ClubMoneyRenewalConsistencyTests(StandardTestCase):
     """Guard the ClubMoney bookkeeping around membership renewals and invoices.
 
@@ -6190,6 +6511,30 @@ class QuickCheckoutHTMXTests(StandardTestCase):
 
         self.assertNotIn(deep_link, app_html)
         self.assertNotIn("Tap to Pay with card", app_html)
+
+    def test_quick_checkout_camera_hidden_on_large_screens(self):
+        """The self-scan camera ships on every checkout page but is hidden on large screens with a
+        Bootstrap responsive class, so it only shows on small screens (phones + the app WebView).
+        The server can't see the viewport, so gating is done client-side, not by User-Agent."""
+        self.client.force_login(self.admin_user)
+        url = reverse("auction_quick_checkout", kwargs={"slug": self.in_person_auction.slug})
+        html = self.client.get(url).content.decode("utf-8")
+        # The camera module is always shipped...
+        self.assertIn("camera_scanner.js", html)
+        # ...and the live-preview wrapper carries d-md-none so desktop never shows (or grabs) it.
+        self.assertIn("d-md-none", html)
+
+    def test_quick_checkout_scan_translates_paddle_barcode(self):
+        """A scanned paddle barcode (11111 + bidder number) posted with ?barcode=1 resolves to the
+        bidder holding that number, just as if the number had been typed in."""
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer)
+        self.client.force_login(self.admin_user)
+        url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "11111555"},
+        )
+        content = self.client.get(url, {"barcode": "1"}).content.decode("utf-8")
+        self.assertIn(f"invoice-buttons-{invoice.pk}", content)
 
 
 class PickupLocationTests(StandardTestCase):
@@ -11950,10 +12295,38 @@ class ContextProcessorsTestCase(TestCase):
         context = site_config(request)
         self.assertIn("navbar_brand", context)
         self.assertIn("copyright_message", context)
+        self.assertIn("show_footer_icon", context)
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
         self.assertIn("enable_promo_page", context)
         self.assertIn("recaptcha_enabled", context)
+
+
+class FooterIconTests(TestCase):
+    def test_footer_icon_shown_by_default(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "icon-footer.png")
+
+    @override_settings(SHOW_FOOTER_ICON=False)
+    def test_footer_icon_hidden_when_disabled(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "icon-footer.png")
+
+
+class SiteWebmanifestTests(TestCase):
+    @override_settings(NAVBAR_BRAND="Test Auctions")
+    def test_manifest_returns_brand_and_icons(self):
+        response = self.client.get(reverse("site_webmanifest"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/manifest+json")
+        data = json.loads(response.content)
+        self.assertEqual(data["name"], "Test Auctions")
+        sources = {icon["src"] for icon in data["icons"]}
+        self.assertIn("/static/android-chrome-512x512.png", sources)
+        # Maskable variants keep their art inside the launcher-crop safe zone
+        self.assertIn("/static/android-chrome-maskable-512x512.png", sources)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):
@@ -12021,6 +12394,16 @@ class AdminSetupChecklistViewTests(TestCase):
         setup_items = response.context["setup_items"]
         email_item = next(item for item in setup_items if item["name"] == "Email delivery")
         self.assertFalse(email_item["configured"])
+
+    def test_wallet_items_say_uuid_links_can_add_and_not_owner_only(self):
+        # The wallet cards are reachable by UUID link, not just the signed-in owner. The help text
+        # must reflect that and must not repeat the old owner-only claim.
+        response = self.client.get(reverse("admin_setup_checklist"))
+        setup_items = response.context["setup_items"]
+        for name in ("Google Wallet membership cards", "Apple Wallet membership cards"):
+            item = next(i for i in setup_items if i["name"] == name)
+            self.assertIn("UUID link", item["what_it_does"])
+            self.assertNotIn("only the signed-in account", item["what_it_does"].lower())
 
 
 class MiddlewareTestCase(TestCase):
@@ -17746,6 +18129,210 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(award.cap_points, 0)
 
 
+class AuctionCalendarButtonTests(StandardTestCase):
+    """The auction page's add-to-calendar control renders a web dropdown, but a single native
+    button inside the mobile app (and never leaks raw calendar JS onto the page)."""
+
+    def setUp(self):
+        super().setUp()
+        # Keep the auction current so the join card / pickup block render normally.
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(days=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        self.location.pickup_time = timezone.now() + datetime.timedelta(days=3)
+        self.location.save()
+
+    def _get(self, user_agent):
+        self.client.force_login(self.user)
+        return self.client.get(self.online_auction.url, HTTP_USER_AGENT=user_agent).content.decode("utf-8")
+
+    def test_web_shows_provider_dropdown(self):
+        html = self._get("Mozilla/5.0")
+        self.assertIn("Add to calendar", html)
+        self.assertIn("Google Calendar", html)  # the web provider menu
+        self.assertNotIn("fishAddToCalendar", html)  # native bridge only in the app
+
+    def test_app_shows_single_native_button_not_dropdown(self):
+        html = self._get("FishAuctionsApp/1.0 (iOS)")
+        self.assertIn("Add to calendar", html)
+        self.assertIn("fishAddToCalendar", html)  # native single-button bridge
+        self.assertNotIn("Google Calendar", html)  # no web provider menu in the app
+
+    def test_map_info_window_fragment_has_no_script_tag(self):
+        # Regression: the map info-window interpolates a location fragment into a JS backtick
+        # string. In the app the old fragment emitted a <script>, whose </script> prematurely
+        # closed the map script and dumped initMap onto the page as visible text. The map
+        # fragment must never contain a script tag.
+        from django.template.loader import render_to_string
+
+        rendered = render_to_string(
+            "location_fragment_map.html",
+            {"location": self.location},
+        )
+        self.assertNotIn("<script", rendered)
+        self.assertNotIn("</script>", rendered)
+
+
+class EndauctionsPrettyMuchOverTests(TestCase):
+    """Tests for endauctions.deactivate_pretty_much_over_lots: deactivation + unsold BAP awards."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="pmo_seller", password="testpass", email="pmo@example.com")
+        self.club = Club.objects.create(
+            name="PMO Club",
+            enable_breeder_award_program=True,
+            auto_add_points=True,
+            only_sold_lots=False,
+            min_quantity=1,
+            points_per_lot=5,
+        )
+        self.category = Category.objects.create(name="PMO Livebearers", bap_points=5)
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+        # In-person auction started well over 24h ago -> pretty_much_over.
+        self.over_auction = Auction.objects.create(
+            title="Over Auction",
+            created_by=self.user,
+            club=self.club,
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+        )
+        self.location = PickupLocation.objects.create(
+            name="pmo loc", auction=self.over_auction, pickup_time=timezone.now() - datetime.timedelta(days=2)
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.over_auction, pickup_location=self.location)
+
+    def _make_lot(self, **kwargs):
+        defaults = {
+            "lot_name": "PMO Guppies",
+            "auction": self.over_auction,
+            "auctiontos_seller": self.tos,
+            "quantity": 5,
+            "i_bred_this_fish": True,
+            "species_category": self.category,
+            "active": True,
+        }
+        defaults.update(kwargs)
+        return Lot.objects.create(**defaults)
+
+    def test_active_lots_deactivated_when_pretty_much_over(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()
+        self.assertTrue(lot.active)
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+
+    def test_current_auction_lots_stay_active(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        current_auction = Auction.objects.create(
+            title="Current Auction",
+            created_by=self.user,
+            club=self.club,
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+        )
+        current_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=current_auction,
+            pickup_location=PickupLocation.objects.create(
+                name="cur", auction=current_auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+            ),
+        )
+        lot = Lot.objects.create(
+            lot_name="Current lot", auction=current_auction, auctiontos_seller=current_tos, quantity=5, active=True
+        )
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertTrue(lot.active)
+
+    def test_unsold_lot_awarded_bap_when_club_awards_unsold(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()  # unsold (no winner/price)
+        self.assertFalse(lot.sold)
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+        self.assertTrue(BapAward.objects.filter(lot=lot).exists())
+
+    def test_unsold_lot_not_awarded_when_only_sold_lots(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        self.club.only_sold_lots = True
+        self.club.save(update_fields=["only_sold_lots"])
+        lot = self._make_lot()  # unsold
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)  # still deactivated
+        self.assertFalse(BapAward.objects.filter(lot=lot).exists())  # but no points
+
+    def test_deactivated_lot_can_still_be_marked_sold(self):
+        from auctions.management.commands.endauctions import deactivate_pretty_much_over_lots
+
+        lot = self._make_lot()
+        deactivate_pretty_much_over_lots()
+        lot.refresh_from_db()
+        self.assertFalse(lot.active)
+        # sold is independent of active: set a winner + price and it reads as sold.
+        lot.auctiontos_winner = self.tos
+        lot.winning_price = 15
+        lot.save()
+        lot.refresh_from_db()
+        self.assertTrue(lot.sold)
+
+
+class LotFilterRegardingAuctionStatusTests(TestCase):
+    """LotFilter.status must stay "open" (active=True lots only) by default when scoped to a
+    still-running auction via regardingAuction/?auction=slug, unless the caller explicitly passes
+    ?status= or the auction is already closed (filter_by_auction already forces "all" once
+    auction.closed is True -- that part is existing, intentional behavior and out of scope here).
+
+    This covers the /lots/?auction=slug path used by AllLots (e.g. the "last auction you used"
+    redirect in ToDefaultLandingPage) and AuctionInfo's embedded lot list, while the auction is
+    still live. Forcing status="all" unconditionally for any regardingAuction scope would make
+    already-ended lots reappear in that default view even for a running auction, which is the
+    exact regression a prior "fix lot list showing closed lots" commit avoided."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="lf_seller", password="testpass", email="lf@example.com")
+        self.auction = Auction.objects.create(
+            title="LF Auction",
+            created_by=self.user,
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.location = PickupLocation.objects.create(
+            name="lf loc", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.active_lot = Lot.objects.create(
+            lot_name="Active lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, active=True
+        )
+        self.ended_lot = Lot.objects.create(
+            lot_name="Ended lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, active=False
+        )
+        # LotFilter excludes lots posted in the last 20 minutes ("very new lot") for online auctions;
+        # backdate so both lots are eligible to show up regardless of that unrelated exclusion.
+        Lot.objects.filter(pk__in=[self.active_lot.pk, self.ended_lot.pk]).update(
+            date_posted=timezone.now() - datetime.timedelta(hours=1)
+        )
+        self.assertFalse(self.auction.closed)
+
+    def test_all_lots_view_scoped_to_auction_hides_ended_lots_by_default(self):
+        response = self.client.get(reverse("allLots"), {"auction": self.auction.slug})
+        self.assertContains(response, "Active lot")
+        self.assertNotContains(response, "Ended lot")
+
+    def test_all_lots_view_scoped_to_auction_shows_ended_lots_with_explicit_status(self):
+        response = self.client.get(reverse("allLots"), {"auction": self.auction.slug, "status": "all"})
+        self.assertContains(response, "Active lot")
+        self.assertContains(response, "Ended lot")
+
+
 class BapAwardRecalculateTests(TestCase):
     """Tests for BapAward.recalculate_member_points and its save/delete hooks."""
 
@@ -21026,6 +21613,7 @@ class ManageUsersThroughClubTests(TestCase):
             "pre_register_lot_discount_percent": self.auction.pre_register_lot_discount_percent,
             "winning_bid_percent_to_club_for_club_members": self.auction.winning_bid_percent_to_club_for_club_members,
             "lot_entry_fee_for_club_members": self.auction.lot_entry_fee_for_club_members,
+            "alternate_split_mode": self.auction.alternate_split_mode,
             "alternative_split_label": self.auction.alternative_split_label,
             "minimum_bid": self.auction.minimum_bid,
             "tax": self.auction.tax,
@@ -21422,7 +22010,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
         self.client.force_login(self.creator)
         response = self.client.post(
-            reverse("auction_quick_check_in_scan", kwargs={"slug": self.auction.slug}),
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
             {"barcode": str(member.membership_number), "assign_bidder_number": "456"},
         )
         self.assertEqual(response.status_code, 200)
@@ -21434,6 +22022,200 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(tos.bidder_number, "456")
         self.assertIsNotNone(tos.checked_in)
         self.assertTrue(tos.bidding_allowed)
+
+    def test_barcode_scan_check_in_only_ignores_side_effects(self):
+        """The self check-in kiosk posts check_in_only; bidder number assignment and
+        invoice adjustments must be ignored no matter what the client sends."""
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(
+            club=self.club,
+            user=self.joiner,
+            name="Joiner",
+            bidder_number="",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "barcode": str(member.membership_number),
+                "check_in_only": "1",
+                "assign_bidder_number": "456",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "10",
+                "adjustment_label": "sneaky",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        member.refresh_from_db()
+        self.assertNotEqual(member.bidder_number, "456")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertNotEqual(tos.bidder_number, "456")
+        self.assertIsNotNone(tos.checked_in)
+        self.assertFalse(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists())
+
+    def test_barcode_scan_check_in_only_unrecognized_barcode(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        for bad_barcode in ["111112345", "0105raffle", "not-a-number"]:
+            response = self.client.post(
+                reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+                {"barcode": bad_barcode, "check_in_only": "1"},
+            )
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(response.json()["message"], "Unrecognized barcode")
+
+    def test_barcode_scan_denied_for_outsider(self):
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        self.client.force_login(self.outsider)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {"barcode": str(member.membership_number)},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_barcode_scan_adjustment_on_checked_in_card_keeps_checkin_time(self):
+        """Scanning an adjustment then an already-checked-in member card applies the adjustment
+        without clobbering the original check-in timestamp or re-checking them in."""
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        self.client.force_login(self.creator)
+        # First scan checks them in
+        self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {"barcode": str(member.membership_number)},
+        )
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        original_checked_in = tos.checked_in
+        self.assertIsNotNone(original_checked_in)
+        # Second scan carries an adjustment
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "barcode": str(member.membership_number),
+                "adjustment_type": "ADD",
+                "adjustment_amount": "7",
+                "adjustment_label": "raffle",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        tos.refresh_from_db()
+        self.assertEqual(tos.checked_in, original_checked_in)
+        self.assertTrue(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos, amount=7).exists())
+
+    def test_barcode_scan_adjustment_applied_to_bidder_number(self):
+        """Scanning an adjustment then a paddle (bidder number) applies the adjustment to the
+        AuctionTOS holding that bidder number, without a membership card."""
+        self._enable_checkin_mode()
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="222",
+            checked_in=timezone.now(),
+            name="Bidder Person",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "222",
+                "adjustment_type": "DISCOUNT",
+                "adjustment_amount": "5",
+                "adjustment_label": "coupon",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["verb"], "Adjusted")
+        adj = InvoiceAdjustment.objects.get(invoice__auctiontos_user=tos)
+        self.assertEqual(adj.amount, 5)
+        self.assertEqual(adj.adjustment_type, "DISCOUNT")
+
+    def test_barcode_scan_adjustment_to_bidder_requires_checked_in(self):
+        """In check-in mode, applying an adjustment to a bidder number that isn't checked in errors."""
+        self._enable_checkin_mode()
+        AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="333",
+            name="Not Yet Here",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "333",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "5",
+                "adjustment_label": "late fee",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not checked in", response.json()["message"])
+        self.assertFalse(InvoiceAdjustment.objects.exists())
+
+    def test_barcode_scan_adjustment_to_bidder_no_checkin_mode(self):
+        """Outside check-in mode, applying an adjustment to a bidder number works without a
+        check-in requirement (scanning is available in all club auctions)."""
+        self._enable_club_managed()  # "all" mode, not check-in
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="444",
+            name="Regular Bidder",
+        )
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "444",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "8",
+                "adjustment_label": "extra",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos, amount=8).exists())
+
+    def test_barcode_scan_adjustment_to_unknown_bidder_number(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "999",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "5",
+                "adjustment_label": "x",
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("999", response.json()["message"])
+
+    def test_self_check_in_page(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Self-checkin")
+        self.assertContains(response, "checkInOnly: true")
+
+    def test_self_check_in_page_requires_checkin_mode(self):
+        self.client.force_login(self.creator)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_self_check_in_page_denied_for_outsider(self):
+        self._enable_checkin_mode()
+        self.client.force_login(self.outsider)
+        response = self.client.get(reverse("auction_self_check_in", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 403)
 
     def test_clubmember_generate_bidder_number_unique_per_club(self):
         cm1 = ClubMember.objects.create(
@@ -22296,6 +23078,64 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("invoice" in t.lower() for t in titles))
         self.assertFalse(any("View users" in t for t in titles))  # not an admin
 
+    def _make_last_auction_pretty_much_over(self):
+        """Push the online auction's pickup + end dates into the past so it's pretty_much_over."""
+        self.location.pickup_time = timezone.now() - datetime.timedelta(hours=48)
+        self.location.save()
+        self.online_auction.date_end = timezone.now() - datetime.timedelta(hours=48)
+        self.online_auction.save()
+        self.assertTrue(self.online_auction.pretty_much_over)
+
+    def test_default_items_pretty_much_over_shows_only_invoice(self):
+        # Once the last auction is pretty_much_over, the palette should surface only its invoice,
+        # not View lots / admin actions.
+        self.invoice.status = "UNPAID"
+        self.invoice.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"))
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("invoice" in t.lower() for t in titles))
+        self.assertFalse(any("View lots" in t for t in titles))
+        self.assertFalse(any("View users" in t for t in titles))
+        self.assertFalse(any("Quick checkout" in t for t in titles))
+
+    def test_view_lots_shortcut_hidden_when_pretty_much_over(self):
+        # The dynamic "view lots" shortcut must not resolve for a pretty_much_over auction.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "view lots"})
+        titles = self._all_item_titles(resp)
+        self.assertFalse(any("View lots" in t for t in titles))
+
+    def test_stats_shortcut_available_even_when_pretty_much_over(self):
+        # Stats stay reachable after the auction is over.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._make_last_auction_pretty_much_over()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "stats"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Auction stats" in t for t in titles))
+
+    def test_create_auction_shortcut(self):
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "create auction"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Create an auction" in t for t in titles))
+
+    def test_set_location_shortcut_for_admin(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("command_palette"), {"q": "set location"})
+        titles = self._all_item_titles(resp)
+        self.assertTrue(any("Set auction location" in t for t in titles))
+
     def test_search_returns_auctions_and_lots(self):
         self._login(self.user)
         resp = self.client.get(reverse("command_palette"), {"q": "online"})
@@ -22432,12 +23272,29 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
 
     def test_landing_page_in_person_admin_redirects_to_users(self):
+        # A current in-person auction (not pretty_much_over) redirects its admin to the users list.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
         self.user.userdata.save()
         self._login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
+
+    def test_landing_page_pretty_much_over_in_person_admin_does_not_redirect_to_users(self):
+        # Once the in-person auction is pretty_much_over, the stale users-list redirect is skipped.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=3)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        resp = self.client.get(reverse("home"))
+        # Not redirected to the users list; either falls through to browse or renders home.
+        if resp.status_code == 302:
+            self.assertNotEqual(resp.url, self.in_person_auction.user_admin_link)
 
     def test_email_search_is_exact_and_includes_auctiontos(self):
         # online_auction is created by self.user, so they administer it.
@@ -22535,6 +23392,11 @@ class CommandPaletteTests(StandardTestCase):
         self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
 
     def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
+        # Keep the auction current (started recently) so it isn't pretty_much_over, which would
+        # otherwise hide the add-lot shortcut. date_end must stay after date_start or the pre_save
+        # signal swaps them.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
         self.in_person_auction.allow_bulk_adding_lots = True
         self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
@@ -22824,6 +23686,67 @@ class MobileCommandPaletteTests(StandardTestCase):
         self.assertEqual(page.hits, 1)
 
 
+class MobileMyClubsTests(StandardTestCase):
+    """/api/mobile/clubs/mine/ — the clubs the JWT user belongs to, with the is_admin flag.
+
+    Mirrors the web ``user_clubs`` membership scoping (non-deleted ClubMember), so this covers
+    what differs on mobile: JWT (not session) auth, name ordering, the is_admin flag, and the
+    {name, slug, url, icon_url, is_admin} contract the app reads.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
+        self.url = reverse("mobile-clubs-mine")
+        # "Beta" sorts before "Alpha club" only by name, so ordering is observable regardless of pk.
+        self.admin_club = Club.objects.create(name="Alpha club")
+        self.member_club = Club.objects.create(name="Beta club")
+        # A club the user does NOT belong to must never appear.
+        self.other_club = Club.objects.create(name="Zeta club")
+        ClubMember.objects.create(club=self.admin_club, user=self.user, name="Me", permission_admin=True)
+        ClubMember.objects.create(club=self.member_club, user=self.user, name="Me")
+
+    def test_requires_jwt_not_session(self):
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+        # A web session must NOT grant access — IsMobileAuthenticated only accepts JWT.
+        self.client.force_login(self.user)
+        self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+    def test_lists_only_my_clubs_sorted_with_admin_flag(self):
+        resp = self.client.get(self.url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        clubs = resp.json()["clubs"]
+        # Only the two clubs the user belongs to, sorted by name.
+        self.assertEqual([c["slug"] for c in clubs], [self.admin_club.slug, self.member_club.slug])
+        by_slug = {c["slug"]: c for c in clubs}
+        # is_admin follows permission_admin on the membership.
+        self.assertTrue(by_slug[self.admin_club.slug]["is_admin"])
+        self.assertFalse(by_slug[self.member_club.slug]["is_admin"])
+        # Full contract, and url is the server-relative web club page.
+        for club in clubs:
+            self.assertEqual(set(club), {"name", "slug", "url", "icon_url", "is_admin"})
+        self.assertEqual(
+            by_slug[self.admin_club.slug]["url"],
+            reverse("club_detail", kwargs={"slug": self.admin_club.slug}),
+        )
+        # No club icon set, so icon_url is null.
+        self.assertIsNone(by_slug[self.admin_club.slug]["icon_url"])
+
+    def test_deleted_membership_is_excluded(self):
+        ClubMember.objects.filter(club=self.member_club, user=self.user).update(is_deleted=True)
+        resp = self.client.get(self.url, **self.bearer)
+        slugs = [c["slug"] for c in resp.json()["clubs"]]
+        self.assertEqual(slugs, [self.admin_club.slug])
+
+    def test_no_memberships_returns_empty_list(self):
+        ClubMember.objects.filter(user=self.user).delete()
+        resp = self.client.get(self.url, **self.bearer)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"clubs": []})
+
+
 class MobileLabelTests(StandardTestCase):
     """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
 
@@ -22914,6 +23837,7 @@ class MobileConfigTests(TestCase):
                 "square_environment": "sandbox",
                 "google_server_client_id": "123.apps.googleusercontent.com",
                 "brand_name": "Test Auctions",
+                "icon_url": "http://testserver/static/android-chrome-512x512.png",
             },
         )
 
@@ -22928,7 +23852,7 @@ class MobileConfigTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             set(resp.json().keys()),
-            {"square_application_id", "square_environment", "google_server_client_id", "brand_name"},
+            {"square_application_id", "square_environment", "google_server_client_id", "brand_name", "icon_url"},
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)

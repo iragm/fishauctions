@@ -1,0 +1,8 @@
+{% if invoice.club_member_discount %}
+<tr id="invoice-club-member-discount-row">
+  <td>Club member discount</td>
+  <td>{{ invoice.currency_symbol }}{{ invoice.club_member_discount|floatformat:2 }}</td>
+</tr>
+{% else %}
+<tr id="invoice-club-member-discount-row" style="display: none;"><td></td><td></td></tr>
+{% endif %}
