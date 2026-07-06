@@ -116,6 +116,7 @@ cryptography==49.0.0
     #   autobahn
     #   django-encrypted-model-fields
     #   django-ses
+    #   google-auth
     #   http-ece
     #   py-vapid
     #   pyopenssl
@@ -222,6 +223,8 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+google-auth==2.55.1
+    # via -r requirements.in
 gunicorn==26.0.0
     # via -r requirements.in
 h11==0.16.0
@@ -326,7 +329,9 @@ pyasn1==0.6.3
     #   -r requirements.in
     #   pyasn1-modules
 pyasn1-modules==0.4.2
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   google-auth
 pycparser==3.0
     # via
     #   -r requirements.in
