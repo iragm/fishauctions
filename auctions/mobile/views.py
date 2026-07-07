@@ -769,7 +769,7 @@ class MobilePrinterProfilesView(APIView):
             "schema_version_max": PROGRAM_SCHEMA_VERSION,
             "profiles": [serialize_profile(p) for p in profiles],
         }
-        digest = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()  # noqa: S324
+        digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
         etag = f'"{digest}"'
         if request.headers.get("If-None-Match") == etag:
             return Response(status=status.HTTP_304_NOT_MODIFIED)
