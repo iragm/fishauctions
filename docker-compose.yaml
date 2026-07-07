@@ -7,6 +7,17 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Shared build config for the app image (web + celery). PUID/PGID must reach the
+# Dockerfile's ARGs so the in-container app user matches the host owner of the
+# bind-mounted mediafiles/logs dirs -- update.sh's ensure_permissions chowns those
+# to the same .env values, so declaring the ARG without wiring it here would let
+# the two silently diverge whenever PUID/PGID != 1000.
+x-app-build: &app-build
+  context: .
+  args:
+    PUID: ${PUID-1000}
+    PGID: ${PGID-1000}
+
 # NOTE on container_name: the fixed names (django, db, redis, ...) are intentional.
 # The entire ops workflow -- CLAUDE.md, update-packages.sh, cron/docs -- runs
 # `docker exec django ...` / `docker exec redis ...` against them. Fixed names do
@@ -14,7 +25,7 @@ x-logging: &default-logging
 # host, but this is a single-instance deploy where stable, greppable names win.
 services:
   web:
-    build: .
+    build: *app-build
     container_name: django
     logging: *default-logging
     volumes:
@@ -38,19 +49,30 @@ services:
       redis:
         condition: service_started
     restart: always
-    # TCP-connect check: confirms the ASGI server is accepting connections without
-    # an HTTP GET (a request with Host 127.0.0.1 could trip ALLOWED_HOSTS -> 400).
+    # HTTP check: proves a worker actually served a request. A bare TCP connect is
+    # not enough -- the gunicorn master binds the socket before forking, so TCP
+    # succeeds even while every worker crash-loops on an import error. Any HTTP
+    # response (even a 4xx/5xx) counts as alive: 127.0.0.1 is in ALLOWED_HOSTS, and
+    # http.client never follows redirects so the check can't wander off-box.
     # start_period is generous: entrypoint.sh runs migrate + collectstatic before
-    # gunicorn binds. nginx waits on this via depends_on condition: service_healthy.
+    # gunicorn binds.
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import socket; socket.create_connection(('127.0.0.1', 8000), 5).close()\" || exit 1"]
+      test:
+        - CMD-SHELL
+        - |
+          python3 - <<'PY'
+          import http.client
+          conn = http.client.HTTPConnection("127.0.0.1", 8000, timeout=5)
+          conn.request("GET", "/")
+          conn.getresponse()
+          PY
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 90s
 
   celery_worker:
-    build: .
+    build: *app-build
     container_name: celery_worker
     logging: *default-logging
     entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
@@ -64,7 +86,7 @@ services:
     restart: always
 
   celery_beat:
-    build: .
+    build: *app-build
     container_name: celery_beat
     logging: *default-logging
     entrypoint: ["sh", "./celery_beat_entrypoint.sh"]
@@ -108,12 +130,21 @@ services:
     # never holds idle connections. That makes the old extremes actively harmful:
     # max_connections=10000 hides connection leaks (and reserves huge per-thread
     # memory), and the 315M (~10 year) timeouts let any leaked/stuck connection live
-    # forever. Values below are derived from the real ceiling: 8 gunicorn workers +
-    # 2 celery (concurrency=2) + 1 beat + ops headroom.
+    # forever. But peak concurrency is NOT just the process count: each of the 8
+    # async gunicorn workers runs sync ORM code in a per-worker threadpool, and with
+    # CONN_MAX_AGE=0 every in-flight request holds its own connection -- so an
+    # auction-end spike can legitimately hold a few hundred connections at once
+    # (plus celery, beat, and ops sessions).
     command:
-      - "--max_connections=256"       # ~20x real peak; a sane cap surfaces leaks instead of masking them
+      - "--max_connections=512"       # covers async-worker fan-out at peak while still surfacing leaks
       - "--max_allowed_packet=16M"
-      - "--wait_timeout=600"          # conns are per-request (CONN_MAX_AGE=0), so a 10-min idle cap safely reaps any leak
+      # wait_timeout must outlive the longest gap BETWEEN queries inside one celery
+      # task: celery's Django fixup only closes connections at task boundaries, and
+      # CONN_HEALTH_CHECKS only runs at request start -- so a task that opens a
+      # connection, spends >wait_timeout on non-DB work (image conversion, PDF
+      # generation), then queries again gets "MySQL server has gone away". An hour
+      # still reaps genuine leaks; 600s would cut those long tasks off mid-run.
+      - "--wait_timeout=3600"
       - "--interactive_timeout=3600"  # keep interactive/CLI sessions alive an hour for ops
       - "--open_files_limit=100000"   # legitimate: many tables x connections
       - "--net_read_timeout=120"      # finite (was 315M) so a stalled client frees its connection
@@ -168,9 +199,11 @@ services:
     # swag/nginx release that reorganizes its config includes and breaks the site.
     # NGINX_IMAGE selects dev (nginx) vs prod (lscr.io/linuxserver/swag); NGINX_TAG
     # pins the version. Both tags still receive rebuilds on `docker compose pull`
-    # (nginx 1.27 patch rebuilds; swag republishes 5.6.0 with newer -ls builds),
-    # so security patches flow without surprise major jumps. Prod sets
-    # NGINX_TAG='5.6.0' in .env (see .env.example). Bump deliberately.
+    # (nginx 1.27 patch rebuilds; swag republishes version tags with newer -ls
+    # builds), so security patches flow without surprise major jumps. The 1.27
+    # default only exists for the dev nginx image -- when NGINX_IMAGE is set to
+    # swag, NGINX_TAG MUST be set in .env to the swag release the host runs
+    # (update.sh refuses to deploy otherwise). Bump deliberately.
     image: ${NGINX_IMAGE-nginx}:${NGINX_TAG-1.27}
     volumes:
       # the root conf file is set for dev, but for production use:
@@ -187,9 +220,16 @@ services:
       - ${HTTP_PORT-80}:80
       - ${SSL_PORT-443}:443 # this is only used in production
     restart: always
+    # Deliberately NOT condition: service_healthy. Gating nginx on web's health
+    # removes the graceful-degradation path: if web can't become healthy (e.g. a
+    # failed migration crash-looping the container), a service_healthy dependency
+    # means nginx can never start or be recreated -- the public endpoint becomes
+    # connection-refused and swag's cert renewal stops, instead of nginx serving
+    # 502s until web recovers. nginx tolerates an absent upstream fine, so it only
+    # needs start ordering here; web's healthcheck still reports in `ps`/`--wait`.
     depends_on:
       web:
-        condition: service_healthy
+        condition: service_started
     # NET_ADMIN is required by the prod swag image only: its bundled fail2ban edits
     # iptables to ban abusive IPs. The dev plain-nginx image never uses the
     # capability (it's inert there, a minor over-grant on a local container).

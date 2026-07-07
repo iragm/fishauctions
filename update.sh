@@ -154,7 +154,9 @@ prompt_for_site_domain() {
 ensure_permissions() {
     local puid
     local pgid
-    local writable_paths=(./mediafiles ./logs ./auctions/static)
+    # Only dirs the containers WRITE to. auctions/static is no longer listed: the
+    # container just reads it (collectstatic source); STATIC_ROOT is a named volume.
+    local writable_paths=(./mediafiles ./logs)
     puid="$(get_env_value "PUID")"
     pgid="$(get_env_value "PGID")"
     puid="${puid:-1000}"
@@ -190,6 +192,22 @@ render_nginx_domain() {
         echo "         domain not rendered. Is the file checked out cleanly?"
     fi
 }
+
+# Preflight: a custom NGINX_IMAGE (prod uses lscr.io/linuxserver/swag) without
+# NGINX_TAG resolves to swag:<default tag>, which only exists for the stock dev
+# nginx image -- the deploy would then die at `docker compose pull`, AFTER git has
+# already advanced. Fail here instead, before anything changes.
+if [ -f "$ENV_FILE" ]; then
+    nginx_image="$(get_env_value "NGINX_IMAGE")"
+    nginx_tag="$(get_env_value "NGINX_TAG")"
+    if [ -n "$nginx_image" ] && [ "$nginx_image" != "nginx" ] && [ -z "$nginx_tag" ]; then
+        echo "Update failed: NGINX_IMAGE is set to '$nginx_image' but NGINX_TAG is not set."
+        echo "Set NGINX_TAG in .env to the release this host currently runs; find it with:"
+        echo "  docker inspect nginx --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}'"
+        echo "then add e.g. NGINX_TAG='2.11.0' to .env and re-run. Nothing was changed."
+        exit 1
+    fi
+fi
 
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 deploy_branch="${DEPLOY_BRANCH:-$current_branch}"
@@ -238,6 +256,23 @@ render_nginx_domain
 # redis, nginx/swag) and the python base in our Dockerfile's FROM would be frozen
 # at whatever was first pulled. `pull` refreshes the pre-built service images;
 # `build --pull` re-pulls the base image referenced by FROM before building ours.
-docker compose pull
-docker compose build --pull
-docker compose up -d
+# From here on git has already advanced, so on any failure say so explicitly:
+# the old containers are still running the previous build, and re-running
+# ./update.sh after fixing the error is the recovery path.
+if ! docker compose pull; then
+    echo "Update failed during 'docker compose pull' (registry error or bad image tag in .env)."
+    echo "Code was already updated by git, but containers were NOT restarted -- the site is"
+    echo "still running the previous build. Fix the error above and re-run ./update.sh."
+    exit 1
+fi
+if ! docker compose build --pull; then
+    echo "Update failed during 'docker compose build'. Code was already updated by git, but"
+    echo "containers were NOT restarted -- the site is still running the previous build."
+    echo "Fix the error above and re-run ./update.sh."
+    exit 1
+fi
+if ! docker compose up -d; then
+    echo "Update failed during 'docker compose up'. Some services may not have restarted;"
+    echo "check 'docker compose ps' and the container logs, then re-run ./update.sh."
+    exit 1
+fi
