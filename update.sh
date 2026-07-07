@@ -271,7 +271,16 @@ if ! docker compose build --pull; then
     echo "Fix the error above and re-run ./update.sh."
     exit 1
 fi
-if ! docker compose up -d; then
+# --force-recreate is REQUIRED, not optional. App code is bind-mounted (not baked
+# into the image), so a routine code-only deploy rebuilds a byte-identical image and
+# a plain `up -d` recreates NOTHING -- gunicorn/celery keep serving the pre-pull code
+# until manually restarted. Worse, nginx proxies to a STATIC `proxy_pass http://web:8000`
+# (nginx_fishauctions.conf), resolving web's container IP once at startup; if web is
+# ever replaced without nginx also restarting, nginx proxies to a dead IP. Recreating
+# the whole graph fixes both: every app container restarts with fresh code, and nginx
+# (which depends_on web) comes up AFTER web and re-resolves its current IP. This is why
+# past deploys needed a manual `docker compose restart` -- that bounced nginx too.
+if ! docker compose up -d --force-recreate; then
     echo "Update failed during 'docker compose up'. Some services may not have restarted;"
     echo "check 'docker compose ps' and the container logs, then re-run ./update.sh."
     exit 1

@@ -3,9 +3,10 @@ import csv
 import datetime
 import hashlib
 import hmac
-import importlib
+import importlib.util
 import io
 import json
+import unittest
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -73,6 +74,14 @@ from .models import (
     Watch,
     add_price_info,
 )
+
+# channels.testing's package __init__ eagerly imports ChannelsLiveServerTestCase, which
+# pulls in daphne -- a test-only dependency (see requirements-test.in) absent from the
+# production image. Probe for daphne WITHOUT importing channels.testing (importing it
+# would raise there): the WebSocketConsumerTests below then skip, rather than error,
+# when run in the daphne-free image, e.g. `docker exec django manage.py test`. CI runs
+# the full suite in the `test` image, which has daphne, so coverage is unchanged.
+CHANNELS_TESTING_AVAILABLE = importlib.util.find_spec("daphne") is not None
 
 
 class CsvImportTestMixin:
@@ -7837,6 +7846,7 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         self.assertTrue(new_image.is_primary)
 
 
+@unittest.skipUnless(CHANNELS_TESTING_AVAILABLE, "channels.testing requires daphne (test-only dependency)")
 class WebSocketConsumerTests(TransactionTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
 
