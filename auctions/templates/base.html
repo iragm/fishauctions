@@ -50,10 +50,16 @@ window.onload = function() {
                 {% endwith %}
             {% endblock %}
         </title>
+        {% if club and club.icon %}
+        <link rel="icon" type="image/png" href="{{ club.icon.url }}"/>
+        <link rel="shortcut icon" href="{{ club.icon.url }}"/>
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ club.icon.url }}"/>
+        {% else %}
         <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}"/>
         <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}"/>
         <link rel="shortcut icon" href="{% static 'favicon.ico' %}"/>
         <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}"/>
+        {% endif %}
         <link rel="manifest" href="{% url 'site_webmanifest' %}"/>
         <meta name="description" content="" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
