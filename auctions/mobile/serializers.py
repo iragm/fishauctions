@@ -1,7 +1,7 @@
 from django.urls import reverse
 from rest_framework import serializers
 
-from auctions.models import MobileDevice
+from auctions.models import MobileDevice, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -74,6 +74,8 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
     """Serialiser for MobileDevice registration / update."""
 
     device_uuid = serializers.UUIDField()
+    # FCM registration token. Optional so an app build without push still registers cleanly.
+    fcm_token = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = MobileDevice
@@ -83,6 +85,7 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
             "device_name",
             "platform",
             "app_version",
+            "fcm_token",
             "created_at",
             "last_seen",
         ]
@@ -94,6 +97,45 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
             msg = f"platform must be one of: {', '.join(sorted(allowed))}"
             raise serializers.ValidationError(msg)
         return value
+
+
+class MobileDeviceUnregisterSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/devices/unregister/."""
+
+    device_uuid = serializers.UUIDField()
+
+
+# ---------------------------------------------------------------------------
+# Label printing
+# ---------------------------------------------------------------------------
+
+
+class MobileLabelPrefsSerializer(serializers.ModelSerializer):
+    """The user's UserLabelPrefs plus the computed mismatch warnings.
+
+    Used by GET/PATCH /api/mobile/labels/prefs/. ``warnings`` is read-only and comes from the same
+    ``auctions.printing.label_prefs_warnings`` the web /printing/ page uses, so app and web agree.
+    """
+
+    warnings = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserLabelPrefs
+        fields = [
+            "print_method",
+            "preset",
+            "unit",
+            "label_width",
+            "label_height",
+            "empty_labels",
+            "print_border",
+            "warnings",
+        ]
+
+    def get_warnings(self, obj):
+        from auctions.printing import label_prefs_warnings
+
+        return label_prefs_warnings(obj)
 
 
 # ---------------------------------------------------------------------------

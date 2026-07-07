@@ -174,23 +174,39 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     club_icon_url = ""
     if member.club.icon:
         club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
-    mail.send(
-        member.email,
-        sender=member.club.contact_sender_email,
-        subject=subject,
-        message="\n".join(text_parts),
-        html_message=_render_membership_email_html(
-            member,
-            intro_text=intro_text,
-            message_text=message_text,
-            membership_link=membership_link,
-            club_icon_url=club_icon_url,
-            barcode_url=barcode_url,
-            next_auction_html=next_html,
-            opening_text=opening_text,
-            closing_text=closing_text,
-        ),
-        headers={"Reply-to": _membership_email_reply_to(member.club)},
+    html_message = _render_membership_email_html(
+        member,
+        intro_text=intro_text,
+        message_text=message_text,
+        membership_link=membership_link,
+        club_icon_url=club_icon_url,
+        barcode_url=barcode_url,
+        next_auction_html=next_html,
+        opening_text=opening_text,
+        closing_text=closing_text,
+    )
+
+    def _send_membership_email():
+        mail.send(
+            member.email,
+            sender=member.club.contact_sender_email,
+            subject=subject,
+            message="\n".join(text_parts),
+            html_message=html_message,
+            headers={"Reply-to": _membership_email_reply_to(member.club)},
+        )
+
+    # A member may or may not be a linked site user; notify_user pushes only when that user opted in
+    # (and has a live device), otherwise it emails — so guest members always get the email.
+    from auctions.notifications import notify_user
+
+    notify_user(
+        member.user,
+        category="membership",
+        title=subject,
+        body=message_text or member.club.name,
+        url=membership_link,
+        send_email=_send_membership_email,
     )
     return True
 
@@ -252,6 +268,53 @@ def flush_expired_tokens(self):
     per login and per refresh; without periodic cleanup the token_blacklist tables grow unbounded.
     """
     call_command("flushexpiredtokens")
+
+
+@shared_task
+def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
+    """Send a push notification to every push-enabled device of a user; prune dead tokens.
+
+    FCM data-message keys: title, body, url (absolute), category. On an unregistered / invalid
+    token the offending device's token is cleared. One ``PushNotificationSent`` row is logged per
+    successful device send (dedupe + stats). ``collapse_key`` folds chatty categories so a phone
+    that was off shows one notification, not many.
+    """
+    from django.contrib.auth.models import User
+
+    from auctions import notifications
+    from auctions.models import MobileDevice, PushNotificationSent
+
+    try:
+        user = User.objects.get(pk=user_pk)
+    except User.DoesNotExist:
+        return 0
+
+    devices = MobileDevice.objects.filter(user=user, push_enabled=True).exclude(fcm_token="")
+    sent_count = 0
+    for device in devices:
+        result = notifications.send_fcm_message(
+            device.fcm_token,
+            title=title,
+            body=body,
+            url=url,
+            category=category,
+            collapse_key=collapse_key,
+        )
+        if result == notifications.SEND_INVALID_TOKEN:
+            # Token follows the app install; a dead one never comes back, so clear it.
+            device.fcm_token = ""
+            device.save(update_fields=["fcm_token"])
+            logger.info("Cleared dead FCM token for device %s (user %s)", device.pk, user_pk)
+        elif result == notifications.SEND_OK:
+            PushNotificationSent.objects.create(
+                user=user,
+                device=device,
+                category=category,
+                auction_id=auction_pk,
+                invoice_id=invoice_pk,
+            )
+            sent_count += 1
+    return sent_count
 
 
 def get_invoice_notification_task_name(invoice_pk):
@@ -374,12 +437,30 @@ def send_invoice_notification(self, invoice_pk):
         if not email_routing_enabled():
             send_kwargs["headers"] = {"Reply-to": contact_email}
             send_kwargs["context"]["reply_to_email"] = contact_email
-        mail.send(email, **send_kwargs)
-        # Add history entry about the email being sent
+
+        # Route through the notify_user choke point: an app user who opted into push gets a
+        # notification instead of the email; everyone else is emailed exactly as before. The
+        # bookkeeping below (email_sent, AuctionHistory) is identical on both paths.
+        from auctions.notifications import notify_user
+
+        push_user = invoice.auctiontos_user.user
+        invoice_url = f"https://{current_site.domain}{invoice.get_absolute_url()}"
+        pushed = notify_user(
+            push_user,
+            category="invoice",
+            title=subject,
+            body="Tap to view your invoice.",
+            url=invoice_url,
+            send_email=lambda: mail.send(email, **send_kwargs),
+            auction_pk=invoice.auction.pk,
+            invoice_pk=invoice.pk,
+        )
+        # Add history entry about the notification being sent
+        channel = "push notification" if pushed else "email"
         AuctionHistory.objects.create(
             auction=invoice.auction,
             user=None,
-            action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
+            action=f"Invoice notification {channel} sent to {invoice.auctiontos_user.name} ({email})",
             applies_to="INVOICES",
         )
 
@@ -597,6 +678,16 @@ def weekly_promo(self):
     Previously run weekly on Wednesday at 9:30 via cron.
     """
     call_command("weekly_promo")
+
+
+@shared_task(bind=True, ignore_result=True)
+def promo_push_notifications(self):
+    """
+    Push promotions for nearby auctions to app users who opted into push instead of the weekly email.
+
+    Runs hourly; each promoted auction is pushed to each nearby opted-in user at most once, ever.
+    """
+    call_command("promo_push_notifications")
 
 
 @shared_task(bind=True, ignore_result=True)

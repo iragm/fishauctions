@@ -152,6 +152,23 @@ def site_config(request):
     }
 
 
+def label_print_method(request):
+    """Expose the user's saved label print method so per-lot print buttons can pick a target.
+
+    In the mobile app, a "bluetooth" method makes the per-lot print button emit a
+    fishauctions://print/<pk> deep link (native Bluetooth printing) instead of the web label PDF.
+    Defaults to "pdf" for anonymous users and users who've never set label preferences.
+    """
+    method = "pdf"
+    if request.user.is_authenticated:
+        from auctions.models import UserLabelPrefs
+
+        method = (
+            UserLabelPrefs.objects.filter(user=request.user).values_list("print_method", flat=True).first() or "pdf"
+        )
+    return {"user_print_method": method}
+
+
 def user_clubs(request):
     if request.user.is_authenticated:
         from auctions.models import Club, ClubMember

@@ -36,6 +36,7 @@ class Command(BaseCommand):
                 "auction_emails",
                 "email_unseen_chats",
                 "weekly_promo",
+                "promo_push_notifications",
                 "set_user_location",
                 "remove_duplicate_views",
                 "webpush_notifications_deduplicate",

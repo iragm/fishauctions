@@ -10,6 +10,7 @@ from django.utils import timezone
 from post_office import mail
 
 from auctions.models import Auction, AuctionHistory
+from auctions.notifications import notify_user
 
 logger = logging.getLogger(__name__)
 
@@ -94,48 +95,72 @@ class Command(BaseCommand):
                 else:
                     subject = f"Thanks for creating {auction}!"
 
-                mail.send(
-                    auction.created_by.email,
-                    template="auction_welcome",
-                    context={
-                        "auction": auction,
-                        "domain": current_site.domain,
-                        "unsubscribe": userData.unsubscribe_link,
-                        "subject": subject,
-                        "enable_help": settings.ENABLE_HELP,
-                    },
+                notify_user(
+                    auction.created_by,
+                    category="auction_admin",
+                    title=subject,
+                    body=f"Tap to manage {auction}.",
+                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                    send_email=lambda: mail.send(
+                        auction.created_by.email,
+                        template="auction_welcome",
+                        context={
+                            "auction": auction,
+                            "domain": current_site.domain,
+                            "unsubscribe": userData.unsubscribe_link,
+                            "subject": subject,
+                            "enable_help": settings.ENABLE_HELP,
+                        },
+                    ),
+                    auction_pk=auction.pk,
                 )
-                logger.info("Sent welcome email to %s for auction %s", auction.created_by.email, auction.slug)
+                logger.info("Sent welcome notification to %s for auction %s", auction.created_by.email, auction.slug)
                 auction.welcome_email_sent = True
                 auction.save()
 
             # Invoice email: sent 1 hour after auction end (online auctions only)
             if not auction.invoice_email_sent and auction.invoice_email_due and now >= auction.invoice_email_due:
-                mail.send(
-                    auction.created_by.email,
-                    template="auction_invoices",
-                    context={
-                        "auction": auction,
-                        "domain": current_site.domain,
-                        "unsubscribe": userData.unsubscribe_link,
-                    },
+                notify_user(
+                    auction.created_by,
+                    category="auction_admin",
+                    title=f"Invoices are ready for {auction}",
+                    body=f"Tap to review invoices for {auction}.",
+                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                    send_email=lambda: mail.send(
+                        auction.created_by.email,
+                        template="auction_invoices",
+                        context={
+                            "auction": auction,
+                            "domain": current_site.domain,
+                            "unsubscribe": userData.unsubscribe_link,
+                        },
+                    ),
+                    auction_pk=auction.pk,
                 )
-                logger.info("Sent invoice email to %s for auction %s", auction.created_by.email, auction.slug)
+                logger.info("Sent invoice notification to %s for auction %s", auction.created_by.email, auction.slug)
                 auction.invoice_email_sent = True
                 auction.save()
 
             # Follow-up/thanks email: sent 24 hours after auction end (online) or start (in-person)
             if not auction.followup_email_sent and auction.followup_email_due and now >= auction.followup_email_due:
-                mail.send(
-                    auction.created_by.email,
-                    template="auction_thanks",
-                    context={
-                        "auction": auction,
-                        "domain": current_site.domain,
-                        "unsubscribe": userData.unsubscribe_link,
-                    },
+                notify_user(
+                    auction.created_by,
+                    category="auction_admin",
+                    title=f"Thanks for running {auction}",
+                    body=f"Tap to see how {auction} went.",
+                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                    send_email=lambda: mail.send(
+                        auction.created_by.email,
+                        template="auction_thanks",
+                        context={
+                            "auction": auction,
+                            "domain": current_site.domain,
+                            "unsubscribe": userData.unsubscribe_link,
+                        },
+                    ),
+                    auction_pk=auction.pk,
                 )
-                logger.info("Sent follow-up email to %s for auction %s", auction.created_by.email, auction.slug)
+                logger.info("Sent follow-up notification to %s for auction %s", auction.created_by.email, auction.slug)
                 auction.followup_email_sent = True
                 auction.save()
 

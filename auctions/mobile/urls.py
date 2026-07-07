@@ -5,12 +5,15 @@ from .views import (
     MobileCommandPaletteView,
     MobileConfigView,
     MobileDeviceRegisterView,
+    MobileDeviceUnregisterView,
     MobileGoogleAuthView,
+    MobileLabelPrefsView,
     MobileLoginView,
     MobileLotLabelView,
     MobileMyClubsView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
+    MobilePrinterProfilesView,
     MobileTokenRefreshView,
     MobileUserMeView,
     MobileWebSessionConsumeView,
@@ -36,7 +39,11 @@ urlpatterns = [
     path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
+    path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),
+    # Printers
+    path("printers/profiles/", MobilePrinterProfilesView.as_view(), name="mobile-printer-profiles"),
     # Labels
+    path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
     # Payments
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),

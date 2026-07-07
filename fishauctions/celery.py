@@ -63,6 +63,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.weekly_promo",
         "schedule": 3600.0,  # Run every hour
     },
+    # Promo push notifications for nearby auctions (push analogue of weekly_promo) - every hour
+    "promo_push_notifications": {
+        "task": "auctions.tasks.promo_push_notifications",
+        "schedule": 3600.0,  # Run every hour
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",

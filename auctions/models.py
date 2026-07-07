@@ -2213,6 +2213,8 @@ class Auction(models.Model):
     reprint_reminder_sent = models.BooleanField(default=False)
     weekly_promo_emails_sent = models.PositiveIntegerField(default=0)
     weekly_promo_emails_sent.help_text = "Number of times this auction was included in weekly promotional emails"
+    promo_push_notifications_sent = models.PositiveIntegerField(default=0)
+    promo_push_notifications_sent.help_text = "Number of push notifications sent promoting this auction"
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -8515,6 +8517,17 @@ class UserLabelPrefs(models.Model):
         default="lg",
         verbose_name="Label size",
     )
+    PRINT_METHODS = (
+        ("pdf", "PDF download"),
+        ("system", "System printer"),
+        ("bluetooth", "Bluetooth label printer"),
+    )
+    print_method = models.CharField(max_length=20, choices=PRINT_METHODS, default="pdf")
+    print_method.help_text = (
+        "PDF downloads a file to print later. System printer sends the PDF straight "
+        "to a printer configured on your phone. Bluetooth prints directly to a "
+        "thermal label printer. System printer and Bluetooth only work in the app."
+    )
 
 
 def get_default_can_create_auctions():
@@ -8622,6 +8635,13 @@ class UserData(models.Model):
     )
     email_me_about_new_lots_ship_to_location.help_text = (
         "Email me when new lots are created that can be shipped to my location"
+    )
+    push_notifications_instead_of_email = models.BooleanField(default=False, blank=True)
+    push_notifications_instead_of_email.help_text = (
+        "Get notifications in the app instead of emails, for everything "
+        "except account emails like password resets. Requires the app to be installed "
+        "and signed in. The weekly promo email is replaced by a notification for "
+        "promoted auctions near you."
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
     paypal_email_address.help_text = "If different from your email address"
@@ -9330,6 +9350,26 @@ class UserData(models.Model):
         if self.location.name == "Canada":
             return "CAD"
         return "USD"
+
+    @property
+    def has_push_device(self):
+        """True when the user has at least one push-enabled device carrying an FCM token."""
+        return self.user.mobile_devices.filter(push_enabled=True).exclude(fcm_token="").exists()
+
+    def user_prefers_push(self):
+        """Whether notifications for this user should go to the app (FCM) instead of email.
+
+        True only when the user opted in, has a registered device with a live token, and
+        push is configured globally. Any of these being false falls back to email — the same
+        graceful-degradation pattern as email routing.
+        """
+        from auctions.notifications import push_configured
+
+        if not self.push_notifications_instead_of_email:
+            return False
+        if not push_configured():
+            return False
+        return self.has_push_device
 
 
 class PayPalSeller(models.Model):
@@ -10250,6 +10290,11 @@ class MobileDevice(models.Model):
     device_name = models.CharField(max_length=200, blank=True)
     platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES, blank=True)
     app_version = models.CharField(max_length=50, blank=True)
+    # FCM registration token for push. Blank = no push target for this device (signed out, or the app
+    # never registered one). Tokens follow the app install, not the user, so signing out clears it.
+    fcm_token = models.TextField(blank=True, default="", db_index=False)
+    fcm_token_updated_at = models.DateTimeField(null=True, blank=True)
+    push_enabled = models.BooleanField(default=True)  # per-device kill switch
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
 
@@ -10258,3 +10303,86 @@ class MobileDevice(models.Model):
 
     def __str__(self):
         return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"
+
+
+class ThermalPrinterProfile(models.Model):
+    """A Bluetooth thermal label printer the mobile app knows how to drive.
+
+    The app downloads all enabled profiles and interprets them; every byte
+    sent to a printer is defined here, not in the app. Adding support for a new
+    printer means adding a row, no app release."""
+
+    slug = models.SlugField(unique=True)  # stable id the app caches/reports
+    name = models.CharField(max_length=100)  # "Fichero / AiYin D11s"
+    enabled = models.BooleanField(default=True)
+    priority = models.PositiveIntegerField(default=100)  # match order, low wins
+    schema_version = models.PositiveIntegerField(default=1)  # command-program schema
+
+    # ── Matching (how the app decides a scanned BLE device uses this profile) ──
+    # JSON list of case-insensitive regexes tested against the advertised name,
+    # e.g. ["^D11", "^Fichero"]. Empty list = never auto-matched (manual pick only).
+    ble_name_patterns = models.JSONField(default=list, blank=True)
+    # Optional exact GATT ids; blank = discover (first writable characteristic).
+    service_uuid = models.CharField(max_length=40, blank=True, default="")
+    write_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
+    notify_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
+
+    # ── Transport pacing ──
+    chunk_size = models.PositiveIntegerField(default=200)  # bytes per BLE write
+    chunk_delay_ms = models.PositiveIntegerField(default=20)  # gap between chunks
+    prefer_write_with_response = models.BooleanField(default=True)
+
+    # ── Raster geometry ──
+    print_width_px = models.PositiveIntegerField(default=96)  # printhead dots
+    dpi = models.PositiveIntegerField(default=203)
+    invert_raster = models.BooleanField(default=False)  # 1 = white printers
+    max_label_width_mm = models.FloatField(null=True, blank=True)
+    max_label_height_mm = models.FloatField(null=True, blank=True)
+
+    # ── Command programs (JSON, see auctions.printer_programs) ──
+    print_program = models.JSONField()  # required
+    status_program = models.JSONField(default=list, blank=True)  # optional pre-flight
+    status_flags = models.JSONField(default=dict, blank=True)  # byte/bit → condition
+    label_size_program = models.JSONField(default=list, blank=True)  # optional size read
+    label_size_parse = models.JSONField(default=dict, blank=True)
+
+    notes = models.TextField(blank=True, default="")  # admin-facing: quirks, sources
+
+    class Meta:
+        ordering = ["priority", "name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.slug})"
+
+    def clean(self):
+        """Validate the command programs so an admin typo is rejected here, not on the printer."""
+        from auctions.printer_programs import ProgramValidationError, validate_profile_programs
+
+        super().clean()
+        try:
+            validate_profile_programs(
+                print_program=self.print_program,
+                status_program=self.status_program,
+                label_size_program=self.label_size_program,
+                status_flags=self.status_flags,
+                label_size_parse=self.label_size_parse,
+            )
+        except ProgramValidationError as exc:
+            raise ValidationError({exc.field or "print_program": str(exc)}) from exc
+
+
+class PushNotificationSent(models.Model):
+    """One row per push actually handed to FCM — dedupe + stats."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    device = models.ForeignKey(MobileDevice, null=True, on_delete=models.SET_NULL)
+    category = models.CharField(max_length=40, db_index=True)
+    auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+    invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "category", "auction"])]
+
+    def __str__(self):
+        return f"push[{self.category}] to {self.user} at {self.sent_at:%Y-%m-%d %H:%M}"

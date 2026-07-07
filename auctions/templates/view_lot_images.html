@@ -192,13 +192,20 @@ function deactivate_lot() {
                                     <i class="bi bi-calendar-x"></i> Remove or refund
                                 </button>
                             {% endif %}
-                            {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web single-lot label link there. {% endcomment %}
-                            {% if is_auction_admin or lot.user.pk == request.user.pk %}{% if not request.is_mobile_app %}
+                            {% comment %} In the app with the Bluetooth print method, print natively via a deep link; otherwise use the web label PDF. {% endcomment %}
+                            {% if is_auction_admin or lot.user.pk == request.user.pk %}
+                                {% if request.is_mobile_app and user_print_method == 'bluetooth' %}
+                                <a class="btn btn-primary" href="fishauctions://print/{{ lot.pk }}">
+                                    <i class="bi bi-tag"></i>
+                                    {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
+                                </a>
+                                {% else %}
                                 <a class="btn btn-primary" href="{% url 'single_lot_label' pk=lot.pk %}">
                                     <i class="bi bi-tag"></i>
                                     {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
                                 </a>
-                            {% endif %}{% endif %}
+                                {% endif %}
+                            {% endif %}
                             {% if request.user.is_superuser %}
                                 <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
                                     Admin

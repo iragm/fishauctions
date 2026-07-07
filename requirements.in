@@ -71,3 +71,4 @@ mailchimp-marketing
 djangorestframework
 djangorestframework-simplejwt
 google-auth
+firebase-admin

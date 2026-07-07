@@ -11841,9 +11841,27 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         )
         return label_prefs
 
+    def _show_print_method(self):
+        """The print-method dropdown only makes sense to someone who can use the app to print. Show
+        it in the app, or on web if the user has ever registered a device (so they can pre-configure)."""
+        return bool(self.request.is_mobile_app) or MobileDevice.objects.filter(user=self.request.user).exists()
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["show_print_method"] = self._show_print_method()
+        return kwargs
+
     def get_context_data(self, **kwargs):
+        from auctions.printing import label_prefs_warnings, warning_matrix
+
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "printing"
+        prefs = self.object
+        context["label_prefs"] = prefs
+        context["show_print_method"] = self._show_print_method()
+        context["warnings"] = label_prefs_warnings(prefs)
+        # A plain dict; the template embeds it safely with |json_script for the live-warning JS.
+        context["warning_map"] = warning_matrix()
         userData = self.request.user.userdata
         context["last_auction_used"] = userData.last_auction_used
         context["last_admin_auction"] = (

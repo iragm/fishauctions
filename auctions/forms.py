@@ -3393,14 +3393,31 @@ class UserLabelPrefsForm(forms.ModelForm):
         model = UserLabelPrefs
         exclude = ("user",)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, show_print_method=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "printing-prefs"
         self.helper.form_class = "form"
         self.helper.form_tag = True
+        # The print-method dropdown is the primary choice on the page, but "System printer" /
+        # "Bluetooth" only mean anything in the app, so it's hidden for pure-web users who have no
+        # device (see UserLabelPrefsView). When hidden, drop the field so the form leaves it as-is.
+        print_method_layout = []
+        if show_print_method:
+            print_method_layout = [
+                Div(
+                    Div("print_method", css_class="col-sm-7"),
+                    css_class="row",
+                ),
+                # Warnings alert + (in-app) Bluetooth connect card + the live-warning JS map. Kept in
+                # a template so the UX/copy iterates server-side without an app release.
+                HTML('{% include "printing_extras.html" %}'),
+            ]
+        else:
+            del self.fields["print_method"]
         self.helper.layout = Layout(
+            *print_method_layout,
             Div(
                 Div(
                     "preset",
@@ -3500,6 +3517,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_me_about_new_lots_ship_to_location",
             "email_me_when_people_comment_on_my_lots",
             "email_me_about_new_chat_replies",
+            "push_notifications_instead_of_email",
             "email_me_about_new_in_person_auctions",
             "email_me_about_new_in_person_auctions_distance",
             "send_reminder_emails_about_joining_auctions",
@@ -3536,6 +3554,15 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.fields[
             "email_me_about_new_chat_replies"
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
+        # Push notifications need a signed-in app install with a live FCM token. Always show the
+        # toggle so users know it exists, but disable it (with an explanatory note) when there's no
+        # device to push to — disabling keeps the stored value unchanged on save.
+        if not (self.instance and self.instance.pk and self.instance.has_push_device):
+            self.fields["push_notifications_instead_of_email"].disabled = True
+            self.fields["push_notifications_instead_of_email"].help_text = (
+                "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
+                "notifications in the app instead of emails, for everything except account emails."
+            )
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
         self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
@@ -3605,6 +3632,13 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML("<h4>Notifications</h4><br>"),
+            Div(
+                Div(
+                    "push_notifications_instead_of_email",
+                    css_class="col-md-12",
+                ),
+                css_class="row",
+            ),
             Div(
                 Div(
                     "email_me_when_people_comment_on_my_lots",

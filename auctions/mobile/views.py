@@ -280,6 +280,8 @@ POST /api/mobile/command-palette/log/
         { "id": 7 }
 """
 
+import hashlib
+import json
 import logging
 
 from django.conf import settings
@@ -295,14 +297,17 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Club, ClubMember, Lot
+from auctions.models import Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs
+from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
 from .serializers import (
     CommandPaletteLogSerializer,
     MobileClubSerializer,
     MobileDeviceSerializer,
+    MobileDeviceUnregisterSerializer,
     MobileGoogleAuthSerializer,
+    MobileLabelPrefsSerializer,
     MobileLoginSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
@@ -589,6 +594,9 @@ class MobileDeviceRegisterView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
+        # Only pass fcm_token through when the client actually sent the key, so a registration that
+        # omits it doesn't wipe a previously stored token.
+        fcm_token = data.get("fcm_token") if "fcm_token" in serializer.initial_data else None
         try:
             device, created = DeviceService.register_or_update(
                 user=request.user,
@@ -596,6 +604,7 @@ class MobileDeviceRegisterView(APIView):
                 device_name=data.get("device_name", ""),
                 platform=data.get("platform", ""),
                 app_version=data.get("app_version", ""),
+                fcm_token=fcm_token,
             )
         except ValueError:
             logger.warning("Device registration/update validation failed.", exc_info=True)
@@ -607,6 +616,28 @@ class MobileDeviceRegisterView(APIView):
         response_serializer = MobileDeviceSerializer(device)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(response_serializer.data, status=http_status)
+
+
+class MobileDeviceUnregisterView(APIView):
+    """POST /api/mobile/devices/unregister/ — clear a device's FCM token at sign-out.
+
+    Keeps the row (for stats) but stops pushes to it. The app calls this during sign-out, right
+    before dropping the JWT, so a signed-out phone never shows the previous user's notifications.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileDeviceUnregisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        found = DeviceService.unregister(user=request.user, device_uuid=serializer.validated_data["device_uuid"])
+        if not found:
+            return Response({"detail": "Device not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +714,20 @@ class MobileLotLabelView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # ?fmt=pdf renders a single-lot PDF with the user's UserLabelPrefs via the same WeasyPrint
+        # pipeline as the web SingleLotLabelView — so a lot printed from the fishauctions://print/<pk>
+        # deep link matches one printed from the website. The PNG path is unchanged.
+        fmt = (request.GET.get("fmt") or "").lower()
+        if fmt == "pdf":
+            from .services.label_pdf import render_single_lot_pdf
+
+            try:
+                content, content_type = render_single_lot_pdf(lot, request)
+            except ValueError:
+                logger.warning("Invalid label PDF request.", exc_info=True)
+                return Response({"detail": "Invalid label request."}, status=status.HTTP_400_BAD_REQUEST)
+            return HttpResponse(content, content_type=content_type)
+
         # NB: param is "fmt", not "format" — DRF reserves ?format= for its own content negotiation.
         # ?resolution=WIDTHxHEIGHT&dpi=N control the output raster (default 600x400 @ 203dpi).
         try:
@@ -700,6 +745,61 @@ class MobileLotLabelView(APIView):
             )
 
         return HttpResponse(content, content_type=content_type)
+
+
+# ---------------------------------------------------------------------------
+# Printer profiles + label preferences
+# ---------------------------------------------------------------------------
+
+
+class MobilePrinterProfilesView(APIView):
+    """GET /api/mobile/printers/profiles/ — every enabled thermal printer profile, priority-ordered.
+
+    The app caches this (printing must work offline at an auction hall) and refreshes opportunistically,
+    so we hand back a weak ETag; an ``If-None-Match`` that matches gets a 304.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        profiles = ThermalPrinterProfile.objects.filter(enabled=True).order_by("priority", "name")
+        data = {
+            "schema_version_max": PROGRAM_SCHEMA_VERSION,
+            "profiles": [serialize_profile(p) for p in profiles],
+        }
+        digest = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()  # noqa: S324
+        etag = f'"{digest}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+        response = Response(data)
+        response["ETag"] = etag
+        return response
+
+
+class MobileLabelPrefsView(APIView):
+    """GET/PATCH /api/mobile/labels/prefs/ — the user's label prefs + computed warnings.
+
+    PATCH accepts any writable subset (used by the app's "use printer-reported size" confirmation);
+    prefs are auto-created if missing and are always the caller's own.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        prefs, _ = UserLabelPrefs.objects.get_or_create(user=request.user)
+        return Response(MobileLabelPrefsSerializer(prefs).data)
+
+    def patch(self, request):
+        prefs, _ = UserLabelPrefs.objects.get_or_create(user=request.user)
+        serializer = MobileLabelPrefsSerializer(prefs, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(serializer.data)
 
 
 # ---------------------------------------------------------------------------

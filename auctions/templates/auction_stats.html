@@ -614,6 +614,13 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             {% endif %}
         </tr>
         <tr>
+            <td>Users who received this auction as a promo push notification</td>
+            <td>{{auction.promo_push_notifications_sent}}</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.promo_push_notifications_sent}}</td>
+            {% endif %}
+        </tr>
+        <tr>
             <td>Click rate for weekly promo email</td>
             <td>{{auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
             {% if compare_auction %}
