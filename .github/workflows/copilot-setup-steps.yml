@@ -18,6 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: ./.github/scripts/prepare-ci.sh
+      - run: ./.github/scripts/prepare-ci.sh --force
       - run: docker compose build
       - run: docker compose up --detach --wait --wait-timeout 60

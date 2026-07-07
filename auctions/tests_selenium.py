@@ -24,7 +24,6 @@ import os
 import time
 import unittest
 
-from channels.testing import ChannelsLiveServerTestCase
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import Client, TestCase, tag
@@ -32,6 +31,20 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import Auction, AuctionTOS, Bid, Category, Lot, PickupLocation
+
+try:
+    from channels.testing import ChannelsLiveServerTestCase
+
+    CHANNELS_LIVE_AVAILABLE = True
+except ImportError:
+    # ChannelsLiveServerTestCase spins up an in-process Daphne server, so importing
+    # it requires daphne -- a test-only dep (see requirements-test.in). It's absent
+    # from the production image, so fall back to a plain TestCase base to keep this
+    # module importable there; LiveBiddingTestCase is skipped below via
+    # CHANNELS_LIVE_AVAILABLE (and needs Selenium anyway, which prod also lacks).
+    from django.test import TestCase as ChannelsLiveServerTestCase
+
+    CHANNELS_LIVE_AVAILABLE = False
 
 try:
     from selenium import webdriver
@@ -819,7 +832,10 @@ class GenericAdminFormTests(SeleniumTestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@unittest.skipUnless(
+    SELENIUM_AVAILABLE and selenium_available() and CHANNELS_LIVE_AVAILABLE,
+    "Selenium and channels live server (daphne) required",
+)
 @tag("selenium")
 class LiveBiddingTestCase(ChannelsLiveServerTestCase):
     """Base class for browser bid tests that need real websockets + test data.

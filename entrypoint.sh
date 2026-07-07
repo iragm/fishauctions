@@ -1,5 +1,11 @@
 #!/bin/sh
 
+# Disable core dumps. The worker's CWD is the bind-mounted repo root, so a native
+# crash (see the uvloop heap-corruption SIGABRTs) drops a ~200MB core file into the
+# source tree and, at that size per crash, will fill the host disk. We keep the
+# crash visible via logs/monitoring rather than 200MB forensic dumps in ./.
+ulimit -c 0
+
 check_writable_dir() {
   local dir="$1"
   local host_dir="$2"
@@ -57,7 +63,14 @@ while True:
     time.sleep(1)
 END
 
-python manage.py migrate --no-input
+echo "Applying database migrations..."
+if ! python manage.py migrate --no-input; then
+    echo "FATAL: 'manage.py migrate' failed -- refusing to start on a half-migrated" >&2
+    echo "database (serving against a mismatched schema causes opaque 500s). Fix the" >&2
+    echo "failing migration and redeploy. With restart:always this container will keep" >&2
+    echo "restarting and re-printing the traceback above until migrations apply." >&2
+    exit 1
+fi
 python manage.py collectstatic --no-input > /dev/null 2>&1
 python manage.py setup_celery_beat > /dev/null 2>&1 || true
 python manage.py ensure_site_defaults
@@ -77,5 +90,7 @@ if [ "$debug_mode" = "true" ]; then
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
     echo Starting fishauctions in production mode
-    exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
+    # Worker/loop config lives in gunicorn.conf.py -- it runs uvicorn on the
+    # stdlib asyncio loop instead of uvloop (see that file for the crash history).
+    exec gunicorn fishauctions.asgi:application -c gunicorn.conf.py
 fi

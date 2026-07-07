@@ -1,3 +1,9 @@
 pre-commit
 ruff
 selenium
+# daphne is only needed by ChannelsLiveServerTestCase (the live-bidding websocket
+# Selenium suite in auctions/tests_selenium.py). Production serves ASGI via
+# uvicorn, so daphne + its Twisted stack stay OUT of requirements.in and live here
+# with the other test-only deps. tests_selenium.py guards the import so the module
+# still loads (and those tests skip) when daphne is absent, e.g. in the prod image.
+daphne

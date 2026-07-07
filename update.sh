@@ -13,7 +13,10 @@ set_env_value() {
     local value="$2"
     if grep -q "^${key}=" "$ENV_FILE"; then
         local escaped_value
-        escaped_value="$(printf '%s' "$value" | sed 's/[@&]/\\&/g')"
+        # Escape sed replacement metacharacters: backslash FIRST, then the @
+        # delimiter and & (whole-match backreference). Missing the backslash meant
+        # a value containing '\' (or '@') silently corrupted the written line.
+        escaped_value="$(printf '%s' "$value" | sed 's/[\\@&]/\\&/g')"
         sed -i "s@^${key}=.*@${key}=${escaped_value}@" "$ENV_FILE"
     else
         printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
@@ -165,16 +168,33 @@ ensure_permissions() {
     fi
 }
 
-update_nginx_domain() {
-    local site_domain
-    local escaped_site_domain
+render_nginx_domain() {
+    # Render the __SITE_DOMAIN__ placeholder in nginx.prod.conf from SITE_DOMAIN.
+    # The committed file always holds the placeholder (and `git restore .` above
+    # resets it before we run), so this is idempotent: no reliance on the current
+    # rendered value, and re-running never corrupts the file. Changing SITE_DOMAIN
+    # therefore actually takes effect -- the old sed keyed on `server_name _;`,
+    # which no longer existed, so it silently did nothing.
+    local site_domain escaped_site_domain
     site_domain="$(get_env_value "SITE_DOMAIN")"
-    escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&]/\\&/g')"
-    if grep -q "server_name _;" ./nginx.prod.conf; then
-        sed -i "s@server_name _;@server_name $escaped_site_domain;@" "./nginx.prod.conf"
+    if [ -z "$site_domain" ]; then
+        echo "WARNING: SITE_DOMAIN is empty; nginx.prod.conf placeholder left unrendered."
+        return
+    fi
+    # Escape sed replacement metacharacters (& and the @ delimiter).
+    escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&\\]/\\&/g')"
+    if grep -q "__SITE_DOMAIN__" ./nginx.prod.conf; then
+        sed -i "s@__SITE_DOMAIN__@${escaped_site_domain}@g" "./nginx.prod.conf"
+    else
+        echo "WARNING: __SITE_DOMAIN__ placeholder not found in nginx.prod.conf;"
+        echo "         domain not rendered. Is the file checked out cleanly?"
     fi
 }
 
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+deploy_branch="${DEPLOY_BRANCH:-$current_branch}"
+
+echo "Deploying branch: $deploy_branch"
 echo "This will erase any local uncommited changes. Did you make a snapshot? (y/n)"
 if [ -t 0 ]; then
     read -r response
@@ -189,8 +209,19 @@ if [[ "$response" != "y" ]]; then
 fi
 
 git restore .
-if ! git pull; then
-    echo "Update failed. Docker services were not restarted."
+# A plain `git pull` silently deploys whatever branch is checked out. Pin the ref
+# (override with DEPLOY_BRANCH) so the deployed branch is explicit, and use
+# --ff-only so a branch that has diverged from its remote fails loudly instead of
+# creating a merge commit / conflict on the server.
+if [ "$deploy_branch" != "$current_branch" ]; then
+    if ! git checkout "$deploy_branch"; then
+        echo "Update failed: could not checkout '$deploy_branch'. Docker services were not restarted."
+        exit 1
+    fi
+fi
+if ! git pull --ff-only origin "$deploy_branch"; then
+    echo "Update failed: origin/$deploy_branch could not be fast-forwarded (diverged branch or network error)."
+    echo "Docker services were not restarted."
     exit 1
 fi
 
@@ -200,6 +231,13 @@ generate_missing_values
 ensure_db_credentials
 ensure_permissions
 set_env_value "SETUP_COMPLETE" "\"1\""
-update_nginx_domain
+render_nginx_domain
 
-docker compose up -d --build
+# Refresh base images so security patches actually arrive. `up --build` alone
+# never re-pulls tags that already exist locally, so pinned images (mariadb,
+# redis, nginx/swag) and the python base in our Dockerfile's FROM would be frozen
+# at whatever was first pulled. `pull` refreshes the pre-built service images;
+# `build --pull` re-pulls the base image referenced by FROM before building ours.
+docker compose pull
+docker compose build --pull
+docker compose up -d

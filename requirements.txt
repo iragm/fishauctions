@@ -23,7 +23,6 @@ asgiref==3.11.1
     #   -r requirements.in
     #   channels
     #   channels-redis
-    #   daphne
     #   django
     #   django-allauth
     #   django-htmx
@@ -31,16 +30,6 @@ attrs==26.1.0
     # via
     #   -r requirements.in
     #   aiohttp
-    #   service-identity
-    #   twisted
-autobahn==26.6.2
-    # via
-    #   -r requirements.in
-    #   daphne
-automat==25.4.16
-    # via
-    #   -r requirements.in
-    #   twisted
 beautifulsoup4==4.15.0
     # via -r requirements.in
 billiard==4.2.4
@@ -57,8 +46,6 @@ botocore==1.43.36
     #   s3transfer
 brotli==1.2.0
     # via fonttools
-cbor2==6.1.2
-    # via autobahn
 celery==5.6.3
     # via
     #   -r requirements.in
@@ -73,7 +60,6 @@ certifi==2026.6.17
 cffi==2.0.0
     # via
     #   -r requirements.in
-    #   autobahn
     #   cryptography
     #   pyheif
     #   weasyprint
@@ -102,10 +88,6 @@ click-plugins==1.1.1.2
     # via celery
 click-repl==0.3.0
     # via celery
-constantly==23.10.4
-    # via
-    #   -r requirements.in
-    #   twisted
 crispy-bootstrap5==2026.3
     # via -r requirements.in
 cron-descriptor==1.4.5
@@ -113,7 +95,6 @@ cron-descriptor==1.4.5
 cryptography==49.0.0
     # via
     #   -r requirements.in
-    #   autobahn
     #   django-encrypted-model-fields
     #   django-ses
     #   google-auth
@@ -121,15 +102,10 @@ cryptography==49.0.0
     #   py-vapid
     #   pyopenssl
     #   pywebpush
-    #   service-identity
 cssselect2==0.9.0
     # via weasyprint
-daphne==4.2.2
-    # via -r requirements.in
 defusedxml==0.7.1
-    # via
-    #   -r requirements.in
-    #   python3-openid
+    # via -r requirements.in
 django==5.2.15
     # via
     #   -r requirements.in
@@ -158,7 +134,6 @@ django==5.2.15
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-    #   jsonfield
 django-allauth==65.18.0
     # via -r requirements.in
 django-autocomplete-light==5.0.0
@@ -241,30 +216,17 @@ httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
     # via squareup
-hyperlink==21.0.0
-    # via
-    #   -r requirements.in
-    #   autobahn
-    #   twisted
 idna==3.18
     # via
     #   -r requirements.in
     #   anyio
     #   httpx
-    #   hyperlink
     #   requests
-    #   twisted
     #   yarl
-incremental==24.11.0
-    # via
-    #   -r requirements.in
-    #   twisted
 jmespath==1.1.0
     # via
     #   boto3
     #   botocore
-jsonfield==3.2.0
-    # via -r requirements.in
 kombu==5.6.2
     # via celery
 linkify-it-py==2.1.0
@@ -282,9 +244,7 @@ mdit-py-plugins==0.6.1
 mdurl==0.1.2
     # via markdown-it-py
 msgpack==1.2.1
-    # via
-    #   autobahn
-    #   channels-redis
+    # via channels-redis
 multidict==6.7.1
     # via
     #   aiohttp
@@ -303,9 +263,7 @@ packaging==26.2
     # via
     #   -r requirements.in
     #   gunicorn
-    #   incremental
     #   kombu
-    #   pip-review
 piexif==1.1.3
     # via heif-image-plugin
 pillow==12.2.0
@@ -314,8 +272,6 @@ pillow==12.2.0
     #   easy-thumbnails
     #   reportlab
     #   weasyprint
-pip-review==1.3.0
-    # via -r requirements.in
 prompt-toolkit==3.0.52
     # via click-repl
 propcache==0.5.2
@@ -350,20 +306,14 @@ pydantic-settings==2.14.2
     # via django-bootstrap-datepicker-plus
 pydyf==0.12.1
     # via weasyprint
-pyhamcrest==2.1.0
-    # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
 pyjwt==2.13.0
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
-pymysql==1.2.0
-    # via -r requirements.in
 pyopenssl==26.3.0
-    # via
-    #   -r requirements.in
-    #   twisted
+    # via -r requirements.in
 pyparsing==3.3.2
     # via -r requirements.in
 pyphen==0.17.2
@@ -381,8 +331,6 @@ python-dotenv==1.2.2
     # via
     #   pydantic-settings
     #   uvicorn
-python3-openid==3.2.0
-    # via -r requirements.in
 pytz==2026.2
     # via -r requirements.in
 pywebpush==2.3.0
@@ -410,10 +358,6 @@ s3transfer==0.19.0
     # via boto3
 segno==1.6.6
     # via django-qr-code
-service-identity==26.1.0
-    # via
-    #   -r requirements.in
-    #   twisted
 shortuuid==1.0.13
     # via
     #   -r requirements.in
@@ -438,14 +382,6 @@ tinycss2==1.5.1
     #   weasyprint
 tinyhtml5==2.1.0
     # via weasyprint
-twisted[tls]==26.4.0
-    # via
-    #   -r requirements.in
-    #   daphne
-txaio==26.6.1
-    # via
-    #   -r requirements.in
-    #   autobahn
 typing-extensions==4.15.0
     # via
     #   aiohttp
@@ -457,7 +393,6 @@ typing-extensions==4.15.0
     #   pydantic-core
     #   pyopenssl
     #   squareup
-    #   twisted
     #   typing-inspection
 typing-inspection==0.4.2
     # via
@@ -477,8 +412,6 @@ ua-parser-builtins==202606
     # via ua-parser
 uc-micro-py==2.0.0
     # via linkify-it-py
-ujson==5.13.0
-    # via autobahn
 urllib3==2.7.0
     # via
     #   -r requirements.in
@@ -513,12 +446,5 @@ websockets==16.0
     # via uvicorn
 yarl==1.24.2
     # via aiohttp
-zope-interface==8.5
-    # via
-    #   -r requirements.in
-    #   twisted
 zopfli==0.4.3
     # via fonttools
-
-# The following packages are considered to be unsafe in a requirements file:
-# pip

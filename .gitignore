@@ -3,6 +3,15 @@
 *.swo
 *~
 .env
+# .env backups (e.g. .env.bak.<timestamp>) hold live secrets -- never commit them.
+.env.bak*
+.env.*.bak
+# Core dumps. A crashing worker's CWD is the bind-mounted repo root, so native
+# crashes drop ~200MB core files here. entrypoints set `ulimit -c 0` to stop
+# them being written at all; this is a backstop so any that slip through (e.g.
+# from a manual run) are never committed.
+core
+core.*
 # Service account keys (e.g. Google Wallet) and signing certs (e.g. Apple Wallet)
 # sit alongside .env at repo root. Root-only patterns so committed files in subdirs
 # (fixtures, devcontainer, vscode, swag/) are unaffected.
@@ -10,7 +19,6 @@
 /*.p12
 /*.pem
 db.sqlite3
-auctions/static/rest_framework/
 set_env.sh
 fishauctions/customsettings.py
 media/
@@ -47,3 +55,22 @@ auctions/static/models/vosk/vosk-model-small-en-us-0.15.tar.gz
 auctions/static/js/highcharts/
 auctions/static/js/excanvas.js
 auctions/static/css/Chart.min.css
+# collectstatic output for third-party apps. STATIC_ROOT is now a dedicated
+# volume (see docker-compose.yaml), so these should never appear here again --
+# but if collectstatic is ever run in a checkout without the volume mounted, it
+# would write these back into the source tree. Ignore them so they are not
+# re-committed. (Genuine source dirs -- js/ css/ models/ vendor/ fonts/ and the
+# root-level images/favicons -- are deliberately NOT listed and stay tracked.)
+auctions/static/admin/
+auctions/static/rest_framework/
+auctions/static/autocomplete_light/
+auctions/static/summernote/
+auctions/static/location_field/
+auctions/static/markdownfield/
+auctions/static/django_tables2/
+auctions/static/django_extensions/
+auctions/static/webpush/
+auctions/static/django_htmx/
+auctions/static/bootstrap_datepicker_plus/
+auctions/static/account/
+auctions/static/el-pagination/
