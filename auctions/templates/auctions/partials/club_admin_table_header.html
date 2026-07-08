@@ -20,6 +20,8 @@
     <i class="bi bi-download"></i> Export current view
   </a>
   {% endif %}
+
+  {% include "auctions/partials/htmx_table_filters.html" %}
 </div>
 
 {% if can_export %}
