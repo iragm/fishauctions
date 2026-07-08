@@ -4759,10 +4759,8 @@ class AuctionViewPermissionTests(StandardTestCase):
 
     def test_bulk_add_button_points_to_auto_url(self):
         """Test that the bulk add lots button uses the auto bulk add URL"""
-        # Set up in-person auction to allow bulk adding, and keep lot submission open so the
-        # Add Lots button renders (it is gated on auction.can_submit_lots).
+        # Set up in-person auction to allow bulk adding
         self.in_person_auction.allow_bulk_adding_lots = True
-        self.in_person_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=3)
         self.in_person_auction.save()
 
         self.client.login(username=self.user.username, password="testpassword")
@@ -24870,10 +24868,18 @@ class LotListUXTests(StandardTestCase):
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.ux_auction.slug}))
         self.assertContains(response, "bi-calendar-plus")
 
-    def test_add_lots_button_hidden_after_submission_closes(self):
+    def test_add_lots_button_shown_after_submission_closes_and_redirects(self):
+        """The Add Lot(s) button stays visible even after lot submission closes. Clicking it
+        returns the user to the auction rules page with a 'Lot submission has ended' error,
+        rather than the button being hidden."""
         self.ux_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(hours=1)
         self.ux_auction.save()
         self.assertFalse(self.ux_auction.can_submit_lots)
         self.client.force_login(self.bidder)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.ux_auction.slug}))
-        self.assertNotContains(response, "bi-calendar-plus")
+        # The button is still rendered
+        self.assertContains(response, "bi-calendar-plus")
+        # Clicking it redirects back to the auction with an error instead of adding a lot
+        response = self.client.get(self.ux_auction.add_lot_link, follow=True)
+        self.assertRedirects(response, self.ux_auction.get_absolute_url())
+        self.assertContains(response, "Lot submission has ended")
