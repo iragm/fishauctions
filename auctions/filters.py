@@ -250,6 +250,10 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "duplicate": {"possible_duplicate__isnull": False},
             "not checked in": {"checked_in__isnull": True},
             "checked in": {"checked_in__isnull": False},
+            # is_club_member marks users who get the club's alternate (paid-member) split; on a
+            # club-managed auction with a membership system this is the "paid club member" flag.
+            "club member": {"is_club_member": True},
+            "unpaid": {"is_club_member": False},
         }
 
         if not match_names_only:

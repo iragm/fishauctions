@@ -3795,6 +3795,21 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
     def get_possible_filters(self):
         filters = []
+        # Membership status only makes sense when this auction is managed through a club that
+        # charges dues (a 0 fee means no membership system) AND uses the club-member split, since
+        # that is the only mode where is_club_member is kept in sync with paid-membership status.
+        if (
+            self.auction.is_club_managed
+            and self.auction.alternate_split_mode == "club_member"
+            and self.auction.club.membership_annual_fee
+        ):
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Membership:</small>", ""),
+                    ("<i class='bi bi-person-badge'></i> Paid club member", "club_member"),
+                    ("<i class='bi bi-person'></i> Unpaid", "unpaid"),
+                ]
+            )
         if self.auction.online_bidding != "disable":
             filters.extend(
                 [
@@ -16309,6 +16324,40 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             kwargs["can_manage_membership"] = bool(member and member.permission_add_edit)
             kwargs["can_manage_auctions"] = bool(member and member.permission_manage_auctions)
         return kwargs
+
+    def get_possible_filters(self):
+        """Clickable chips that inject ClubMemberFilter search tokens, modeled on the auction
+        users page. Each chip's key is normalized (underscores -> spaces) into a search token."""
+        filters = []
+        # Membership status only exists when the club charges dues (a 0 fee means no membership
+        # system, so hide the paid/unpaid chips).
+        if self.club.membership_annual_fee:
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Membership:</small>", ""),
+                    ("<i class='bi bi-person-badge'></i> Paid club member", "current"),
+                    ("<i class='bi bi-person'></i> Unpaid", "expired"),
+                    ("<i class='bi bi-hourglass-split'></i> Expiring soon", "expiring"),
+                    ("<i class='bi bi-person-x'></i> Never paid", "never"),
+                ]
+            )
+        filters.append(("<small class='text-muted'>Source:</small>", ""))
+        filters.extend(
+            [
+                ("<i class='bi bi-globe'></i> Website signup", "joined"),
+                ("<i class='bi bi-pencil'></i> Manually added", "manual"),
+            ]
+        )
+        if self.club.discord_server_id:
+            filters.append(("<i class='bi bi-discord'></i> Discord", "discord"))
+        filters.append(("<small class='text-muted'>Other:</small>", ""))
+        filters.append(("<i class='bi bi-people-fill'></i> Possible duplicate", "duplicate"))
+        if self.club.mailchimp_connected:
+            filters.append(("<i class='bi bi-envelope-exclamation'></i> Not in Mailchimp", "nonmailchimp"))
+        if self.club.brevo_connected:
+            filters.append(("<i class='bi bi-envelope-exclamation'></i> Not in Brevo", "nonbrevo"))
+        filters.append(("<i class='bi bi-archive'></i> Deactivated", "deactivated"))
+        return filters
 
 
 class ClubMemberValidation(ClubViewMixin, APIPostView):

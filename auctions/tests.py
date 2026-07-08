@@ -7041,9 +7041,7 @@ class ImageViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         url = reverse("add_image", kwargs={"lot": lot.pk})
         upload = SimpleUploadedFile("ok.jpg", self._image_bytes(), content_type="image/jpeg")
-        permission_error = PermissionError(
-            "[Errno 13] Permission denied: '/home/app/web/mediafiles/images/ok.jpg'"
-        )
+        permission_error = PermissionError("[Errno 13] Permission denied: '/home/app/web/mediafiles/images/ok.jpg'")
         with patch("auctions.models.LotImage.save", side_effect=permission_error):
             with self.assertRaises(PermissionError):
                 self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
@@ -10003,6 +10001,27 @@ class SquarePaymentTests(StandardTestCase):
 
         # tosB should be in the filtered results
         self.assertIn(self.tosB, filtered_qs)
+
+    def test_is_club_member_filter_in_auction_tos(self):
+        """'club member' returns is_club_member=True users; 'unpaid' returns is_club_member=False."""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS
+
+        self.online_tos.is_club_member = True
+        self.online_tos.save(update_fields=["is_club_member"])
+        self.tosB.is_club_member = False
+        self.tosB.save(update_fields=["is_club_member"])
+
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+        filter_instance = AuctionTOSFilter()
+
+        paid = filter_instance.generic(qs, "club member")
+        self.assertIn(self.online_tos, paid)
+        self.assertNotIn(self.tosB, paid)
+
+        unpaid = filter_instance.generic(qs, "unpaid")
+        self.assertIn(self.tosB, unpaid)
+        self.assertNotIn(self.online_tos, unpaid)
 
     def test_pickup_by_mail_requires_address(self):
         """Test that Square payment link requires address when pickup_by_mail is True"""
@@ -15809,6 +15828,38 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         # Should return 403 or redirect
         self.assertIn(response.status_code, [403, 302])
+
+    def test_club_admin_membership_filters_hidden_without_fee(self):
+        """Paid/Unpaid membership chips are hidden when the club charges no dues, but the
+        source/other chips (modeled on the auction users page) are still offered."""
+        self.club.membership_annual_fee = None
+        self.club.save()
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        keys = [key for _, key in response.context["possible_filters"]]
+        self.assertNotIn("current", keys)
+        self.assertNotIn("expired", keys)
+        self.assertIn("joined", keys)
+        self.assertIn("deactivated", keys)
+
+    def test_club_admin_membership_filters_shown_with_fee(self):
+        """Paid club member / Unpaid chips appear once the club has a membership fee."""
+        self.club.membership_annual_fee = 20
+        self.club.save()
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        filters = response.context["possible_filters"]
+        self.assertIn(("<i class='bi bi-person-badge'></i> Paid club member", "current"), filters)
+        self.assertIn(("<i class='bi bi-person'></i> Unpaid", "expired"), filters)
+        # The shared HTMX template renders the chips as toggleable checkboxes.
+        content = response.content.decode(response.charset or "utf-8")
+        self.assertIn('data-filter-key="current"', content)
+        self.assertIn('data-filter-key="expired"', content)
+        self.assertIn("Paid club member", content)
 
     def test_club_edit_owner_can_access(self):
         """Club admin member can access edit page (permission_admin grants permission_edit_club)"""
