@@ -35,6 +35,7 @@ from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 from django.db.models import (
     Avg,
@@ -127,6 +128,7 @@ from .filters import (
     rhyming_name_q,
 )
 from .forms import (
+    IMAGE_PROCESSING_EXCEPTIONS,
     AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
@@ -6838,24 +6840,38 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.image_source = "RANDOM"
         uploaded_image = form.cleaned_data.get("image")
 
-        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG
-        try:
-            with Image.open(uploaded_image) as img:
-                if img.format != "JPEG":
-                    img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG")
-                    buffer.seek(0)
-                    image.image.save(
-                        uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
-                    )
-        except Exception as e:
-            logger.error("Error processing image: %s", e)
+        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG. The
+        # upload was already validated in the form, so this is best-effort: if it fails we
+        # just fall through and let the normal save path try the original file.
+        if isinstance(uploaded_image, UploadedFile):
+            try:
+                with Image.open(uploaded_image) as img:
+                    if img.format != "JPEG":
+                        img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
+                        buffer = BytesIO()
+                        img.save(buffer, format="JPEG")
+                        buffer.seek(0)
+                        image.image.save(
+                            uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
+                        )
+            except IMAGE_PROCESSING_EXCEPTIONS as e:
+                logger.info("Could not pre-convert uploaded image to JPEG: %s", e)
+
         try:
             image.save()
-        except Exception as e:
-            form.add_error("image", f"Image is not in a supported format or is corrupt.  Error: {e}")
+        except IMAGE_PROCESSING_EXCEPTIONS as e:
+            # The image itself is unusable (bad format, corrupt, decompression bomb...).
+            # Show the uploader a friendly, actionable error.
+            logger.info("Rejected lot image during save: %s", e)
+            form.add_error(
+                "image",
+                "We couldn't process that image -- it may be corrupt or in an unsupported format. "
+                "Please try a different photo.",
+            )
             return self.form_invalid(form)
+        # Anything else (permission denied writing to mediafiles, disk full, database
+        # errors...) is a server/site problem, not the user's file. Let it propagate so it
+        # becomes a 500 and the admins get emailed instead of blaming the uploader's photo.
         return super().form_valid(form)
 
 

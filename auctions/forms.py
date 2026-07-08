@@ -16,6 +16,7 @@ from dal import autocomplete
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import UploadedFile
 from django.db.models import Q
 from django.forms import (
     HiddenInput,
@@ -25,6 +26,8 @@ from django.utils import timezone
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
+from easy_thumbnails.exceptions import EasyThumbnailsError
+from PIL import Image, ImageFile, UnidentifiedImageError
 
 from .helper_functions import get_currency_symbol
 from .models import (
@@ -112,6 +115,64 @@ def validate_image_url(url):
         )
         raise forms.ValidationError(msg)
     return url
+
+
+# Exceptions that mean "the image the user gave us is unusable" (bad/unknown format,
+# truncated/corrupt data, or an oversized decompression bomb) rather than "something is
+# wrong with the server". These are safe to show to the uploader as a fixable problem.
+#
+# Note that ``UnidentifiedImageError`` is a subclass of ``OSError`` but bare ``OSError`` is
+# deliberately NOT listed here: Pillow/easy_thumbnails raise plain ``OSError`` (e.g.
+# ``PermissionError`` / ``[Errno 13]``, out-of-disk-space) when *writing* the resized file,
+# and those are server problems that must surface as 500s so the admins get emailed rather
+# than being blamed on the user's photo.
+IMAGE_PROCESSING_EXCEPTIONS = (
+    UnidentifiedImageError,
+    Image.DecompressionBombError,
+    EasyThumbnailsError,  # includes InvalidImageFormatError
+    SyntaxError,
+    EOFError,
+)
+
+
+def validate_uploaded_image(uploaded_image):
+    """Confirm `uploaded_image` is a real image that Pillow can fully decode.
+
+    This mirrors how easy_thumbnails opens the source when generating the thumbnail on
+    save (a full ``load()`` with ``LOAD_TRUNCATED_IMAGES`` enabled) so we reject exactly
+    the files that would otherwise blow up during thumbnailing -- but we do it here, up
+    front, where we can show the uploader a friendly, actionable message instead of a 500.
+
+    Raises ``forms.ValidationError`` for anything that isn't a usable image. The file's
+    read position is reset to the start so the subsequent model save can re-read it.
+    """
+    try:
+        uploaded_image.seek(0)
+    except (AttributeError, OSError):
+        pass
+    previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
+    try:
+        # Match easy_thumbnails' tolerance so we don't reject images it would happily
+        # process (and vice-versa).
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        with Image.open(uploaded_image) as img:
+            img.load()
+    except (*IMAGE_PROCESSING_EXCEPTIONS, ValueError, OSError) as e:
+        # We are only *reading* the uploaded file here, so an OSError means the image
+        # data itself is bad -- not a disk/permission problem (those happen on write).
+        logger.info("Rejected uploaded image: %s", e)
+        msg = (
+            "We couldn't read that image -- it may be corrupt or in a format we don't support. "
+            "Please try a different photo (JPEG, PNG, GIF, or WEBP)."
+        )
+        raise forms.ValidationError(msg) from e
+    finally:
+        ImageFile.LOAD_TRUNCATED_IMAGES = previous_truncated_setting
+        try:
+            uploaded_image.seek(0)
+        except (AttributeError, OSError):
+            pass
+    return uploaded_image
 
 
 def clean_summernote(html, max_length=16383):
@@ -1809,6 +1870,21 @@ class CreateImageForm(forms.ModelForm):
         if not url:
             return url
         return validate_image_url(url)
+
+    def clean_image(self):
+        """Reject corrupt/unsupported uploads with a friendly message before they hit save.
+
+        Django's ImageField only runs Pillow's ``verify()`` (a header check), which passes
+        truncated or otherwise broken files that then explode during thumbnail generation.
+        Here we fully decode a freshly uploaded file so image problems become a nice inline
+        field error rather than a server error blamed on the user's photo.
+        """
+        image = self.cleaned_data.get("image")
+        # Only validate a newly uploaded file; leave an unchanged, already-stored image
+        # (on the edit view) alone.
+        if isinstance(image, UploadedFile):
+            validate_uploaded_image(image)
+        return image
 
     def clean(self):
         cleaned_data = super().clean()

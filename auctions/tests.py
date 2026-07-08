@@ -6968,6 +6968,23 @@ class UserViewTests(StandardTestCase):
 class ImageViewTests(StandardTestCase):
     """Test image create/update/delete views"""
 
+    def _image_bytes(self, fmt="JPEG", size=(10, 10)):
+        """Return the raw bytes of a small valid image in the given format"""
+        from PIL import Image as PILImage
+
+        buffer = io.BytesIO()
+        PILImage.new("RGB", size, "blue").save(buffer, format=fmt)
+        return buffer.getvalue()
+
+    def _addable_lot(self):
+        """An unsold lot the standard `self.user` is allowed to add images to"""
+        return Lot.objects.create(
+            lot_name="addable lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+
     def test_image_create_anonymous(self):
         """Anonymous users cannot create images"""
         url = reverse("add_image", kwargs={"lot": self.lot.pk})
@@ -6981,6 +6998,70 @@ class ImageViewTests(StandardTestCase):
         url = reverse("add_image", kwargs={"lot": self.lot.pk})
         response = self.client.get(url)
         assert response.status_code == 302
+
+    def test_create_image_form_accepts_valid_image(self):
+        """A real image passes form validation"""
+        from .forms import CreateImageForm
+
+        upload = SimpleUploadedFile("ok.jpg", self._image_bytes(), content_type="image/jpeg")
+        form = CreateImageForm(data={"image_source": "ACTUAL"}, files={"image": upload})
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_create_image_form_rejects_corrupt_image(self):
+        """A corrupt/non-image upload becomes an inline field error, never a 500"""
+        from .forms import CreateImageForm
+
+        upload = SimpleUploadedFile("bad.jpg", b"this is definitely not an image", content_type="image/jpeg")
+        form = CreateImageForm(data={"image_source": "ACTUAL"}, files={"image": upload})
+        self.assertFalse(form.is_valid())
+        self.assertIn("image", form.errors)
+
+    def test_validate_uploaded_image_rejects_garbage(self):
+        """validate_uploaded_image raises a friendly ValidationError on unreadable data"""
+        from .forms import validate_uploaded_image
+
+        upload = SimpleUploadedFile("bad.png", b"not an image at all", content_type="image/png")
+        with self.assertRaises(ValidationError):
+            validate_uploaded_image(upload)
+
+    def test_validate_uploaded_image_accepts_real_image(self):
+        """validate_uploaded_image returns the file (rewound) for a valid image"""
+        from .forms import validate_uploaded_image
+
+        upload = SimpleUploadedFile("ok.png", self._image_bytes(fmt="PNG"), content_type="image/png")
+        # Should not raise, and should leave the file ready to be re-read.
+        validate_uploaded_image(upload)
+        self.assertEqual(upload.tell(), 0)
+
+    def test_site_error_on_save_is_not_masked_as_corrupt(self):
+        """A permission/disk error while saving must surface as a 500 (which emails the
+        admins), not be reported to the user as a corrupt image. This is the prod
+        regression: [Errno 13] Permission denied writing to mediafiles/images/."""
+        lot = self._addable_lot()
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("add_image", kwargs={"lot": lot.pk})
+        upload = SimpleUploadedFile("ok.jpg", self._image_bytes(), content_type="image/jpeg")
+        permission_error = PermissionError(
+            "[Errno 13] Permission denied: '/home/app/web/mediafiles/images/ok.jpg'"
+        )
+        with patch("auctions.models.LotImage.save", side_effect=permission_error):
+            with self.assertRaises(PermissionError):
+                self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
+
+    def test_image_processing_error_on_save_shown_to_user(self):
+        """If the image itself is unusable at save time, the user gets a friendly error
+        (not a 500) and stays on the form."""
+        from PIL import UnidentifiedImageError
+
+        lot = self._addable_lot()
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("add_image", kwargs={"lot": lot.pk})
+        upload = SimpleUploadedFile("ok.jpg", self._image_bytes(), content_type="image/jpeg")
+        with patch("auctions.models.LotImage.save", side_effect=UnidentifiedImageError("bad image")):
+            response = self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "corrupt or in an unsupported format")
+        self.assertFalse(LotImage.objects.filter(lot_number=lot).exists())
 
 
 class WatchViewTests(StandardTestCase):
