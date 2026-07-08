@@ -6,6 +6,7 @@
       "Bash(docker compose config)",
       "Bash(docker compose config *)",
       "Bash(docker compose logs *)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }
