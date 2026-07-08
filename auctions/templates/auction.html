@@ -162,6 +162,7 @@ function initMap() {
                         <div class="col-12 col-md-auto">
                             <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
                         </div>
+                        {% if auction.can_submit_lots %}
                         <div class="col-12 col-md-auto">
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
                             <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
@@ -169,6 +170,7 @@ function initMap() {
                             <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
                             {% endif %}
                         </div>
+                        {% endif %}
                         <div class="col-12 col-md-auto">
                             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-info btn-sm w-100"><i class="bi bi-bag"></i> My Invoice</a>
                         </div>

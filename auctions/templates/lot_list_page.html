@@ -5,7 +5,11 @@
 {% load currency_filters %}
 {% if not object_list %}
   {% if embed == 'all_lots' %}
-  <h5>No lots found</h5>
+    {% if recently_added_lots_hidden %}
+    <h5>Recently added lots will appear here shortly</h5>
+    {% else %}
+    <h5>No lots found</h5>
+    {% endif %}
   {% else %}
   <h5>You've already seen all your recommended lots</h5>
   {% endif %}
@@ -30,7 +34,7 @@
     {% endif %}
     {% for lot in object_list %}
     <tr class='nowrap'>
-      <td>{% if lot.auction %}
+      <td>{% if lot_view_type == 'mybids' and not lot.ended and not lot.sealed_bid and lot.high_bidder and lot.high_bidder.pk != request.user.pk %}<span class="badge bg-danger">Outbid</span> {% endif %}{% if lot.auction %}
             Lot {{ lot.lot_number_display }}
           {% else %}
             {% if lot.local_pickup %}

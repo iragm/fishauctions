@@ -24796,3 +24796,82 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, dup_user)
         self.assertFalse(AuctionTOS.objects.filter(pk=own.pk).exists())
+
+
+class LotListUXTests(StandardTestCase):
+    """Part 3 UX: the persistent 'Outbid' chip on /bids/, the 20-minute new-lot message on the
+    auction lot list, and gating the 'Add Lots' button by the submission window."""
+
+    def setUp(self):
+        super().setUp()
+        now = timezone.now()
+        self.ux_auction = Auction.objects.create(
+            created_by=self.user,
+            title="UX online auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=3),
+            lot_submission_end_date=now + datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+        )
+        self.ux_location = PickupLocation.objects.create(
+            name="ux location", auction=self.ux_auction, pickup_time=now + datetime.timedelta(days=2)
+        )
+        self.bidder = User.objects.create_user(username="ux_bidder", password="x", email="uxbidder@example.com")
+        AuctionTOS.objects.create(user=self.bidder, auction=self.ux_auction, pickup_location=self.ux_location)
+        self.other = User.objects.create_user(username="ux_other", password="x", email="uxother@example.com")
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.ux_auction, pickup_location=self.ux_location
+        )
+
+    def _make_lot(self, name, recent=False):
+        lot = Lot.objects.create(
+            lot_name=name,
+            auction=self.ux_auction,
+            auctiontos_seller=self.seller_tos,
+            user=self.user,
+            quantity=1,
+            active=True,
+        )
+        if not recent:
+            Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
+        return lot
+
+    def test_outbid_chip_shown_when_not_high_bidder(self):
+        lot = self._make_lot("Lot I got outbid on")
+        Bid.objects.create(user=self.bidder, lot_number=lot, amount=50)
+        Bid.objects.create(user=self.other, lot_number=lot, amount=100)
+        self.client.force_login(self.bidder)
+        response = self.client.get(reverse("my_bids"))
+        self.assertContains(response, "Lot I got outbid on")
+        self.assertContains(response, "Outbid")
+
+    def test_no_outbid_chip_when_high_bidder(self):
+        lot = self._make_lot("Lot I am winning")
+        Bid.objects.create(user=self.bidder, lot_number=lot, amount=100)
+        Bid.objects.create(user=self.other, lot_number=lot, amount=50)
+        self.client.force_login(self.bidder)
+        response = self.client.get(reverse("my_bids"))
+        self.assertContains(response, "Lot I am winning")
+        self.assertNotContains(response, "Outbid")
+
+    def test_recently_added_lots_message(self):
+        # The only lot was posted moments ago, so it's hidden from non-owners by the 20-minute window.
+        self._make_lot("Brand new lot", recent=True)
+        self.client.force_login(self.bidder)
+        response = self.client.get(self.ux_auction.view_lot_link)
+        self.assertContains(response, "Recently added lots will appear here shortly")
+        self.assertNotContains(response, "Brand new lot")
+
+    def test_add_lots_button_shown_while_submission_open(self):
+        self.client.force_login(self.bidder)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.ux_auction.slug}))
+        self.assertContains(response, "bi-calendar-plus")
+
+    def test_add_lots_button_hidden_after_submission_closes(self):
+        self.ux_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(hours=1)
+        self.ux_auction.save()
+        self.assertFalse(self.ux_auction.can_submit_lots)
+        self.client.force_login(self.bidder)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.ux_auction.slug}))
+        self.assertNotContains(response, "bi-calendar-plus")

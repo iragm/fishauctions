@@ -9018,6 +9018,21 @@ class AllLots(LotListView, AuctionViewMixin):
             ignore=True,
             regardingAuction=self.auction,
         )
+        # LotFilter hides lots posted in the last 20 minutes from non-owners. When those are the
+        # only lots in the auction the list looks empty, so flag it and let the template explain the
+        # short wait instead of showing a bare "No lots found". Superusers and in-person auctions
+        # don't hide new lots (see LotFilter.qs), so there's nothing to explain there.
+        context["recently_added_lots_hidden"] = False
+        if self.auction and self.auction.is_online and not self.request.user.is_superuser:
+            recent_lots = Lot.objects.filter(
+                auction=self.auction,
+                is_deleted=False,
+                banned=False,
+                date_posted__gte=timezone.now() - timedelta(minutes=20),
+            )
+            if self.request.user.is_authenticated:
+                recent_lots = recent_lots.exclude(user=self.request.user)
+            context["recently_added_lots_hidden"] = recent_lots.exists()
         context["hide_google_login"] = True
         return context
 

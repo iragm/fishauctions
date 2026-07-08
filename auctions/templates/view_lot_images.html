@@ -88,6 +88,19 @@ function deactivate_lot() {
     window.onload = function() {
     var $ = window.jQuery;
     originalTitle = $(document).prop('title');
+    // Localize the initial "Ends:" value to the browser's timezone. The server renders it in a
+    // fallback timezone (America/New_York) until the tz cookie is set, which made this look hours
+    // off from the tiles and the live websocket update. The server string stays as a no-JS fallback.
+    var endDateEl = document.getElementById('end_date');
+    if (endDateEl) {
+        var endIso = endDateEl.getAttribute('data-end-iso');
+        if (endIso) {
+            var endLocal = new Date(endIso);
+            if (!isNaN(endLocal.getTime())) {
+                endDateEl.textContent = endLocal.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+            }
+        }
+    }
     // recommended lots
     {% if lot.minutes_to_end > 10 %}
     setTimeout( function() {
@@ -430,7 +443,7 @@ function deactivate_lot() {
                         {% endif %}
 
                         <tr>
-                            <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
+                            <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}" data-end-iso="{% if not lot.is_part_of_in_person_auction or lot.winner_as_str and lot.date_end %}{{ lot.calculated_end|date:'c' }}{% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
                         </tr>
 
                         {% if lot.auction and lot.auction.multi_location and lot.location %}
