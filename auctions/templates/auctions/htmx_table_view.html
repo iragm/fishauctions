@@ -11,22 +11,24 @@
   {% endif %}
 
   {% if possible_filters %}
-    <span class="dropdown">
-      <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-        <i class="bi bi-filter"></i> Filters
-      </button>
-      <div class="dropdown-menu">
-        {% for filter_label, filter_key in possible_filters %}
-          {% if filter_key %}
-            <label class="dropdown-item">
-              <input type="checkbox" class="htmx-table-filter" data-filter-key="{{ filter_key }}"> {{ filter_label|safe }}
-            </label>
-          {% else %}
-            <span class="dropdown-item">{{ filter_label|safe }}</span>
-          {% endif %}
-        {% endfor %}
-      </div>
-    </span>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
+      <span class="dropdown">
+        <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+          <i class="bi bi-filter"></i> Filters
+        </button>
+        <div class="dropdown-menu">
+          {% for filter_label, filter_key in possible_filters %}
+            {% if filter_key %}
+              <label class="dropdown-item">
+                <input type="checkbox" class="htmx-table-filter" data-filter-key="{{ filter_key }}"> {{ filter_label|safe }}
+              </label>
+            {% else %}
+              <span class="dropdown-item">{{ filter_label|safe }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </span>
+    </div>
   {% endif %}
 
   {% block htmx_table_filter_form %}
