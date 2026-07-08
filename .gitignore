@@ -6,6 +6,12 @@
 # .env backups (e.g. .env.bak.<timestamp>) hold live secrets -- never commit them.
 .env.bak*
 .env.*.bak
+# Generated nginx site config. update.sh renders nginx.prod.conf.template ->
+# nginx.prod.conf, substituting the real SITE_DOMAIN. The output is deliberately
+# untracked so `git restore .` / `git pull` can't revert it to a broken
+# __SITE_DOMAIN__ placeholder (which would take the site down), and so the live
+# domain never lands in git. Edit nginx.prod.conf.template, not this file.
+/nginx.prod.conf
 # Core dumps. A crashing worker's CWD is the bind-mounted repo root, so native
 # crashes drop ~200MB core files here. entrypoints set `ulimit -c 0` to stop
 # them being written at all; this is a backstop so any that slip through (e.g.

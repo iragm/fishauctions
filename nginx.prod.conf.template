@@ -26,10 +26,11 @@ server {
 }
 
 # fishauctions server, https only.
-# __SITE_DOMAIN__ is a placeholder rendered from SITE_DOMAIN by
-# render_nginx_domain() in update.sh. It must stay literal in the committed
-# file so the render is idempotent. Do NOT use `server_name _;` here -- that is
-# a wildcard that matches every host, which swallows all traffic and makes the
+# This is a TEMPLATE. update.sh's render_nginx_domain() copies it to the
+# gitignored nginx.prod.conf, substituting __SITE_DOMAIN__ with SITE_DOMAIN from
+# .env. Keep __SITE_DOMAIN__ literal here so the render stays idempotent and the
+# real domain never lands in git. Do NOT use `server_name _;` here -- that is a
+# wildcard that matches every host, which swallows all traffic and makes the
 # catch-all 404 block above dead code.
 server {
     listen 443 ssl http2;

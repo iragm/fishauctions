@@ -171,26 +171,38 @@ ensure_permissions() {
 }
 
 render_nginx_domain() {
-    # Render the __SITE_DOMAIN__ placeholder in nginx.prod.conf from SITE_DOMAIN.
-    # The committed file always holds the placeholder (and `git restore .` above
-    # resets it before we run), so this is idempotent: no reliance on the current
-    # rendered value, and re-running never corrupts the file. Changing SITE_DOMAIN
-    # therefore actually takes effect -- the old sed keyed on `server_name _;`,
-    # which no longer existed, so it silently did nothing.
+    # Render nginx.prod.conf from the tracked nginx.prod.conf.template, substituting
+    # __SITE_DOMAIN__ with SITE_DOMAIN. The OUTPUT is gitignored, which is the whole
+    # point: `git restore .` / `git pull` above never revert it to a broken
+    # placeholder (a code-only deploy can no longer take the site down), and
+    # rendering never dirties the tree, so the live domain can't be committed by
+    # accident. The template is always clean, so this is fully idempotent -- no
+    # reliance on the current rendered value.
+    local template="./nginx.prod.conf.template"
+    local output="./nginx.prod.conf"
     local site_domain escaped_site_domain
     site_domain="$(get_env_value "SITE_DOMAIN")"
-    if [ -z "$site_domain" ]; then
-        echo "WARNING: SITE_DOMAIN is empty; nginx.prod.conf placeholder left unrendered."
+    if [ ! -f "$template" ]; then
+        echo "WARNING: $template not found; $output not rendered."
         return
+    fi
+    if ! grep -q "__SITE_DOMAIN__" "$template"; then
+        echo "WARNING: __SITE_DOMAIN__ placeholder not found in $template; $output not rendered."
+        echo "         Is the file checked out cleanly?"
+        return
+    fi
+    # An empty SITE_DOMAIN would render `server_name ;`, which nginx rejects and
+    # which would take the site down. Refuse to overwrite a possibly-good existing
+    # config and abort the deploy loudly -- git has already advanced, so the old
+    # containers keep serving until SITE_DOMAIN is fixed and ./update.sh re-run.
+    if [ -z "$site_domain" ]; then
+        echo "Update failed: SITE_DOMAIN is empty; refusing to render $output (would break nginx)."
+        echo "Set SITE_DOMAIN in .env and re-run ./update.sh. Containers were NOT restarted."
+        exit 1
     fi
     # Escape sed replacement metacharacters (& and the @ delimiter).
     escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&\\]/\\&/g')"
-    if grep -q "__SITE_DOMAIN__" ./nginx.prod.conf; then
-        sed -i "s@__SITE_DOMAIN__@${escaped_site_domain}@g" "./nginx.prod.conf"
-    else
-        echo "WARNING: __SITE_DOMAIN__ placeholder not found in nginx.prod.conf;"
-        echo "         domain not rendered. Is the file checked out cleanly?"
-    fi
+    sed "s@__SITE_DOMAIN__@${escaped_site_domain}@g" "$template" > "$output"
 }
 
 # Preflight: a custom NGINX_IMAGE (prod uses lscr.io/linuxserver/swag) without
