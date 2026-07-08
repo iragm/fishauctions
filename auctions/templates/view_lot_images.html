@@ -93,7 +93,7 @@ function deactivate_lot() {
     setTimeout( function() {
         $.ajax({
         type: "GET",
-        url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}&keywords={{lot.lot_name|urlencode}}",
+        url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}&keywords={{lot.lot_name|urlencode}}&exclude={{lot.pk}}",
         success : function(result) {
             $("#recommendations").html(result);
         },
@@ -444,7 +444,7 @@ function deactivate_lot() {
                         {% endif %}
                         {% if not lot.sealed_bid %}
                         <tr>
-                            <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
+                            <td><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
                         </tr>
                         {% endif %}
                     </table>

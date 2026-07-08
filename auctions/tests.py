@@ -24659,6 +24659,54 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         response = self.client.get(reverse("my_bids"))
         self.assertContains(response, "Fresh user bid on this")
 
+    def test_next_param_is_carried_into_join_form_action(self):
+        """Visiting the auction with ?next= renders a join form that POSTs back with ?next=,
+        so get_success_url can return the user to where they came from."""
+        self.client.force_login(self.fresh_user)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}) + "?next=/lots/")
+        self.assertEqual(response.context["form"].helper.form_action.split("?next=")[-1], "%2Flots%2F")
+
+    def test_join_redirects_to_next(self):
+        self.client.force_login(self.fresh_user)
+        response = self.client.post(
+            reverse("auction_main", kwargs={"slug": self.open_auction.slug}) + "?next=/lots/",
+            {
+                "i_agree": "on",
+                "pickup_location": str(self.open_location.pk),
+                "time_spent_reading_rules": "5",
+            },
+        )
+        self.assertRedirects(response, "/lots/", fetch_redirect_response=False)
+
+    def test_recommended_lots_can_exclude_a_lot(self):
+        from auctions.filters import get_recommended_lots
+
+        self._join()
+        seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.open_auction, pickup_location=self.open_location
+        )
+        category = Category.objects.create(name="Recommend test category")
+        lot_a = Lot.objects.create(
+            lot_name="Recommend A",
+            auction=self.open_auction,
+            auctiontos_seller=seller_tos,
+            species_category=category,
+            quantity=1,
+            active=True,
+        )
+        lot_b = Lot.objects.create(
+            lot_name="Recommend B",
+            auction=self.open_auction,
+            auctiontos_seller=seller_tos,
+            species_category=category,
+            quantity=1,
+            active=True,
+        )
+        Lot.objects.filter(pk__in=[lot_a.pk, lot_b.pk]).update(date_posted=timezone.now() - datetime.timedelta(days=1))
+        results = list(get_recommended_lots(user=self.fresh_user, auction=self.open_auction.slug, exclude_pk=lot_a.pk))
+        self.assertIn(lot_b, results)
+        self.assertNotIn(lot_a, results)
+
 
 class AuctionTOSEmailChangeGuardTests(StandardTestCase):
     """The email-change guard in AuctionTOS.save() should only unlink the account on a *real*

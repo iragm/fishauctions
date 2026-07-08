@@ -1560,7 +1560,7 @@ class LotRefundForm(forms.ModelForm):
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required=True)
 
-    def __init__(self, user, auction, *args, **kwargs):
+    def __init__(self, user, auction, next_url=None, *args, **kwargs):
         self.user = user
         self.auction = auction
         super().__init__(*args, **kwargs)
@@ -1570,6 +1570,12 @@ class AuctionJoin(forms.ModelForm):
         self.helper.form_id = "rule-form"
         self.helper.form_tag = True
         self.helper.form_action = reverse("auction_main", kwargs={"slug": auction.slug})
+        if next_url:
+            # Carry ?next= through the POST so get_success_url() (which reads request.GET["next"])
+            # can return the user to where they came from (e.g. the lot page they joined from).
+            from urllib.parse import quote
+
+            self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",

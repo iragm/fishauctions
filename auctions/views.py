@@ -1563,7 +1563,13 @@ class RecommendedLots(ListView):
             for word in lotWords:
                 if word not in settings.IGNORE_WORDS:
                     keywords.append(word)
-        return get_recommended_lots(user=self.request.user, auction=auction, qty=qty, keywords=keywords)
+        try:
+            exclude_pk = int(data.get("exclude")) if data.get("exclude") else None
+        except (ValueError, TypeError):
+            exclude_pk = None
+        return get_recommended_lots(
+            user=self.request.user, auction=auction, qty=qty, keywords=keywords, exclude_pk=exclude_pk
+        )
 
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
@@ -8430,6 +8436,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         form_kwargs = super().get_form_kwargs()
         form_kwargs["user"] = self.request.user
         form_kwargs["auction"] = self.auction
+        form_kwargs["next_url"] = self.request.GET.get("next")
         return form_kwargs
 
     def dispatch(self, request, *args, **kwargs):
@@ -8533,6 +8540,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         context["form"] = AuctionJoin(
             user=self.request.user,
             auction=self.auction,
+            next_url=self.request.GET.get("next"),
             initial={
                 "user": getattr(self.request.user, "id", None),
                 "auction": self.auction.pk,

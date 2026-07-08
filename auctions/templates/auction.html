@@ -357,7 +357,7 @@ function initMap() {
                             {% if location.users_must_coordinate_pickup %}
                                 <p>You must schedule your pickup time in advance.</p>
                             {% else %}
-                                <p><strong>{{ location.pickup_time }}</strong></p>
+                                <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
                             {% endif %}
                             <div class="btn-group flex-wrap" role="group">
                                 {%if location.has_coordinates %}
@@ -431,7 +431,7 @@ function initMap() {
                                 {% if location.users_must_coordinate_pickup %}
                                     <p>You must schedule your pickup time in advance.</p>
                                 {% else %}
-                                    <p><strong>{{ location.pickup_time }}</strong></p>
+                                    <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
                                 {% endif %}
 
                                 <div class="btn-group mb-3 flex-wrap" role="group">

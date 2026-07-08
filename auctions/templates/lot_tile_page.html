@@ -126,7 +126,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
 
       <div class="card-body">
         <h5 class="card-title">
-          {{ lot.lot_name }}
+          <a href="{{ lot.lot_link }}?src={{src}}" class="text-reset text-decoration-none">{{ lot.lot_name }}</a>
           {% if not lot.thumbnail and request.user.is_authenticated %}
             {% if lot.is_watched_by_req_user or not lot.ended %}
             <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)" style="float: right;">

@@ -24,7 +24,7 @@
               <td>{% if invoice.user_should_be_paid or invoice.net == 0 %}
                   {{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }}
                 {% else %}
-                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }})</span>
+                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.absolute_amount|floatformat:2 }})</span>
                 {% endif %}
                 </td>
               <td>{{ invoice.get_status_display }}</td>

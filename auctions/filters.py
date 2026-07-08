@@ -995,6 +995,7 @@ def get_recommended_lots(
     longitude=0,
     qty=10,
     keywords=[],
+    exclude_pk=None,  # lot pk to leave out (e.g. the lot the user is currently viewing)
 ):
     """
     This is the core of the recommendation system
@@ -1013,6 +1014,8 @@ def get_recommended_lots(
         order="-recommended",
         keywords=keywords,
     ).qs
+    if exclude_pk:
+        qs = qs.exclude(pk=exclude_pk)
     return qs[:qty]
 
 
