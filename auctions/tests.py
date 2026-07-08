@@ -21829,9 +21829,11 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(cm.source, "Empty Auction")
         self.assertTrue(cm.bidder_number)
         self.assertNotEqual(cm.bidder_number, "")
-        # AuctionTOS.save clears user when email changes for non-manually-added records;
-        # the user gets re-linked on next login via signals. Query by clubmember instead.
+        # The join links the AuctionTOS to the joining user directly. (The email-change guard used
+        # to clear it because the email went None->value on the second save; it no longer does now
+        # that the email is seeded on creation and the guard ignores blank->value transitions.)
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
+        self.assertEqual(tos.user, self.joiner)
         self.assertEqual(tos.bidder_number, cm.bidder_number)
 
     def test_join_page_hides_club_add_message_for_existing_member(self):
@@ -24563,3 +24565,186 @@ class MobilePaymentEndpointTests(StandardTestCase):
         self.assertIn("still due", body["detail"])
         # No second payment was recorded off the stale charge.
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
+
+
+class AuctionJoinLinksUserTests(StandardTestCase):
+    """Regression + guard tests for the AuctionTOS.user=None bug.
+
+    Joining an auction through the UI must link the AuctionTOS to the joining user so downstream
+    user-FK lookups keep working: the join-state check on the auction page, /bids/ and /lots/won/
+    (both restrict lots to auctions the user has a TOS in, via LotFilter.possibleAuctions).
+    """
+
+    def setUp(self):
+        super().setUp()
+        now = timezone.now()
+        self.open_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Open online auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=3),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.open_location = PickupLocation.objects.create(
+            name="open location", auction=self.open_auction, pickup_time=now + datetime.timedelta(days=2)
+        )
+        self.fresh_user = User.objects.create_user(
+            username="fresh_joiner", password="testpassword", email="fresh@example.com"
+        )
+
+    def _join(self):
+        self.client.force_login(self.fresh_user)
+        return self.client.post(
+            reverse("auction_main", kwargs={"slug": self.open_auction.slug}),
+            {
+                "i_agree": "on",
+                "pickup_location": str(self.open_location.pk),
+                "time_spent_reading_rules": "5",
+            },
+        )
+
+    def test_join_links_auctiontos_to_user(self):
+        """The core fix: a first-time UI join leaves AuctionTOS.user set, not None."""
+        self._join()
+        tos = AuctionTOS.objects.get(auction=self.open_auction, email="fresh@example.com")
+        self.assertEqual(tos.user, self.fresh_user)
+
+    def test_join_marks_location_chosen_so_form_is_not_reshown(self):
+        """With the user linked, the auction page recognizes the join and hides the join form."""
+        self._join()
+        self.client.force_login(self.fresh_user)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}))
+        self.assertTrue(response.context["hasChosenLocation"])
+
+    def test_won_lot_visible_on_won_lots_page_after_join(self):
+        self._join()
+        tos = AuctionTOS.objects.get(auction=self.open_auction, user=self.fresh_user)
+        seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.open_auction, pickup_location=self.open_location
+        )
+        won = Lot.objects.create(
+            lot_name="Fresh user won this",
+            auction=self.open_auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=tos,
+            active=False,
+        )
+        # date_posted is auto_now_add; push it out of the 20-minute new-lot hiding window.
+        Lot.objects.filter(pk=won.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
+        self.client.force_login(self.fresh_user)
+        response = self.client.get(reverse("won_lots"))
+        self.assertContains(response, "Fresh user won this")
+
+    def test_bid_lot_visible_on_bids_page_after_join(self):
+        self._join()
+        seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.open_auction, pickup_location=self.open_location
+        )
+        lot = Lot.objects.create(
+            lot_name="Fresh user bid on this",
+            auction=self.open_auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            active=True,
+        )
+        Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
+        Bid.objects.create(user=self.fresh_user, lot_number=lot, amount=5)
+        self.client.force_login(self.fresh_user)
+        response = self.client.get(reverse("my_bids"))
+        self.assertContains(response, "Fresh user bid on this")
+
+
+class AuctionTOSEmailChangeGuardTests(StandardTestCase):
+    """The email-change guard in AuctionTOS.save() should only unlink the account on a *real*
+    email change to an address that isn't the linked user's own."""
+
+    def test_real_email_change_unlinks_user_and_resets_status(self):
+        guard_user = User.objects.create_user(username="guard1", password="x", email="guard-a@example.com")
+        tos = AuctionTOS.objects.create(
+            user=guard_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="guard-a@example.com",
+            email_address_status="VALID",
+            manually_added=False,
+        )
+        tos.email = "guard-b@example.com"
+        tos.save()
+        tos.refresh_from_db()
+        self.assertIsNone(tos.user)
+        self.assertEqual(tos.email_address_status, "UNKNOWN")
+
+    def test_filling_blank_email_keeps_user(self):
+        guard_user = User.objects.create_user(username="guard2", password="x", email="guard2@example.com")
+        # No matching user exists for this address at creation, so user stays as we set it.
+        tos = AuctionTOS.objects.create(
+            user=guard_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=False,
+        )
+        self.assertIsNone(tos.email)
+        tos.email = "guard2@example.com"
+        tos.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.user, guard_user)
+
+    def test_change_to_linked_users_own_email_keeps_user(self):
+        guard_user = User.objects.create_user(username="guard3", password="x", email="guard3-own@example.com")
+        tos = AuctionTOS.objects.create(
+            user=guard_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="guard3-other@example.com",
+            manually_added=False,
+        )
+        tos.email = "guard3-own@example.com"
+        tos.save()
+        tos.refresh_from_db()
+        self.assertEqual(tos.user, guard_user)
+
+
+class RelinkAuctiontosUsersCommandTests(StandardTestCase):
+    """Tests for the relink_auctiontos_users repair command."""
+
+    def _make_orphan(self, email):
+        """Create an AuctionTOS with no user (no matching user exists yet, so save() can't auto-link)."""
+        tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email=email,
+            manually_added=False,
+        )
+        self.assertIsNone(tos.user)
+        return tos
+
+    def test_relinks_orphaned_tos(self):
+        orphan = self._make_orphan("orphan@example.com")
+        orphan_user = User.objects.create_user(username="orphanu", password="x", email="orphan@example.com")
+        call_command("relink_auctiontos_users")
+        orphan.refresh_from_db()
+        self.assertEqual(orphan.user, orphan_user)
+
+    def test_dry_run_makes_no_changes(self):
+        orphan = self._make_orphan("orphan2@example.com")
+        User.objects.create_user(username="orphanu2", password="x", email="orphan2@example.com")
+        call_command("relink_auctiontos_users", "--dry-run")
+        orphan.refresh_from_db()
+        self.assertIsNone(orphan.user)
+
+    def test_merges_duplicate_keeping_oldest(self):
+        orphan = self._make_orphan("dup@example.com")
+        dup_user = User.objects.create_user(username="dupu", password="x", email="dup@example.com")
+        # A newer TOS already linked to the user in the same auction.
+        own = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location, user=dup_user)
+        call_command("relink_auctiontos_users")
+        # Oldest record (the orphan) is kept as canonical and gets the user; the newer one is merged away.
+        orphan.refresh_from_db()
+        self.assertEqual(orphan.user, dup_user)
+        self.assertFalse(AuctionTOS.objects.filter(pk=own.pk).exists())

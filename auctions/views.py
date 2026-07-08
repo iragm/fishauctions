@@ -8597,7 +8597,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 obj, created = AuctionTOS.objects.get_or_create(
                     user=self.request.user,
                     auction=auction,
-                    defaults={"pickup_location": form.cleaned_data["pickup_location"]},
+                    defaults={
+                        "pickup_location": form.cleaned_data["pickup_location"],
+                        # Seed the email on creation so the record never takes the None->email
+                        # transition that used to trip AuctionTOS.save()'s email-change guard and
+                        # clear this freshly-linked user. `or None` (not "") keeps the "no email"
+                        # admin filter working, which relies on email__isnull.
+                        "email": self.request.user.email or None,
+                    },
                 )
                 is_new_join = created
             obj.pickup_location = form.cleaned_data["pickup_location"]

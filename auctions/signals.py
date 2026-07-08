@@ -526,9 +526,14 @@ def update_lot_info(sender, instance, **kwargs):
         instance.reserve_price = instance.auction.minimum_bid
 
 
-@receiver(user_logged_in)
-def user_logged_in_callback(sender, user, request, **kwargs):
-    """When a user signs in, link unattached AuctionTOS and ClubMember records to their account."""
+def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
+    """Link any AuctionTOS rows that match this user's email but have no user FK yet.
+
+    When the user already has a TOS in the same auction, the two are merged (oldest kept as
+    canonical) via AuctionTOS.merge_duplicate; otherwise the orphan row is linked directly.
+    Shared by the login signal (user_logged_in_callback) and the relink_auctiontos_users
+    management command so both repair paths behave identically.
+    """
     from auctions.models import AuctionTOS
 
     auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
@@ -541,10 +546,16 @@ def user_logged_in_callback(sender, user, request, **kwargs):
                 AuctionTOS.objects.filter(pk=canonical.pk).update(user=user)
             else:
                 canonical, duplicate = existing, auctiontos
-            canonical.merge_duplicate(duplicate, reason="duplicate detected on login")
+            canonical.merge_duplicate(duplicate, reason=reason)
         else:
             auctiontos.user = user
             auctiontos.save()
+
+
+@receiver(user_logged_in)
+def user_logged_in_callback(sender, user, request, **kwargs):
+    """When a user signs in, link unattached AuctionTOS and ClubMember records to their account."""
+    link_unattached_tos_for_user(user)
 
     from auctions.models import ClubMember
 

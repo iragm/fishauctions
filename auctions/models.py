@@ -4869,7 +4869,14 @@ class AuctionTOS(models.Model):
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
             if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
-                if not self.manually_added:
+                # Only unlink on a *real* email change to an address that isn't the linked user's own.
+                # Filling in a previously blank email (the auction-join flow) is not a change that
+                # invalidates the link, and unlinking so auto-matching can "find the correct user" is
+                # self-defeating when the new email already belongs to the linked user.
+                user_owns_new_email = bool(
+                    self.user and self.user.email and normalize_email(self.user.email) == self.email
+                )
+                if not self.manually_added and saved_tos.email and not user_owns_new_email:
                     # Clear the linked account so future auto-matching during auction joins can link this record
                     # to the correct user for the updated email address.
                     self.user = None
