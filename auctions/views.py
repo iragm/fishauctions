@@ -16788,7 +16788,7 @@ class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
         current_role = member.discord_role
         subtitle_parts.append(current_role.role_name if current_role else "No current role")
         subtitle = " · ".join(subtitle_parts)
-        title = mark_safe(f"{member} <small class='text-muted'>{subtitle}</small>")
+        title = format_html("{} <small class='text-muted'>{}</small>", member, subtitle)
         return {
             "modal_title": title,
             "form": form,
@@ -18967,10 +18967,8 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             )
             .values("pk", "name", "email", "address", "lat", "lng", "is_expired")
         )
-        import json as _json
-
         context["club"] = self.club
-        context["members_json"] = mark_safe(_json.dumps(list(qs)))
+        context["members_json"] = list(qs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         return context
 
