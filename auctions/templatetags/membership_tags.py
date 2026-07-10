@@ -62,7 +62,12 @@ def google_wallet_save_url(member):
     # Google Wallet URL should be exposed.
     if not member.club.show_member_barcode:
         return ""
-    from auctions.google_wallet import _object_visuals, is_configured
+    from auctions.google_wallet import (
+        _object_visuals,
+        is_configured,
+        member_text_modules,
+        member_valid_time_interval,
+    )
 
     if not is_configured():
         return ""
@@ -91,20 +96,17 @@ def google_wallet_save_url(member):
             "subheader": {
                 "defaultValue": {"language": "en-US", "value": member_name},
             },
-            "textModulesData": [
-                {"id": "member_id", "header": "Member ID", "body": str(member.membership_number)},
-            ],
+            "textModulesData": member_text_modules(member),
             "barcode": {
                 "type": "CODE_128",
                 "value": str(member.membership_number),
                 "alternateText": str(member.membership_number),
             },
-            **_object_visuals(club),
+            **_object_visuals(club, expired=member.wallet_status_is_expired),
         }
-        if member.membership_expiration_date:
-            generic_object["validTimeInterval"] = {
-                "end": {"date": f"{member.membership_expiration_date.isoformat()}T23:59:59"}
-            }
+        valid_time_interval = member_valid_time_interval(member)
+        if valid_time_interval:
+            generic_object["validTimeInterval"] = valid_time_interval
         payload = {
             "iss": service_account_email,
             "aud": "google",

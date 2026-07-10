@@ -769,24 +769,34 @@ class Club(CloudflareImageMixin, models.Model):
     membership_email_template = models.TextField(blank=True, default="")
     include_next_auction_in_emails = models.BooleanField(default=True)
     welcome_opening = models.TextField(
-        blank=True, default="Thanks for joining!", verbose_name="Welcome email opening text"
+        blank=True,
+        default="Thanks for joining!\n\nYou can view your membership below:",
+        verbose_name="Welcome email opening text",
     )
-    welcome_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Welcome email closing text")
+    welcome_closing = models.TextField(
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Welcome email closing text"
+    )
     welcome_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
     )
     renewal_opening = models.TextField(
-        blank=True, default="Your membership has been renewed!", verbose_name="Renewal email opening text"
+        blank=True,
+        default="Thanks for being a club member, and we'll see you at our next meeting.",
+        verbose_name="Renewal email opening text",
     )
-    renewal_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Renewal email closing text")
+    renewal_closing = models.TextField(
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Renewal email closing text"
+    )
     renewal_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
     )
     expiring_soon_opening = models.TextField(
-        blank=True, default="Your membership expires soon", verbose_name="Expiring soon email opening text"
+        blank=True,
+        default="It's time to renew your membership!  You can pay at this link:",
+        verbose_name="Expiring soon email opening text",
     )
     expiring_soon_closing = models.TextField(
-        blank=True, default="Best wishes,", verbose_name="Expiring soon email closing text"
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Expiring soon email closing text"
     )
     expiring_soon_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
@@ -1452,6 +1462,50 @@ class ClubMember(ContactRecord):
                 return self.membership_last_paid >= datetime.date(today.year, 1, 1)
             return self.membership_last_paid >= today - datetime.timedelta(days=365)
         return False
+
+    @property
+    def effective_expiration_date(self):
+        """The date this membership is (or was) valid through, or None.
+
+        Returns None when the club doesn't run memberships (membership_system 'none')
+        or the member has no payment on record. Prefers an explicit
+        membership_expiration_date, otherwise derives it from membership_last_paid
+        under the club's renewal system — mirroring is_paid_member and
+        calculate_membership_expiration_reminder_due so every surface agrees.
+        """
+        if self.club.membership_system == "none":
+            return None
+        if self.membership_expiration_date:
+            return self.membership_expiration_date
+        if self.membership_last_paid:
+            paid = self.membership_last_paid
+            if self.club.membership_system == "january_first":
+                return datetime.date(paid.year + 1, 1, 1)
+            return paid + datetime.timedelta(days=365)
+        return None
+
+    @property
+    def wallet_status_text(self):
+        """Short membership-status line for Google/Apple Wallet passes, or None.
+
+        None when the club doesn't run memberships — in that case passes omit the
+        status entirely and behave exactly as before. Otherwise returns
+        "Unpaid/expired" when dues are lapsed or never paid, or
+        "Valid through 1 Jan 2025" using the effective expiration date.
+        """
+        if self.club.membership_system == "none":
+            return None
+        if not self.is_paid_member:
+            return "Unpaid/expired"
+        expiration = self.effective_expiration_date
+        if expiration:
+            return f"Valid through {expiration.strftime('%-d %b %Y')}"
+        return "Valid"
+
+    @property
+    def wallet_status_is_expired(self):
+        """True when the wallet pass should render its expired styling (red)."""
+        return self.club.membership_system != "none" and not self.is_paid_member
 
     @property
     def discord_role(self):

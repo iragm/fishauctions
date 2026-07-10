@@ -1,0 +1,108 @@
+{% autoescape on %}{% if embed_mode == 'unstyled' %}<table class="bap-leaderboard">
+  <caption>{{ club_name }} — {{ program_label }} Top 10</caption>
+  <thead>
+    <tr><th scope="col">Rank</th><th scope="col">Name</th><th scope="col">{{ program_label }} points</th></tr>
+  </thead>
+  <tbody>
+  {% for row in leaderboard %}
+    <tr><td>{{ row.rank }}</td><td>{{ row.name }}</td><td>{{ row.points }}</td></tr>
+  {% empty %}
+    <tr><td colspan="3">No points recorded yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<!doctype html>
+<html lang="en" data-theme="{{ embed_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ club_name }} {{ program_label }} leaderboard</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #198754;
+      --badge-bg: #eef2f7;
+      --badge-text: #374151;
+    }
+    html[data-theme="dark"] {
+      --bg: #111827;
+      --card-bg: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --border: #374151;
+      --accent: #22c55e;
+      --badge-bg: #374151;
+      --badge-text: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+    .lb {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 16px;
+      background: var(--card-bg);
+    }
+    .lb h2 {
+      margin: 0 0 12px;
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+    ol.lb-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    ol.lb-list li {
+      display: flex;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    ol.lb-list li:last-child { border-bottom: 0; }
+    .lb-rank { min-width: 2em; color: var(--muted); }
+    .lb-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-rank-1 .lb-name { font-weight: 600; }
+    .lb-points {
+      margin-left: 12px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .lb-rank-1 .lb-points { background: var(--accent); color: #ffffff; }
+    .lb-empty { color: var(--muted); margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="lb">
+    <h2>{{ club_name }} &mdash; {{ program_label }} Top 10</h2>
+    {% if leaderboard %}
+    <ol class="lb-list">
+      {% for row in leaderboard %}
+      <li class="lb-rank-{{ row.rank }}">
+        <span class="lb-rank">{{ row.rank }}.</span>
+        <span class="lb-name">{{ row.name }}</span>
+        <span class="lb-points">{{ row.points }} pts</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="lb-empty">No points recorded yet.</p>
+    {% endif %}
+  </div>
+</body>
+</html>
+{% endif %}{% endautoescape %}

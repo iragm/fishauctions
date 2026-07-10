@@ -1183,6 +1183,50 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     ignore_result=True,
     autoretry_for=(requests.RequestException,),
     retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def refresh_google_wallet_membership_status(self):
+    """Daily: refresh Google Wallet passes for members whose membership status just
+    changed by the passage of time (i.e. their membership recently expired).
+
+    Keeps the on-pass status line ("Valid through …" / "Unpaid/expired") and the
+    expired red styling accurate even when no member edit fired the change signal.
+    Only members who lapsed in the last few days are touched, so this stays cheap.
+
+    Google Wallet objects support live PATCH; Apple passes can't be pushed without the
+    PassKit web service (not run here) but are regenerated correctly on every download.
+    """
+    from auctions.google_wallet import is_configured, update_generic_object_for_member
+    from auctions.models import ClubMember
+
+    if not is_configured():
+        return
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    # Members whose explicit expiration date passed in the last few days just flipped to
+    # expired (is_paid_member goes False the day after membership_expiration_date). The
+    # small window gives slack for a missed daily run.
+    window_start = today - datetime.timedelta(days=3)
+    members = ClubMember.objects.filter(
+        is_deleted=False,
+        club__google_wallet_class_created=True,
+        club__membership_system__in=["january_first", "rolling"],
+        membership_expiration_date__gte=window_start,
+        membership_expiration_date__lt=today,
+    ).select_related("user", "club")
+    for member in members:
+        try:
+            update_generic_object_for_member(member)
+        except requests.RequestException:
+            logger.exception("Google Wallet daily status refresh failed for member=%s", member.pk)
+            raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
     retry_backoff_max=300,
     max_retries=3,
 )

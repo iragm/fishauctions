@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 # two cards feel consistent.
 DEFAULT_BACKGROUND_RGB = (31, 41, 55)
 DEFAULT_FOREGROUND_RGB = (255, 255, 255)
+# Card background for a lapsed/expired membership — a dark red that stays readable
+# with white text. Apple passes can't color one field red, so the whole card is
+# tinted to signal the "Unpaid/expired" state.
+EXPIRED_BACKGROUND_RGB = (153, 27, 27)
 
 
 def is_configured() -> bool:
@@ -115,9 +119,18 @@ def _icon_png(club, size: tuple[int, int]) -> bytes:
 
 
 def _build_pass_json(member) -> dict:
-    """Build the pass.json content for a member."""
+    """Build the pass.json content for a member.
+
+    Apple Wallet passes can't be pushed live to already-installed passes without the
+    PassKit web service (device registration endpoints + APNs), which this project does
+    not run. But .pkpass files are regenerated on every download from the UUID link, so
+    a member who re-downloads always gets an up-to-date expiration/status — and Google
+    Wallet (which does support live PATCH) covers the real-time case.
+    """
     club = member.club
     member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
+    expired = member.wallet_status_is_expired
+    background_rgb = EXPIRED_BACKGROUND_RGB if expired else DEFAULT_BACKGROUND_RGB
     pass_json: dict = {
         "formatVersion": 1,
         "passTypeIdentifier": settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER,
@@ -125,7 +138,7 @@ def _build_pass_json(member) -> dict:
         "organizationName": settings.APPLE_WALLET_ORGANIZATION_NAME or club.name,
         "serialNumber": f"member-{member.pk}",
         "description": f"{club.name} membership card",
-        "backgroundColor": f"rgb{DEFAULT_BACKGROUND_RGB}",
+        "backgroundColor": f"rgb{background_rgb}",
         "foregroundColor": f"rgb{DEFAULT_FOREGROUND_RGB}",
         "labelColor": "rgb(200, 200, 200)",
         "logoText": club.name,
@@ -154,18 +167,16 @@ def _build_pass_json(member) -> dict:
             }
         ],
     }
-    if member.membership_expiration_date:
+    # Membership status line: "Unpaid/expired" or "Valid through 1 Jan 2025".
+    # None only when the club doesn't run memberships, leaving the pass unchanged.
+    status_text = member.wallet_status_text
+    if status_text:
+        pass_json["generic"]["auxiliaryFields"].append({"key": "status", "label": "Status", "value": status_text})
+    expiration = member.effective_expiration_date
+    if expiration:
         # Apple wants ISO 8601 with timezone offset; treat the date as end-of-day UTC.
-        pass_json["expirationDate"] = f"{member.membership_expiration_date.isoformat()}T23:59:59Z"
-        pass_json["generic"]["auxiliaryFields"].append(
-            {
-                "key": "expires",
-                "label": "Expires",
-                "value": f"{member.membership_expiration_date.isoformat()}T00:00",
-                "dateStyle": "PKDateStyleMedium",
-                "timeStyle": "PKDateStyleNone",
-            }
-        )
+        # Apple greys out an expired pass automatically once this date passes.
+        pass_json["expirationDate"] = f"{expiration.isoformat()}T23:59:59Z"
     return pass_json
 
 

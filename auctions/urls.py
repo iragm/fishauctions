@@ -807,6 +807,11 @@ urlpatterns = [
         name="club_member_apple_wallet_by_uuid",
     ),
     path(
+        "clubs/<slug:slug>/bap-embed/",
+        views.BapEmbedView.as_view(),
+        name="bap_embed",
+    ),
+    path(
         "clubs/<slug:slug>/print-barcodes/",
         views.ClubBarcodeLabelsView.as_view(),
         name="club_barcode_labels",

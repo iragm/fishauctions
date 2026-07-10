@@ -225,6 +225,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "name",
                 "membership_number",
                 "membership_expiration_date",
+                "membership_last_paid",
                 "address",
                 "email",
             )
@@ -237,6 +238,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_name = prev.get("name") or ""
         instance._previous_membership_number = prev.get("membership_number")
         instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
+        instance._previous_membership_last_paid = prev.get("membership_last_paid")
         instance._previous_address = prev.get("address") or ""
         instance._previous_email = prev.get("email") or ""
     else:
@@ -246,6 +248,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_name = ""
         instance._previous_membership_number = None
         instance._previous_membership_expiration_date = None
+        instance._previous_membership_last_paid = None
         instance._previous_address = ""
         instance._previous_email = ""
 
@@ -332,21 +335,25 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
 def update_google_wallet_object_on_member_change(sender, instance, created, **kwargs):
     """When wallet-visible member fields change, PATCH the member's Wallet object.
 
-    Watches: name, membership_number, membership_expiration_date.
-    New members have no Wallet object yet (they haven't clicked "Add to Wallet"),
-    so update_generic_object_for_member silently skips 404s — no harm done.
+    Watches: name, membership_number, membership_expiration_date, membership_last_paid.
+    last_paid matters because the on-pass status ("Valid through …" / "Unpaid/expired")
+    derives from the effective expiration date, which falls back to last_paid when no
+    explicit expiration date is set (e.g. rolling renewals). New members have no Wallet
+    object yet (they haven't clicked "Add to Wallet"), so update_generic_object_for_member
+    silently skips 404s — no harm done.
     """
     if created:
         return
     prev_name = getattr(instance, "_previous_name", "")
     prev_number = getattr(instance, "_previous_membership_number", None)
     prev_expiry = getattr(instance, "_previous_membership_expiration_date", None)
-    current_expiry = instance.membership_expiration_date
+    prev_last_paid = getattr(instance, "_previous_membership_last_paid", None)
 
     if (
         prev_name == (instance.name or "")
         and prev_number == instance.membership_number
-        and prev_expiry == current_expiry
+        and prev_expiry == instance.membership_expiration_date
+        and prev_last_paid == instance.membership_last_paid
     ):
         return
 

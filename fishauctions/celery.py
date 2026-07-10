@@ -98,6 +98,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Refresh Google Wallet passes for members who recently expired so the pass status/color updates - every 24 hours
+    "refresh_google_wallet_membership_status": {
+        "task": "auctions.tasks.refresh_google_wallet_membership_status",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
     "flush_expired_tokens": {
         "task": "auctions.tasks.flush_expired_tokens",

@@ -76,6 +76,7 @@ from django.utils.decorators import method_decorator
 from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
+from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
 from django.views.generic.base import ContextMixin
@@ -17289,6 +17290,83 @@ class ClubBarcodePNGView(View):
         return response
 
 
+BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "culture_points"}
+BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
+
+
+def _bap_embed_leaderboard(club, program):
+    """Top-10 leaderboard rows for a program: rank, display name, and points only.
+
+    Deliberately exposes no PII — never emails, member numbers, or database ids. When a
+    member has no name we fall back to a generic "Member N" label keyed off their rank.
+    """
+    field = BAP_EMBED_PROGRAM_FIELDS[program]
+    members = ClubMember.objects.filter(club=club, is_deleted=False, **{f"{field}__gt": 0}).order_by(
+        f"-{field}", "name"
+    )[:10]
+    rows = []
+    for i, member in enumerate(members):
+        name = (member.name or "").strip() or f"Member {i + 1}"
+        rows.append({"rank": i + 1, "name": name, "points": getattr(member, field)})
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class BapEmbedView(View):
+    """Public, embeddable top-10 BAP/HAP/CAP leaderboard for a club.
+
+    A single endpoint serves several representations via ?format= (json, iframelight,
+    iframedark, unstyledhtml) and picks the program with ?program= (bap, hap, cap).
+    Only the top-10 leaderboard is exposed, and only names + points — never emails,
+    member numbers, or other PII. Framing (xframe_options_exempt) and cross-origin
+    fetches (Access-Control-Allow-Origin) are allowed so third-party sites can embed it.
+    GET-only and public, so CSRF never applies.
+    """
+
+    def _json_response(self, club, program, label, rows):
+        response = JsonResponse({"club": club.name, "program": program, "program_label": label, "leaderboard": rows})
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_breeder_award_program:
+            raise Http404
+
+        program = (request.GET.get("program") or "bap").strip().lower()
+        if program not in BAP_EMBED_PROGRAM_FIELDS:
+            program = "bap"
+        # HAP/CAP only have their own standings when the club tracks them separately;
+        # otherwise those points roll into BAP and a dedicated board would be misleading.
+        if (program == "hap" and not club.separate_hap) or (program == "cap" and not club.separate_cap):
+            raise Http404
+
+        rows = _bap_embed_leaderboard(club, program)
+        label = BAP_EMBED_PROGRAM_LABELS[program]
+        fmt = (request.GET.get("format") or "json").strip().lower()
+
+        if fmt in ("iframelight", "iframedark", "iframdark"):
+            embed_mode = "dark" if fmt in ("iframedark", "iframdark") else "light"
+        elif fmt == "unstyledhtml":
+            embed_mode = "unstyled"
+        else:
+            # json or anything unrecognized falls back to JSON — a typo never leaks an unexpected page.
+            return self._json_response(club, program, label, rows)
+
+        html = render_to_string(
+            "auctions/bap_embed.html",
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "program_label": label,
+                "leaderboard": rows,
+            },
+        )
+        response = HttpResponse(html)
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+
 class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """Print barcode stickers: bidder paddles, invoice adjustments, and member cards."""
 
@@ -18441,6 +18519,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
+        context["bap_embed_path"] = reverse("bap_embed", kwargs={"slug": self.club.slug})
         return context
 
     def get_table_kwargs(self, **kwargs):

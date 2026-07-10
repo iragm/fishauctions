@@ -27,6 +27,26 @@
   <i class="bi bi-info-circle"></i> Changes on this page will not be saved, so make sure the labels have all printed correctly before you leave.
 </div>
 
+<div class="mb-3">
+  <button type="button" id="scanner-test-toggle" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-upc-scan"></i> Test scanner
+  </button>
+</div>
+
+<div id="scanner-test-panel" class="border rounded p-3 mb-3 d-none">
+  <p class="small mb-2">
+    Scan the test barcode below with your USB scanner while this panel is open. We'll check that it's
+    configured with an <code>F9</code> prefix and a carriage-return (Enter) suffix.
+    <br>
+    <span class="text-warning">While this test is open, keystrokes are captured for diagnostics &mdash; click <strong>Hide scanner test</strong> to type normally again.</span>
+  </p>
+  <div class="bg-white border rounded p-2 d-inline-block mb-2">
+    <img src="{% url 'club_barcode' slug=club.slug value=1234567890 %}" alt="Test barcode" style="height:60px;width:auto;display:block;">
+    <div class="text-center text-dark small mt-1" style="font-family:monospace;">1234567890</div>
+  </div>
+  <div id="scanner-test-status" class="alert alert-secondary mt-1 mb-0">Scan the test barcode above to begin&hellip;</div>
+</div>
+
 <form method="get" action="{% url 'club_barcode_labels_pdf' club.slug %}" id="barcode-form" target="_blank">
   <div id="rows-container"></div>
   <div class="d-flex gap-2 mt-2">
@@ -142,5 +162,93 @@ document.getElementById('rows-container').addEventListener('change', function() 
 document.getElementById('rows-container').addEventListener('input', function() {
   labelSettingsLink.classList.add('d-none');
 });
+
+// --- Scanner troubleshooting -------------------------------------------------
+// A USB HID scanner should be configured to send an F9 prefix keystroke before
+// each barcode and a carriage return (Enter) after it (see barcode_scanner.js).
+// This diagnostic listens for a scan of the known test barcode and reports which
+// of those two pieces of configuration is missing.
+(function () {
+  const TEST_VALUE = "1234567890";
+  const toggleBtn = document.getElementById('scanner-test-toggle');
+  const panel = document.getElementById('scanner-test-panel');
+  const statusEl = document.getElementById('scanner-test-status');
+  if (!toggleBtn || !panel || !statusEl) return;
+
+  const BURST_GAP = 300; // ms; scanner keystrokes are near-instant, humans are slower
+  let active = false;
+  let buffer = "";
+  let sawPrefix = false;
+  let lastKeyTime = 0;
+  let evalTimer = null;
+
+  function resetBurst() { buffer = ""; sawPrefix = false; }
+
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = 'alert mt-1 mb-0 ' + cls;
+  }
+
+  function finish(sawSuffix) {
+    if (evalTimer) { clearTimeout(evalTimer); evalTimer = null; }
+    const digits = buffer.replace(/\D/g, '');
+    if (digits.indexOf(TEST_VALUE) === -1) {
+      // Not the test barcode (a partial capture or stray typing) — wait for a clean scan.
+      resetBurst();
+      return;
+    }
+    if (!sawPrefix) {
+      setStatus('No F9 prefix set up. Configure your scanner to send an F9 keystroke before each barcode.', 'alert-danger');
+    } else if (!sawSuffix) {
+      setStatus('No CR suffix set up. Configure your scanner to send a carriage return (Enter) after each barcode.', 'alert-warning');
+    } else {
+      setStatus('Scanner working correctly!', 'alert-success');
+    }
+    resetBurst();
+  }
+
+  function armTimer() {
+    if (evalTimer) clearTimeout(evalTimer);
+    // If no Enter arrives to close the burst, evaluate anyway (this is the missing-CR case).
+    evalTimer = setTimeout(function () { finish(false); }, BURST_GAP + 120);
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (!active) return;
+    const now = Date.now();
+    if (now - lastKeyTime > BURST_GAP) { resetBurst(); }
+    lastKeyTime = now;
+    if (e.key === 'F9') {
+      e.preventDefault();
+      sawPrefix = true;
+      armTimer();
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (buffer) {
+        e.preventDefault();
+        finish(true);
+      }
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      buffer += e.key;
+      armTimer();
+    }
+  }, true);
+
+  toggleBtn.addEventListener('click', function () {
+    active = !active;
+    panel.classList.toggle('d-none', !active);
+    toggleBtn.innerHTML = active
+      ? '<i class="bi bi-x-lg"></i> Hide scanner test'
+      : '<i class="bi bi-upc-scan"></i> Test scanner';
+    if (active) {
+      resetBurst();
+      setStatus('Scan the test barcode above to begin…', 'alert-secondary');
+    }
+  });
+})();
 </script>
 {% endblock %}
