@@ -22702,6 +22702,54 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("999", response.json()["message"])
 
+    def test_barcode_scan_adjustment_to_bidder_with_closed_invoice_errors(self):
+        """Scanning an adjustment onto a paddle/bidder number whose invoice is already closed
+        (not DRAFT) must error out instead of adjusting the closed invoice."""
+        self._enable_checkin_mode()
+        tos = AuctionTOS.objects.create(
+            user=self.joiner,
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="222",
+            checked_in=timezone.now(),
+            name="Paid Bidder",
+        )
+        Invoice.objects.create(auctiontos_user=tos, auction=self.auction, status="UNPAID")
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "apply_to_bidder_number": "222",
+                "adjustment_type": "ADD",
+                "adjustment_amount": "5",
+                "adjustment_label": "late fee",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("is not open", response.json()["message"])
+        self.assertFalse(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists())
+
+    def test_barcode_scan_adjustment_on_member_card_with_closed_invoice_errors(self):
+        """Scanning an adjustment then a membership card whose invoice is already closed must
+        error out instead of adjusting the closed invoice (and must not create a new one)."""
+        self._enable_checkin_mode()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        Invoice.objects.create(auctiontos_user=tos, auction=self.auction, status="PAID")
+        self.client.force_login(self.creator)
+        response = self.client.post(
+            reverse("auction_barcode_scan", kwargs={"slug": self.auction.slug}),
+            {
+                "barcode": str(member.membership_number),
+                "adjustment_type": "ADD",
+                "adjustment_amount": "9",
+                "adjustment_label": "raffle",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("is not open", response.json()["message"])
+        self.assertFalse(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists())
+
     def test_self_check_in_page(self):
         self._enable_checkin_mode()
         self.client.force_login(self.creator)
@@ -25386,6 +25434,24 @@ class LotListUXTests(StandardTestCase):
 )
 class CloudflareImagesTests(StandardTestCase):
     """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import tempfile
+
+        # These tests write real image files and generate local easy-thumbnails, so point
+        # MEDIA_ROOT at a writable temp dir rather than the container's mediafiles volume
+        # (which may not be writable by the test user -> PermissionError).
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
 
     def _image_file(self, name="test.jpg"):
         from PIL import Image as PILImage
