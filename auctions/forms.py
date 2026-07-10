@@ -1842,6 +1842,9 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["image"].help_text = (
+            "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
+        )
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -1849,6 +1852,12 @@ class CreateImageForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "image",
+            HTML(
+                '<div id="pasted-image-preview" class="d-none mb-3">'
+                '<img src="" alt="Preview of selected image" class="img-thumbnail" style="max-height: 200px;">'
+                '<div class="text-muted small">Click Save to upload this image</div>'
+                "</div>"
+            ),
             "url",
             Div(
                 Div(
