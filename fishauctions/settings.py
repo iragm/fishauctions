@@ -487,6 +487,20 @@ THUMBNAIL_ALIASES = {
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
+# Cloudflare Images (https://developers.cloudflare.com/images/)
+# When all three of account id, API token and account hash are set, images that have
+# been migrated (see the migrate_to_cloudflare_images management command) are served
+# from Cloudflare instead of local files, using named variants that mirror
+# THUMBNAIL_ALIASES above (see auctions/cloudflare_images.py).  Documented in .env.example.
+CLOUDFLARE_IMAGES_ACCOUNT_ID = os.environ.get("CLOUDFLARE_IMAGES_ACCOUNT_ID", "")
+CLOUDFLARE_IMAGES_API_TOKEN = os.environ.get("CLOUDFLARE_IMAGES_API_TOKEN", "")
+CLOUDFLARE_IMAGES_ACCOUNT_HASH = os.environ.get("CLOUDFLARE_IMAGES_ACCOUNT_HASH", "")
+# Optional: serve from your own (Cloudflare-proxied) domain instead of imagedelivery.net
+CLOUDFLARE_IMAGES_DOMAIN = os.environ.get("CLOUDFLARE_IMAGES_DOMAIN", "")
+CLOUDFLARE_IMAGES_ENABLED = bool(
+    CLOUDFLARE_IMAGES_ACCOUNT_ID and CLOUDFLARE_IMAGES_API_TOKEN and CLOUDFLARE_IMAGES_ACCOUNT_HASH
+)
+
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 # Trust X-Forwarded-Proto header from nginx proxy for HTTPS detection

@@ -51,9 +51,9 @@ window.onload = function() {
             {% endblock %}
         </title>
         {% if club and club.icon %}
-        <link rel="icon" type="image/png" href="{{ club.icon.url }}"/>
-        <link rel="shortcut icon" href="{{ club.icon.url }}"/>
-        <link rel="apple-touch-icon" sizes="180x180" href="{{ club.icon.url }}"/>
+        <link rel="icon" type="image/png" href="{{ club.icon_display_url }}"/>
+        <link rel="shortcut icon" href="{{ club.icon_display_url }}"/>
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ club.icon_display_url }}"/>
         {% else %}
         <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}"/>
         <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}"/>
@@ -335,7 +335,7 @@ window.onload = function() {
                       <a class="dropdown-item" href="{% url 'clubs' %}">Find a club</a>
                       <div class="dropdown-divider"></div>
                       {% for club in user_clubs %}
-                      <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon.url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>
+                      <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon_thumbnail_url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>
                       {% endfor %}
                     </div>
                     {% else %}

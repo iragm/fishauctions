@@ -6,7 +6,7 @@ import logging
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.db import transaction
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
@@ -661,3 +661,25 @@ def on_club_member_saved(sender, instance, **kwargs):
     """When a member gains permission_admin or permission_manage_auctions, auto-associate their auctions."""
     if instance.permission_admin or instance.permission_manage_auctions:
         _associate_auctions_for_member(instance)
+
+
+@receiver(post_delete, sender="auctions.LotImage")
+@receiver(post_delete, sender="auctions.Club")
+@receiver(post_delete, sender="auctions.AdCampaign")
+def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
+    """Queue deletion of the Cloudflare copy of an image when its row is deleted.
+
+    The task itself skips deletion if another row still references the same
+    Cloudflare image (copied lots share images).  Local files are not deleted,
+    matching how they were treated before Cloudflare Images was added.
+    """
+    from . import cloudflare_images
+
+    if (
+        instance.cloudflare_image_id
+        and instance.cloudflare_image_id != cloudflare_images.UPLOAD_FAILED
+        and cloudflare_images.enabled()
+    ):
+        from .tasks import delete_cloudflare_image
+
+        delete_cloudflare_image.delay(instance.cloudflare_image_id)

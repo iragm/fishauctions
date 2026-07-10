@@ -98,6 +98,13 @@ def _absolute_icon_url(club) -> str:
         return ""
     try:
         from django.contrib.sites.models import Site
+
+        from auctions import cloudflare_images
+
+        cloudflare_url = cloudflare_images.image_url(None, club.cloudflare_image_id, "google_wallet_logo")
+        if cloudflare_url:
+            # imagedelivery.net URLs are already absolute and publicly reachable
+            return cloudflare_url
         from easy_thumbnails.files import get_thumbnailer
 
         thumbnailer = get_thumbnailer(club.icon)

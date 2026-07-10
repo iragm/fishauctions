@@ -12,6 +12,7 @@ from html import escape
 
 import requests
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
@@ -171,9 +172,9 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     if closing_text:
         text_parts.extend(["", closing_text])
     text_parts.extend(["", member.club.name])
-    club_icon_url = ""
-    if member.club.icon:
-        club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
+    club_icon_url = member.club.icon_display_url or ""
+    if club_icon_url and not club_icon_url.startswith("http"):
+        club_icon_url = f"https://{current_site.domain}{club_icon_url}"
     html_message = _render_membership_email_html(
         member,
         intro_text=intro_text,
@@ -729,6 +730,42 @@ def deduplicate_user_interest(self):
     the occasional duplicate and this reconciles them, summing the interest.
     """
     call_command("deduplicate_user_interest")
+
+
+@shared_task(bind=True, ignore_result=True)
+def migrate_to_cloudflare_images(self):
+    """
+    Move all pending locally stored images (originals only, never the generated
+    thumbnails) to Cloudflare Images.
+
+    Runs every minute to pick up new uploads; a no-op unless the CLOUDFLARE_IMAGES_*
+    settings in .env are configured.  A large initial migration is chunked by the
+    task time limit and resumes on the next run.
+    """
+    try:
+        call_command("migrate_to_cloudflare_images")
+    except SoftTimeLimitExceeded:
+        logger.info("migrate_to_cloudflare_images hit the task time limit; the next run will resume")
+
+
+@shared_task(bind=True, ignore_result=True)
+def delete_cloudflare_image(self, image_id):
+    """
+    Delete an image from Cloudflare Images, unless a row still references it
+    (lots copied with "relist" share the Cloudflare image of the original).
+    """
+    from auctions import cloudflare_images
+    from auctions.models import AdCampaign, Club, LotImage
+
+    if not cloudflare_images.enabled():
+        return
+    for model in (LotImage, Club, AdCampaign):
+        if model.objects.filter(cloudflare_image_id=image_id).exists():
+            return
+    try:
+        cloudflare_images.delete(image_id)
+    except cloudflare_images.CloudflareImagesError:
+        logger.exception("Could not delete Cloudflare image %s", image_id)
 
 
 def schedule_auction_stats_update(run_at=None):

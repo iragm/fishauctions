@@ -7043,6 +7043,8 @@ class LotValidation(LoginRequiredMixin):
                             )
                             if original_image.image:
                                 new_image.image = get_thumbnailer(original_image.image)
+                                # both rows share the same file, so they share the same Cloudflare image
+                                new_image.cloudflare_image_id = original_image.cloudflare_image_id
                             # if the original lot sold, this picture sure isn't of the actual item
                             if original_lot.winner and original_image.image_source == "ACTUAL":
                                 new_image.image_source = "REPRESENTATIVE"
@@ -18239,7 +18241,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         club_icon_url = ""
         if self.club.icon:
             try:
-                club_icon_url = self.club.icon.url
+                club_icon_url = self.club.icon_display_url or ""
             except (ValueError, AttributeError):
                 club_icon_url = ""
 

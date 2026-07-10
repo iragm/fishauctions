@@ -1,5 +1,4 @@
 {% comment %}Club navigation links. Included by club_sidebar.html for both the desktop column and the mobile offcanvas. Context comes from the club_sidebar tag.{% endcomment %}
-{% load thumbnail %}
 <nav class="nav flex-column">
   <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
 

@@ -1,9 +1,7 @@
 {# this is the tabs that are shown on many auction pages #}
-{% load thumbnail %}
 <h3 class="d-flex align-items-center gap-2">
   {% if auction.club and auction.club.icon %}
-  {% thumbnail auction.club.icon "club_icon" as auction_club_icon %}
-  <img src="{{ auction_club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
+  <img src="{{ auction.club.icon_thumbnail_url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
   {% endif %}
   <span>{{auction}}</span>
 </h3>

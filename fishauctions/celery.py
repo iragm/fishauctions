@@ -103,6 +103,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.flush_expired_tokens",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Move one local image to Cloudflare Images - every minute (no-op unless CLOUDFLARE_IMAGES_* is set in .env)
+    "migrate_to_cloudflare_images": {
+        "task": "auctions.tasks.migrate_to_cloudflare_images",
+        "schedule": 60.0,  # Run every minute
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.

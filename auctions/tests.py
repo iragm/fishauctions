@@ -25015,3 +25015,226 @@ class LotListUXTests(StandardTestCase):
         response = self.client.get(self.ux_auction.add_lot_link, follow=True)
         self.assertRedirects(response, self.ux_auction.get_absolute_url())
         self.assertContains(response, "Lot submission has ended")
+
+
+@override_settings(
+    CLOUDFLARE_IMAGES_ENABLED=True,
+    CLOUDFLARE_IMAGES_ACCOUNT_ID="test-account",
+    CLOUDFLARE_IMAGES_API_TOKEN="test-token",
+    CLOUDFLARE_IMAGES_ACCOUNT_HASH="test-hash",
+    CLOUDFLARE_IMAGES_DOMAIN="",
+)
+class CloudflareImagesTests(StandardTestCase):
+    """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command"""
+
+    def _image_file(self, name="test.jpg"):
+        from PIL import Image as PILImage
+
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (20, 20), "blue").save(buffer, format="JPEG")
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/jpeg")
+
+    def _lot(self, name="Cloudflare test lot"):
+        return Lot.objects.create(lot_name=name, user=self.user, quantity=1, active=False, lot_run_duration=10)
+
+    def _mock_upload_response(self, image_id="cf-image-id"):
+        response = MagicMock()
+        response.json.return_value = {"success": True, "result": {"id": image_id}}
+        return response
+
+    def test_delivery_url(self):
+        from auctions import cloudflare_images
+
+        self.assertEqual(cloudflare_images.delivery_url("abc123"), "https://imagedelivery.net/test-hash/abc123/public")
+        self.assertEqual(
+            cloudflare_images.delivery_url("abc123", "lot_list"),
+            "https://imagedelivery.net/test-hash/abc123/lot_list",
+        )
+        # unknown variants fall back to full size rather than 404ing
+        self.assertEqual(
+            cloudflare_images.delivery_url("abc123", "no_such_variant"),
+            "https://imagedelivery.net/test-hash/abc123/public",
+        )
+        with override_settings(CLOUDFLARE_IMAGES_DOMAIN="auction.example.com"):
+            self.assertEqual(
+                cloudflare_images.delivery_url("abc123", "lot_list"),
+                "https://auction.example.com/cdn-cgi/imagedelivery/test-hash/abc123/lot_list",
+            )
+
+    def test_lot_image_urls_prefer_cloudflare(self):
+        image = LotImage.objects.create(
+            lot_number=self._lot(), cloudflare_image_id="abc123", url="http://example.com/pic.jpg"
+        )
+        self.assertEqual(image.display_url, "https://imagedelivery.net/test-hash/abc123/public")
+        self.assertEqual(image.thumbnail_url, "https://imagedelivery.net/test-hash/abc123/lot_list")
+        with override_settings(CLOUDFLARE_IMAGES_ENABLED=False):
+            # not enabled and no local file: fall back to the url field
+            self.assertEqual(image.display_url, "http://example.com/pic.jpg")
+            self.assertEqual(image.thumbnail_url, "http://example.com/pic.jpg")
+
+    def test_club_icon_urls_prefer_cloudflare(self):
+        club = Club.objects.create(name="Icon club", icon=self._image_file("icon.jpg"), cloudflare_image_id="icon1")
+        self.assertEqual(club.icon_display_url, "https://imagedelivery.net/test-hash/icon1/public")
+        self.assertEqual(club.icon_thumbnail_url, "https://imagedelivery.net/test-hash/icon1/club_icon")
+        with override_settings(CLOUDFLARE_IMAGES_ENABLED=False):
+            # falls back to the locally generated easy-thumbnails alias (named by size, not alias)
+            self.assertEqual(club.icon_display_url, club.icon.url)
+            self.assertIn("128x128", club.icon_thumbnail_url)
+
+    def test_management_command_migrates_all_images_in_one_run(self):
+        lot = self._lot()
+        first = LotImage.objects.create(lot_number=lot, image=self._image_file("first.jpg"))
+        second = LotImage.objects.create(lot_number=lot, image=self._image_file("second.jpg"))
+        with patch("auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response()) as mock_post:
+            call_command("migrate_to_cloudflare_images")
+        # a single run migrates every pending original (only the originals, never the thumbnails)
+        self.assertEqual(mock_post.call_count, 2)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.cloudflare_image_id, "cf-image-id")
+        self.assertEqual(second.cloudflare_image_id, "cf-image-id")
+        # everything is migrated; another run makes no API calls
+        with patch("auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response()) as mock_post:
+            call_command("migrate_to_cloudflare_images")
+        self.assertEqual(mock_post.call_count, 0)
+
+    def test_management_command_count_limits_images_per_run(self):
+        lot = self._lot()
+        first = LotImage.objects.create(lot_number=lot, image=self._image_file("first.jpg"))
+        second = LotImage.objects.create(lot_number=lot, image=self._image_file("second.jpg"))
+        with patch("auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response()) as mock_post:
+            call_command("migrate_to_cloudflare_images", "--count", "1")
+        self.assertEqual(mock_post.call_count, 1)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.cloudflare_image_id, "cf-image-id")
+        self.assertEqual(second.cloudflare_image_id, "")
+        # the next run picks up where the last one left off
+        with patch(
+            "auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response("cf-image-2")
+        ) as mock_post:
+            call_command("migrate_to_cloudflare_images", "--count", "1")
+        self.assertEqual(mock_post.call_count, 1)
+        second.refresh_from_db()
+        self.assertEqual(second.cloudflare_image_id, "cf-image-2")
+
+    def test_management_command_skips_when_lock_held(self):
+        from django.core.cache import cache
+
+        from auctions.management.commands.migrate_to_cloudflare_images import LOCK_KEY, LOCK_TIMEOUT_SECONDS
+
+        LotImage.objects.create(lot_number=self._lot(), image=self._image_file())
+        cache.add(LOCK_KEY, 1, LOCK_TIMEOUT_SECONDS)
+        try:
+            with patch("auctions.cloudflare_images.requests.post") as mock_post:
+                call_command("migrate_to_cloudflare_images")
+            self.assertEqual(mock_post.call_count, 0)
+        finally:
+            cache.delete(LOCK_KEY)
+
+    def test_management_command_skips_deleted_lots(self):
+        lot = self._lot()
+        lot.is_deleted = True
+        lot.save()
+        LotImage.objects.create(lot_number=lot, image=self._image_file("deleted.jpg"))
+        with patch("auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response()) as mock_post:
+            call_command("migrate_to_cloudflare_images")
+        self.assertEqual(mock_post.call_count, 0)
+
+    @override_settings(CLOUDFLARE_IMAGES_ENABLED=False)
+    def test_management_command_noop_when_disabled(self):
+        LotImage.objects.create(lot_number=self._lot(), image=self._image_file())
+        with patch("auctions.cloudflare_images.requests.post") as mock_post:
+            call_command("migrate_to_cloudflare_images")
+        self.assertEqual(mock_post.call_count, 0)
+
+    def test_management_command_aborts_on_api_error(self):
+        from django.core.management.base import CommandError
+
+        image = LotImage.objects.create(lot_number=self._lot(), image=self._image_file())
+        response = MagicMock()
+        response.status_code = 403
+        response.json.return_value = {"success": False, "errors": [{"code": 10000, "message": "bad token"}]}
+        with (
+            patch("auctions.cloudflare_images.requests.post", return_value=response),
+            self.assertRaises(CommandError),
+        ):
+            call_command("migrate_to_cloudflare_images")
+        image.refresh_from_db()
+        self.assertEqual(image.cloudflare_image_id, "")
+
+    def test_management_command_marks_rejected_files_and_continues(self):
+        from auctions.cloudflare_images import UPLOAD_FAILED
+
+        lot = self._lot()
+        bad = LotImage.objects.create(lot_number=lot, image=self._image_file("bad.jpg"))
+        good = LotImage.objects.create(lot_number=lot, image=self._image_file("good.jpg"))
+        rejected = MagicMock()
+        rejected.status_code = 415
+        rejected.json.return_value = {"success": False, "errors": [{"code": 5455, "message": "unsupported format"}]}
+        with patch("auctions.cloudflare_images.requests.post", side_effect=[rejected, self._mock_upload_response()]):
+            call_command("migrate_to_cloudflare_images")
+        bad.refresh_from_db()
+        good.refresh_from_db()
+        # the rejected file is marked so it isn't retried every run, and keeps serving locally
+        self.assertEqual(bad.cloudflare_image_id, UPLOAD_FAILED)
+        self.assertNotIn("imagedelivery", bad.display_url)
+        self.assertEqual(good.cloudflare_image_id, "cf-image-id")
+
+    def test_replacing_image_clears_stale_cloudflare_id(self):
+        image = LotImage.objects.create(lot_number=self._lot(), image=self._image_file(), cloudflare_image_id="stale")
+        image.image = self._image_file("replacement.jpg")
+        image.save()
+        self.assertEqual(image.cloudflare_image_id, "")
+
+    def test_setting_new_id_with_new_image_is_kept(self):
+        # the lot copy flows set a new file and its matching id in the same save
+        image = LotImage.objects.create(lot_number=self._lot())
+        image.image = self._image_file()
+        image.cloudflare_image_id = "copied-id"
+        image.save()
+        image.refresh_from_db()
+        self.assertEqual(image.cloudflare_image_id, "copied-id")
+
+    def test_relist_lot_copies_cloudflare_id(self):
+        lot = Lot.objects.create(
+            lot_name="Relist cloudflare",
+            user=self.user,
+            quantity=1,
+            winner=self.user_with_no_lots,
+            winning_price=10,
+            active=False,
+            lot_run_duration=10,
+        )
+        LotImage.objects.create(
+            lot_number=lot, image=self._image_file(), cloudflare_image_id="shared-id", is_primary=True
+        )
+        new_lot = lot.relist_lot()
+        new_image = LotImage.objects.filter(lot_number=new_lot).first()
+        self.assertEqual(new_image.cloudflare_image_id, "shared-id")
+
+    def test_deleting_row_queues_cloudflare_delete(self):
+        image = LotImage.objects.create(lot_number=self._lot(), cloudflare_image_id="gone1")
+        with patch("auctions.tasks.delete_cloudflare_image.delay") as mock_delay:
+            image.delete()
+        mock_delay.assert_called_once_with("gone1")
+
+    def test_delete_task_skips_shared_images(self):
+        from auctions import tasks
+
+        lot = self._lot()
+        LotImage.objects.create(lot_number=lot, cloudflare_image_id="shared-id")
+        with patch("auctions.cloudflare_images.delete") as mock_delete:
+            tasks.delete_cloudflare_image("shared-id")
+            self.assertEqual(mock_delete.call_count, 0)
+            tasks.delete_cloudflare_image("unreferenced-id")
+            mock_delete.assert_called_once_with("unreferenced-id")
+
+    def test_setup_syncs_variants(self):
+        from auctions import cloudflare_images
+
+        response = MagicMock()
+        response.json.return_value = {"success": True, "result": {}}
+        with patch("auctions.cloudflare_images.requests.post", return_value=response) as mock_post:
+            call_command("migrate_to_cloudflare_images", "--setup")
+        self.assertEqual(mock_post.call_count, len(cloudflare_images.VARIANTS))

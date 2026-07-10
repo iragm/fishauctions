@@ -52,6 +52,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
+from . import cloudflare_images
 from .email_routing import admin_routing_email, build_routed_sender_address
 from .helper_functions import bin_data, get_currency_symbol
 
@@ -590,6 +591,38 @@ def _pick_unique_membership_number():
     raise RuntimeError(msg)
 
 
+class CloudflareImageMixin(models.Model):
+    """For models with an image field that can be mirrored to Cloudflare Images.
+
+    `cloudflare_image_id` is set by the migrate_to_cloudflare_images management command;
+    once set (and Cloudflare Images is enabled, see .env.example), image URLs come from
+    Cloudflare's CDN instead of locally generated thumbnails.  Replacing the image file
+    clears a stale id so the new file gets picked up by the next migration run.
+    Set IMAGE_FIELD_NAME on the subclass if its image field isn't called `image`.
+    """
+
+    IMAGE_FIELD_NAME = "image"
+    cloudflare_image_id = models.CharField(max_length=100, blank=True, default="", editable=False, db_index=True)
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if self.pk and self.cloudflare_image_id and (update_fields is None or self.IMAGE_FIELD_NAME in update_fields):
+            old = type(self).objects.filter(pk=self.pk).values(self.IMAGE_FIELD_NAME, "cloudflare_image_id").first()
+            if (
+                old
+                and old[self.IMAGE_FIELD_NAME] != getattr(self, self.IMAGE_FIELD_NAME).name
+                and old["cloudflare_image_id"] == self.cloudflare_image_id
+            ):
+                # the image file changed but the id didn't: it now points at the old image
+                self.cloudflare_image_id = ""
+                if update_fields is not None:
+                    kwargs["update_fields"] = set(update_fields) | {"cloudflare_image_id"}
+        super().save(*args, **kwargs)
+
+
 class BlogPost(models.Model):
     """
     A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
@@ -631,9 +664,10 @@ class GeneralInterest(models.Model):
         return str(self.name)
 
 
-class Club(models.Model):
+class Club(CloudflareImageMixin, models.Model):
     """Users can self-select which club they belong to"""
 
+    IMAGE_FIELD_NAME = "icon"
     name = models.CharField(max_length=255, db_index=True)
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
@@ -973,6 +1007,16 @@ class Club(models.Model):
     def brevo_connected(self):
         """True when this club has an active Brevo connection (API key) with a list selected."""
         return bool(self.brevo_api_key and self.brevo_list_id)
+
+    @property
+    def icon_display_url(self):
+        """Full-size icon URL; from Cloudflare when migrated, else the local file"""
+        return cloudflare_images.image_url(self.icon, self.cloudflare_image_id)
+
+    @property
+    def icon_thumbnail_url(self):
+        """Small square icon (the club_icon alias/variant), shown beside the club name"""
+        return cloudflare_images.image_url(self.icon, self.cloudflare_image_id, "club_icon")
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
@@ -5922,6 +5966,8 @@ class Lot(models.Model):
             )
             if originalImage.image:
                 newImage.image = get_thumbnailer(originalImage.image)
+                # both rows now share the same file, so they can share the same Cloudflare image
+                newImage.cloudflare_image_id = originalImage.cloudflare_image_id
             # if the original lot sold, this picture sure isn't of the actual item
             if originalImage.image_source == "ACTUAL":
                 newImage.image_source = "REPRESENTATIVE"
@@ -9991,7 +10037,7 @@ class AdCampaignGroup(models.Model):
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
-class AdCampaign(models.Model):
+class AdCampaign(CloudflareImageMixin, models.Model):
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
@@ -10023,6 +10069,11 @@ class AdCampaign(models.Model):
         if self.campaign_group:
             return f"{self.campaign_group.title} - {self.title} ({self.click_rate:.2f}% clicked)"
         return f"{self.title}"
+
+    @property
+    def image_display_url(self):
+        """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "ad")
 
     @property
     def number_of_clicks(self):
@@ -10117,7 +10168,7 @@ class AuctionCampaign(models.Model):
         super().save(*args, **kwargs)
 
 
-class LotImage(models.Model):
+class LotImage(CloudflareImageMixin, models.Model):
     """An image that belongs to a lot.  Each lot can have multiple images"""
 
     PIC_CATEGORIES = (
@@ -10146,10 +10197,14 @@ class LotImage(models.Model):
 
     @property
     def display_url(self):
-        """Return the URL to display this image; prefer uploaded image over url field"""
-        if self.image:
-            return self.image.url
-        return self.url or None
+        """Return the URL to display this image; prefer uploaded image (from Cloudflare
+        when migrated) over the url field"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or self.url or None
+
+    @property
+    def thumbnail_url(self):
+        """Small (250x150) version of display_url for lot tiles and carousel previews"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "lot_list") or self.url or None
 
 
 class FAQ(models.Model):

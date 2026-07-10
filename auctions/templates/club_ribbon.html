@@ -1,11 +1,9 @@
 {# Club page header. Navigation now lives in the club sidebar (club_sidebar.html). #}
 {# In single club mode the single club's name is the navbar brand, so don't repeat it here. #}
-{% load thumbnail %}
 {% if not single_club_mode or club.name != navbar_brand %}
 <h3 class="d-flex align-items-center gap-2">
   {% if club.icon %}
-  {% thumbnail club.icon "club_icon" as club_icon %}
-  <img src="{{ club_icon.url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
+  <img src="{{ club.icon_thumbnail_url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
   {% endif %}
   <span>{{ club.name }}</span>
 </h3>
