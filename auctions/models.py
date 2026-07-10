@@ -1414,6 +1414,14 @@ class ClubMember(ContactRecord):
         max_length=50, blank=True, help_text="Brevo internal contact id, used to build the 'View in Brevo' link."
     )
     brevo_last_synced = models.DateTimeField(null=True, blank=True)
+    # Apple Wallet (PassKit web service) bookkeeping.  The auth token is the shared
+    # secret baked into the member's .pkpass; devices present it as
+    # "Authorization: ApplePass <token>" when talking to the web service.  Generated
+    # lazily the first time a pass is built (see apple_wallet.ensure_apple_pass_auth_token).
+    apple_pass_auth_token = models.CharField(max_length=64, blank=True, default="", editable=False)
+    # Bumped whenever pass-visible content changes; drives Last-Modified / If-Modified-Since
+    # on pass delivery and the passesUpdatedSince filter on the device registration list.
+    apple_pass_updated = models.DateTimeField(default=timezone.now, editable=False)
 
     @property
     def has_any_permission(self):
@@ -2046,6 +2054,30 @@ class ClubMember(ContactRecord):
         if save:
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number
+
+
+class AppleDeviceRegistration(models.Model):
+    """A device that holds a member's Apple Wallet pass (PassKit web service).
+
+    Created when an iPhone/Watch registers via POST /passkit/v1/devices/..., removed
+    when the user deletes the pass.  push_token is the APNs token we notify when the
+    pass content changes so the device re-fetches the latest .pkpass.
+    """
+
+    member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="apple_device_registrations")
+    device_library_identifier = models.CharField(max_length=255, db_index=True)
+    push_token = models.CharField(max_length=255)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["member", "device_library_identifier"], name="unique_member_device_registration"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.device_library_identifier} for {self.member}"
 
 
 class ClubHistory(models.Model):

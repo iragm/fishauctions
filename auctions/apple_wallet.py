@@ -1,13 +1,21 @@
-"""Helpers for generating Apple Wallet (PassKit) .pkpass files.
+"""Helpers for Apple Wallet (PassKit): .pkpass generation and pass-update pushes.
 
 Unlike Google Wallet, Apple does not expose a REST API — passes are signed
 zip archives generated server-side and served directly to the user. We sign
 the manifest with PKCS#7 (detached, DER-encoded) using the project's existing
 ``cryptography`` dep, and draw fallback icon/logo PNGs on the fly with Pillow.
 
+Installed passes update live via the PassKit web service (auctions/passkit_views.py):
+each pass embeds webServiceURL + a per-member authenticationToken, devices register
+here with an APNs push token, and send_pass_update_notification() pokes APNs (empty
+push, topic = pass type ID, authenticated with the same Pass Type ID cert) so the
+device re-fetches the latest .pkpass.
+
 Public entry points:
-    is_configured()                       -> bool
-    generate_pkpass_for_member(member)    -> bytes  (raw .pkpass zip data)
+    is_configured()                          -> bool
+    generate_pkpass_for_member(member)       -> bytes  (raw .pkpass zip data)
+    ensure_apple_pass_auth_token(member)     -> str    (per-pass web service secret)
+    send_pass_update_notification(registration) -> bool (True = registration still valid)
 """
 
 from __future__ import annotations
@@ -16,17 +24,23 @@ import hashlib
 import io
 import json
 import logging
+import os
+import secrets
+import tempfile
 import zipfile
 from functools import lru_cache
 
+import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKCS7SignatureBuilder
 from django.conf import settings
 from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
+
+APNS_URL = "https://api.push.apple.com"  # Pass Type ID certs are production-only; no sandbox.
 
 # Card background — same dark slate we use for the Google Wallet class so the
 # two cards feel consistent.
@@ -118,14 +132,41 @@ def _icon_png(club, size: tuple[int, int]) -> bytes:
     return _placeholder_png(initials, size)
 
 
+def ensure_apple_pass_auth_token(member) -> str:
+    """Return the member's PassKit web service auth token, generating it on first use.
+
+    Persisted with a queryset update so lazily minting a token doesn't re-fire the
+    ClubMember save signals (which would queue a pointless wallet-update push).
+    """
+    if not member.apple_pass_auth_token:
+        member.apple_pass_auth_token = secrets.token_hex(16)
+        type(member).objects.filter(pk=member.pk).update(apple_pass_auth_token=member.apple_pass_auth_token)
+    return member.apple_pass_auth_token
+
+
+def _web_service_url() -> str:
+    """Base URL for the PassKit web service; devices append /v1/... themselves."""
+    from django.contrib.sites.models import Site
+
+    try:
+        domain = Site.objects.get_current().domain
+    except Site.DoesNotExist:
+        domain = "localhost"
+    return f"https://{domain}/passkit"
+
+
 def _build_pass_json(member) -> dict:
     """Build the pass.json content for a member.
 
-    Apple Wallet passes can't be pushed live to already-installed passes without the
-    PassKit web service (device registration endpoints + APNs), which this project does
-    not run. But .pkpass files are regenerated on every download from the UUID link, so
-    a member who re-downloads always gets an up-to-date expiration/status — and Google
-    Wallet (which does support live PATCH) covers the real-time case.
+    Every pass carries webServiceURL + authenticationToken so installed passes stay
+    live: devices register with the PassKit web service and get an APNs poke (see
+    send_pass_update_notification) whenever pass-visible content changes, then
+    re-fetch the newest .pkpass from here.
+
+    A pass for a club that has turned off member barcodes — or for a member who has
+    been deactivated — is marked voided; that is the only way to remotely kill an
+    installed Apple pass (there is no delete API), so the web service keeps serving
+    those passes voided instead of 404ing.
     """
     club = member.club
     member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
@@ -137,6 +178,8 @@ def _build_pass_json(member) -> dict:
         "teamIdentifier": settings.APPLE_WALLET_TEAM_IDENTIFIER,
         "organizationName": settings.APPLE_WALLET_ORGANIZATION_NAME or club.name,
         "serialNumber": f"member-{member.pk}",
+        "webServiceURL": _web_service_url(),
+        "authenticationToken": ensure_apple_pass_auth_token(member),
         "description": f"{club.name} membership card",
         "backgroundColor": f"rgb{background_rgb}",
         "foregroundColor": f"rgb{DEFAULT_FOREGROUND_RGB}",
@@ -177,6 +220,8 @@ def _build_pass_json(member) -> dict:
         # Apple wants ISO 8601 with timezone offset; treat the date as end-of-day UTC.
         # Apple greys out an expired pass automatically once this date passes.
         pass_json["expirationDate"] = f"{expiration.isoformat()}T23:59:59Z"
+    if not club.show_member_barcode or member.is_deleted:
+        pass_json["voided"] = True
     return pass_json
 
 
@@ -225,3 +270,66 @@ def generate_pkpass_for_member(member) -> bytes:
         for name in sorted(files):
             zf.writestr(name, files[name])
     return buf.getvalue()
+
+
+@lru_cache(maxsize=1)
+def _apns_cert_path() -> str:
+    """Write the Pass Type ID cert + key as one PEM file for APNs client TLS auth.
+
+    APNs pass-update pushes authenticate with the same certificate that signs the
+    pass, but the TLS layer only loads certs from disk — so the .p12 contents are
+    re-serialized to a mode-0600 temp file once per process (mkstemp is 0600 by
+    default; the key already sits on the same disk inside the .p12).
+    """
+    private_key, signer_cert, _wwdr = _load_signing_certs()
+    pem = signer_cert.public_bytes(Encoding.PEM) + private_key.private_bytes(
+        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+    )
+    fd, path = tempfile.mkstemp(prefix="apns-cert-", suffix=".pem")
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
+    return path
+
+
+@lru_cache(maxsize=1)
+def _apns_client() -> httpx.Client:
+    """Shared HTTP/2 client for APNs (APNs rejects HTTP/1.1)."""
+    return httpx.Client(http2=True, cert=_apns_cert_path(), timeout=10)
+
+
+def send_pass_update_notification(registration) -> bool:
+    """Tell one registered device its pass changed; the device then re-fetches it.
+
+    The push is an empty payload with the pass type identifier as the topic — that
+    is the entire PassKit update protocol. Returns False (and deletes the
+    registration) when APNs says the token is dead, e.g. the user removed the pass
+    while offline. Raises httpx.HTTPError on transient failures so Celery retries.
+    """
+    response = _apns_client().post(
+        f"{APNS_URL}/3/device/{registration.push_token}",
+        json={"aps": {}},
+        headers={
+            "apns-topic": settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER,
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+        },
+    )
+    if response.status_code == 200:
+        return True
+    try:
+        reason = response.json().get("reason", "")
+    except ValueError:
+        reason = ""
+    # 410 = token permanently gone; the 400-reasons below mean this token can never
+    # work for this topic. Drop the registration instead of retrying forever.
+    if response.status_code == 410 or reason in ("BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"):
+        logger.info(
+            "Dropping dead APNs registration pk=%s (status=%s reason=%s)",
+            registration.pk,
+            response.status_code,
+            reason,
+        )
+        registration.delete()
+        return False
+    response.raise_for_status()
+    return True

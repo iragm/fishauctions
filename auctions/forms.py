@@ -1842,9 +1842,9 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["image"].help_text = (
-            "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
-        )
+        self.fields[
+            "image"
+        ].help_text = "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"

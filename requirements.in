@@ -67,6 +67,7 @@ celery
 django-celery-beat
 redis
 squareup
+httpx[http2]
 mailchimp-marketing
 djangorestframework
 djangorestframework-simplejwt

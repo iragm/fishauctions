@@ -10,6 +10,7 @@ import json
 import logging
 from html import escape
 
+import httpx
 import requests
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -1194,8 +1195,7 @@ def refresh_google_wallet_membership_status(self):
     expired red styling accurate even when no member edit fired the change signal.
     Only members who lapsed in the last few days are touched, so this stays cheap.
 
-    Google Wallet objects support live PATCH; Apple passes can't be pushed without the
-    PassKit web service (not run here) but are regenerated correctly on every download.
+    The Apple-side equivalent is refresh_apple_wallet_membership_status below.
     """
     from auctions.google_wallet import is_configured, update_generic_object_for_member
     from auctions.models import ClubMember
@@ -1220,6 +1220,101 @@ def refresh_google_wallet_membership_status(self):
         except requests.RequestException:
             logger.exception("Google Wallet daily status refresh failed for member=%s", member.pk)
             raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def notify_apple_wallet_devices_for_member(self, member_pk):
+    """Bump a member's Apple pass version and poke every registered device via APNs.
+
+    The bump (apple_pass_updated=now) is what makes the PassKit web service serve
+    fresh content — Last-Modified on pass delivery and the passesUpdatedSince filter
+    both read it — so it happens even when no device is registered (a manual
+    pull-to-refresh on the pass must still see the change). Deleted members are NOT
+    skipped: the update they push is the voided pass.
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    if not ClubMember.objects.filter(pk=member_pk).update(apple_pass_updated=timezone.now()):
+        return
+    for registration in AppleDeviceRegistration.objects.filter(member_id=member_pk):
+        send_pass_update_notification(registration)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def notify_apple_wallet_devices_for_club(self, club_pk):
+    """Club-wide Apple pass refresh: bump every member and poke every registered device.
+
+    Used when something on the club touches all passes at once — name/icon change
+    (pass visuals) or flipping show_member_barcode (which voids/unvoids every pass).
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    ClubMember.objects.filter(club_id=club_pk).update(apple_pass_updated=timezone.now())
+    registrations = AppleDeviceRegistration.objects.filter(member__club_id=club_pk)
+    for registration in registrations:
+        send_pass_update_notification(registration)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def refresh_apple_wallet_membership_status(self):
+    """Daily: push Apple pass updates to members whose membership just lapsed.
+
+    The Apple analogue of refresh_google_wallet_membership_status — when a
+    membership expires by the mere passage of time no signal fires, but the pass's
+    status line and red styling need to change. Only members who lapsed in the last
+    few days AND have at least one registered device are touched, so this stays cheap.
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    window_start = today - datetime.timedelta(days=3)
+    members = ClubMember.objects.filter(
+        is_deleted=False,
+        club__membership_system__in=["january_first", "rolling"],
+        membership_expiration_date__gte=window_start,
+        membership_expiration_date__lt=today,
+        apple_device_registrations__isnull=False,
+    ).distinct()
+    for member in members:
+        ClubMember.objects.filter(pk=member.pk).update(apple_pass_updated=timezone.now())
+        for registration in AppleDeviceRegistration.objects.filter(member=member):
+            send_pass_update_notification(registration)
 
 
 @shared_task(

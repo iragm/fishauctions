@@ -186,11 +186,12 @@ def stash_previous_club_state(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
-    """When barcodes are disabled, expire all active Wallet passes.
+    """When barcodes are toggled, update all active Wallet passes.
 
-    Apple Wallet does not have an equivalent push-revocation API without the
-    full Web Service implementation, so we rely on the embedded `expirationDate`
-    in the pkpass plus URL gating on re-download.
+    Google: disabling barcodes expires every member's Wallet object (no un-expire
+    on re-enable — the object is recreated on next save-to-wallet).
+    Apple: installed passes void/unvoid based on show_member_barcode at build time,
+    so a flip in either direction pushes an update to every registered device.
     """
     if created:
         return
@@ -198,10 +199,11 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
     current = instance.show_member_barcode
     if prev == current:
         return
-    from .tasks import expire_google_wallet_objects_for_club
+    from .tasks import expire_google_wallet_objects_for_club, notify_apple_wallet_devices_for_club
 
     if not current:
         transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk))
+    transaction.on_commit(lambda: notify_apple_wallet_devices_for_club.delay(instance.pk))
 
 
 @receiver(pre_save, sender="auctions.ClubMember")
@@ -210,8 +212,8 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
     and propagate them to linked shadow AuctionTOS records.
 
     Also snapshots wallet-relevant fields (name, membership_number,
-    membership_expiration_date) so update_google_wallet_object_on_member_change
-    can detect when a PATCH to the member's Wallet pass is needed.
+    membership_expiration_date, is_deleted) so update_wallet_passes_on_member_change
+    can detect when the member's Google/Apple Wallet passes need refreshing.
     """
     if instance.pk:
         from .models import ClubMember
@@ -228,6 +230,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "membership_last_paid",
                 "address",
                 "email",
+                "is_deleted",
             )
             .first()
             or {}
@@ -241,6 +244,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_membership_last_paid = prev.get("membership_last_paid")
         instance._previous_address = prev.get("address") or ""
         instance._previous_email = prev.get("email") or ""
+        instance._previous_is_deleted = prev.get("is_deleted")
     else:
         instance._previous_bidder_number = None
         instance._previous_bidding_allowed = None
@@ -251,6 +255,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_membership_last_paid = None
         instance._previous_address = ""
         instance._previous_email = ""
+        instance._previous_is_deleted = None
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -332,15 +337,20 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender="auctions.ClubMember")
-def update_google_wallet_object_on_member_change(sender, instance, created, **kwargs):
-    """When wallet-visible member fields change, PATCH the member's Wallet object.
+def update_wallet_passes_on_member_change(sender, instance, created, **kwargs):
+    """When wallet-visible member fields change, refresh the member's Wallet passes.
 
-    Watches: name, membership_number, membership_expiration_date, membership_last_paid.
-    last_paid matters because the on-pass status ("Valid through …" / "Unpaid/expired")
-    derives from the effective expiration date, which falls back to last_paid when no
-    explicit expiration date is set (e.g. rolling renewals). New members have no Wallet
-    object yet (they haven't clicked "Add to Wallet"), so update_generic_object_for_member
-    silently skips 404s — no harm done.
+    Google: PATCH the member's GenericObject. Apple: bump the pass version and poke
+    registered devices via APNs (notify_apple_wallet_devices_for_member).
+
+    Watches: name, membership_number, membership_expiration_date, membership_last_paid,
+    is_deleted. last_paid matters because the on-pass status ("Valid through …" /
+    "Unpaid/expired") derives from the effective expiration date, which falls back to
+    last_paid when no explicit expiration date is set (e.g. rolling renewals).
+    is_deleted matters only for Apple (a deactivated member's pass is served voided);
+    the Google task skips deleted members, so including it here is harmless there.
+    New members have no Wallet pass yet (they haven't clicked "Add to Wallet") —
+    both tasks no-op safely in that case.
     """
     if created:
         return
@@ -348,18 +358,21 @@ def update_google_wallet_object_on_member_change(sender, instance, created, **kw
     prev_number = getattr(instance, "_previous_membership_number", None)
     prev_expiry = getattr(instance, "_previous_membership_expiration_date", None)
     prev_last_paid = getattr(instance, "_previous_membership_last_paid", None)
+    prev_is_deleted = getattr(instance, "_previous_is_deleted", None)
 
     if (
         prev_name == (instance.name or "")
         and prev_number == instance.membership_number
         and prev_expiry == instance.membership_expiration_date
         and prev_last_paid == instance.membership_last_paid
+        and prev_is_deleted == instance.is_deleted
     ):
         return
 
-    from .tasks import update_google_wallet_object_for_member
+    from .tasks import notify_apple_wallet_devices_for_member, update_google_wallet_object_for_member
 
     transaction.on_commit(lambda: update_google_wallet_object_for_member.delay(instance.pk))
+    transaction.on_commit(lambda: notify_apple_wallet_devices_for_member.delay(instance.pk))
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -599,11 +612,13 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender="auctions.Club")
-def refresh_google_wallet_objects_for_club(sender, instance, created, **kwargs):
-    """Patch all member wallet objects when the club's name or icon changes.
+def refresh_wallet_passes_on_club_change(sender, instance, created, **kwargs):
+    """Refresh all member wallet passes when the club's name or icon changes.
 
-    Logo and background color are GenericObject fields (per-pass), not class
+    Google: logo and background color are GenericObject fields (per-pass), not class
     fields, so a club-level visual change requires PATCHing every active member.
+    Apple: the club name and icon are baked into each .pkpass, so registered
+    devices get an APNs poke to re-fetch.
     """
     if created:
         return
@@ -612,9 +627,10 @@ def refresh_google_wallet_objects_for_club(sender, instance, created, **kwargs):
     current_icon = instance.icon.name if instance.icon else ""
     if prev_name == instance.name and prev_icon == current_icon:
         return
-    from .tasks import update_google_wallet_objects_for_club
+    from .tasks import notify_apple_wallet_devices_for_club, update_google_wallet_objects_for_club
 
     transaction.on_commit(lambda: update_google_wallet_objects_for_club.delay(instance.pk))
+    transaction.on_commit(lambda: notify_apple_wallet_devices_for_club.delay(instance.pk))
 
 
 @receiver(bounce_received)

@@ -3,9 +3,29 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import views
+from . import passkit_views, views
 
 urlpatterns = [
+    # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
+    # by Apple's spec — devices build them from the webServiceURL in pass.json — and
+    # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
+    # APPEND_SLASH redirect).
+    path(
+        "passkit/v1/devices/<str:device_library_id>/registrations/<str:pass_type_id>/<str:serial_number>",
+        passkit_views.PassKitRegistrationView.as_view(),
+        name="passkit_registration",
+    ),
+    path(
+        "passkit/v1/devices/<str:device_library_id>/registrations/<str:pass_type_id>",
+        passkit_views.PassKitDeviceRegistrationsView.as_view(),
+        name="passkit_device_registrations",
+    ),
+    path(
+        "passkit/v1/passes/<str:pass_type_id>/<str:serial_number>",
+        passkit_views.PassKitPassView.as_view(),
+        name="passkit_pass",
+    ),
+    path("passkit/v1/log", passkit_views.PassKitLogView.as_view(), name="passkit_log"),
     path(
         "api/auctiontos-autocomplete/",
         views.AuctionTOSAutocomplete.as_view(),

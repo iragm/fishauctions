@@ -11,6 +11,7 @@ from .models import (
     AdCampaign,
     AdCampaignGroup,
     AdCampaignResponse,
+    AppleDeviceRegistration,
     Auction,
     AuctionCampaign,
     AuctionHistory,
@@ -377,6 +378,25 @@ class MobileDeviceAdmin(admin.ModelAdmin):
     @admin.display(boolean=True, description="Has push token")
     def has_token(self, obj):
         return bool(obj.fcm_token)
+
+
+@admin.register(AppleDeviceRegistration)
+class AppleDeviceRegistrationAdmin(admin.ModelAdmin):
+    """One row = one iPhone/Watch holding a member's Apple Wallet pass.
+
+    Rows are created/removed by the PassKit web service (auctions/passkit_views.py);
+    this admin exists for debugging pass-update pushes, not for editing.
+    """
+
+    list_display = ("member", "club", "device_library_identifier", "createdon")
+    search_fields = ("member__name", "member__email", "member__club__name", "device_library_identifier")
+    readonly_fields = ("createdon",)
+    raw_id_fields = ("member",)
+    date_hierarchy = "createdon"
+
+    @admin.display(description="Club")
+    def club(self, obj):
+        return obj.member.club
 
 
 @admin.register(ThermalPrinterProfile)

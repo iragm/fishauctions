@@ -21253,7 +21253,8 @@ class AppleWalletPassTests(TestCase):
         self.club = Club.objects.create(name="Apple Test Club")
         self.member = ClubMember.objects.create(club=self.club, name="Test Member", user=self.user)
 
-    def _make_cert_files(self, tmp_path):
+    @staticmethod
+    def _make_cert_files(tmp_path):
         """Generate a self-signed cert + WWDR-stand-in cert and return their paths."""
         import datetime as _dt
 
@@ -21381,6 +21382,353 @@ class AppleWalletPassTests(TestCase):
         ):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 404)
+
+
+class PassKitWebServiceTests(TestCase):
+    """Apple PassKit web service: device registration, pass delivery, APNs pushes."""
+
+    # Settings that satisfy is_configured() for endpoints that never load the certs.
+    FAKE_WALLET_SETTINGS = {
+        "APPLE_WALLET_CERT_FILE": "cert.p12",
+        "APPLE_WALLET_CERT_PASSWORD": "",
+        "APPLE_WALLET_WWDR_FILE": "wwdr.pem",
+        "APPLE_WALLET_PASS_TYPE_IDENTIFIER": "pass.com.example.membership",
+        "APPLE_WALLET_TEAM_IDENTIFIER": "ABCDE12345",
+    }
+
+    def setUp(self):
+        from .apple_wallet import ensure_apple_pass_auth_token
+        from .models import Club, ClubMember
+
+        self.user = User.objects.create_user(username="passkit_user", password="x", email="pk@b.c")
+        self.club = Club.objects.create(name="PassKit Test Club")
+        self.member = ClubMember.objects.create(club=self.club, name="PassKit Member", user=self.user)
+        self.token = ensure_apple_pass_auth_token(self.member)
+        self.device_id = "device-abc123"
+        self.registration_url = reverse(
+            "passkit_registration",
+            kwargs={
+                "device_library_id": self.device_id,
+                "pass_type_id": "pass.com.example.membership",
+                "serial_number": f"member-{self.member.pk}",
+            },
+        )
+
+    def _auth(self, token=None):
+        return {"HTTP_AUTHORIZATION": f"ApplePass {token or self.token}"}
+
+    def _register(self, push_token="apns-token-1"):
+        from .models import AppleDeviceRegistration
+
+        return AppleDeviceRegistration.objects.create(
+            member=self.member, device_library_identifier=self.device_id, push_token=push_token
+        )
+
+    def test_register_device(self):
+        from .models import AppleDeviceRegistration
+
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            response = self.client.post(
+                self.registration_url,
+                data='{"pushToken": "apns-token-1"}',
+                content_type="application/json",
+                **self._auth(),
+            )
+            self.assertEqual(response.status_code, 201)
+            registration = AppleDeviceRegistration.objects.get(
+                member=self.member, device_library_identifier=self.device_id
+            )
+            self.assertEqual(registration.push_token, "apns-token-1")
+            # Re-registering is 200 (not 201) and updates a rotated push token.
+            response = self.client.post(
+                self.registration_url,
+                data='{"pushToken": "apns-token-2"}',
+                content_type="application/json",
+                **self._auth(),
+            )
+            self.assertEqual(response.status_code, 200)
+            registration.refresh_from_db()
+            self.assertEqual(registration.push_token, "apns-token-2")
+
+    def test_register_device_rejects_bad_auth(self):
+        from .models import AppleDeviceRegistration
+
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            # Wrong token, missing header, and empty stored token must all fail.
+            response = self.client.post(
+                self.registration_url,
+                data='{"pushToken": "t"}',
+                content_type="application/json",
+                **self._auth("wrong-token"),
+            )
+            self.assertEqual(response.status_code, 401)
+            response = self.client.post(
+                self.registration_url, data='{"pushToken": "t"}', content_type="application/json"
+            )
+            self.assertEqual(response.status_code, 401)
+            type(self.member).objects.filter(pk=self.member.pk).update(apple_pass_auth_token="")
+            response = self.client.post(
+                self.registration_url,
+                data='{"pushToken": "t"}',
+                content_type="application/json",
+                HTTP_AUTHORIZATION="ApplePass ",
+            )
+            self.assertEqual(response.status_code, 401)
+            self.assertFalse(AppleDeviceRegistration.objects.exists())
+
+    def test_register_device_404s(self):
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            # Unknown serial number.
+            url = reverse(
+                "passkit_registration",
+                kwargs={
+                    "device_library_id": self.device_id,
+                    "pass_type_id": "pass.com.example.membership",
+                    "serial_number": "member-999999",
+                },
+            )
+            response = self.client.post(url, data='{"pushToken": "t"}', content_type="application/json", **self._auth())
+            self.assertEqual(response.status_code, 404)
+            # Wrong pass type identifier.
+            url = reverse(
+                "passkit_registration",
+                kwargs={
+                    "device_library_id": self.device_id,
+                    "pass_type_id": "pass.com.wrong.type",
+                    "serial_number": f"member-{self.member.pk}",
+                },
+            )
+            response = self.client.post(url, data='{"pushToken": "t"}', content_type="application/json", **self._auth())
+            self.assertEqual(response.status_code, 404)
+        # Not configured at all.
+        with self.settings(APPLE_WALLET_CERT_FILE="", APPLE_WALLET_PASS_TYPE_IDENTIFIER=""):
+            response = self.client.post(
+                self.registration_url, data='{"pushToken": "t"}', content_type="application/json", **self._auth()
+            )
+            self.assertEqual(response.status_code, 404)
+
+    def test_unregister_device(self):
+        from .models import AppleDeviceRegistration
+
+        self._register()
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            response = self.client.delete(self.registration_url, **self._auth("wrong"))
+            self.assertEqual(response.status_code, 401)
+            response = self.client.delete(self.registration_url, **self._auth())
+            self.assertEqual(response.status_code, 200)
+        self.assertFalse(AppleDeviceRegistration.objects.exists())
+
+    def test_list_updatable_passes(self):
+        self._register()
+        list_url = reverse(
+            "passkit_device_registrations",
+            kwargs={"device_library_id": self.device_id, "pass_type_id": "pass.com.example.membership"},
+        )
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            response = self.client.get(list_url)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["serialNumbers"], [f"member-{self.member.pk}"])
+            last_updated = data["lastUpdated"]
+            # Nothing changed since the tag we just got → 204.
+            response = self.client.get(list_url, {"passesUpdatedSince": last_updated})
+            self.assertEqual(response.status_code, 204)
+            # Bump the pass version (what the notify task does) → serial reappears.
+            type(self.member).objects.filter(pk=self.member.pk).update(
+                apple_pass_updated=timezone.now() + datetime.timedelta(seconds=5)
+            )
+            response = self.client.get(list_url, {"passesUpdatedSince": last_updated})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["serialNumbers"], [f"member-{self.member.pk}"])
+            # A device we've never seen → 404.
+            unknown_url = reverse(
+                "passkit_device_registrations",
+                kwargs={"device_library_id": "device-unknown", "pass_type_id": "pass.com.example.membership"},
+            )
+            response = self.client.get(unknown_url)
+            self.assertEqual(response.status_code, 404)
+
+    def test_get_pass_serves_fresh_pkpass_and_304s(self):
+        import io as _io
+        import json as _json
+        import tempfile
+        import zipfile as _zip
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        pass_url = reverse(
+            "passkit_pass",
+            kwargs={"pass_type_id": "pass.com.example.membership", "serial_number": f"member-{self.member.pk}"},
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path)
+            apple_wallet._load_signing_certs.cache_clear()
+            with self.settings(
+                BASE_DIR=tmp_path,
+                APPLE_WALLET_CERT_FILE=p12_path.name,
+                APPLE_WALLET_CERT_PASSWORD="",
+                APPLE_WALLET_WWDR_FILE=wwdr_path.name,
+                APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+                APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+            ):
+                response = self.client.get(pass_url, **self._auth("nope"))
+                self.assertEqual(response.status_code, 401)
+                response = self.client.get(pass_url, **self._auth())
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], "application/vnd.apple.pkpass")
+                last_modified = response["Last-Modified"]
+                with _zip.ZipFile(_io.BytesIO(response.content)) as zf:
+                    pass_data = _json.loads(zf.read("pass.json"))
+                self.assertEqual(pass_data["authenticationToken"], self.token)
+                self.assertTrue(pass_data["webServiceURL"].endswith("/passkit"))
+                self.assertNotIn("voided", pass_data)
+                # Device re-checks with If-Modified-Since → 304 until the pass is bumped.
+                response = self.client.get(pass_url, HTTP_IF_MODIFIED_SINCE=last_modified, **self._auth())
+                self.assertEqual(response.status_code, 304)
+                type(self.member).objects.filter(pk=self.member.pk).update(
+                    apple_pass_updated=timezone.now() + datetime.timedelta(seconds=5)
+                )
+                response = self.client.get(pass_url, HTTP_IF_MODIFIED_SINCE=last_modified, **self._auth())
+                self.assertEqual(response.status_code, 200)
+
+    def test_get_pass_serves_voided_pass_when_barcode_disabled_or_member_deleted(self):
+        """Unlike the user-facing download (404), the web service serves a voided pass."""
+        import io as _io
+        import json as _json
+        import tempfile
+        import zipfile as _zip
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        pass_url = reverse(
+            "passkit_pass",
+            kwargs={"pass_type_id": "pass.com.example.membership", "serial_number": f"member-{self.member.pk}"},
+        )
+
+        def _fetch_pass_json():
+            response = self.client.get(pass_url, **self._auth())
+            self.assertEqual(response.status_code, 200)
+            with _zip.ZipFile(_io.BytesIO(response.content)) as zf:
+                return _json.loads(zf.read("pass.json"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path)
+            apple_wallet._load_signing_certs.cache_clear()
+            with self.settings(
+                BASE_DIR=tmp_path,
+                APPLE_WALLET_CERT_FILE=p12_path.name,
+                APPLE_WALLET_CERT_PASSWORD="",
+                APPLE_WALLET_WWDR_FILE=wwdr_path.name,
+                APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+                APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+            ):
+                self.club.show_member_barcode = False
+                self.club.save()
+                self.assertTrue(_fetch_pass_json().get("voided"))
+                self.club.show_member_barcode = True
+                self.club.save()
+                type(self.member).objects.filter(pk=self.member.pk).update(is_deleted=True)
+                self.assertTrue(_fetch_pass_json().get("voided"))
+
+    def test_log_endpoint(self):
+        with self.settings(**self.FAKE_WALLET_SETTINGS):
+            response = self.client.post(
+                reverse("passkit_log"), data='{"logs": ["something broke"]}', content_type="application/json"
+            )
+            self.assertEqual(response.status_code, 200)
+
+    def test_member_change_queues_apple_notification(self):
+        """Editing a wallet-visible field queues both the Google PATCH and the Apple push."""
+        with (
+            patch("auctions.tasks.update_google_wallet_object_for_member.delay") as google_delay,
+            patch("auctions.tasks.notify_apple_wallet_devices_for_member.delay") as apple_delay,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=365)
+            self.member.save()
+        google_delay.assert_called_once_with(self.member.pk)
+        apple_delay.assert_called_once_with(self.member.pk)
+
+    def test_member_deactivation_queues_apple_notification(self):
+        with (
+            patch("auctions.tasks.update_google_wallet_object_for_member.delay"),
+            patch("auctions.tasks.notify_apple_wallet_devices_for_member.delay") as apple_delay,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.member.is_deleted = True
+            self.member.save()
+        apple_delay.assert_called_once_with(self.member.pk)
+
+    def test_barcode_mode_flip_queues_club_wide_apple_notification(self):
+        with (
+            patch("auctions.tasks.expire_google_wallet_objects_for_club.delay"),
+            patch("auctions.tasks.notify_apple_wallet_devices_for_club.delay") as apple_delay,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.club.show_member_barcode = False
+            self.club.save()
+        apple_delay.assert_called_once_with(self.club.pk)
+        # Re-enabling also pushes (passes un-void), unlike Google's expire-only path.
+        with (
+            patch("auctions.tasks.notify_apple_wallet_devices_for_club.delay") as apple_delay,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.club.show_member_barcode = True
+            self.club.save()
+        apple_delay.assert_called_once_with(self.club.pk)
+
+    def test_notify_task_bumps_version_and_pushes(self):
+        from .tasks import notify_apple_wallet_devices_for_member
+
+        registration = self._register()
+        before = self.member.apple_pass_updated
+        with (
+            self.settings(**self.FAKE_WALLET_SETTINGS),
+            patch("auctions.apple_wallet.send_pass_update_notification") as send,
+        ):
+            notify_apple_wallet_devices_for_member(self.member.pk)
+        self.member.refresh_from_db()
+        self.assertGreater(self.member.apple_pass_updated, before)
+        send.assert_called_once()
+        self.assertEqual(send.call_args[0][0].pk, registration.pk)
+
+    def test_apns_dead_token_deletes_registration(self):
+        from .apple_wallet import send_pass_update_notification
+        from .models import AppleDeviceRegistration
+
+        registration = self._register()
+        response = MagicMock(status_code=410)
+        response.json.return_value = {"reason": "Unregistered"}
+        client = MagicMock()
+        client.post.return_value = response
+        with (
+            self.settings(**self.FAKE_WALLET_SETTINGS),
+            patch("auctions.apple_wallet._apns_client", return_value=client),
+        ):
+            self.assertFalse(send_pass_update_notification(registration))
+        self.assertFalse(AppleDeviceRegistration.objects.filter(pk=registration.pk).exists())
+
+    def test_apns_success_keeps_registration(self):
+        from .apple_wallet import send_pass_update_notification
+        from .models import AppleDeviceRegistration
+
+        registration = self._register()
+        client = MagicMock()
+        client.post.return_value = MagicMock(status_code=200)
+        with (
+            self.settings(**self.FAKE_WALLET_SETTINGS),
+            patch("auctions.apple_wallet._apns_client", return_value=client),
+        ):
+            self.assertTrue(send_pass_update_notification(registration))
+        self.assertTrue(AppleDeviceRegistration.objects.filter(pk=registration.pk).exists())
+        # The push itself: empty aps payload, topic = pass type identifier.
+        _args, kwargs = client.post.call_args
+        self.assertEqual(kwargs["json"], {"aps": {}})
+        self.assertEqual(kwargs["headers"]["apns-topic"], "pass.com.example.membership")
 
 
 class MembershipNumberModeTests(TestCase):

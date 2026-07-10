@@ -46,6 +46,8 @@ botocore==1.43.36
     #   s3transfer
 brotli==1.2.0
     # via fonttools
+cachecontrol==0.14.4
+    # via firebase-admin
 celery==5.6.3
     # via
     #   -r requirements.in
@@ -100,6 +102,7 @@ cryptography==49.0.0
     #   google-auth
     #   http-ece
     #   py-vapid
+    #   pyjwt
     #   pyopenssl
     #   pywebpush
 cssselect2==0.9.0
@@ -192,30 +195,77 @@ djangorestframework-simplejwt==5.5.1
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
+firebase-admin==7.5.0
+    # via -r requirements.in
 fonttools[woff]==4.63.0
     # via weasyprint
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+google-api-core[grpc]==2.31.0
+    # via
+    #   firebase-admin
+    #   google-cloud-core
+    #   google-cloud-firestore
+    #   google-cloud-storage
 google-auth==2.55.1
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   google-api-core
+    #   google-cloud-core
+    #   google-cloud-firestore
+    #   google-cloud-storage
+google-cloud-core==2.6.0
+    # via
+    #   google-cloud-firestore
+    #   google-cloud-storage
+google-cloud-firestore==2.28.0
+    # via firebase-admin
+google-cloud-storage==3.12.1
+    # via firebase-admin
+google-crc32c==1.8.0
+    # via
+    #   google-cloud-storage
+    #   google-resumable-media
+google-resumable-media==2.10.0
+    # via google-cloud-storage
+googleapis-common-protos==1.75.0
+    # via
+    #   google-api-core
+    #   grpcio-status
+grpcio==1.82.1
+    # via
+    #   google-api-core
+    #   google-cloud-firestore
+    #   grpcio-status
+grpcio-status==1.82.1
+    # via google-api-core
 gunicorn==26.0.0
     # via -r requirements.in
 h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
+h2==4.3.0
+    # via httpx
 heif-image-plugin==0.7.0
     # via -r requirements.in
+hpack==4.2.0
+    # via h2
 http-ece==1.2.1
     # via pywebpush
 httpcore==1.0.9
     # via httpx
 httptools==0.8.0
     # via uvicorn
-httpx==0.28.1
-    # via squareup
+httpx[http2]==0.28.1
+    # via
+    #   -r requirements.in
+    #   firebase-admin
+    #   squareup
+hyperframe==6.1.0
+    # via h2
 idna==3.18
     # via
     #   -r requirements.in
@@ -244,7 +294,9 @@ mdit-py-plugins==0.6.1
 mdurl==0.1.2
     # via markdown-it-py
 msgpack==1.2.1
-    # via channels-redis
+    # via
+    #   cachecontrol
+    #   channels-redis
 multidict==6.7.1
     # via
     #   aiohttp
@@ -278,6 +330,17 @@ propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
+proto-plus==1.28.1
+    # via
+    #   google-api-core
+    #   google-cloud-firestore
+protobuf==7.35.1
+    # via
+    #   google-api-core
+    #   google-cloud-firestore
+    #   googleapis-common-protos
+    #   grpcio-status
+    #   proto-plus
 py-vapid==1.9.4
     # via pywebpush
 pyasn1==0.6.3
@@ -308,10 +371,11 @@ pydyf==0.12.1
     # via weasyprint
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt==2.13.0
+pyjwt[crypto]==2.13.0
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
+    #   firebase-admin
 pyopenssl==26.3.0
     # via -r requirements.in
 pyparsing==3.3.2
@@ -348,7 +412,10 @@ reportlab==5.0.0
 requests==2.34.2
     # via
     #   -r requirements.in
+    #   cachecontrol
     #   django-ses
+    #   google-api-core
+    #   google-cloud-storage
     #   mailchimp-marketing
     #   pywebpush
     #   requests-oauthlib
@@ -389,6 +456,7 @@ typing-extensions==4.15.0
     #   anyio
     #   beautifulsoup4
     #   django-bootstrap-datepicker-plus
+    #   grpcio
     #   pydantic
     #   pydantic-core
     #   pyopenssl
