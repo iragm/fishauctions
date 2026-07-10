@@ -10042,6 +10042,18 @@ class SquarePaymentTests(StandardTestCase):
         # We can't test the actual API call, but we can verify the location is set correctly
         self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
 
+    def test_sanitize_square_phone(self):
+        """The Square phone pre-fill hint keeps valid numbers and drops junk that would 400."""
+        from auctions.models import sanitize_square_phone
+
+        # Valid: US 10-digit (formatting stripped), US 11-digit, and E.164 keep the leading +.
+        self.assertEqual(sanitize_square_phone("(555) 123-4567"), "5551234567")
+        self.assertEqual(sanitize_square_phone("1-555-123-4567"), "15551234567")
+        self.assertEqual(sanitize_square_phone("+44 20 7946 0958"), "+442079460958")
+        # Invalid: dropped to "" so the caller omits the hint instead of failing the link.
+        for junk in ["call me", "555-1234", "", None, "x1234", "0", "12345678901234567890"]:
+            self.assertEqual(sanitize_square_phone(junk), "", msg=f"expected '' for {junk!r}")
+
     def test_open_invoice_filter_no_duplicates(self):
         """Filtering should not return duplicate AuctionTOS rows when a user has multiple payments on their invoice"""
         from auctions.filters import AuctionTOSFilter

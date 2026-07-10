@@ -9592,6 +9592,27 @@ SQUARE_OAUTH_SCOPES = (
 )
 
 
+def sanitize_square_phone(raw):
+    """Return a Square-acceptable phone string for the checkout pre-fill hint, or "".
+
+    Square validates ``buyer_phone_number`` strictly and rejects the *entire* payment-link
+    request with INVALID_PHONE_NUMBER on a malformed value -- so a junk stored number
+    ("call me", a bare extension, a 7-digit number missing its area code) must be dropped
+    rather than allowed to block checkout, since the field is only a convenience pre-fill
+    the buyer can edit anyway. Keeps a leading "+" (E.164) plus digits and requires a
+    plausible length (10-15 digits); anything else returns "".
+    """
+    if not raw:
+        return ""
+    has_plus = raw.strip().startswith("+")
+    digits = re.sub(r"\D", "", raw)
+    # E.164 caps at 15 digits; a 10-digit floor drops short partials (the most common
+    # INVALID_PHONE_NUMBER trigger) while keeping US 10/11-digit and country-code numbers.
+    if not (10 <= len(digits) <= 15):
+        return ""
+    return f"+{digits}" if has_plus else digits
+
+
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
@@ -9876,9 +9897,13 @@ class SquareSeller(models.Model):
                         if len(name_parts) >= 2:
                             buyer_name["family_name"] = name_parts[1][:50]
                         pre_populated_data["buyer_name"] = buyer_name
-                # Add phone number if available (20 char limit per Square API)
-                if invoice.auctiontos_user.phone_number:
-                    pre_populated_data["buyer_phone_number"] = invoice.auctiontos_user.phone_number[:20]
+                # Add phone number only when it looks like a real phone (20 char limit per
+                # Square API). This is just a checkout pre-fill hint, but Square rejects the
+                # whole payment-link request with INVALID_PHONE_NUMBER for a malformed value,
+                # so a junk stored number is dropped here rather than allowed to block checkout.
+                buyer_phone = sanitize_square_phone(invoice.auctiontos_user.phone_number)
+                if buyer_phone:
+                    pre_populated_data["buyer_phone_number"] = buyer_phone
                 # Add address if available (500 char limit per Square API)
                 if invoice.auctiontos_user.address:
                     pre_populated_data["buyer_address"] = {
@@ -9945,6 +9970,10 @@ class SquareSeller(models.Model):
                     error_code = errors[0].get("code", "")
                     if error_code == "INVALID_EMAIL_ADDRESS":
                         error_msg = "The email address on your account is not valid for Square payments. Please contact the auction organizer to update your email address."
+                    elif error_code == "INVALID_PHONE_NUMBER":
+                        # Backstop: sanitize_square_phone should already omit bad numbers, but if
+                        # one slips through, tell the buyer what to fix instead of a raw Square code.
+                        error_msg = "The phone number on your account is not valid for Square payments. Please contact the auction organizer to update your phone number."
                     elif error_detail:
                         error_msg = f"Square error: {error_detail}"
             return None, error_msg
