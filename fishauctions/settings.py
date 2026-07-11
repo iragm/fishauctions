@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 import datetime
 import os
+import sys
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -74,6 +75,49 @@ CSRF_TRUSTED_ORIGINS = [
     "https://" + os.environ.get("ALLOWED_HOST_3", ""),
 ]
 
+
+# Log files go to /home/logs, which docker-compose bind-mounts from the host's
+# ./logs directory -- so they survive container recreation (i.e. every deploy) and
+# can be grepped on the host without docker exec. (Django previously wrote to
+# /home/app/logs, a container-internal path: invisible from the host and wiped on
+# every redeploy.) If the mount is unwritable -- a host chown mistake -- fall back
+# to a writable dir with a loud stderr warning INSTEAD of letting the file handlers
+# raise at logging-setup time: that would crash-loop web AND both celery services
+# over log-file ownership, a far worse failure than losing file logs.
+def _first_writable_dir(candidates):
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(candidate, os.W_OK):
+            return candidate
+    return None
+
+
+_preferred_log_dir = Path("/home/logs")
+LOG_DIR = _first_writable_dir([_preferred_log_dir, Path("/home/app/logs"), BASE_DIR / "logs"])
+if LOG_DIR is None:
+    # Nothing writable at all: keep the preferred path so the handler's own
+    # startup error names the directory the operator should fix.
+    LOG_DIR = _preferred_log_dir
+elif LOG_DIR != _preferred_log_dir:
+    sys.stderr.write(
+        f"WARNING: {_preferred_log_dir} is not writable; log files will go to {LOG_DIR} instead.\n"
+        f"On the host, from the project root, run: sudo chown -R <PUID>:<PGID> ./logs (or rerun ./update.sh)\n"
+    )
+
+# web, celery worker, and celery beat share the /home/logs mount, so each service
+# writes its own files (root.log vs root-celery.log vs root-beat.log, set via
+# LOG_SERVICE_NAME in docker-compose.yaml): RotatingFileHandler is not
+# multiprocess-safe, and concurrent writers race on the rollover rename,
+# clobbering each other's backups. Within the web service several gunicorn
+# workers still share one file -- a pre-existing tradeoff that stays size-bounded
+# (each process enforces maxBytes on its own handle); worst case is an
+# occasionally garbled line, not unbounded growth.
+_log_service = os.environ.get("LOG_SERVICE_NAME", "")
+_log_suffix = f"-{_log_service}" if _log_service else ""
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -95,7 +139,7 @@ LOGGING = {
         "django_file": {
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/app/logs/django.log",
+            "filename": str(LOG_DIR / f"django{_log_suffix}.log"),
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",
@@ -103,7 +147,7 @@ LOGGING = {
         "root_file": {
             "level": os.getenv("LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/app/logs/root.log",
+            "filename": str(LOG_DIR / f"root{_log_suffix}.log"),
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",

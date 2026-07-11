@@ -39,6 +39,8 @@ services:
       # AppDirectoriesFinder to collect FROM.
       - staticfiles:/home/app/web/staticfiles
       - ./mediafiles:/home/app/web/mediafiles
+      # Django's rotating log files (settings.py LOG_DIR) -- on the host so they
+      # survive container recreation and can be grepped without docker exec.
       - ./logs:/home/logs
     expose:
       - 8000
@@ -80,6 +82,10 @@ services:
       - .:/home/app/web
       - ./logs:/home/logs
     env_file: .env
+    environment:
+      # Own log files (root-celery.log/django-celery.log): RotatingFileHandler is
+      # not multiprocess-safe across services sharing the ./logs mount (settings.py).
+      - LOG_SERVICE_NAME=celery
     depends_on:
       - db
       - redis
@@ -94,6 +100,8 @@ services:
       - .:/home/app/web
       - ./logs:/home/logs
     env_file: .env
+    environment:
+      - LOG_SERVICE_NAME=beat # own log files; see celery_worker
     depends_on:
       - db
       - redis
@@ -250,6 +258,7 @@ services:
 
   selenium:
     container_name: selenium
+    logging: *default-logging
     image: selenium/standalone-chrome:latest
     shm_size: 2gb
     expose:

@@ -41,7 +41,10 @@ check_writable_dir "/home/app/web/mediafiles" \
 # chowning something on the host filesystem cannot fix it.
 check_writable_dir "/home/app/web/staticfiles" \
   "This is the 'staticfiles' named volume. Fix its ownership from the host: docker run --rm -v <compose-project>_staticfiles:/v alpine chown -R $(id -u):$(id -g) /v (find the exact name with: docker volume ls)"
-check_writable_dir "/home/app/web/logs" \
+# /home/logs is the bind mount of the host's ./logs and is where Django writes its
+# log files (settings.py LOG_DIR). Unwritable is non-fatal: settings.py falls back
+# to a container-internal dir, so the site boots but logs stop reaching the host.
+check_writable_dir "/home/logs" \
   "Fix on the host, from the project root: sudo chown -R $(id -u):$(id -g) ./logs"
 
 python << END

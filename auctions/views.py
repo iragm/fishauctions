@@ -10120,14 +10120,29 @@ class PayPalAPIMixin:
 
     def _get_access_token(self):
         client_id, secret = self._paypal_auth()
-        token_resp = requests.post(
-            f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
-            auth=(client_id, secret),
-            headers={"Accept": "application/json", "Accept-Language": "en_US"},
-            data={"grant_type": "client_credentials"},
-            timeout=10,
-        )
-        token_resp.raise_for_status()
+        # Log auth failures here rather than relying on callers: several of them
+        # (e.g. the order-creation view) catch RequestException and show the user a
+        # generic message, so an unlogged failure at this step is invisible.
+        try:
+            token_resp = requests.post(
+                f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
+                auth=(client_id, secret),
+                headers={"Accept": "application/json", "Accept-Language": "en_US"},
+                data={"grant_type": "client_credentials"},
+                timeout=10,
+            )
+            token_resp.raise_for_status()
+        except requests.RequestException as exc:
+            resp = getattr(exc, "response", None)
+            logger.error(
+                "PayPal auth token request failed: %s status=%s debug_id=%s resp_text=%s",
+                exc,
+                getattr(resp, "status_code", None),
+                resp.headers.get("Paypal-Debug-Id", "") if resp is not None else "",
+                resp.text[:500] if resp is not None else "",
+            )
+            msg = f"PayPal auth token request failed: {exc}"
+            raise PayPalRequestError(msg) from exc
         return token_resp.json()["access_token"]
 
     def _build_paypal_headers(self, merchant_id="", include_bn_code=True, token=None):
@@ -10188,6 +10203,20 @@ class PayPalAPIMixin:
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
             raise PayPalRequestError(msg)
+        except requests.RequestException as exc:
+            # No HTTP response at all (connection error / timeout). Callers catch
+            # RequestException and show a generic message, so without this branch a
+            # network failure to PayPal left no trace anywhere.
+            logger.error(
+                "PayPal API call failed (no response): %s %s error=%s req_params=%s req_json=%s",
+                method,
+                url,
+                exc,
+                params,
+                json,
+            )
+            msg = f"PayPal API call failed (no response): {method} {url} error={exc}"
+            raise PayPalRequestError(msg) from exc
 
     def post_to_paypal(self, endpoint, payload, include_bn_code=True):
         """POST JSON to a PayPal API endpoint and return parsed JSON."""
