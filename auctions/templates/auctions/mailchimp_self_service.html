@@ -1,12 +1,24 @@
 {% extends "base.html" %}
-{% block title %}{{ heading }} &mdash; {{ club.name }}{% endblock %}
+{% block title %}{% if heading %}{{ heading }}{% else %}{{ confirm_label }}{% endif %} &mdash; {{ club.name }}{% endblock %}
 {% block content %}
 <div class="container" style="max-width: 640px;">
   <div class="card mt-4">
     <div class="card-body text-center">
+      {% if confirm_prompt %}
+      {# GET: confirmation step. The change is applied only when this form is POSTed, so email #}
+      {# link scanners/prefetchers that follow the GET link can't change a member's status. #}
+      <h3 class="mb-3">{{ confirm_label }}</h3>
+      <p>{{ confirm_prompt }}</p>
+      <form method="post" class="mt-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">{{ confirm_label }}</button>
+        <a href="{% url 'club_detail' club.slug %}" class="btn btn-outline-secondary ms-2">Cancel</a>
+      </form>
+      {% else %}
       <h3 class="mb-3">{{ heading }}</h3>
       <p>{{ body }}</p>
       <a href="{% url 'club_detail' club.slug %}" class="btn btn-primary mt-2">{{ club.name }}</a>
+      {% endif %}
     </div>
   </div>
 </div>

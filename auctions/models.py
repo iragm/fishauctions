@@ -478,6 +478,36 @@ def guess_category(text):
     return None
 
 
+# Tags Summernote legitimately emits for rich-text formatting. Anything not on this
+# allowlist is stripped. An allowlist (unlike the previous fixed blocklist) can't be
+# bypassed by novel or foreign elements -- e.g. <svg>/<math>, which open a foreign
+# parsing context that browsers use for mutation-XSS and which no blocklist enumerates
+# completely.
+ALLOWED_SUMMERNOTE_TAGS = frozenset(
+    {
+        "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col",
+        "colgroup", "dd", "del", "dfn", "div", "dl", "dt", "em", "figcaption",
+        "figure", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
+        "kbd", "li", "mark", "ol", "p", "pre", "q", "s", "samp", "small", "span",
+        "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
+        "thead", "time", "tr", "u", "ul", "var",
+    }
+)  # fmt: skip
+
+# Disallowed tags whose *contents* must also be dropped (not just the tag itself): these
+# carry executable code, foreign (SVG/MathML) or embedded/external content, or raw-text
+# parsing contexts that mutation-XSS relies on. Any other disallowed tag is unwrapped so
+# its plain text survives.
+UNSAFE_SUMMERNOTE_TAGS = frozenset(
+    {
+        "applet", "audio", "base", "canvas", "embed", "form", "frame", "frameset",
+        "iframe", "img", "link", "map", "math", "meta", "noembed", "noscript",
+        "object", "param", "plaintext", "script", "source", "style", "svg",
+        "template", "textarea", "title", "track", "video", "xmp",
+    }
+)  # fmt: skip
+
+
 def sanitize_summernote_html(text):
     """Remove disallowed Summernote content while preserving supported formatting."""
     if text is None:
@@ -487,11 +517,20 @@ def sanitize_summernote_html(text):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    # Block executable, externally embedded, or page-hijacking content.
-    # <style>/<link> enable CSS injection; <base> hijacks relative URLs; <meta> can redirect;
-    # <form> enables phishing overlays (Summernote never generates forms).
-    for tag in soup.find_all(["base", "embed", "form", "iframe", "img", "link", "meta", "object", "script", "style"]):
-        tag.decompose()
+    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order (parents
+    # before children), so decomposing a parent marks its descendants ``decomposed`` and we
+    # skip them below. Executable/foreign tags are removed with their subtree; any other
+    # unexpected tag is unwrapped so its text content is preserved.
+    for tag in soup.find_all(True):
+        if getattr(tag, "decomposed", False):
+            continue
+        name = (tag.name or "").lower()
+        if name in ALLOWED_SUMMERNOTE_TAGS:
+            continue
+        if name in UNSAFE_SUMMERNOTE_TAGS:
+            tag.decompose()
+        else:
+            tag.unwrap()
 
     for tag in soup.find_all():
         for attr_name, attr_value in list(tag.attrs.items()):

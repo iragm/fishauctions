@@ -1659,7 +1659,7 @@ class MyLots(HTMxTableView):
                 msg += (
                     f""" with new messages.  <a href="{reverse("messages")}">Go to your messages page to see them</a>"""
                 )
-                messages.info(self.request, msg)
+                messages.info(self.request, msg, extra_tags="safe")
         return super().get(*args, **kwargs)
 
 
@@ -3404,7 +3404,7 @@ class PickupLocationForm:
     def get_success_url(self):
         data = self.request.GET.copy()
         next_url = data.get("next")
-        if next_url:
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
             return next_url
         if self.auction.is_online:
             return reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
@@ -3569,21 +3569,33 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
         elif not self.get_object().is_online and self.get_object().online_bidding != "disable" and settings.ENABLE_HELP:
             messages.info(
                 self.request,
-                f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug': self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
+                format_html(
+                    "This auction allows online bidding -- make sure to <a href='{}'>watch the tutorial in the help</a> to see how this works",
+                    reverse("auction_help", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
             )
         if (
             self.get_object().buy_now == "allow" or self.get_object().buy_now == "required"
         ) and "buy_now_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Buy now is enabled, but labels are not set to print a buy now price. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing buy now on labels here.</a>",
+                format_html(
+                    "Buy now is enabled, but labels are not set to print a buy now price. <a href='{}'>You should enable printing buy now on labels here.</a>",
+                    reverse("auction_label_config", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
             )
         if (
             self.get_object().reserve_price == "allow" or self.get_object().reserve_price == "required"
         ) and "min_bid_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
+                format_html(
+                    "Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{}'>You should enable printing minimum bids on labels here.</a>",
+                    reverse("auction_label_config", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
             )
 
         # some checks to warn if an important time is set for midnight (00:00)
@@ -3893,16 +3905,18 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
             create_url = reverse("clubmember_create", kwargs={"slug": auction.club.slug}) + qs
         else:
             create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
-        return (
-            f'<div class="text-center py-3">'
-            f'<p class="text-muted mb-2">No users match <strong>{query}</strong>.</p>'
-            f'<button class="btn btn-info btn-sm" '
-            f'hx-get="{create_url}" '
-            f'hx-target="#modals-here" '
-            f'hx-trigger="click" '
-            f'_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-            f'<i class="bi bi-person-fill-add"></i> Create user</button>'
-            f"</div>"
+        return format_html(
+            '<div class="text-center py-3">'
+            '<p class="text-muted mb-2">No users match <strong>{}</strong>.</p>'
+            '<button class="btn btn-info btn-sm" '
+            'hx-get="{}" '
+            'hx-target="#modals-here" '
+            'hx-trigger="click" '
+            '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+            '<i class="bi bi-person-fill-add"></i> Create user</button>'
+            "</div>",
+            query,
+            create_url,
         )
 
     def get(self, *args, **kwargs):
@@ -4737,7 +4751,7 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return JsonResponse(result)
 
     def get(self, request, *args, **kwargs):
-        return self.http_method_not_allowed
+        return self.http_method_not_allowed(request, *args, **kwargs)
 
 
 class CSVContactImportMixin:
@@ -6593,8 +6607,8 @@ class ViewLot(DetailView):
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
         if not self.request.user.is_authenticated:
-            context["user_specific_bidding_error"] = (
-                f"You have to <a href='/login/?next={lot.lot_link}'>sign in</a> to place bids."
+            context["user_specific_bidding_error"] = format_html(
+                "You have to <a href='/login/?next={}'>sign in</a> to place bids.", lot.lot_link
             )
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
@@ -6621,8 +6635,11 @@ class ViewLot(DetailView):
                             "This auction requires admin approval before you can bid"
                         )
             else:
-                context["user_specific_bidding_error"] = (
-                    f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
+                context["user_specific_bidding_error"] = format_html(
+                    "This lot is part of <b>{}</b>. Please <a href='/auctions/{}/?next={}#join'>read the auction's rules and join the auction</a> to bid<br>",
+                    lot.auction,
+                    lot.auction.slug,
+                    lot.lot_link,
                 )
             if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
                 context["push_notifications_possible"] = True
@@ -6635,7 +6652,12 @@ class ViewLot(DetailView):
             if lot.auction.online_bidding != "disable":
                 messages.info(
                     self.request,
-                    f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{lot.pk}/'>read the auction's rules and join the auction</a> to bid",
+                    format_html(
+                        "Please <a href='/auctions/{}/?next=/lots/{}/'>read the auction's rules and join the auction</a> to bid",
+                        lot.auction.slug,
+                        lot.pk,
+                    ),
+                    extra_tags="safe",
                 )
         if self.request.user.is_authenticated:
             userData = self.request.user.userdata
@@ -7000,7 +7022,11 @@ class LotValidation(LoginRequiredMixin):
                 # remember that on form submit in CreateLotForm.clean(), we are validating that the user has an auctiontos
                 messages.error(
                     self.request,
-                    f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.",
+                    format_html(
+                        "You need to <a href='/auctions/{}'>confirm your pickup location for this auction</a> before people can bid on this lot.",
+                        lot.auction.slug,
+                    ),
+                    extra_tags="safe",
                 )
             else:
                 lot.auctiontos_seller = auctiontos
@@ -7053,13 +7079,17 @@ class LotValidation(LoginRequiredMixin):
                         # we are only cloning images here, not watchers, views, or other related models
                 except Exception as e:
                     logger.exception(e)
-            msg = "Created lot! "
+            msg = mark_safe("Created lot! ")
             if not lot.image_count:
-                msg += f"You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image</a>  to this lot.  Or, "
-            msg += "<a href='/lots/new'>create another lot</a>"
+                msg += format_html(
+                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
+                    lot.lot_number,
+                )
+            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
             messages.success(
                 self.request,
                 msg,
+                extra_tags="safe",
             )
         # if image_url is set, add an image to the lot using this URL, then clear the field
         image_url = form.cleaned_data.get("image_url")
@@ -7193,7 +7223,12 @@ class LotCreateView(LotValidation, CreateView):
             ):
                 messages.info(
                     request,
-                    f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
+                    format_html(
+                        "Sick of adding lots one at a time?  <a href='{}'>Add lots of lots to {}</a>",
+                        reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": userData.last_auction_used.slug}),
+                        userData.last_auction_used,
+                    ),
+                    extra_tags="safe",
                 )
         data = self.request.GET.copy()
         auction_slug = data.get("auction", None)
@@ -7469,6 +7504,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                             "You're doing things the hard way - <a href='{}'>quick set lot winners</a> page lets you mark lots sold much more quickly.",
                             quick_set_url,
                         ),
+                        extra_tags="safe",
                     )
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
@@ -8479,7 +8515,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if not locations:
                 messages.info(
                     self.request,
-                    "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>",
+                    mark_safe(
+                        "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>"
+                    ),
+                    extra_tags="safe",
                 )
         return super().dispatch(request, *args, **kwargs)
 
@@ -8510,7 +8549,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             context["ended"] = True
             messages.info(
                 self.request,
-                f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.auction.view_lot_link}'>view lots</a>.",
+                format_html(
+                    "This auction has ended.  You can't bid on anything, but you can still <a href='{}'>view lots</a>.",
+                    self.auction.view_lot_link,
+                ),
+                extra_tags="safe",
             )
         else:
             context["ended"] = False
@@ -8557,18 +8600,29 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if invalidPickups:
                 messages.info(
                     self.request,
-                    f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction",
+                    format_html(
+                        "<a href='{}'>Some pickup times</a> are set before the end date of the auction", invalidPickups
+                    ),
+                    extra_tags="safe",
                 )
             nonLogicalTimes = self.auction.has_non_logical_times
             if nonLogicalTimes:
                 messages.info(
                     self.request,
-                    f"<a href='{nonLogicalTimes}'>Auction start or end time</a> should be set to a logical time like 14:30 or 09:00",
+                    format_html(
+                        "<a href='{}'>Auction start or end time</a> should be set to a logical time like 14:30 or 09:00",
+                        nonLogicalTimes,
+                    ),
+                    extra_tags="safe",
                 )
             if self.auction.time_start_is_at_night and not self.auction.is_online:
                 messages.info(
                     self.request,
-                    f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.auction.slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
+                    format_html(
+                        "You know your auction is starting in the middle of the night, right? <a href='{}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
+                        reverse("edit_auction", kwargs={"slug": self.auction.slug}),
+                    ),
+                    extra_tags="safe",
                 )
 
         context["form"] = AuctionJoin(
@@ -8826,7 +8880,13 @@ class ToDefaultLandingPage(View):
                 if invoice:
                     messages.info(
                         request,
-                        f'{auction} has ended.  <a href="{reverse("invoice_by_pk", kwargs={"pk": invoice.pk})}">View your invoice</a> or <a href="{reverse("feedback")}">leave feedback</a> on lots you bought or sold',
+                        format_html(
+                            '{} has ended.  <a href="{}">View your invoice</a> or <a href="{}">leave feedback</a> on lots you bought or sold',
+                            auction,
+                            reverse("invoice_by_pk", kwargs={"pk": invoice.pk}),
+                            reverse("feedback"),
+                        ),
+                        extra_tags="safe",
                     )
                     return redirect(reverse("allLots"))
                 else:
@@ -9590,7 +9650,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         if context["labels_per_page"] == 0:
             messages.error(
                 self.request,
-                "Your lot label setting may be wrong. The label size is too large for the page size.  <a href='/printing'>Adjust your label settings</a>",
+                mark_safe(
+                    "Your lot label setting may be wrong. The label size is too large for the page size.  <a href='/printing'>Adjust your label settings</a>"
+                ),
+                extra_tags="safe",
             )
             context["labels_per_page"] = 1
 
@@ -11399,7 +11462,10 @@ class MailchimpWebhookView(View):
 
     def _get_club(self, slug, secret):
         club = Club.objects.filter(slug=slug).first()
-        if not club or not club.mailchimp_webhook_secret or club.mailchimp_webhook_secret != secret:
+        if not club or not club.mailchimp_webhook_secret:
+            return None
+        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        if not secrets.compare_digest(club.mailchimp_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
 
@@ -11448,11 +11514,46 @@ class ClubMemberSelfServiceView(View):
 
     action = None  # "unsubscribe" | "resubscribe" | "nocomm"
 
-    def get(self, request, slug, uuid):
+    def _get_member(self, slug, uuid):
         from auctions.models import ClubMember
+
+        return get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+
+    def get(self, request, slug, uuid):
+        # Read-only. The write happens in post() so that email link-scanners and prefetchers
+        # (Outlook SafeLinks, etc.), which routinely GET links, can't silently flip a member's
+        # contact status. GET just renders a confirmation page with a button that POSTs.
+        member = self._get_member(slug, uuid)
+        prompts = {
+            "unsubscribe": (
+                "Unsubscribe",
+                f"Stop receiving marketing emails from {member.club.name}?",
+            ),
+            "resubscribe": (
+                "Resubscribe",
+                f"Start receiving emails from {member.club.name} again?",
+            ),
+            "nocomm": (
+                "Do not contact me",
+                f"Ask {member.club.name} to stop contacting you entirely?",
+            ),
+        }
+        confirm_label, confirm_prompt = prompts.get(self.action, prompts["nocomm"])
+        return render(
+            request,
+            "auctions/mailchimp_self_service.html",
+            {
+                "club": member.club,
+                "member": member,
+                "confirm_label": confirm_label,
+                "confirm_prompt": confirm_prompt,
+            },
+        )
+
+    def post(self, request, slug, uuid):
         from auctions.tasks import sync_club_member_to_brevo, sync_club_member_to_mailchimp
 
-        member = get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+        member = self._get_member(slug, uuid)
         if self.action == "unsubscribe":
             member.contact_status = "non_essential"
             member.save(update_fields=["contact_status"])
@@ -11734,7 +11835,10 @@ class BrevoWebhookView(View):
 
     def _get_club(self, slug, secret):
         club = Club.objects.filter(slug=slug).first()
-        if not club or not club.brevo_webhook_secret or club.brevo_webhook_secret != secret:
+        if not club or not club.brevo_webhook_secret:
+            return None
+        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        if not secrets.compare_digest(club.brevo_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
 
@@ -14846,7 +14950,21 @@ class AuctionBulkPrintingPDF(LotLabelView):
         if not self.selected_tos:
             self.queryset = self.auction.unprinted_labels_qs
         else:
-            self.selected_tos = ast.literal_eval(self.selected_tos)
+            # selected_tos is a client-supplied string like "[1, 2, 3]" (AuctionTOS pks). Parse it
+            # defensively: malformed input, a non-list literal, or non-integer elements must not 500.
+            try:
+                parsed = ast.literal_eval(self.selected_tos)
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                parsed = None
+            if not isinstance(parsed, (list, tuple, set)):
+                parsed = []
+            cleaned = []
+            for pk in parsed:
+                try:
+                    cleaned.append(int(pk))
+                except (TypeError, ValueError):
+                    continue
+            self.selected_tos = cleaned
             if self.print_only_unprinted:
                 self.queryset = self.auction.unprinted_labels_qs
             else:

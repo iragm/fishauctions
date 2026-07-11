@@ -429,12 +429,12 @@ window.onload = function() {
         {% if messages %}
             {% for message in messages %}
             <div class="alert
-            {% if "error" in message.tags %}
+            {% if "error" in message.level_tag %}
             alert-danger
             {% else %}
-            alert-{{ message.tags }}
+            alert-{{ message.level_tag }}
             {% endif %}
-            alert-dismissible fade show" role="alert">{{ message|safe }}
+            alert-dismissible fade show" role="alert">{% if message.extra_tags and "safe" in message.extra_tags %}{{ message|safe }}{% else %}{{ message }}{% endif %}
             <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
             </div>
             {% endfor %}

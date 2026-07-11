@@ -11914,6 +11914,17 @@ class FormsUtilityTestCase(TestCase):
             '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a>Obfuscated</a><a href="https://example.com">Safe</a>',
         )
 
+    def test_clean_summernote_removes_foreign_content_tags(self):
+        """Allowlist sanitizer must strip <svg>/<math> and their subtrees (mutation-XSS vectors)
+        that the old blocklist did not enumerate, while unwrapping unknown-but-benign tags."""
+        from auctions.forms import clean_summernote
+
+        self.assertEqual(clean_summernote("<svg><script>alert(1)</script></svg>"), "")
+        self.assertEqual(clean_summernote("<math><mtext><script>alert(1)</script></mtext></math>"), "")
+        self.assertEqual(clean_summernote("<svg><desc><img src=x onerror=alert(1)></desc></svg>"), "")
+        # Unknown, non-executable tags are unwrapped so their text content survives.
+        self.assertEqual(clean_summernote("<p>Keep <acme>this</acme></p>"), "<p>Keep this</p>")
+
     def test_summernote_widget_includes_upload_url_in_rendered_html(self):
         """Summernote widget should include upload URL and drag-drop disabling in rendered HTML."""
         from django.urls import reverse
@@ -23337,9 +23348,17 @@ class MailchimpSelfServiceTests(TestCase):
         self.club = Club.objects.create(name="Self Serve Club")
         self.member = ClubMember.objects.create(club=self.club, name="Sam", email="sam@example.com")
 
+    def test_get_shows_confirmation_without_changing_status(self):
+        # A GET (e.g. from an email link scanner/prefetcher) must not change anything.
+        url = reverse("club_member_unsubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+        response = self.client_http.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "contact")
+
     def test_unsubscribe_link(self):
         url = reverse("club_member_unsubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
-        self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.assertEqual(self.client_http.post(url).status_code, 200)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "non_essential")
 
@@ -23348,14 +23367,14 @@ class MailchimpSelfServiceTests(TestCase):
         self.member.mailchimp_status = "unsubscribed"
         self.member.save()
         url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
-        self.client_http.get(url)
+        self.client_http.post(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "contact")
         self.assertEqual(self.member.mailchimp_status, "")
 
     def test_nocomm_link(self):
         url = reverse("club_member_nocomm", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
-        self.client_http.get(url)
+        self.client_http.post(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "do_not_contact")
 
@@ -23512,7 +23531,7 @@ class BrevoSelfServiceTests(TestCase):
         self.member.brevo_status = "unsubscribed"
         self.member.save()
         url = reverse("club_member_resubscribe", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
-        self.client_http.get(url)
+        self.client_http.post(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "contact")
         self.assertEqual(self.member.brevo_status, "")
