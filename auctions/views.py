@@ -1945,29 +1945,42 @@ class CreateUserBan(APIView):
             user=user,
             defaults={},
         )
-        auctionsList = Auction.objects.exclude(is_deleted=True).filter(created_by=user.pk)
-        # delete all bids the banned user has made on active lots or in active auctions created by the request user
-        bids = Bid.objects.exclude(is_deleted=True).filter(user=bannedUser)
+        # bans apply to every auction this user administers (matching Auction.user_banned_by_admins),
+        # not just auctions they created
+        auctionsList = (
+            Auction.objects.exclude(is_deleted=True)
+            .filter(Q(created_by=user.pk) | Q(auctiontos__user=user, auctiontos__is_admin=True))
+            .distinct()
+        )
+        # delete all bids the banned user has made on active lots or in active auctions this user administers
+        bids = (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(user=bannedUser, lot_number__is_deleted=False)
+            .filter(Q(lot_number__user=user.pk) | Q(lot_number__auction__in=auctionsList))
+            .select_related("lot_number__auction")
+        )
         for bid in bids:
-            lot = Lot.objects.get(pk=bid.lot_number.pk, is_deleted=False)
-            if lot.user == user or lot.auction in auctionsList:
-                if not lot.ended:
-                    logger.info("Deleting bid %s", str(bid))
-                    bid.delete()
+            if not bid.lot_number.ended:
+                logger.info("Deleting bid %s", str(bid))
+                bid.delete()
+        # undo buy now purchases by the banned user in these auctions.  Clear auctiontos_winner
+        # along with winner so the sale isn't left half-undone
+        buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction__in=auctionsList)
+        for lot in buy_now_lots:
+            lot.winner = None
+            lot.auctiontos_winner = None
+            lot.winning_price = None
+            lot.save()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
-        for auction in auctionsList:
-            buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction=auction.pk)
-            for lot in buy_now_lots:
-                lot.winner = None
-                lot.winning_price = None
+        lots = Lot.objects.exclude(is_deleted=True).filter(
+            Q(user=bannedUser) | Q(auctiontos_seller__user=bannedUser), auction__in=auctionsList
+        )
+        for lot in lots:
+            if not lot.ended:
+                logger.info("User %s has banned lot %s", str(user), lot)
+                lot.banned = True
+                lot.ban_reason = "The seller of this lot has been banned from this auction"
                 lot.save()
-            lots = Lot.objects.exclude(is_deleted=True).filter(user=bannedUser, auction=auction.pk)
-            for lot in lots:
-                if not lot.ended:
-                    logger.info("User %s has banned lot %s", str(user), lot)
-                    lot.banned = True
-                    lot.ban_reason = "The seller of this lot has been banned from this auction"
-                    lot.save()
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
@@ -3596,6 +3609,19 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
                     reverse("auction_label_config", kwargs={"slug": self.get_object().slug}),
                 ),
                 extra_tags="safe",
+            )
+        if (
+            self.get_object().use_check_in_mode
+            and not self.get_object().is_online
+            and self.get_object().online_bidding != "disable"
+            and self.get_object().date_online_bidding_starts
+            and self.get_object().date_online_bidding_starts < self.get_object().date_start
+        ):
+            messages.info(
+                self.request,
+                "This auction uses check-in mode, so users can't bid until they've been checked in at the event.  "
+                "Online bidding is set to open before the auction starts, but no one will be able to bid online "
+                "until they've been checked in.",
             )
 
         # some checks to warn if an important time is set for midnight (00:00)
@@ -6636,10 +6662,9 @@ class ViewLot(DetailView):
         context["user_tos"] = None
         context["user_tos_location"] = None
         if lot.auction and self.request.user.is_authenticated:
-            tos = AuctionTOS.objects.filter(
-                Q(user=self.request.user) | Q(email=self.request.user.email),
-                auction=lot.auction,
-            ).first()
+            # same resolver the bid gate uses (newest record wins), so the UI can't
+            # disagree with enforcement when duplicate TOS records exist
+            tos = lot.auction.tos_for_user(self.request.user)
             if tos:
                 context["user_tos"] = True
                 context["user_tos_location"] = tos.pickup_location
@@ -7007,6 +7032,11 @@ class LotValidation(LoginRequiredMixin):
         There is quite a lot that needs to be done before the lot is saved
         """
         lot = form.save(commit=False)
+        if lot.auction and lot.auction.user_banned_by_admins(self.request.user):
+            # CreateUserBan sweeps the banned user's existing lots out of the auction;
+            # without this, they could simply resubmit them
+            form.add_error(None, "You've been banned from selling lots in this auction")
+            return self.form_invalid(form)
         lot.user = self.request.user
         lot.date_of_last_user_edit = timezone.now()
         if lot.buy_now_price:
@@ -8783,7 +8813,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     club_member.generate_bidder_number(save=True)
                 obj.clubmember = club_member
                 obj.bidder_number = club_member.bidder_number
-                obj.bidding_allowed = club_member.bidding_allowed
+                if auction.use_check_in_mode and not obj.checked_in:
+                    # Check-in mode: joining never grants bidding on its own. The member has to
+                    # check in at the event (which sets checked_in + bidding_allowed). Mirrors the
+                    # auto-add path in signals.propagate_clubmember_to_shadow_tos.
+                    obj.bidding_allowed = False
+                else:
+                    obj.bidding_allowed = club_member.bidding_allowed
                 obj.selling_allowed = club_member.selling_allowed
                 if club_member_is_new:
                     from .models import ClubHistory

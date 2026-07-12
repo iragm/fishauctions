@@ -3797,6 +3797,43 @@ class Auction(models.Model):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
 
+    @property
+    def auction_admins_user_pks(self):
+        """User pks of everyone on this auction's admin team, for ban enforcement.
+
+        Unlike auction_admins_pks this always includes the creator (who may not have an
+        AuctionTOS row of their own) and never contains None (admin TOS rows that aren't
+        linked to a user account)."""
+        pks = {pk for pk in self.auction_admins_pks if pk}
+        if self.created_by_id:
+            pks.add(self.created_by_id)
+        return pks
+
+    def user_banned_by_admins(self, user):
+        """True if `user` has been banned by anyone on this auction's admin team.
+
+        UserBans are personal ban lists, but they apply to every auction the banning user
+        administers, not just ones they created: the no-show flow's "ban this user from
+        future auctions" records the ban under the acting admin, and co-admins running a
+        club's auction expect their bans to hold there."""
+        if not user or not getattr(user, "pk", None):
+            return False
+        return UserBan.objects.filter(banned_user=user.pk, user__pk__in=self.auction_admins_user_pks).exists()
+
+    def tos_for_user(self, user):
+        """Resolve the AuctionTOS for a signed-in user in this auction, or None.
+
+        The single source of truth for "which TOS is this user": matched on the user FK or
+        the account email (emails are verified at signup), newest record first. Bid
+        enforcement and the lot page UI must both use this so duplicate TOS records can't
+        make them disagree about whether someone can bid."""
+        if not user or not getattr(user, "is_authenticated", False):
+            return None
+        query = Q(user=user)
+        if user.email:
+            query |= Q(email=user.email)
+        return AuctionTOS.objects.filter(query, auction=self).order_by("-createdon").first()
+
     # Stat getter/setter properties
     @property
     def get_stat_activity(self):
@@ -5426,7 +5463,9 @@ class AuctionTOS(models.Model):
                 other_users = UserData.objects.filter(last_ip_address=userData.last_ip_address).exclude(pk=userData.pk)
                 for other_user in other_users:
                     logger.debug("%s is also known as %s", self.user, other_user.user)
-                    banned = UserBan.objects.filter(banned_user=other_user.user, user=self.auction.created_by).first()
+                    banned = UserBan.objects.filter(
+                        banned_user=other_user.user, user__pk__in=self.auction.auction_admins_user_pks
+                    ).first()
                     if banned:
                         url = reverse("userpage", kwargs={"slug": other_user.user.username})
                         return f"<a href='{url}'>{other_user.user.username}</a>"
@@ -8533,7 +8572,9 @@ class Watch(models.Model):
 class UserBan(models.Model):
     """
     Users can ban other users from bidding on their lots
-    This will prevent the banned_user from bidding on any lots or in auction auctions created by the owned user
+    This will prevent the banned_user from bidding on the banning user's lots and in any
+    auction the banning user administers (created, or is an AuctionTOS admin of) -- see
+    Auction.user_banned_by_admins
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)

@@ -94,7 +94,7 @@
                 {% if banned %}
                 <form method="post" action="/api/users/unban/{{user.pk}}/">
                     {% csrf_token %}
-                    This user has been banned from bidding on your lots and in auctions you've created.<br><button class="btn btn-primary"  name="action_unban" type="submit">Unban</button>
+                    This user has been banned from bidding on your lots and in auctions you administer.<br><button class="btn btn-primary"  name="action_unban" type="submit">Unban</button>
                 </form>
                 {% else %}
                 <form method="post" action="/api/users/ban/{{user.pk}}/">
@@ -151,7 +151,7 @@
 {% block extra_js %}
 <script type="text/javascript">
 (function() {
-  var message = "Ban this user from bidding on all your lots and auctions?";
+  var message = "Ban this user from bidding on your lots and in auctions you administer?";
   var actions = document.getElementsByName('action_ban');
   if (actions.length) {
     actions[0].addEventListener("click", function(e) {

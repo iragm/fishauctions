@@ -67,6 +67,7 @@ from .models import (
     PickupLocation,
     SearchHistory,
     SquareSeller,
+    UserBan,
     UserData,
     UserIgnoreCategory,
     UserInterestCategory,
@@ -1774,6 +1775,236 @@ class DecimalBidValidationTests(TestCase):
         # bid of $6 should succeed
         result = bid_on_lot(lot, self.userB, 6)
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "NEW_HIGH_BID", "INFO"])
+
+
+class BiddingPermissionsHardeningTests(TestCase):
+    """Regression tests for the bid-path hardening: admin-team ban enforcement, own-lot and
+    seller-ban checks via auctiontos_seller, the invoice gate for email-matched TOS records,
+    under-reserve bid rejection, and CreateUserBan cleanup robustness."""
+
+    def setUp(self):
+        self.future = timezone.now() + datetime.timedelta(days=30)
+        self.past = timezone.now() - datetime.timedelta(hours=1)
+        self.creator = User.objects.create_user(username="hard_creator", password="x", email="hardcreator@example.com")
+        self.coadmin = User.objects.create_user(username="hard_coadmin", password="x", email="hardcoadmin@example.com")
+        self.bidder = User.objects.create_user(username="hard_bidder", password="x", email="hardbidder@example.com")
+        self.outbidder = User.objects.create_user(
+            username="hard_outbidder", password="x", email="hardoutbidder@example.com"
+        )
+        self.auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Hardening auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=self.future,
+        )
+        self.location = PickupLocation.objects.create(name="hard_loc", auction=self.auction, pickup_time=self.future)
+        # note: the creator deliberately has NO AuctionTOS row of their own
+        self.coadmin_tos = AuctionTOS.objects.create(
+            user=self.coadmin, auction=self.auction, pickup_location=self.location, is_admin=True
+        )
+        self.bidder_tos = AuctionTOS.objects.create(
+            user=self.bidder, auction=self.auction, pickup_location=self.location
+        )
+        self.outbidder_tos = AuctionTOS.objects.create(
+            user=self.outbidder, auction=self.auction, pickup_location=self.location
+        )
+        # A TOS matched by email only: created BEFORE the matching user account exists, so
+        # AuctionTOS.save()'s create-time auto-link can't fire (the imported-member case)
+        self.unlinked_tos = AuctionTOS.objects.create(
+            auction=self.auction, pickup_location=self.location, email="hardunlinked@example.com", name="Unlinked"
+        )
+        self.unlinked_user = User.objects.create_user(
+            username="hard_unlinked", password="x", email="hardunlinked@example.com"
+        )
+
+    def _make_lot(self, seller_tos, reserve=5, user=None, name="hardening lot"):
+        lot = Lot.objects.create(
+            lot_name=name,
+            auction=self.auction,
+            auctiontos_seller=seller_tos,
+            user=user,
+            reserve_price=reserve,
+            quantity=1,
+            date_end=self.future,
+        )
+        lot.date_posted = self.past
+        lot.save()
+        return lot
+
+    def test_coadmin_ban_blocks_bidding_in_auction(self):
+        from auctions.consumers import check_all_permissions
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        UserBan.objects.create(user=self.coadmin, banned_user=self.bidder)
+        self.assertEqual(check_all_permissions(lot, self.bidder), "This user has banned you from bidding on their lots")
+        # a lot the co-admin doesn't own is still blocked, via the admin-team check
+        other_lot = self._make_lot(self.outbidder_tos, user=self.outbidder, name="other lot")
+        self.assertEqual(
+            check_all_permissions(other_lot, self.bidder), "You don't have permission to bid in this auction"
+        )
+
+    def test_creator_ban_blocks_even_without_creator_tos(self):
+        """auction_admins_pks only contains users with a TOS row; the creator must be
+        covered even when they never made one for themselves"""
+        from auctions.consumers import check_all_permissions
+
+        lot = self._make_lot(self.outbidder_tos, user=self.outbidder)
+        UserBan.objects.create(user=self.creator, banned_user=self.bidder)
+        self.assertEqual(check_all_permissions(lot, self.bidder), "You don't have permission to bid in this auction")
+
+    def test_non_admin_ban_does_not_block_auction_bidding(self):
+        from auctions.consumers import check_all_permissions
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        UserBan.objects.create(user=self.outbidder, banned_user=self.bidder)
+        self.assertFalse(check_all_permissions(lot, self.bidder))
+
+    def test_own_lot_blocked_via_auctiontos_seller(self):
+        """Admin-added lots often have no lot.user; the seller must still be blocked from
+        bidding on their own lot when their TOS is matched by email"""
+        from auctions.bidding import check_bidding_permissions
+
+        self.unlinked_tos.refresh_from_db()
+        self.assertIsNone(self.unlinked_tos.user)
+        lot = self._make_lot(self.unlinked_tos, user=None)
+        self.assertEqual(check_bidding_permissions(lot, self.unlinked_user), "You can't bid on your own lot")
+
+    def test_seller_ban_applies_when_lot_user_is_none(self):
+        from auctions.consumers import check_all_permissions
+
+        lot = self._make_lot(self.coadmin_tos, user=None)
+        UserBan.objects.create(user=self.coadmin, banned_user=self.bidder)
+        self.assertEqual(check_all_permissions(lot, self.bidder), "This user has banned you from bidding on their lots")
+
+    def test_invoice_gate_applies_to_email_matched_tos(self):
+        """A closed invoice must block bidding even when the TOS has no linked user account"""
+        from auctions.bidding import bid_on_lot
+
+        invoice = Invoice.objects.create(auctiontos_user=self.unlinked_tos, auction=self.auction)
+        Invoice.objects.filter(pk=invoice.pk).update(status="UNPAID")
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        result = bid_on_lot(lot, self.unlinked_user, 10)
+        self.assertEqual(result["type"], "ERROR")
+        self.assertIn("not open", result["message"])
+
+    def test_first_bid_below_reserve_rejected(self):
+        from auctions.bidding import bid_on_lot
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin, reserve=10)
+        result = bid_on_lot(lot, self.bidder, 5)
+        self.assertEqual(result["type"], "ERROR")
+        self.assertIn("bid at least", result["message"])
+        self.assertFalse(Bid.objects.filter(lot_number=lot).exists())
+        # a bid at exactly the reserve is accepted
+        result = bid_on_lot(lot, self.bidder, 10)
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+
+    def test_raising_reserve_above_existing_bids_does_not_break_rebidding(self):
+        """lot.high_bidder returns False when all bids are under the reserve; re-bidding used
+        to crash on False.pk and report a generic error"""
+        from auctions.bidding import bid_on_lot
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin, reserve=5)
+        bid_on_lot(lot, self.bidder, 10)
+        lot.reserve_price = 20
+        lot.save()
+        result = bid_on_lot(lot, self.bidder, 25)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+
+    def test_outbid_email_failure_does_not_fail_bid(self):
+        from unittest.mock import patch
+
+        from auctions.bidding import bid_on_lot
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        bid_on_lot(lot, self.bidder, 10)
+        with patch("auctions.bidding.mail.send", side_effect=Exception("smtp down")):
+            result = bid_on_lot(lot, self.outbidder, 20)
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+        self.assertTrue(Bid.objects.filter(lot_number=lot, user=self.outbidder, was_high_bid=True).exists())
+        # the price-change history was still written
+        self.assertTrue(LotHistory.objects.filter(lot=lot, changed_price=True, bid_amount=20).exists())
+
+    def test_place_bid_and_broadcast_places_bid_and_handles_missing_lot(self):
+        from auctions.bidding import place_bid_and_broadcast
+
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        result = place_bid_and_broadcast(lot, self.bidder, 10)
+        self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
+        lot.is_deleted = True
+        lot.save()
+        result = place_bid_and_broadcast(lot, self.outbidder, 20)
+        self.assertEqual(result["type"], "ERROR")
+        self.assertEqual(result["message"], "This lot has been removed")
+
+    def test_tos_for_user_newest_record_wins(self):
+        """Enforcement and UI both resolve TOS through tos_for_user; newest record wins.
+        AuctionTOS.save() auto-merges same-email duplicates on create nowadays, so simulate a
+        legacy duplicate with a queryset update that bypasses save()"""
+        AuctionTOS.objects.filter(pk=self.bidder_tos.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
+        newer = AuctionTOS.objects.create(
+            auction=self.auction, pickup_location=self.location, email="tempdupe@example.com", name="dupe"
+        )
+        AuctionTOS.objects.filter(pk=newer.pk).update(email="hardbidder@example.com")
+        self.assertEqual(self.auction.tos_for_user(self.bidder).pk, newer.pk)
+
+    def test_create_user_ban_survives_soft_deleted_lots(self):
+        """Banning a user whose bid history touches a soft-deleted lot used to 500 mid-sweep"""
+        lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
+        Bid.objects.create(user=self.bidder, lot_number=lot, amount=10)
+        lot.is_deleted = True
+        lot.save()
+        live_lot = self._make_lot(self.outbidder_tos, user=self.outbidder, name="live lot")
+        live_bid = Bid.objects.create(user=self.bidder, lot_number=live_lot, amount=10)
+        self.client.force_login(self.creator)
+        response = self.client.post(f"/api/users/ban/{self.bidder.pk}/")
+        self.assertEqual(response.status_code, 302)
+        live_bid.refresh_from_db()
+        self.assertTrue(live_bid.is_deleted)
+
+    def test_coadmin_ban_sweeps_administered_auction(self):
+        """A co-admin's ban must clean up the auctions they administer, not just ones they created"""
+        # the banned user has an active bid, and a lot linked only through auctiontos_seller
+        target_lot = self._make_lot(self.outbidder_tos, user=self.outbidder, name="bid target")
+        bid = Bid.objects.create(user=self.bidder, lot_number=target_lot, amount=10)
+        seller_lot = self._make_lot(self.bidder_tos, user=None, name="seller linked lot")
+        self.client.force_login(self.coadmin)
+        response = self.client.post(f"/api/users/ban/{self.bidder.pk}/")
+        self.assertEqual(response.status_code, 302)
+        bid.refresh_from_db()
+        seller_lot.refresh_from_db()
+        self.assertTrue(bid.is_deleted)
+        self.assertTrue(seller_lot.banned)
+
+    def test_banned_user_cannot_submit_lot(self):
+        """CreateUserBan sweeps existing lots; without a gate at submission the banned user
+        could simply resubmit them"""
+        UserBan.objects.create(user=self.creator, banned_user=self.bidder)
+        userdata = self.bidder.userdata
+        userdata.address = "123 Test St"
+        userdata.save()
+        self.bidder.first_name = "Test"
+        self.bidder.last_name = "Bidder"
+        self.bidder.save()
+        self.client.force_login(self.bidder)
+        response = self.client.post(
+            f"/lots/new/?auction={self.auction.slug}",
+            {
+                "lot_name": "Banned user lot",
+                "auction": self.auction.pk,
+                "quantity": 1,
+                "reserve_price": "5",
+                "part_of_auction": "True",
+                "run_duration": "10",
+                "cloned_from": "",
+                "image_url": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "banned from selling")
+        self.assertFalse(Lot.objects.filter(lot_name="Banned user lot").exists())
 
 
 class AuctionEditFormMinimumBidTests(TestCase):
@@ -22338,6 +22569,93 @@ class ManageUsersThroughClubTests(TestCase):
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.assertEqual(tos.user, self.joiner)
         self.assertEqual(tos.bidder_number, cm.bidder_number)
+
+    def test_checkin_mode_self_join_does_not_grant_bidding(self):
+        """Clicking 'join' on a check-in auction must not enable bidding -- the member still has
+        to check in at the event.  Regression: the join path copied the club member's default
+        bidding_allowed=True, which let a self-joined user bid without ever checking in."""
+        self._enable_checkin_mode()
+        from unittest.mock import MagicMock
+
+        from auctions.forms import AuctionJoin
+        from auctions.views import AuctionInfo
+
+        form = AuctionJoin(
+            data={
+                "i_agree": True,
+                "pickup_location": str(self.location.pk),
+                "time_spent_reading_rules": "5",
+            },
+            auction=self.auction,
+            user=self.joiner,
+        )
+        self.assertTrue(form.is_valid(), msg=f"Form errors: {form.errors}")
+        view = AuctionInfo()
+        view.auction = self.auction
+        view.kwargs = {}
+        view.object = self.auction
+        request = MagicMock()
+        request.user = self.joiner
+        view.request = request
+        view.get_form = lambda: form
+        view.form_valid = lambda f: None
+        view.form_invalid = lambda f: None
+        view.post(request)
+        tos = AuctionTOS.objects.get(auction=self.auction, user=self.joiner)
+        self.assertIsNone(tos.checked_in)
+        self.assertFalse(tos.bidding_allowed)
+        self.assertTrue(tos.requires_check_in_before_bidding)
+        self.assertFalse(tos.can_bid_in_auction)
+
+    def test_check_bidding_permissions_blocks_unchecked_in_member(self):
+        """Defense in depth: even if a check-in-mode TOS somehow has bidding_allowed=True, the bid
+        gate must refuse a member who has not checked in yet."""
+        from auctions.bidding import check_bidding_permissions
+
+        self._enable_checkin_mode()
+        cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
+        # checkin mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
+        tos.bidding_allowed = True  # simulate a stray grant that skipped check-in
+        tos.checked_in = None
+        tos.save()
+        lot = Lot.objects.create(lot_name="a lot", auction=self.auction, quantity=1, user=self.creator)
+        self.assertEqual(
+            check_bidding_permissions(lot, self.joiner),
+            "You must check in at the event before you can bid",
+        )
+        # Once checked in, the gate no longer blocks on check-in grounds.
+        tos.checked_in = timezone.now()
+        tos.save()
+        self.assertNotEqual(
+            check_bidding_permissions(lot, self.joiner),
+            "You must check in at the event before you can bid",
+        )
+
+    def test_edit_form_warns_when_checkin_mode_and_pre_event_online_bidding(self):
+        """Check-in mode blocks bidding until users are checked in at the event, so online
+        bidding that opens before the start date can't actually be used; warn the admin"""
+        self.client.force_login(self.creator)
+        data = {
+            **self._auction_form_data(),
+            "manage_users_through_club": "checkin",
+            "online_bidding": "allow",
+            "date_online_bidding_starts": (self.auction.date_start - datetime.timedelta(days=3)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "date_online_bidding_ends": self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        response = self.client.post(reverse("edit_auction", kwargs={"slug": self.auction.slug}), data=data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "uses check-in mode")
+        # no warning when online bidding opens at/after the start date
+        data["date_online_bidding_starts"] = self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S")
+        data["date_online_bidding_ends"] = (self.auction.date_start + datetime.timedelta(days=1)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        response = self.client.post(reverse("edit_auction", kwargs={"slug": self.auction.slug}), data=data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "uses check-in mode")
 
     def test_join_page_hides_club_add_message_for_existing_member(self):
         self._enable_club_managed()
