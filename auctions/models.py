@@ -2482,7 +2482,7 @@ class Auction(models.Model):
     )
     reserve_price.help_text = "Allow users to set a minimum bid on their lots"
     tax = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
-    tax.help_text = "Added to invoices for all won lots"
+    tax.help_text = "A percent added to the buyer's invoice for all won lots (e.g. enter 7 for 7% sales tax). Leave at 0 for no tax."
     advanced_lot_adding = models.BooleanField(default=False)
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
     use_quantity_field = models.BooleanField(default=False, blank=True)
@@ -7485,7 +7485,7 @@ class Invoice(models.Model):
         max_length=20,
         choices=(
             ("DRAFT", "Open"),
-            ("UNPAID", "Waiting for payment"),
+            ("UNPAID", "Ready"),
             ("PAID", "Paid"),
         ),
         default="DRAFT",
@@ -8363,6 +8363,10 @@ class InvoiceAdjustment(models.Model):
     def display(self):
         """for templates"""
         result = ""
+        # Show an explicit sign so a line reads "+$10.00" (added to the invoice) vs
+        # "-$10.00" (subtracted), instead of a bare amount that gives no direction.
+        if self.adjustment_type in ["ADD", "ADD_PERCENT"]:
+            result += "+"
         if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
             result += "-"
         if self.adjustment_type in ["ADD", "DISCOUNT"]:

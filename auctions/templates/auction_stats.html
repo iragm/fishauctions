@@ -430,6 +430,11 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                 <i class="bi bi-arrow-repeat"></i> Stats are being recalculated. You'll get a notification when they're ready.
             </div>
             {% endif %}
+            {% if not auction.total_lots %}
+            <div class="alert alert-secondary" role="alert">
+                <i class="bi bi-bar-chart"></i> There's no data to chart yet. Stats and graphs will fill in here once lots are added and people start viewing and bidding.
+            </div>
+            {% endif %}
             <div class="mb-3">
                 <label for="compare-auction">Compare with another auction:</label>
                 <select id="compare-auction" class="form-control" style="max-width: 400px;">

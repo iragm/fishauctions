@@ -33,6 +33,12 @@ Pickup locations
               {% endif %}
               <td>{% if location.pickup_by_mail %}N/A{% else %}{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}{% endif %}</td>
             </tr>
+            {% empty %}
+            <tr>
+              <td colspan="{% if auction.all_location_count > 1 %}5{% else %}3{% endif %}" class="text-center text-muted p-3">
+                No pickup locations yet. Add one with the <strong>Add pickup location</strong> button above &mdash; this is where users pick up the lots they win.
+              </td>
+            </tr>
             {% endfor %}
         </tbody>
       </table>

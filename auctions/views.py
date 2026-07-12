@@ -3868,14 +3868,30 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
         context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
-        # When the filtered table has no results and a query was typed, show a "Create user" button
-        # pre-populated intelligently based on what the user typed.
+        # When the table has no rows, replace the bare column headers with a helpful message:
+        # a "Create user" button pre-populated from the search when a query was typed, or a
+        # first-run empty state explaining how users get added on a brand-new auction.
         query = (self.request.GET.get("query") or "").strip()
         filterset = context.get("filter")
-        filtered_empty = filterset is not None and query and not filterset.qs.exists()
-        if filtered_empty and self.can_add_edit_people:
-            context["no_results"] = self._build_no_results_html(query)
+        table_empty = filterset is not None and not filterset.qs.exists()
+        if table_empty and self.can_add_edit_people:
+            if query:
+                context["no_results"] = self._build_no_results_html(query)
+            else:
+                context["no_results"] = self._build_empty_auction_html()
         return context
+
+    def _build_empty_auction_html(self):
+        """Return a first-run empty state shown when the auction has no users yet."""
+        return (
+            "<div class='text-center text-muted p-4'>"
+            "<i class='bi bi-people fs-1 d-block mb-2'></i>"
+            "<p class='mb-1'>No users yet.</p>"
+            "<p class='mb-0'>Users are added automatically when someone joins, bids, or submits a lot. "
+            "You can also add one now with the <strong>Add user</strong> button above. "
+            "Each user's invoice appears here automatically once they buy or sell a lot.</p>"
+            "</div>"
+        )
 
     def _build_no_results_html(self, query):
         """Return an HTML snippet with a 'Create user' button pre-populated from the search query."""
@@ -7711,6 +7727,18 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
+            # Deleting an AuctionTOS cascades away its invoice, adjustments, and payments.
+            # Block that when an invoice exists; a merge (which moves that history to another
+            # user) is required instead. The form already enforces this, but guard here too
+            # since this is where the irreversible delete happens.
+            performing_merge = bool(form.cleaned_data.get("merge_with")) and not form.cleaned_data.get("delete_lots")
+            if not performing_merge and Invoice.objects.filter(auctiontos_user=self.auctiontos).exists():
+                messages.error(
+                    request,
+                    f"{self.auctiontos.name} has an invoice, so deleting them would erase their payment history. "
+                    "Merge them into another user instead.",
+                )
+                return self.form_invalid(form)
             if form.cleaned_data["delete_lots"]:
                 sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
                 won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
@@ -9969,13 +9997,16 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             )
         except Exception:
             logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
+        if self.invoice_count:
+            noun = "invoice" if self.invoice_count == 1 else "invoices"
+            messages.success(request, f"{self.invoice_count} {noun} marked {self.new_status_display}.")
         return close_modal_response("reload-page")
 
 
 class MarkInvoicesReady(InvoiceBulkUpdateStatus):
     old_invoice_status = "DRAFT"
     new_invoice_status = "UNPAID"
-    old_status_display = "draft"
+    old_status_display = "open"
     new_status_display = "ready"
 
     show_checkbox = True

@@ -9,7 +9,7 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 from bootstrap_datepicker_plus.widgets import (
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
-from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
@@ -518,7 +518,9 @@ class InvoiceAdjustmentFormSetHelper(FormHelper):
         self.layout = Layout(
             Div(
                 Div("adjustment_type", css_class="col-md-4"),
-                Div(PrependedAppendedText("amount", "$", ".00"), css_class="col-md-4"),
+                # Whole dollars only (amount is an integer field), so no ".00" suffix that
+                # would imply cents can be entered.
+                Div(PrependedText("amount", "$"), css_class="col-md-4"),
                 Div("notes", css_class="col-md-4"),
                 css_class="row",
             )
@@ -539,6 +541,8 @@ class InvoiceAdjustmentForm(forms.ModelForm):
         if not self.is_bound and not self.instance.pk:
             self.initial["amount"] = ""
         self.fields["notes"].widget.attrs = {"placeholder": "ex: membership fee"}
+        self.fields["adjustment_type"].help_text = "Charge extra adds to the invoice; Discount subtracts from it."
+        self.fields["amount"].help_text = "Whole dollars only"
 
         return result
 
@@ -808,12 +812,29 @@ class DeleteAuctionTOS(forms.Form):
                 "delete_lots"
             ].help_text = "Uncheck if this is a duplicate user.  Lot numbers will not be changed."
             self.fields["merge_with"].label = "To keep these lots, select a user to assign them to"
+        # An invoice records payment/adjustment history that a plain delete would
+        # cascade away. Deleting is blocked in that case; a merge (which moves the
+        # invoice, adjustments, and payments onto another user) is the only way out.
+        self.invoice_exists = Invoice.objects.filter(auctiontos_user=self.auctiontos).exists()
+        if self.invoice_exists:
+            self.fields["delete_lots"].widget = HiddenInput()
+            self.fields["delete_lots"].initial = False
+            self.fields["merge_with"].label = (
+                "This user has an invoice, so their payment history can't be deleted. "
+                "Select another user to merge them into — their lots, adjustments, and payments move to that user."
+            )
 
     def clean(self):
         cleaned_data = super().clean()
         delete_lots = cleaned_data.get("delete_lots")
+        merge_with = cleaned_data.get("merge_with")
+        if self.invoice_exists and (delete_lots or not merge_with):
+            # Force the merge path; the destructive branches would erase the invoice.
+            self.add_error(
+                "merge_with",
+                "This user has an invoice. Select another user to merge them into so their payment history is preserved.",
+            )
         if not delete_lots:
-            merge_with = cleaned_data.get("merge_with")
             if not merge_with:
                 if self.lots_exist:
                     self.add_error("merge_with", "Select a new user to preserve this user's data")
@@ -2242,6 +2263,16 @@ class AuctionEditForm(forms.ModelForm):
             currency = "USD"
         currency_symbol = get_currency_symbol(currency)
 
+        def slot(field_name, visible_element):
+            """Place a field in its grid column when visible, but render just the
+            bare hidden input (no empty column) when its widget has been switched
+            to HiddenInput above. This keeps the value in the POST without leaving
+            a blank cell in the row. See auction_edit_form.html for the JS-toggled
+            fields, which collapse their own column via toggleCol()."""
+            if isinstance(self.fields[field_name].widget, forms.HiddenInput):
+                return field_name
+            return visible_element
+
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -2264,19 +2295,25 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                     label="Bidding opens",
                 ),
-                Div(
+                slot(
                     "date_end",
-                    css_class="col-md-3",
+                    Div(
+                        "date_end",
+                        css_class="col-md-3",
+                    ),
                 ),
                 css_class="row",
             ),
             HTML("<h4>Lot fees</h4>"),
             Div(
-                PrependedAppendedText(
+                slot(
                     "unsold_lot_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
+                    PrependedAppendedText(
+                        "unsold_lot_fee",
+                        currency_symbol,
+                        ".00",
+                        wrapper_class="col-lg-3",
+                    ),
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee",
@@ -2318,11 +2355,14 @@ class AuctionEditForm(forms.ModelForm):
             ),
             Div(
                 # PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
-                PrependedAppendedText(
+                slot(
                     "pre_register_lot_discount_percent",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
+                    PrependedAppendedText(
+                        "pre_register_lot_discount_percent",
+                        "",
+                        "%",
+                        wrapper_class="col-lg-3",
+                    ),
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee_for_club_members",
@@ -2346,17 +2386,26 @@ class AuctionEditForm(forms.ModelForm):
             ),
             HTML("<h4>Lot permissions</h4>"),
             Div(
-                Div(
+                slot(
                     "online_bidding",
-                    css_class="col-md-3",
+                    Div(
+                        "online_bidding",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "date_online_bidding_starts",
-                    css_class="col-md-3",
+                    Div(
+                        "date_online_bidding_starts",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "date_online_bidding_ends",
-                    css_class="col-md-3",
+                    Div(
+                        "date_online_bidding_ends",
+                        css_class="col-md-3",
+                    ),
                 ),
                 Div(
                     "allow_deleting_bids",
@@ -2381,9 +2430,12 @@ class AuctionEditForm(forms.ModelForm):
                     "only_approved_bidders",
                     css_class="col-md-4",
                 ),
-                Div(
+                slot(
                     "copy_users_when_copying_this_auction",
-                    css_class="col-md-4",
+                    Div(
+                        "copy_users_when_copying_this_auction",
+                        css_class="col-md-4",
+                    ),
                 ),
                 Div(
                     "use_seller_dash_lot_numbering",
@@ -2393,9 +2445,12 @@ class AuctionEditForm(forms.ModelForm):
             ),
             HTML("<h4>Club</h4>"),
             Div(
-                Div(
+                slot(
                     "club",
-                    css_class="col-md-6",
+                    Div(
+                        "club",
+                        css_class="col-md-6",
+                    ),
                 ),
                 Div(
                     "manage_users_through_club",
@@ -2419,17 +2474,26 @@ class AuctionEditForm(forms.ModelForm):
                     "email_users_when_invoices_ready",
                     css_class="col-md-3",
                 ),
-                Div(
+                slot(
                     "add_membership_fee_to_invoices_for_expired_members",
-                    css_class="col-md-3",
+                    Div(
+                        "add_membership_fee_to_invoices_for_expired_members",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "enable_online_payments",
-                    css_class="col-md-3",
+                    Div(
+                        "enable_online_payments",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "enable_square_payments",
-                    css_class="col-md-3",
+                    Div(
+                        "enable_square_payments",
+                        css_class="col-md-3",
+                    ),
                 ),
                 Div(
                     "invoice_payment_instructions",
@@ -2455,9 +2519,12 @@ class AuctionEditForm(forms.ModelForm):
                     "auto_add_images",
                     css_class="col-md-3",
                 ),
-                Div(
+                slot(
                     "message_users_when_lots_sell",
-                    css_class="col-md-3",
+                    Div(
+                        "message_users_when_lots_sell",
+                        css_class="col-md-3",
+                    ),
                 ),
                 # Div('set_lot_winners_url', css_class='col-md-3',),
                 PrependedAppendedText(

@@ -5,6 +5,11 @@
 {% block extra_js %}
 <script>
 function show_hide_advanced() {
+    {% if form.invoice_exists %}
+        // This user has an invoice: a merge is required, so always show the picker.
+        $('#merge_selection').show();
+        return;
+    {% endif %}
     var elem = document.getElementById('id_delete_lots')
     if (elem.type == "hidden") {
 
@@ -31,6 +36,14 @@ $(document).ready(function() {
 {% block content %}
     <h4>Remove {{ auctiontos.name }}</h4>
     <p>Are you sure you want to remove {{ auctiontos.name }} from {{ auctiontos.auction }}?</p>
-    <span class="text-warning">This cannot be undone!</span><br><br>
+    {% if form.invoice_exists %}
+        <div class="alert alert-warning">
+            {{ auctiontos.name }} has an invoice. Deleting them would permanently erase that invoice
+            along with any recorded payments and adjustments. To remove them, merge them into another
+            user below — their lots, adjustments, and payments will move to that user.
+        </div>
+    {% else %}
+        <span class="text-warning">This cannot be undone!</span><br><br>
+    {% endif %}
     {% crispy form form.helper %}
 {% endblock %}

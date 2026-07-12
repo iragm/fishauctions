@@ -30,21 +30,24 @@ $(document).ready(function() {
 $('#id_online_bidding').change(function(data) {
     change_bidding(this.value);
 });
+// Toggle the whole Bootstrap grid column, not just the inner field wrapper,
+// so a hidden field doesn't leave an empty cell reserving space in its row.
+// Falls back to the element itself for widgets (e.g. PrependedAppendedText)
+// where the col-* class already sits on #div_id_<field>.
+function toggleCol(sel, show) {
+    var $el = $(sel);
+    if (!$el.length) return;
+    var $col = $el.closest('[class*="col-"]');
+    if (!$col.length) { $col = $el; }
+    $col.toggle(!!show);
+}
 function update_club_fields(club_val) {
-    var club_fields = [
+    [
         '#div_id_add_membership_fee_to_invoices_for_expired_members',
         '#div_id_manage_users_through_club',
         '#div_id_club_member_discount',
-    ];
-    club_fields.forEach(function(sel) {
-        var $el = $(sel);
-        if ($el.length) {
-            if (club_val) {
-                $el.show();
-            } else {
-                $el.hide();
-            }
-        }
+    ].forEach(function(sel) {
+        toggleCol(sel, club_val);
     });
     update_alternate_split_fields();
 }
@@ -63,10 +66,10 @@ function update_alternate_split_fields() {
         '#div_id_winning_bid_percent_to_club_for_club_members',
         '#div_id_club_member_cut',
     ].forEach(function(sel) {
-        $(sel).toggle(mode != 'off');
+        toggleCol(sel, mode != 'off');
     });
     // In club member discount mode the label is always "Club member", so hide the name field
-    $('#div_id_alternative_split_label').toggle(mode == 'custom');
+    toggleCol('#div_id_alternative_split_label', mode == 'custom');
 }
 $('#id_alternate_split_mode').on('change', update_alternate_split_fields);
 // Native select change (covers plain <select> and select2 hidden input)
