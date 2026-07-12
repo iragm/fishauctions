@@ -13203,7 +13203,8 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             # )
             return (
                 base_qs.filter(user__isnull=True)
-                .exclude(ip_address="", ip_address__isnull=True)
+                .exclude(ip_address="")
+                .exclude(ip_address__isnull=True)
                 .values("ip_address")
                 .distinct()
                 .count()
@@ -13322,22 +13323,29 @@ class UserMap(TemplateView):
         data = self.request.GET.copy()
         view = data.get("view")
         filter1 = data.get("filter")
+        try:
+            numeric_filter = int(filter1)
+        except (TypeError, ValueError):
+            numeric_filter = None
         # view_qs = PageView.objects.exclude(latitude=0)
-        qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
-            lots_sold=Count("lot"), lots_bought=Count("winner")
+        qs = (
+            User.objects.filter(userdata__isnull=False, is_active=True)
+            .exclude(userdata__latitude=0, userdata__longitude=0)
+            .select_related("userdata")
+            .annotate(lots_sold=Count("lot", distinct=True), lots_bought=Count("winner", distinct=True))
         )
         if view == "club" and filter1:
             # Users from a club
             qs = qs.filter(userdata__club__name=filter1)
-        elif view == "buyers_and_sellers" and filter1:
+        elif view == "buyers_and_sellers" and numeric_filter is not None:
             # Users who sold and bought
-            qs = qs.filter(lots_sold__gte=filter1, lots_bought__gte=filter1)
-        elif view == "volume" and filter1:
+            qs = qs.filter(lots_sold__gte=numeric_filter, lots_bought__gte=numeric_filter)
+        elif view == "volume" and numeric_filter is not None:
             # users by top volume_percentile
-            qs = qs.filter(userdata__volume_percentile__lte=filter1)
-        elif view == "recent" and filter1:
+            qs = qs.filter(userdata__volume_percentile__lte=numeric_filter)
+        elif view == "recent" and numeric_filter is not None:
             # view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
-            qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
+            qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=numeric_filter))
         context["users"] = qs
         # context["pageviews"] = view_qs
         return context
