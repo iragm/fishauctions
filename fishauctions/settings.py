@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fishauctions._env import env_has_real_value, parse_bool_env, require_secure_prod_secrets
+from fishauctions.firebase_config import load_firebase_client_config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
@@ -460,6 +461,13 @@ SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" 
 # Absent ⇒ push is disabled globally and every notification falls back to email — the same
 # graceful-degradation pattern as SES_ROUTE_EMAILS_ENABLED. See auctions.notifications.push_configured.
 FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
+# Public Firebase *client* config for the mobile app, parsed from the config files that ship with the
+# mobile build (google-services.json for Android, GoogleService-Info.plist for iOS). Public values
+# only — never the service-account key above. Absent/unparseable files ⇒ that platform is omitted
+# from /api/mobile/config/. Served by auctions.mobile.views.MobileConfigView.
+FIREBASE_ANDROID_CONFIG_FILE = os.environ.get("FIREBASE_ANDROID_CONFIG_FILE", "").strip()
+FIREBASE_IOS_CONFIG_FILE = os.environ.get("FIREBASE_IOS_CONFIG_FILE", "").strip()
+FIREBASE_CLIENT_CONFIG = load_firebase_client_config(FIREBASE_ANDROID_CONFIG_FILE, FIREBASE_IOS_CONFIG_FILE)
 INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"

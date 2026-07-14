@@ -123,7 +123,8 @@
       var message = (payload && payload.message) || "Scan failed -- check your connection and try again.";
       showToast(message, "danger");
       announce({ ok: false, message: message });
-      return;
+      // Signal the camera scanner that this read was rejected so it re-arms quickly for a retry.
+      return false;
     }
     beep("checkin");
     pendingBidderNumber = "";
@@ -131,13 +132,14 @@
     if (checkInOnly) {
       // the self check-in kiosk shows its own full-screen welcome instead of a toast
       announce({ ok: true, payload: payload });
-      return;
+      return true;
     }
     var suffix = assignedBidderNumber ? " and assigned bidder number " + assignedBidderNumber : "";
     var adjSuffix = payload.adjustment_desc ? " | " + payload.adjustment_desc + " applied" : "";
     var verb = payload.verb || "Checked in";
     showToast(verb + " " + payload.name + suffix + adjSuffix, "success");
     announce({ ok: true, payload: payload });
+    return true;
   }
 
   async function applyAdjustmentToBidder(bidderNumber) {
@@ -163,7 +165,7 @@
       var errMessage = (payload && payload.message) || "Scan failed -- check your connection and try again.";
       showToast(errMessage, "danger");
       announce({ ok: false, message: errMessage });
-      return;
+      return false;
     }
     beep("checkin");
     // Clear both the adjustment and any pending bidder number from the form
@@ -172,8 +174,11 @@
     var adjSuffix = payload.adjustment_desc ? " | " + payload.adjustment_desc + " applied" : "";
     showToast("Adjusted " + payload.name + " (bidder " + payload.bidder_number + ")" + adjSuffix, "success");
     announce({ ok: true, payload: payload });
+    return true;
   }
 
+  // Returns false when the value was rejected (unrecognized or a failed server scan) so a camera
+  // caller can re-arm quickly; true/undefined otherwise. The USB HID path ignores the return value.
   async function handleCode(rawValue) {
     var value = String(rawValue || "").trim();
     if (!value) {
@@ -186,10 +191,9 @@
         beep("error");
         showToast("Unrecognized barcode", "danger");
         announce({ ok: false, message: "Unrecognized barcode" });
-        return;
+        return false;
       }
-      await postScan(value);
-      return;
+      return await postScan(value);
     }
     var paddleBidderNumber = parsePaddleBarcode(value);
     if (paddleBidderNumber) {
@@ -197,13 +201,12 @@
         // Adjustment scanned first, now a paddle: look up the bidder holding that number and
         // apply the pending adjustment straight to their invoice (no member card, no check-in).
         beep("scan");
-        await applyAdjustmentToBidder(paddleBidderNumber);
-        return;
+        return await applyAdjustmentToBidder(paddleBidderNumber);
       }
       beep("scan");
       pendingBidderNumber = paddleBidderNumber;
       showToast("Scan the user to assign bidder number " + pendingBidderNumber + " to.", "warning");
-      return;
+      return true;
     }
     var adjustment = parseAdjustmentBarcode(value);
     if (adjustment) {
@@ -211,9 +214,9 @@
       pendingAdjustment = adjustment;
       var sign = adjustment.adjustmentType === "ADD" ? "+" : "-";
       showToast("Scan a member card or bidder number to apply " + sign + "$" + adjustment.amount + " " + adjustment.label + " to their invoice.", "warning");
-      return;
+      return true;
     }
-    await postScan(value);
+    return await postScan(value);
   }
 
   // --- USB HID (keyboard wedge) listener -----------------------------------

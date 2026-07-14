@@ -7734,13 +7734,21 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                 review_form = AuctionTOSMergeReviewForm(request.POST, instance=target, auction=self.auction)
                 if review_form.is_valid():
                     with transaction.atomic():
-                        target = review_form.save()
+                        # Merge (which deletes the source) BEFORE saving the reviewed fields onto the
+                        # target. The review form typically copies the source's email onto the target,
+                        # and saving the target with that email while the source still exists trips
+                        # AuctionTOS.save()'s exact-email auto-merge — which keeps the *older* record
+                        # (the source) and deletes the target out from under us, raising
+                        # "Unsaved model instance ... cannot be used in an ORM query" on the next line
+                        # (and merging in the wrong direction). Deleting the source first makes the
+                        # email unique so the auto-merge can't fire.
                         target.merge_duplicate(
                             self.auctiontos,
                             reason=f"merged by {request.user.username}",
                             user=request.user,
                             preserve_missing_fields=False,
                         )
+                        target = review_form.save()
                     messages.success(request, f"Merged {self.auctiontos.name} into {target.name}.")
                     return redirect(self._merge_success_url())
                 return self._render_merge_review(request, target, review_form)
@@ -12761,6 +12769,55 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                         "label": "Google Cloud — OAuth credentials",
                         "url": "https://console.cloud.google.com/apis/credentials",
                     },
+                ],
+            },
+            # -- Mobile push notifications ---------------------------------------
+            {
+                "section": "Mobile push notifications",
+                "name": "Mobile push notifications (Firebase)",
+                "hide_title": True,
+                # The service-account key is what actually enables sending; without it every
+                # notification falls back to email. The two client files let the app register to
+                # receive — flagged in the help text below.
+                "configured": bool(getattr(settings, "FIREBASE_CREDENTIALS_JSON", "")),
+                "what_it_does": (
+                    "Sends push notifications to the mobile app (invoices, watched lots, chat, and more) "
+                    "instead of email for users who opt in. Without it those notifications simply fall back "
+                    "to email. Three pieces from one Firebase project:"
+                    "<ul class='mb-0'>"
+                    "<li><code>FIREBASE_CREDENTIALS_JSON</code> &mdash; the <strong>service-account</strong> key "
+                    "(a secret) the server uses to send. Inline JSON, or a path to the file.</li>"
+                    "<li><code>FIREBASE_ANDROID_CONFIG_FILE</code> &mdash; path to <code>google-services.json</code>, "
+                    "the Android app's <em>public</em> config, served to the app so it can register for push.</li>"
+                    "<li><code>FIREBASE_IOS_CONFIG_FILE</code> &mdash; path to <code>GoogleService-Info.plist</code>, "
+                    "the iOS app's <em>public</em> config.</li>"
+                    "</ul>"
+                    "The two client files hold only public values; keep the service-account key secret. The "
+                    "client files are re-read at startup, so restart after changing them."
+                ),
+                "where_to_get_it": (
+                    "In the Firebase console, create a project (or reuse one) and add an Android app and an iOS "
+                    "app to it. Download <code>google-services.json</code> (Android) and "
+                    "<code>GoogleService-Info.plist</code> (iOS) from each app's settings. For the server key, "
+                    "open <strong>Project settings &rarr; Service accounts</strong> and generate a new private key."
+                ),
+                "setup_steps": [
+                    "Create a Firebase project and add your Android and iOS apps to it.",
+                    "Download each app's config file and place them on the server (e.g. a mounted config directory).",
+                    "Generate a service-account private key under <strong>Project settings &rarr; Service accounts</strong>.",
+                    "Set the three variables below, then restart so the client config files are re-read.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'FIREBASE_CREDENTIALS_JSON="/config/firebase-service-account.json"\n'
+                            'FIREBASE_ANDROID_CONFIG_FILE="/config/google-services.json"\n'
+                            'FIREBASE_IOS_CONFIG_FILE="/config/GoogleService-Info.plist"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Firebase console", "url": "https://console.firebase.google.com/"},
                 ],
             },
             # -- reCAPTCHA --------------------------------------------------------

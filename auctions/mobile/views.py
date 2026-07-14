@@ -19,7 +19,14 @@ GET /api/mobile/config/
           "square_application_id":   "sq0idp-xxxx",
           "square_environment":      "sandbox",   // or "production"
           "google_server_client_id": "xxxx.apps.googleusercontent.com",
-          "brand_name":              "auction.fish"
+          "brand_name":              "auction.fish",
+          // Optional; present only for platforms whose Firebase config file is set. Public values.
+          "firebase": {
+            "android": {"package_name": "...", "api_key": "...", "app_id": "...",
+                        "messaging_sender_id": "...", "project_id": "..."},
+            "ios":     {"bundle_id": "...", "api_key": "...", "app_id": "...",
+                        "messaging_sender_id": "...", "project_id": "..."}
+          }
         }
 
 Authentication
@@ -562,18 +569,23 @@ class MobileConfigView(APIView):
     throttle_classes = [ScopedRateThrottle]
 
     def get(self, request):
-        return Response(
-            {
-                "square_application_id": settings.SQUARE_APPLICATION_ID,
-                "square_environment": settings.SQUARE_ENVIRONMENT,
-                # Web OAuth client id used as the audience when verifying Google ID tokens in
-                # /api/mobile/auth/google/; the app passes it as the Google Sign-In serverClientId.
-                "google_server_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
-                "brand_name": settings.NAVBAR_BRAND,
-                # Absolute URL so the app can load the site icon without knowing the static layout.
-                "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
-            }
-        )
+        data = {
+            "square_application_id": settings.SQUARE_APPLICATION_ID,
+            "square_environment": settings.SQUARE_ENVIRONMENT,
+            # Web OAuth client id used as the audience when verifying Google ID tokens in
+            # /api/mobile/auth/google/; the app passes it as the Google Sign-In serverClientId.
+            "google_server_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
+            "brand_name": settings.NAVBAR_BRAND,
+            # Absolute URL so the app can load the site icon without knowing the static layout.
+            "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
+        }
+        # Public Firebase client config per platform, parsed from the mobile config files. Only the
+        # platforms whose file is configured appear; the whole key is omitted when neither is set.
+        # Public values only (api key, app id, sender id, project id, package/bundle id) — no secrets.
+        firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
+        if firebase:
+            data["firebase"] = firebase
+        return Response(data)
 
 
 # ---------------------------------------------------------------------------

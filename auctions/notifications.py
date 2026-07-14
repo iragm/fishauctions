@@ -115,11 +115,14 @@ def _get_firebase_app():
 
 
 def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
-    """Send a single FCM data message to *token*.
+    """Send a single FCM notification+data hybrid message to *token*.
 
     Returns :data:`SEND_OK`, :data:`SEND_INVALID_TOKEN` (dead token — caller should prune it), or
-    :data:`SEND_ERROR` (transient). Never raises. Data-only message (no ``notification`` block) so
-    the app renders and routes it consistently; the WebView opens ``url`` on tap.
+    :data:`SEND_ERROR` (transient). Never raises.
+
+    Hybrid message: the ``notification`` block lets the OS display the alert itself when the app is
+    backgrounded or terminated (on both Android and iOS), while the ``data`` block carries the same
+    fields for tap-routing — the WebView opens ``url`` on tap when the app handles the notification.
     """
     app = _get_firebase_app()
     if app is None:
@@ -130,6 +133,7 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
         return SEND_ERROR
 
     message = messaging.Message(
+        notification=messaging.Notification(title=title or "", body=body or ""),
         data={
             "title": title or "",
             "body": body or "",
@@ -140,6 +144,10 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
         android=messaging.AndroidConfig(
             priority="high",
             collapse_key=collapse_key or None,
+        ),
+        apns=messaging.APNSConfig(
+            headers={"apns-priority": "10"},
+            payload=messaging.APNSPayload(aps=messaging.Aps(sound="default")),
         ),
     )
     try:

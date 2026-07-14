@@ -45,35 +45,72 @@
     var video = options.video;
     var onCode = options.onCode || function () {};
     var onStatus = options.onStatus || function () {};
+    // How long the same decoded value is suppressed after a *successful* read, so the camera
+    // (which decodes the same code on every frame) doesn't fire it dozens of times a second.
+    var DUP_WINDOW_MS = options.duplicateWindowMs || 2500;
+    // Shorter window used after an *invalid* read: if onCode returns false, the same card can be
+    // re-tried this quickly (a fresh, hopefully cleaner frame) instead of being locked out for the
+    // full DUP_WINDOW_MS. Fast enough to feel responsive, slow enough not to spam error beeps.
+    var RETRY_WINDOW_MS = options.retryWindowMs || 700;
 
     var stream = null;
     var detector = null;
     var animationFrameId = null;
     var zxingReader = null;
     var isScanning = false;
-    var lastProcessedValue = "";
-
-    function shouldIgnoreDuplicate(value) {
-      // The camera decodes the same barcode on every frame; silently ignore repeats
-      // of the same value until a new one is detected.
-      if (value === lastProcessedValue) {
-        return true;
-      }
-      lastProcessedValue = value;
-      return false;
-    }
+    var lastValue = "";
+    var lastValueTime = 0;
 
     async function handleCode(rawValue) {
       var value = String(rawValue || "").trim();
-      if (!value || shouldIgnoreDuplicate(value)) {
+      if (!value) {
         return;
       }
-      await onCode(value);
+      var now = Date.now();
+      // Suppress rapid repeats of the same value within the active window.
+      if (value === lastValue && now - lastValueTime < DUP_WINDOW_MS) {
+        return;
+      }
+      lastValue = value;
+      lastValueTime = now;
+      var result = await onCode(value);
+      // onCode returns false when the value was invalid/unrecognized; back-date the timestamp so the
+      // remaining suppression is only RETRY_WINDOW_MS and the operator can immediately re-present the
+      // card. A successful read keeps the full DUP_WINDOW_MS.
+      if (result === false) {
+        lastValueTime = now - (DUP_WINDOW_MS - RETRY_WINDOW_MS);
+      }
     }
+
+    // Ask the camera for continuous autofocus once the track is live. Small barcodes and phone-screen
+    // membership cards read far more reliably when the lens keeps refocusing; capabilities vary by
+    // device, so every hint is best-effort and failures are ignored.
+    function applyTrackEnhancements() {
+      if (!stream) {
+        return;
+      }
+      var track = stream.getVideoTracks()[0];
+      if (!track || !track.getCapabilities) {
+        return;
+      }
+      var caps = track.getCapabilities();
+      var advanced = [];
+      if (caps.focusMode && caps.focusMode.indexOf("continuous") !== -1) {
+        advanced.push({ focusMode: "continuous" });
+      }
+      if (advanced.length) {
+        track.applyConstraints({ advanced: advanced }).catch(function () {});
+      }
+    }
+
+    // Prefer a higher-resolution stream so small/screen barcodes carry enough detail to decode.
+    // `ideal` degrades gracefully on cameras that can't hit it.
+    var VIDEO_CONSTRAINTS = { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } };
 
     async function startNativeScanner() {
       detector = new BarcodeDetector({ formats: FORMATS });
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: false });
+      applyTrackEnhancements();
       video.srcObject = stream;
       await video.play();
       var scanFrame = async function () {
@@ -93,17 +130,51 @@
       animationFrameId = requestAnimationFrame(scanFrame);
     }
 
+    function buildZxingHints(ZXing) {
+      var hints = new Map();
+      // Spend more effort per frame — worth it for glare/screen reads on iOS.
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      var formatMap = {
+        code_128: "CODE_128",
+        qr_code: "QR_CODE",
+        ean_13: "EAN_13",
+        ean_8: "EAN_8",
+        upc_a: "UPC_A",
+        upc_e: "UPC_E",
+      };
+      var possible = [];
+      FORMATS.forEach(function (name) {
+        var zx = formatMap[name];
+        if (zx && ZXing.BarcodeFormat[zx] !== undefined) {
+          possible.push(ZXing.BarcodeFormat[zx]);
+        }
+      });
+      if (possible.length) {
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, possible);
+      }
+      return hints;
+    }
+
     async function startFallbackScanner() {
       var ZXing = await loadZxing();
-      zxingReader = new ZXing.BrowserMultiFormatReader();
-      await zxingReader.decodeFromVideoDevice(null, video, function (result, error) {
+      // delayBetweenScanAttempts defaults to 500ms; drop it so iOS scans several times a second.
+      zxingReader = new ZXing.BrowserMultiFormatReader(buildZxingHints(ZXing), { delayBetweenScanAttempts: 150 });
+      var onResult = function (result, error) {
         if (result) {
           handleCode(result.getText());
         } else if (error && !(error instanceof ZXing.NotFoundException)) {
           console.error(error);
         }
-      });
+      };
+      // decodeFromConstraints lets us request the same higher-resolution stream as the native path;
+      // fall back to the default device picker if this build of ZXing lacks it.
+      if (zxingReader.decodeFromConstraints) {
+        await zxingReader.decodeFromConstraints({ video: VIDEO_CONSTRAINTS, audio: false }, video, onResult);
+      } else {
+        await zxingReader.decodeFromVideoDevice(null, video, onResult);
+      }
       stream = video.srcObject;
+      applyTrackEnhancements();
     }
 
     async function start() {
@@ -152,7 +223,8 @@
       start: start,
       stop: stop,
       resetDuplicate: function () {
-        lastProcessedValue = "";
+        lastValue = "";
+        lastValueTime = 0;
       },
       isScanning: function () {
         return isScanning;

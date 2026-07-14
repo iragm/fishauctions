@@ -14600,6 +14600,43 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         self.assertIsNone(self.online_tos.user)
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
 
+    def test_merge_review_keeping_target_when_reviewed_email_matches_source(self):
+        """Reviewing with the source's email must not 500 via save()'s auto-merge deleting the target.
+
+        Regression: submitting the review with the target's email set to the source's email used to
+        trip AuctionTOS.save()'s exact-email auto-merge, which kept the older source and deleted the
+        target — the next merge_duplicate() call then raised "Unsaved model instance ... in an ORM
+        query". The target must survive and keep the email; the source must be gone.
+        """
+        won_lot = Lot.objects.create(
+            lot_name="Won by source",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            auctiontos_winner=self.source_tos,
+            winning_price=5,
+        )
+        url = reverse("auctiontosdelete", kwargs={"pk": self.source_tos.pk}) + "?action=merge"
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "step": "review",
+                "target": str(self.online_tos.pk),
+                "name": "Kept User",
+                "email": self.source_tos.email,  # same email as the source we're deleting
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+                "pickup_location": self.location.pk,
+            },
+        )
+        self.assertRedirects(response, reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.email, "source@example.com")
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+        # The source's won lot moved to the kept target (not lost to a backwards auto-merge).
+        won_lot.refresh_from_db()
+        self.assertEqual(won_lot.auctiontos_winner, self.online_tos)
+
 
 class LotImageManagementTests(StandardTestCase):
     """Tests for the image management features added in the image management update"""
@@ -24745,6 +24782,134 @@ class MobileConfigTests(TestCase):
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)
+
+    def test_includes_firebase_block_for_configured_platforms(self):
+        android = {
+            "package_name": "com.example.auction",
+            "api_key": "AIzaAndroid",
+            "app_id": "1:111:android:aaa",
+            "messaging_sender_id": "111",
+            "project_id": "demo-project",
+        }
+        ios = {
+            "bundle_id": "com.example.auction",
+            "api_key": "AIzaIos",
+            "app_id": "1:111:ios:bbb",
+            "messaging_sender_id": "111",
+            "project_id": "demo-project",
+        }
+        with override_settings(FIREBASE_CLIENT_CONFIG={"android": android, "ios": ios}):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["firebase"], {"android": android, "ios": ios})
+
+    def test_omits_firebase_block_when_no_platform_configured(self):
+        with override_settings(FIREBASE_CLIENT_CONFIG={}):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("firebase", resp.json())
+
+
+class FirebaseClientConfigParsingTests(TestCase):
+    """Parsing the public Firebase client files (google-services.json / GoogleService-Info.plist)."""
+
+    def _write(self, name, content, *, binary=False):
+        import tempfile
+        from pathlib import Path
+
+        path = Path(tempfile.mkdtemp()) / name
+        mode = "wb" if binary else "w"
+        with path.open(mode) as f:
+            f.write(content)
+        return str(path)
+
+    def _google_services_json(self):
+        import json as _json
+
+        return self._write(
+            "google-services.json",
+            _json.dumps(
+                {
+                    "project_info": {
+                        "project_number": "111122223333",
+                        "project_id": "demo-project",
+                        "storage_bucket": "demo-project.appspot.com",
+                    },
+                    "client": [
+                        {
+                            "client_info": {
+                                "mobilesdk_app_id": "1:111122223333:android:aaaabbbb",
+                                "android_client_info": {"package_name": "com.example.auction"},
+                            },
+                            "api_key": [{"current_key": "AIzaSyAndroidKey"}],
+                        }
+                    ],
+                }
+            ),
+        )
+
+    def _google_service_info_plist(self):
+        import plistlib
+
+        return self._write(
+            "GoogleService-Info.plist",
+            plistlib.dumps(
+                {
+                    "BUNDLE_ID": "com.example.auction",
+                    "API_KEY": "AIzaSyIosKey",
+                    "GOOGLE_APP_ID": "1:111122223333:ios:ccccdddd",
+                    "GCM_SENDER_ID": "111122223333",
+                    "PROJECT_ID": "demo-project",
+                }
+            ),
+            binary=True,
+        )
+
+    def test_parses_both_platforms(self):
+        from fishauctions.firebase_config import load_firebase_client_config
+
+        config = load_firebase_client_config(self._google_services_json(), self._google_service_info_plist())
+        self.assertEqual(
+            config,
+            {
+                "android": {
+                    "package_name": "com.example.auction",
+                    "api_key": "AIzaSyAndroidKey",
+                    "app_id": "1:111122223333:android:aaaabbbb",
+                    "messaging_sender_id": "111122223333",
+                    "project_id": "demo-project",
+                },
+                "ios": {
+                    "bundle_id": "com.example.auction",
+                    "api_key": "AIzaSyIosKey",
+                    "app_id": "1:111122223333:ios:ccccdddd",
+                    "messaging_sender_id": "111122223333",
+                    "project_id": "demo-project",
+                },
+            },
+        )
+
+    def test_omits_platform_with_unset_path(self):
+        from fishauctions.firebase_config import load_firebase_client_config
+
+        config = load_firebase_client_config(self._google_services_json(), "")
+        self.assertIn("android", config)
+        self.assertNotIn("ios", config)
+
+    def test_empty_when_neither_configured(self):
+        from fishauctions.firebase_config import load_firebase_client_config
+
+        self.assertEqual(load_firebase_client_config("", ""), {})
+
+    def test_malformed_or_missing_files_degrade_to_none(self):
+        from fishauctions.firebase_config import load_android_config, load_ios_config
+
+        self.assertIsNone(load_android_config("/no/such/google-services.json"))
+        self.assertIsNone(load_ios_config("/no/such/GoogleService-Info.plist"))
+        # A JSON file missing the expected keys must not raise.
+        self.assertIsNone(load_android_config(self._write("bad.json", '{"unexpected": true}')))
+        # A plist that isn't a valid plist must not raise.
+        self.assertIsNone(load_ios_config(self._write("bad.plist", "not a plist", binary=False)))
 
 
 class SingleLotLabelPngTests(StandardTestCase):

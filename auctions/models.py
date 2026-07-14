@@ -5264,6 +5264,11 @@ class AuctionTOS(models.Model):
         For club-managed auctions, also merges the associated ClubMember records.
         Pass user=request.user when this is triggered by an admin action.
         """
+        if self.pk is None or duplicate.pk is None:
+            # Both records must already exist; an unsaved instance here means a caller merged in the
+            # wrong order and let a save()-time auto-merge delete one out from under it.
+            msg = "Cannot merge AuctionTOS records that have not been saved (or were already deleted)."
+            raise ValueError(msg)
         if duplicate == self:
             msg = "Cannot merge an AuctionTOS record with itself."
             raise ValueError(msg)
