@@ -237,7 +237,6 @@ def bid_on_lot(lot, user, amount):
                     lot.winner = user
                     if auction_tos:
                         lot.auctiontos_winner = auction_tos
-                        lot.create_update_invoices()
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
                     if lot.label_printed:
@@ -249,6 +248,12 @@ def bid_on_lot(lot, user, amount):
                     lot.date_end = timezone.now()
                     lot.watch_warning_email_sent = True
                     lot.save()
+                    if auction_tos:
+                        # Recalculate the buyer AND seller invoices only AFTER the sale is
+                        # persisted. Previously this ran before winning_price/auctiontos_winner
+                        # were saved, so both invoices recalculated from stale (unsold) DB state
+                        # and credited $0 until a later recalculation (e.g. the endauctions cron).
+                        lot.create_update_invoices()
                     result["send_to"] = "everyone"
                     result["high_bidder_pk"] = user.pk
                     result["high_bidder_name"] = user_string

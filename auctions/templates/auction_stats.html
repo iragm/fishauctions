@@ -206,7 +206,7 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
   ];
 
   var chartData = {
-    labels: mainData.labels,
+    labels: mainData.labels.slice(),
     datasets: []
   };
 
@@ -220,12 +220,34 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
     });
   }
 
-  // Add comparison datasets if available
+  // Add comparison datasets if available. Align the compare series to the shared category axis by
+  // LABEL, not by index: some charts (the sell-price histogram, per-location volume, referrers)
+  // build a different label set per auction, so plotting compareData.data straight against
+  // mainData.labels would put each compare bar under the wrong label. Append any labels only the
+  // compare auction has, then remap its data into the matching slots (missing buckets stay 0). When
+  // both auctions share the same labels this is an identity remap, so fixed-bin charts are unaffected.
   if (compareData) {
+    var labelPositions = {};
+    for (var j = 0; j < chartData.labels.length; j++) {
+      labelPositions[chartData.labels[j]] = j;
+    }
+    for (var j = 0; j < compareData.labels.length; j++) {
+      if (!(compareData.labels[j] in labelPositions)) {
+        labelPositions[compareData.labels[j]] = chartData.labels.length;
+        chartData.labels.push(compareData.labels[j]);
+      }
+    }
     for (var i = 0; i < compareData.providers.length; i++) {
+      var remapped = [];
+      for (var j = 0; j < chartData.labels.length; j++) {
+        remapped.push(0);
+      }
+      for (var j = 0; j < compareData.labels.length; j++) {
+        remapped[labelPositions[compareData.labels[j]]] = compareData.data[i][j];
+      }
       chartData.datasets.push({
         label: compareData.providers[i] + ' (' + compareTitle + ')',
-        data: compareData.data[i],
+        data: remapped,
         backgroundColor: compareColors[i % compareColors.length],
         hoverBackgroundColor: compareColors[i % compareColors.length].replace('0.8', '1.0')
       });

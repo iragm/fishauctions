@@ -2228,7 +2228,6 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
-            # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
             self.fields["date_online_bidding_starts"].widget = forms.HiddenInput()
@@ -2354,7 +2353,6 @@ class AuctionEditForm(forms.ModelForm):
                 css_class="row",
             ),
             Div(
-                # PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
                 slot(
                     "pre_register_lot_discount_percent",
                     PrependedAppendedText(

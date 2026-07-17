@@ -80,3 +80,4 @@ auctions/static/django_htmx/
 auctions/static/bootstrap_datepicker_plus/
 auctions/static/account/
 auctions/static/el-pagination/
+*.plist

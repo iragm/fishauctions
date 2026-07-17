@@ -6,6 +6,7 @@ import hmac
 import importlib.util
 import io
 import json
+import re
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -1626,6 +1627,39 @@ class LotPricesTests(TestCase):
         invoice_buyer, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
         self.assertEqual(invoice_buyer.rounded_net, invoice_buyer.net)
         self.assertAlmostEqual(invoice_buyer.net, Decimal("-13.13"), places=2)
+
+    def test_recalculate_stores_exact_decimal_net(self):
+        """recalculate() must persist the exact cents of the net.
+
+        Regression for calculated_total being an IntegerField: with invoice_rounding off, a net of
+        Decimal('-10.50') was truncated to -10 on write, losing $0.50 on every fractional invoice.
+        """
+        self.auction.only_whole_dollar_bids = False
+        self.auction.invoice_rounding = False
+        self.auction.tax = 0
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        self.assertEqual(invoice.net, Decimal("-10.50"))
+        invoice.recalculate()
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.calculated_total, Decimal("-10.50"))
+
+    def test_recalculate_stores_whole_dollar_when_rounding_enabled(self):
+        """With invoice_rounding on, the stored total is still a whole-dollar amount."""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.invoice_rounding = True
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        # net = -13.13; rounded in the buyer's favor -> -13
+        self.assertEqual(invoice.rounded_net, Decimal(-13))
+        invoice.recalculate()
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.calculated_total, Decimal("-13.00"))
+        self.assertEqual(invoice.calculated_total, invoice.calculated_total.to_integral_value())
 
 
 class DecimalBidValidationTests(TestCase):
@@ -4694,6 +4728,446 @@ class LotPropertyTests(StandardTestCase):
         assert lot.ended is True
 
 
+class LotInvoicePropertyTests(StandardTestCase):
+    """Regression tests for Lot.winner_invoice / Lot.sellers_invoice.
+
+    These properties previously queried Invoice with a non-existent `user` field
+    (`Q(user=..., auction=...)`). The resulting FieldError was swallowed by a blanket
+    `except Exception: return None`, so any lot with `winner` or `user` (seller) set --
+    which is the normal case for online sales and every user-submitted lot -- silently
+    resolved to None. That broke the Square auto-refund path and the invoice links in the
+    lot table/detail templates. The correct traversal is `auctiontos_user__user=...`.
+    """
+
+    def test_winner_invoice_resolves_when_winner_user_and_auctiontos_both_set(self):
+        """Realistic online-sale case: both winner (User) and auctiontos_winner are set.
+
+        The old code raised a swallowed FieldError as soon as `winner` was truthy (even though
+        the auctiontos branch was valid), so this returned None. It must now return the invoice.
+        """
+        self.lot.winner = self.userB
+        self.lot.save()
+        assert self.lot.winner is not None
+        assert self.lot.auctiontos_winner == self.tosB
+        assert self.lot.winner_invoice == self.invoiceB
+
+    def test_winner_invoice_resolves_from_winner_user_without_auctiontos(self):
+        """Only the legacy winner (User FK) is set: resolve via auctiontos_user__user for this auction."""
+        invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        lot = Lot.objects.create(
+            lot_name="winner-user only lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=Decimal("10.00"),
+            winner=self.userB,
+            active=False,
+        )
+        assert lot.auctiontos_winner is None
+        assert lot.winner_invoice == invoice
+
+    def test_sellers_invoice_resolves_when_seller_user_and_auctiontos_both_set(self):
+        """Realistic case: both user (seller User FK) and auctiontos_seller are set."""
+        self.lot.user = self.user
+        self.lot.save()
+        assert self.lot.user is not None
+        assert self.lot.auctiontos_seller == self.online_tos
+        assert self.lot.sellers_invoice == self.invoice
+
+    def test_sellers_invoice_resolves_from_seller_user_without_auctiontos(self):
+        """Only the legacy user (seller User FK) is set: resolve via auctiontos_user__user for this auction."""
+        invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+        lot = Lot.objects.create(
+            lot_name="seller-user only lot",
+            auction=self.online_auction,
+            user=self.user,
+            quantity=1,
+            active=False,
+        )
+        assert lot.auctiontos_seller is None
+        assert lot.sellers_invoice == invoice
+
+    def test_winner_invoice_none_when_winner_has_no_invoice(self):
+        """A winner who never joined the auction has no invoice: return None, not an error."""
+        lot = Lot.objects.create(
+            lot_name="no-invoice winner lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=Decimal("10.00"),
+            winner=self.user_who_does_not_join,
+            active=False,
+        )
+        assert lot.winner_invoice is None
+
+    def test_invoice_properties_none_when_no_winner_or_seller(self):
+        """A lot with neither winner nor seller set returns None from both properties."""
+        bare_lot = Lot.objects.create(
+            lot_name="bare lot",
+            auction=self.online_auction,
+            quantity=1,
+            active=False,
+        )
+        assert bare_lot.winner_invoice is None
+        assert bare_lot.sellers_invoice is None
+
+    def test_square_refund_possible_true_for_winner_user_lot_with_square_payment(self):
+        """With the invoice now resolvable, a Square payment large enough makes a refund possible."""
+        invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        InvoicePayment.objects.create(
+            invoice=invoice,
+            payment_method="square",
+            amount=Decimal("20.00"),
+            amount_available_to_refund=Decimal("20.00"),
+        )
+        lot = Lot.objects.create(
+            lot_name="square refundable lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=Decimal("10.00"),
+            winner=self.userB,
+            active=False,
+        )
+        assert lot.winner_invoice == invoice
+        assert lot.square_refund_possible is True
+
+    def test_square_refund_possible_false_without_square_payment(self):
+        """The invoice resolves, but with no Square payment a refund is not possible."""
+        Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        lot = Lot.objects.create(
+            lot_name="no square payment lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=Decimal("10.00"),
+            winner=self.userB,
+            active=False,
+        )
+        assert lot.winner_invoice is not None
+        assert lot.square_refund_possible is False
+
+
+class SellerInvoiceRemovedLotTests(StandardTestCase):
+    """Regression tests for Item 12: a removed (banned) lot must still appear on its seller's
+    invoice, but it must not be charged.
+
+    ``Lot.banned`` is labeled "Removed" and its help text documents "Removed lots are not
+    charged in invoices." The original ``payout`` property honored that with an
+    ``if self.banned: return payout`` short-circuit (a $0 payout). When the cut math was
+    refactored into the ``add_price_info`` queryset annotation, that guard was dropped, so a
+    removed lot was silently charged its normal seller cut / unsold-lot fee -- money the
+    invoice's own line items displayed but that the club never intended to collect, and (on
+    the buyer side) money billed for a lot that was pulled. These tests lock in:
+
+      * removed lots stay visible in ``sold_lots_queryset`` (they are not filtered out),
+      * their ``your_cut`` / ``club_cut`` are $0, so the displayed seller line items reconcile
+        with ``total_sold`` / ``net`` / ``calculated_total``,
+      * a buyer is never billed for a removed lot they "won".
+    """
+
+    def _isolated_auction(self):
+        """Build a clean online auction with a seller, a buyer, and both invoices, so the
+        assertions aren't muddied by the lots StandardTestCase attaches to ``self.invoice``."""
+        now = timezone.now()
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="removed-lot auction",
+            is_online=True,
+            date_end=now - datetime.timedelta(days=2),
+            date_start=now - datetime.timedelta(days=3),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=0,
+        )
+        location = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=now + datetime.timedelta(days=3)
+        )
+        seller_tos = AuctionTOS.objects.create(user=self.user_with_no_lots, auction=auction, pickup_location=location)
+        buyer_tos = AuctionTOS.objects.create(user=self.userB, auction=auction, pickup_location=location)
+        seller_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=seller_tos, auction=auction)
+        buyer_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer_tos, auction=auction)
+        return auction, seller_tos, buyer_tos, seller_invoice, buyer_invoice
+
+    def _sold_lot(self, auction, seller_tos, buyer_tos, name, price=100):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            auctiontos_winner=buyer_tos,
+            winning_price=Decimal(price),
+            quantity=1,
+            active=False,
+        )
+
+    def _unsold_lot(self, auction, seller_tos, name):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            active=False,
+        )
+
+    def test_removed_lot_still_listed_on_seller_invoice(self):
+        """A removed lot (sold or unsold) is not filtered out of the seller's lot listing."""
+        auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
+        kept = self._sold_lot(auction, seller_tos, buyer_tos, "kept sold lot", price=100)
+        removed_sold = self._sold_lot(auction, seller_tos, buyer_tos, "sold then removed", price=100)
+        removed_sold.remove(True, self.user)
+        removed_unsold = self._unsold_lot(auction, seller_tos, "unsold then removed")
+        removed_unsold.remove(True, self.user)
+
+        listed_pks = {lot.pk for lot in seller_invoice.sold_lots_queryset}
+        assert kept.pk in listed_pks
+        assert removed_sold.pk in listed_pks, "removed sold lot must still show on the seller invoice"
+        assert removed_unsold.pk in listed_pks, "removed unsold lot must still show on the seller invoice"
+
+    def test_removed_lots_are_not_charged(self):
+        """Removed lots contribute $0 to both the seller's cut and the club's cut."""
+        auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
+        removed_sold = self._sold_lot(auction, seller_tos, buyer_tos, "sold then removed", price=100)
+        removed_sold.remove(True, self.user)
+        removed_unsold = self._unsold_lot(auction, seller_tos, "unsold then removed")
+        removed_unsold.remove(True, self.user)
+
+        by_pk = {lot.pk: lot for lot in seller_invoice.sold_lots_queryset}
+        assert by_pk[removed_sold.pk].your_cut == Decimal(0)
+        assert by_pk[removed_sold.pk].club_cut == Decimal(0)
+        # Without the fix this would be -unsold_lot_fee (-10), charging the seller for a pulled lot.
+        assert by_pk[removed_unsold.pk].your_cut == Decimal(0)
+        assert by_pk[removed_unsold.pk].club_cut == Decimal(0)
+
+    def test_seller_invoice_lines_reconcile_with_total(self):
+        """The sum of the displayed per-lot cuts equals total_sold / net / calculated_total."""
+        auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
+        # one lot that is genuinely sold (charged) plus two removed lots (not charged)
+        self._sold_lot(auction, seller_tos, buyer_tos, "kept sold lot", price=100)
+        removed_sold = self._sold_lot(auction, seller_tos, buyer_tos, "sold then removed", price=100)
+        removed_sold.remove(True, self.user)
+        removed_unsold = self._unsold_lot(auction, seller_tos, "unsold then removed")
+        removed_unsold.remove(True, self.user)
+
+        listed = list(seller_invoice.sold_lots_queryset)
+        displayed_seller_total = sum((lot.your_cut for lot in listed), Decimal(0))
+        # kept lot: 100 * (100-25)/100 - 2 = 73; removed lots: 0 each
+        assert displayed_seller_total == Decimal(73)
+        assert seller_invoice.total_sold == Decimal(73)
+        assert displayed_seller_total == seller_invoice.total_sold
+
+        seller_invoice.recalculate()
+        seller_invoice.refresh_from_db()
+        assert seller_invoice.net == Decimal(73)
+        assert seller_invoice.calculated_total == Decimal(73)
+
+    def test_buyer_not_charged_for_removed_lot(self):
+        """A buyer is never billed for a lot they "won" that was later removed."""
+        auction, seller_tos, buyer_tos, _, buyer_invoice = self._isolated_auction()
+        kept = self._sold_lot(auction, seller_tos, buyer_tos, "kept sold lot", price=100)
+        removed = self._sold_lot(auction, seller_tos, buyer_tos, "won then removed", price=100)
+        removed.remove(True, self.user)
+
+        bought_pks = {lot.pk for lot in buyer_invoice.bought_lots_queryset}
+        assert kept.pk in bought_pks
+        assert removed.pk not in bought_pks, "buyer must not be billed for a removed lot"
+
+        # buyer display (bought_lots_queryset) reconciles with total_bought, and neither counts the removed lot
+        displayed_buyer_total = sum((lot.final_price for lot in buyer_invoice.bought_lots_queryset), Decimal(0))
+        assert displayed_buyer_total == Decimal(100)
+        assert buyer_invoice.total_bought == Decimal(100)
+
+    def test_non_removed_lots_unaffected(self):
+        """Guard: the fix must not change what non-removed lots are charged."""
+        auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
+        sold = self._sold_lot(auction, seller_tos, buyer_tos, "normal sold", price=100)
+        unsold = self._unsold_lot(auction, seller_tos, "normal unsold")
+
+        by_pk = {lot.pk: lot for lot in seller_invoice.sold_lots_queryset}
+        assert by_pk[sold.pk].your_cut == Decimal(73)
+        assert by_pk[sold.pk].club_cut == Decimal(27)
+        # a plain unsold lot is still charged the unsold-lot fee -- only *removed* lots are waived
+        assert by_pk[unsold.pk].your_cut == Decimal(-10)
+
+
+class BuyNowSellerCreditTests(StandardTestCase):
+    """Regression tests for Item 13: a lot bought via "buy now" must credit the seller (and
+    charge the buyer) immediately -- before the endauctions cron runs.
+
+    A completed buy-now sale sets ``winning_price`` + ``buy_now_used`` but deliberately leaves
+    ``active=True`` (the sold lot stays visible in the browse view until the cron flips it
+    inactive; see the comment in ``bidding.bid_on_lot``). Two bugs kept the money wrong until
+    the cron caught up:
+
+      * ``add_price_info``'s ``your_cut`` annotation only produced the real seller cut for lots
+        with ``active=False``. A live buy-now lot fell through to ``$0``, so ``club_cut``
+        (``winning_price - your_cut``) booked the *entire* sale price to the club and credited
+        the seller nothing until ``endauctions`` set ``active=False``.
+      * ``bidding.bid_on_lot`` called ``create_update_invoices`` *before* saving the sale
+        fields, so both invoices recalculated from stale (unsold) DB state -- even the buyer's
+        invoice showed ``$0`` until the next recalculation.
+
+    These tests lock in that the seller cut, club cut, and both invoices are correct the moment
+    buy now completes, that a later ``endauctions`` run does not double-apply anything, and that
+    normal (non-buy-now) sales are unchanged.
+    """
+
+    def _buy_now_auction(self, **kwargs):
+        now = timezone.now()
+        defaults = {
+            "winning_bid_percent_to_club": 25,
+            "lot_entry_fee": 2,
+            "unsold_lot_fee": 10,
+            "tax": 0,
+            "buy_now": "allow",
+        }
+        defaults.update(kwargs)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="buy-now auction",
+            is_online=True,
+            date_end=now + datetime.timedelta(days=2),
+            date_start=now - datetime.timedelta(days=1),
+            **defaults,
+        )
+        location = PickupLocation.objects.create(
+            name="loc", auction=auction, pickup_time=now + datetime.timedelta(days=3)
+        )
+        seller_tos = AuctionTOS.objects.create(user=self.user_with_no_lots, auction=auction, pickup_location=location)
+        buyer_tos = AuctionTOS.objects.create(user=self.userB, auction=auction, pickup_location=location)
+        return auction, location, seller_tos, buyer_tos
+
+    def _biddable_lot(self, auction, seller_tos, buy_now_price=100, **kwargs):
+        now = timezone.now()
+        lot = Lot.objects.create(
+            lot_name="buy-now lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            buy_now_price=Decimal(buy_now_price),
+            date_end=now + datetime.timedelta(days=2),
+            **kwargs,
+        )
+        # bidding (and therefore buy now) is blocked on very new lots; backdate date_posted so it is allowed
+        lot.date_posted = now - datetime.timedelta(hours=1)
+        lot.save()
+        return lot
+
+    def _seller_invoice(self, auction, seller_tos):
+        return Invoice.objects.filter(auctiontos_user=seller_tos, auction=auction).first()
+
+    def _buyer_invoice(self, auction, buyer_tos):
+        return Invoice.objects.filter(auctiontos_user=buyer_tos, auction=auction).first()
+
+    def test_seller_credited_immediately_after_buy_now(self):
+        """The seller cut / club cut are correct the moment buy now completes, before any cron run."""
+        from auctions.bidding import bid_on_lot
+
+        auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
+        lot = self._biddable_lot(auction, seller_tos, buy_now_price=100)
+
+        result = bid_on_lot(lot, self.userB, Decimal(100))
+        assert result["type"] == "LOT_END_WINNER", result
+
+        lot.refresh_from_db()
+        # buy now completed the sale, but deliberately left the lot active until the cron
+        assert lot.winning_price == Decimal(100)
+        assert lot.buy_now_used is True
+        assert lot.auctiontos_winner == buyer_tos
+        assert lot.active is True, "buy now must not deactivate the lot (it stays visible until endauctions)"
+
+        # the seller-cut annotation credits the live buy-now lot NOW, not $0-until-the-cron
+        priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
+        assert priced.your_cut == Decimal(73)  # 100 * (100 - 25)/100 - 2 (lot entry fee)
+        assert priced.club_cut == Decimal(27)  # 100 - 73
+
+        seller_invoice = self._seller_invoice(auction, seller_tos)
+        assert seller_invoice is not None, "buy now must create the seller invoice"
+        assert seller_invoice.total_sold == Decimal(73)
+        assert seller_invoice.calculated_total == Decimal(73)
+
+    def test_buyer_charged_immediately_after_buy_now(self):
+        """The buyer's invoice reflects the purchase the moment buy now completes."""
+        from auctions.bidding import bid_on_lot
+
+        auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
+        lot = self._biddable_lot(auction, seller_tos, buy_now_price=100)
+
+        bid_on_lot(lot, self.userB, Decimal(100))
+        lot.refresh_from_db()
+
+        buyer_invoice = self._buyer_invoice(auction, buyer_tos)
+        assert buyer_invoice is not None, "buy now must create the buyer invoice"
+        bought_pks = {b.pk for b in buyer_invoice.bought_lots_queryset}
+        assert lot.pk in bought_pks, "the bought lot must appear on the buyer invoice immediately"
+        assert buyer_invoice.total_bought == Decimal(100)
+        # tax=0, so the buyer simply owes the 100 sale price -> net is -100
+        assert buyer_invoice.calculated_total == Decimal(-100)
+
+    def test_endauctions_does_not_double_apply_after_buy_now(self):
+        """Running the endauctions logic after buy now must not change either invoice total.
+
+        The buy-now lot is still ``active=True`` so ``declare_winners_on_lots`` picks it up,
+        sets ``active=False`` and recalculates. Because ``recalculate()`` re-derives the total
+        (it is not additive), the numbers are identical before and after -- no double credit."""
+        from auctions.bidding import bid_on_lot
+        from auctions.management.commands.endauctions import declare_winners_on_lots
+
+        auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
+        lot = self._biddable_lot(auction, seller_tos, buy_now_price=100)
+
+        bid_on_lot(lot, self.userB, Decimal(100))
+
+        seller_invoice = self._seller_invoice(auction, seller_tos)
+        buyer_invoice = self._buyer_invoice(auction, buyer_tos)
+        assert seller_invoice.calculated_total == Decimal(73)
+        assert buyer_invoice.calculated_total == Decimal(-100)
+
+        # run the cron logic; the buy-now lot is ended (sold) and still active, so it is processed
+        lot.refresh_from_db()
+        declare_winners_on_lots([lot])
+
+        lot.refresh_from_db()
+        assert lot.active is False, "endauctions should finalize (deactivate) the buy-now lot"
+        seller_invoice.refresh_from_db()
+        buyer_invoice.refresh_from_db()
+        # totals unchanged: the credit was already applied at buy-now time and recalculate is idempotent
+        assert seller_invoice.calculated_total == Decimal(73)
+        assert buyer_invoice.calculated_total == Decimal(-100)
+        # and the seller cut is still correct once the lot is inactive (active=False branch agrees)
+        priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
+        assert priced.your_cut == Decimal(73)
+        assert priced.club_cut == Decimal(27)
+
+    def test_normal_auction_ending_lot_still_credits_correctly(self):
+        """Guard: a normally-ended (non-buy-now) sold lot -- active=False, buy_now_used=False --
+        still credits the seller exactly as before the fix."""
+        auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
+        lot = Lot.objects.create(
+            lot_name="normal sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            auctiontos_winner=buyer_tos,
+            winning_price=Decimal(100),
+            quantity=1,
+            active=False,
+        )
+        priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
+        assert priced.buy_now_used is False
+        assert priced.your_cut == Decimal(73)
+        assert priced.club_cut == Decimal(27)
+
+    def test_active_lot_without_buy_now_is_not_credited(self):
+        """Guard: the fix must be precise -- a still-active lot that hasn't sold (no winning_price,
+        not buy_now_used) is credited $0. Only *completed* buy-now sales bypass the active=False gate."""
+        auction, _location, seller_tos, _buyer_tos = self._buy_now_auction()
+        lot = self._biddable_lot(auction, seller_tos, buy_now_price=100)  # no bid placed: active, unsold
+
+        priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
+        assert priced.your_cut == Decimal(0)
+        assert priced.club_cut == Decimal(0)
+
+
 class AuctionTOSPropertyTests(StandardTestCase):
     """Test AuctionTOS model properties"""
 
@@ -6089,13 +6563,23 @@ class InvoiceStatusButtonTests(StandardTestCase):
         self.invoice.refresh_from_db()
         assert self.invoice.status == "PAID"
 
-    def test_invoice_status_button_uuid_allowed(self):
-        """Unauthenticated callers with the invoice no-login UUID can update invoice status"""
+    def test_invoice_status_button_uuid_denied(self):
+        """The invoice no-login UUID (emailed to the bidder) must NOT allow a status change.
+
+        Regression test for the self-payment vulnerability: a bidder holding their invoice's
+        no-login link could otherwise POST /api/payinvoice/<uuid>/PAID to mark their own
+        invoice paid, which books club-ledger (ClubMoney) entries as if cash was received.
+        """
+        clubmoney_before = ClubMoney.objects.filter(invoice=self.invoice).count()
         url = f"/api/payinvoice/{self.invoice.no_login_link}/PAID"
         response = self.client.post(url)
-        assert response.status_code == 200
+        # No no-login/status-change route exists any more -> the UUID cannot resolve to the pk
+        # endpoint, so this is rejected (404). It must never succeed.
+        assert response.status_code in (401, 403, 404)
         self.invoice.refresh_from_db()
-        assert self.invoice.status == "PAID"
+        assert self.invoice.status != "PAID"
+        # No club-ledger entries should have been booked for this invoice.
+        assert ClubMoney.objects.filter(invoice=self.invoice).count() == clubmoney_before
 
     def test_invoice_status_button_uuid_wrong_uuid_denied(self):
         """A bogus UUID returns 404"""
@@ -6104,6 +6588,54 @@ class InvoiceStatusButtonTests(StandardTestCase):
         url = f"/api/payinvoice/{uuid.uuid4()}/PAID"
         response = self.client.post(url)
         assert response.status_code == 404
+
+    def test_invoice_status_button_invalid_status_rejected(self):
+        """An out-of-choices status string is rejected (404) and never written to the invoice."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        original_status = self.invoice.status
+        url = f"/api/payinvoice/{self.invoice.pk}/BANANA"
+        response = self.client.post(url)
+        assert response.status_code == 404
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == original_status
+        assert self.invoice.status in ("DRAFT", "UNPAID", "PAID")
+
+    def test_invoice_status_button_non_admin_owner_denied(self):
+        """A non-admin who OWNS the invoice cannot change its status via pk or the emailed UUID.
+
+        self.invoiceB belongs to self.tosB (user=self.userB), who is a bidder in the auction
+        but not an admin. Neither the pk endpoint nor the no-login UUID may let them self-pay,
+        and no ClubMoney ledger entry may be booked.
+        """
+        self.client.login(username=self.userB.username, password="testpassword")
+        clubmoney_before = ClubMoney.objects.filter(invoice=self.invoiceB).count()
+        # Authenticated non-admin owner via the pk endpoint -> forbidden.
+        response = self.client.post(f"/api/payinvoice/{self.invoiceB.pk}/PAID")
+        assert response.status_code == 403
+        # Same owner via the emailed no-login UUID -> also rejected.
+        response = self.client.post(f"/api/payinvoice/{self.invoiceB.no_login_link}/PAID")
+        assert response.status_code in (401, 403, 404)
+        self.invoiceB.refresh_from_db()
+        assert self.invoiceB.status != "PAID"
+        assert ClubMoney.objects.filter(invoice=self.invoiceB).count() == clubmoney_before
+
+    def test_invoice_status_button_admin_can_mark_paid_and_unpaid(self):
+        """An auction admin can still mark an invoice paid and back to unpaid via the pk path."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/UNPAID")
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "UNPAID"
+
+    def test_invoice_no_login_uuid_view_still_works(self):
+        """The emailed UUID link must still let the recipient VIEW their invoice (view-only route)."""
+        url = reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link})
+        response = self.client.get(url)
+        assert response.status_code == 200
 
 
 class ClubMembershipRenewalFlowTests(StandardTestCase):
@@ -11743,8 +12275,8 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
         qs = Lot.objects.filter(lot_name__startswith="Median test even")
         result = median_value(qs, "winning_price")
-        # With values 0, 10, 20, 30, 40, 50, median should be 30 (rounded from index 3)
-        self.assertEqual(result, 30)
+        # With values 0, 10, 20, 30, 40, 50, the median is the mean of the two middle values (20, 30)
+        self.assertEqual(result, 25)
 
     def test_add_price_info_requires_lot_queryset(self):
         """Test that add_price_info only accepts Lot querysets"""
@@ -15784,6 +16316,350 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         }
         response = self._post_verified_webhook(event)
         self.assertEqual(response.status_code, 200)
+
+
+class RefundWebhookIdempotencyTests(StandardTestCase):
+    """Refund webhooks are redelivered/re-fired by both PayPal and Square, so the refundable
+    balance must move only once per refund.
+
+    Regression: amount_available_to_refund was decremented on every webhook delivery, so a
+    duplicate delivery of the same refund permanently shrank the refundable amount.
+    """
+
+    PAYPAL_SETTINGS = {
+        "PAYPAL_WEBHOOK_ID": "WH-TESTID",
+        "PAYPAL_API_BASE": "https://api-m.sandbox.paypal.com",
+        "PAYPAL_CLIENT_ID": "test-client-id",
+        "PAYPAL_SECRET": "test-secret",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.paypal_headers = {
+            "HTTP_PAYPAL_TRANSMISSION_ID": "trans-id-123",
+            "HTTP_PAYPAL_TRANSMISSION_TIME": "2024-01-01T00:00:00Z",
+            "HTTP_PAYPAL_CERT_URL": "https://api.paypal.com/v1/notifications/certs/cert123",
+            "HTTP_PAYPAL_AUTH_ALGO": "SHA256withRSA",
+            "HTTP_PAYPAL_TRANSMISSION_SIG": "sig-abc123",
+        }
+
+    def _post_verified_webhook(self, event_data):
+        """Post a PayPal webhook with mocked token fetch and signature verification (always passes)."""
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.return_value = {"verification_status": "SUCCESS"}
+
+        with patch("auctions.views.requests.post", side_effect=[token_mock, verify_mock]):
+            with override_settings(**self.PAYPAL_SETTINGS):
+                return self.client.post(
+                    reverse("paypal-webhook"),
+                    data=json.dumps(event_data),
+                    content_type="application/json",
+                    **self.paypal_headers,
+                )
+
+    def _make_payment(self, external_id, amount, payment_method):
+        return InvoicePayment.objects.create(
+            invoice=self.invoiceB,
+            external_id=external_id,
+            amount=Decimal(amount),
+            amount_available_to_refund=Decimal(amount),
+            currency="USD",
+            payment_method=payment_method,
+        )
+
+    def _paypal_refund_event(self, refund_id, capture_id, value):
+        return {
+            "id": "WH-REFUND-EVENT",
+            "event_type": "PAYMENT.CAPTURE.REFUNDED",
+            "resource": {
+                "id": refund_id,
+                "amount": {"currency_code": "USD", "value": value},
+                "links": [
+                    {"rel": "up", "href": f"https://api.paypal.com/v2/payments/captures/{capture_id}"},
+                ],
+            },
+        }
+
+    def _square_refund_event(self, refund_id, payment_id, amount_cents):
+        return {
+            "merchant_id": "MLF3WZS2N9WVG",
+            "type": "refund.updated",
+            "event_id": "sq-refund-event",
+            "created_at": "2026-01-01T00:00:00Z",
+            "data": {
+                "type": "refund",
+                "id": "refund-data-id",
+                "object": {
+                    "refund": {
+                        "id": refund_id,
+                        "status": "COMPLETED",
+                        "payment_id": payment_id,
+                        "amount_money": {"amount": amount_cents, "currency": "USD"},
+                        "reason": "test refund",
+                    }
+                },
+            },
+        }
+
+    def _post_square(self, event):
+        # The env sets a real SQUARE_WEBHOOK_SIGNATURE_KEY; clear it (as the other Square webhook
+        # tests do) so signature verification is skipped for these posts.
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
+            return self.client.post(reverse("square_webhook"), data=json.dumps(event), content_type="application/json")
+
+    def test_paypal_duplicate_refund_webhook_decrements_once(self):
+        capture_id = "CAPTURE-REFUND-DUP"
+        refund_id = "REFUND-DUP-1"
+        payment = self._make_payment(capture_id, "40.00", "PayPal")
+        event = self._paypal_refund_event(refund_id, capture_id, "15.00")
+
+        # First delivery decrements the refundable balance by the refund amount.
+        self.assertEqual(self._post_verified_webhook(event).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
+
+        # Redelivery of the identical refund must be a no-op.
+        self.assertEqual(self._post_verified_webhook(event).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
+        self.assertEqual(InvoicePayment.objects.filter(external_id=refund_id).count(), 1)
+
+    def test_paypal_updated_refund_amount_adjusts_by_delta(self):
+        capture_id = "CAPTURE-REFUND-UPD"
+        refund_id = "REFUND-UPD-1"
+        payment = self._make_payment(capture_id, "40.00", "PayPal")
+
+        self.assertEqual(
+            self._post_verified_webhook(self._paypal_refund_event(refund_id, capture_id, "10.00")).status_code, 200
+        )
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
+
+        # A later delivery raises the refund from $10 to $18; the balance moves only by the $8 delta.
+        self.assertEqual(
+            self._post_verified_webhook(self._paypal_refund_event(refund_id, capture_id, "18.00")).status_code, 200
+        )
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("22.00"))
+        self.assertEqual(InvoicePayment.objects.filter(external_id=refund_id).count(), 1)
+        self.assertEqual(InvoicePayment.objects.get(external_id=refund_id).amount, Decimal("-18.00"))
+
+    def test_paypal_refund_on_paid_club_invoice_keeps_ledger_frozen(self):
+        # Item 9 freeze end-to-end: a refund webhook on a settled (PAID) club invoice still
+        # records the refund (negative InvoicePayment + reduced refundable balance) but must not
+        # re-derive the invoice's settled total or re-book the club ledger from current settings.
+        club = Club.objects.create(name="Refund Freeze Club", enable_membership=True)
+        self.online_auction.club = club
+        self.online_auction.save(update_fields=["club"])
+        ClubMoney.objects.all().delete()
+
+        capture_id = "CAPTURE-FREEZE"
+        refund_id = "REFUND-FREEZE"
+        payment = self._make_payment(capture_id, "40.00", "PayPal")
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        self.invoiceB.refresh_from_db()
+        frozen_total = self.invoiceB.calculated_total
+        frozen_rows = sorted(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("pk", "amount", "category"))
+        self.assertTrue(frozen_rows)  # the sale/tax entries were booked when it was marked PAID
+
+        self.assertEqual(
+            self._post_verified_webhook(self._paypal_refund_event(refund_id, capture_id, "15.00")).status_code, 200
+        )
+        # The refund itself flows through: refundable balance drops once, refund row exists.
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
+        self.assertTrue(InvoicePayment.objects.filter(external_id=refund_id, amount=Decimal("-15.00")).exists())
+        # The freeze: the settled total and every booked ledger row are unchanged.
+        self.invoiceB.refresh_from_db()
+        self.assertEqual(self.invoiceB.calculated_total, frozen_total)
+        current_rows = sorted(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("pk", "amount", "category"))
+        self.assertEqual(current_rows, frozen_rows)
+
+    def test_square_duplicate_refund_webhook_decrements_once(self):
+        payment_id = "SQ-PAYMENT-DUP"
+        refund_id = "SQ-REFUND-DUP"
+        payment = self._make_payment(payment_id, "50.00", "Square")
+        event = self._square_refund_event(refund_id, payment_id, 2000)  # $20.00
+
+        self.assertEqual(self._post_square(event).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
+
+        # Square re-fires the same refund (refund.updated retries / follow-up events); no double decrement.
+        self.assertEqual(self._post_square(event).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
+        self.assertEqual(InvoicePayment.objects.filter(external_id=refund_id).count(), 1)
+
+    def test_square_updated_refund_amount_adjusts_by_delta(self):
+        payment_id = "SQ-PAYMENT-UPD"
+        refund_id = "SQ-REFUND-UPD"
+        payment = self._make_payment(payment_id, "50.00", "Square")
+
+        self.assertEqual(self._post_square(self._square_refund_event(refund_id, payment_id, 1000)).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("40.00"))
+
+        # A later delivery raises the refund from $10 to $12; the balance moves only by the $2 delta.
+        self.assertEqual(self._post_square(self._square_refund_event(refund_id, payment_id, 1200)).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("38.00"))
+        self.assertEqual(InvoicePayment.objects.get(external_id=refund_id).amount, Decimal("-12.00"))
+
+
+class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
+    """Square fires payment.updated for many lifecycle changes. A later payment.updated for an
+    already-recorded payment must never restore refundability that refunds have already consumed.
+
+    Regression: the handler reset amount_available_to_refund to the full payment amount whenever it
+    was currently 0, so a fully-refunded payment became "refundable" again after any later
+    payment.updated event, allowing a second full refund (double refund).
+    """
+
+    MERCHANT_ID = "MLF3WZS2N9WVG"
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # The COMPLETED branch of payment.updated looks up a SquareSeller by merchant_id and
+        # resolves the invoice via the order's reference_id.
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id=self.MERCHANT_ID,
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+    def _payment_updated_event(self, payment_id, order_id, amount_cents, status="COMPLETED"):
+        return {
+            "merchant_id": self.MERCHANT_ID,
+            "type": "payment.updated",
+            "event_id": "sq-payment-event",
+            "created_at": "2026-01-01T00:00:00Z",
+            "data": {
+                "type": "payment",
+                "id": "payment-data-id",
+                "object": {
+                    "payment": {
+                        "id": payment_id,
+                        "status": status,
+                        "order_id": order_id,
+                        "amount_money": {"amount": amount_cents, "currency": "USD"},
+                    }
+                },
+            },
+        }
+
+    def _square_refund_event(self, refund_id, payment_id, amount_cents):
+        return {
+            "merchant_id": self.MERCHANT_ID,
+            "type": "refund.updated",
+            "event_id": "sq-refund-event",
+            "created_at": "2026-01-01T00:00:00Z",
+            "data": {
+                "type": "refund",
+                "id": "refund-data-id",
+                "object": {
+                    "refund": {
+                        "id": refund_id,
+                        "status": "COMPLETED",
+                        "payment_id": payment_id,
+                        "amount_money": {"amount": amount_cents, "currency": "USD"},
+                        "reason": "test refund",
+                    }
+                },
+            },
+        }
+
+    def _post_payment_updated(self, payment_id, order_id, amount_cents, reference_id=None, status="COMPLETED"):
+        """Build and post a payment.updated webhook, mocking the Square order lookup to return
+        reference_id (our invoice pk, defaulting to invoiceB) and skipping signature verification.
+        """
+        from .models import SquareSeller
+
+        if reference_id is None:
+            reference_id = self.invoiceB.pk
+        event = self._payment_updated_event(payment_id, order_id, amount_cents, status=status)
+        mock_order = MagicMock()
+        mock_order.reference_id = str(reference_id)
+        mock_order_response = MagicMock()
+        mock_order_response.order = mock_order
+        mock_client = MagicMock()
+        mock_client.orders.get.return_value = mock_order_response
+
+        with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
+            with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
+                return self.client.post(
+                    reverse("square_webhook"), data=json.dumps(event), content_type="application/json"
+                )
+
+    def _post_refund(self, event):
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
+            return self.client.post(reverse("square_webhook"), data=json.dumps(event), content_type="application/json")
+
+    def test_payment_updated_does_not_resurrect_refundability_after_full_refund(self):
+        payment_id = "SQ-PAY-RESURRECT"
+        order_id = "SQ-ORDER-RESURRECT"
+        refund_id = "SQ-REFUND-RESURRECT"
+
+        # A first payment.updated records the payment ($30 available to refund).
+        self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
+        payment = InvoicePayment.objects.get(external_id=payment_id)
+        self.assertEqual(payment.amount, Decimal("30.00"))
+        self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
+
+        # A full refund consumes the entire refundable balance.
+        self.assertEqual(self._post_refund(self._square_refund_event(refund_id, payment_id, 3000)).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("0.00"))
+
+        # A later/duplicate payment.updated for the same payment must NOT resurrect refundability.
+        self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("0.00"))
+        # The payment amount itself is unchanged, and no duplicate payment row was created.
+        self.assertEqual(payment.amount, Decimal("30.00"))
+        self.assertEqual(InvoicePayment.objects.filter(external_id=payment_id).count(), 1)
+
+    def test_payment_updated_initializes_new_payment(self):
+        payment_id = "SQ-PAY-NEW"
+        order_id = "SQ-ORDER-NEW"
+
+        self.assertFalse(InvoicePayment.objects.filter(external_id=payment_id).exists())
+        self.assertEqual(self._post_payment_updated(payment_id, order_id, 4500).status_code, 200)
+        payment = InvoicePayment.objects.get(external_id=payment_id)
+        self.assertEqual(payment.invoice, self.invoiceB)
+        self.assertEqual(payment.amount, Decimal("45.00"))
+        self.assertEqual(payment.amount_available_to_refund, Decimal("45.00"))
+        self.assertEqual(payment.payment_method, "Square")
+
+    def test_payment_updated_amount_change_moves_refundable_by_delta(self):
+        payment_id = "SQ-PAY-DELTA"
+        order_id = "SQ-ORDER-DELTA"
+        refund_id = "SQ-REFUND-DELTA"
+
+        # Record a $30 payment, then partially refund $10 (leaving $20 available).
+        self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
+        self.assertEqual(self._post_refund(self._square_refund_event(refund_id, payment_id, 1000)).status_code, 200)
+        payment = InvoicePayment.objects.get(external_id=payment_id)
+        self.assertEqual(payment.amount_available_to_refund, Decimal("20.00"))
+
+        # A later payment.updated raises the captured amount to $35; the refundable balance moves by
+        # the $5 delta (to $25), rather than being reset to the full amount.
+        self.assertEqual(self._post_payment_updated(payment_id, order_id, 3500).status_code, 200)
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount, Decimal("35.00"))
+        self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
 
 
 class PayPalCSVExportTests(StandardTestCase):
@@ -20593,6 +21469,504 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
         self.assertTrue(ClubMoney.objects.filter(invoice=invoice).exists())
 
 
+class ClubProfitTests(TestCase):
+    """Auction.club_profit -- what the club nets from auction activity.
+
+    Regression coverage for the four defects fixed in Item 14:
+      * a genuine loss stays negative (no abs()),
+      * invoices whose calculated_total was never stamped (NULL) are not dropped,
+      * cents survive end to end (no int() truncation),
+      * sales tax and membership dues are excluded (they are not auction-activity profit).
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("profit_creator", "pc@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Profit Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self._n = 0
+
+    def _auction(self, *, tax=0, rounding=False, club_pct=20, first_bid_payout=0):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Profit Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            tax=tax,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            first_bid_payout=first_bid_payout,
+            invoice_rounding=rounding,
+        )
+        PickupLocation.objects.create(name="Profit Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+
+    def _invoice(self, tos, *, paid=False, renewal_needed=False):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=tos)[0]
+        if renewal_needed:
+            invoice.renewal_needed = True
+        if paid:
+            invoice.status = "PAID"
+        if paid or renewal_needed:
+            invoice.save()
+        return invoice
+
+    def test_normal_profit_is_positive_commission(self):
+        # club_pct=20 on a $100 lot: buyer pays 100, seller gets 80, club keeps 20.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.club_profit, Decimal("20.00"))
+        self.assertIsInstance(auction.club_profit, Decimal)
+
+    def test_loss_shows_as_negative(self):
+        # club takes no cut but promises every buyer a $5 first-bid payout: it collects 5 from the
+        # buyer yet owes the seller 10, a real $5 loss. The old abs() reported this as +5 profit.
+        auction = self._auction(club_pct=0, first_bid_payout=5)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.club_profit, Decimal("-5.00"))
+        self.assertLess(auction.club_profit, 0)
+
+    def test_null_calculated_total_is_not_dropped(self):
+        # Fresh draft invoices never had calculated_total stamped; they must still contribute their
+        # live rounded_net instead of silently vanishing from the total.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        seller_invoice = self._invoice(seller)
+        buyer_invoice = self._invoice(buyer)
+        # Precondition: both invoices genuinely have an unstamped (NULL) calculated_total.
+        self.assertIsNone(seller_invoice.calculated_total)
+        self.assertIsNone(buyer_invoice.calculated_total)
+        # Profit is still the full 20 (100 collected - 80 paid), not 0 as it was when NULLs dropped.
+        self.assertEqual(auction.club_profit, Decimal("20.00"))
+
+    def test_cents_are_preserved(self):
+        # club_pct=33 on a $10 lot: seller cut 6.70, club cut 3.30. int() truncation would drop the
+        # 30 cents (yielding 3). No invoice_rounding, so the exact cents must flow through.
+        auction = self._auction(club_pct=33)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.club_profit, Decimal("3.30"))
+        self.assertNotEqual(auction.club_profit, Decimal(3))
+
+    def test_tax_is_excluded(self):
+        # 10% tax on a $100 lot: buyer owes 110, but the extra 10 is remitted to the taxing
+        # authority. club_profit is the 20 commission, NOT 30 (which would count the tax as profit).
+        auction = self._auction(club_pct=20, tax=10)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction._auction_tax_collected, Decimal("10.00"))
+        self.assertEqual(auction.club_profit, Decimal("20.00"))
+
+    def test_membership_dues_are_excluded(self):
+        # A renewing buyer pays their $100 in bids plus the $25 annual fee. Dues are separate club
+        # revenue, so club_profit stays the 20 commission, not 45.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True, renewal_needed=True)
+        self.assertEqual(auction._auction_membership_dues, Decimal("25.00"))
+        self.assertEqual(auction.club_profit, Decimal("20.00"))
+
+    def test_tax_and_dues_together_leave_only_commission(self):
+        auction = self._auction(club_pct=20, tax=10)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True, renewal_needed=True)
+        # buyer invoice net = -(100 bids + 10 tax + 25 dues) = -135; seller net = +80.
+        # -sum(calculated_total) = 55, minus 10 tax minus 25 dues = 20 commission.
+        self.assertEqual(auction.club_profit, Decimal("20.00"))
+
+    def test_untaxed_non_membership_auction_backs_out_nothing(self):
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction._auction_tax_collected, Decimal("0.00"))
+        self.assertEqual(auction._auction_membership_dues, Decimal("0.00"))
+
+    def test_derived_properties_track_the_fix(self):
+        # percent_to_club derives from club_profit, so the sign fix flows through: on a loss the
+        # club's percentage of gross is correctly negative -- which the old abs() masked.
+        # total_to_sellers is computed directly (Item 15), so the buyer's $5 first-bid payout is NOT
+        # miscounted as money paid to the seller: the seller is credited exactly their $10 cut.
+        auction = self._auction(club_pct=0, first_bid_payout=5)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.gross, Decimal(10))
+        self.assertEqual(auction.club_profit, Decimal("-5.00"))
+        self.assertEqual(auction.total_to_sellers, Decimal("10.00"))
+        self.assertLess(auction.percent_to_club, 0)
+
+
+class TotalToSellersPercentToClubTests(TestCase):
+    """Auction.total_to_sellers and Auction.percent_to_club (Item 15).
+
+    total_to_sellers is now computed directly from the per-lot seller cut (``your_cut``) rather
+    than as ``gross - club_profit``. That subtraction distorted the figure once club_profit
+    stopped mirroring gross: club_profit excludes tax and dues (never part of gross) and reflects
+    buyer-side promotions, so subtraction would fold tax, dues and buyer payouts into a number
+    that is supposed to be only what sellers are owed. percent_to_club is club_profit as a
+    Decimal fraction of gross, negative on a loss and 0 (not a ZeroDivisionError) when gross is 0.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("tts_creator", "tts@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Sellers Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self._n = 0
+
+    def _auction(self, *, tax=0, club_pct=25, first_bid_payout=0, unsold_lot_fee=0, rounding=False):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Sellers Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            tax=tax,
+            lot_entry_fee=0,
+            unsold_lot_fee=unsold_lot_fee,
+            first_bid_payout=first_bid_payout,
+            invoice_rounding=rounding,
+        )
+        PickupLocation.objects.create(name="Sellers Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price, *, banned=False, donation=False):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            banned=banned,
+            donation=donation,
+            quantity=1,
+        )
+
+    def _unsold_lot(self, auction, seller):
+        return Lot.objects.create(
+            lot_name="Unsold lot",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=None,
+            active=False,
+            quantity=1,
+        )
+
+    def _invoice(self, tos, *, paid=False, renewal_needed=False):
+        invoice = Invoice.objects.get_or_create(auctiontos_user=tos)[0]
+        if renewal_needed:
+            invoice.renewal_needed = True
+        if paid:
+            invoice.status = "PAID"
+        if paid or renewal_needed:
+            invoice.save()
+        return invoice
+
+    # ---- total_to_sellers ----------------------------------------------------------------
+
+    def test_total_to_sellers_matches_seller_credits(self):
+        # club_pct=25: on $100 the seller keeps 75, on $40 they keep 30. Total credited = 105.
+        auction = self._auction(club_pct=25)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 40)
+        self.assertEqual(auction.total_to_sellers, Decimal("105.00"))
+        self.assertIsInstance(auction.total_to_sellers, Decimal)
+
+    def test_total_to_sellers_not_distorted_by_tax(self):
+        # 10% tax makes the buyer owe 110, but tax never touches the seller cut: still 80.
+        # gross - club_profit would also give 80 here only by coincidence; the direct value is 80.
+        auction = self._auction(club_pct=20, tax=10)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.total_to_sellers, Decimal("80.00"))
+
+    def test_total_to_sellers_not_distorted_by_membership_dues(self):
+        # A renewing buyer pays $25 dues on top of their bids; the seller is still owed only 80.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True, renewal_needed=True)
+        self.assertEqual(auction._auction_membership_dues, Decimal("25.00"))
+        self.assertEqual(auction.total_to_sellers, Decimal("80.00"))
+
+    def test_total_to_sellers_excludes_buyer_first_bid_payout(self):
+        # club_pct=0 + $5 first-bid payout to the buyer: the seller is credited their full $10.
+        # gross - club_profit = 10 - (-5) = 15 would wrongly count the buyer payout as a payout.
+        auction = self._auction(club_pct=0, first_bid_payout=5)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.total_to_sellers, Decimal("10.00"))
+
+    def test_total_to_sellers_ignores_banned_and_donated_lots(self):
+        # Banned lots are never charged (seller gets 0) and donations go entirely to the club
+        # (seller cut 0). Only the normal $100 lot's $75 cut counts.
+        auction = self._auction(club_pct=25)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 200, banned=True)
+        self._sold_lot(auction, seller, buyer, 60, donation=True)
+        self.assertEqual(auction.total_to_sellers, Decimal("75.00"))
+
+    def test_total_to_sellers_ignores_unsold_lot_fees(self):
+        # An unsold lot carries a seller-charged unsold_lot_fee. total_to_sellers reports payouts
+        # for lots that sold; the fee must not silently reduce it below the sold lot's cut.
+        auction = self._auction(club_pct=25, unsold_lot_fee=2)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._unsold_lot(auction, seller)
+        self.assertEqual(auction.total_to_sellers, Decimal("75.00"))
+
+    def test_total_to_sellers_zero_when_nothing_sold(self):
+        auction = self._auction(club_pct=25)
+        seller = self._tos(auction)
+        self._unsold_lot(auction, seller)
+        self.assertEqual(auction.total_to_sellers, Decimal("0.00"))
+        self.assertIsInstance(auction.total_to_sellers, Decimal)
+
+    # ---- percent_to_club -----------------------------------------------------------------
+
+    def test_percent_to_club_known_split(self):
+        # club_pct=20 on a $100 lot: club nets 20 of 100 gross = 20%.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.percent_to_club, Decimal(20))
+        self.assertIsInstance(auction.percent_to_club, Decimal)
+
+    def test_percent_to_club_zero_gross_returns_zero(self):
+        # No sold lots -> gross is 0. Must return a sane 0, not raise ZeroDivisionError.
+        auction = self._auction(club_pct=20)
+        self.assertEqual(auction.gross, 0)
+        self.assertEqual(auction.percent_to_club, Decimal(0))
+        self.assertIsInstance(auction.percent_to_club, Decimal)
+
+    def test_percent_to_club_negative_on_loss(self):
+        # club_pct=0 + $5 buyer payout: the club loses $5 on $10 gross = -50%.
+        auction = self._auction(club_pct=0, first_bid_payout=5)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 10)
+        self._invoice(seller, paid=True)
+        self._invoice(buyer, paid=True)
+        self.assertEqual(auction.club_profit, Decimal("-5.00"))
+        self.assertEqual(auction.percent_to_club, Decimal(-50))
+        self.assertLess(auction.percent_to_club, 0)
+
+
+class AuctionGrossTests(TestCase):
+    """Auction.gross -- refund-adjusted gross sales (Item 17).
+
+    gross was ``Sum("winning_price")`` over every lot in the auction. That had three defects, all
+    fixed here so gross reconciles with the money stats shown beside it on the stats page:
+
+      * it counted BANNED (removed) lots, which are never charged and are excluded from
+        ``total_to_sellers``, ``median_lot_price`` and ``total_sold_lots``;
+      * it ignored PARTIAL REFUNDS, reporting the full hammer price even though a refund
+        proportionally reduces both the buyer's bill and the seller's payout;
+      * its filter did not match ``total_sold_lots``, so "N lots sold, $X gross" could count
+        different lots.
+
+    The chosen basis is refund-adjusted final price (``winning_price * (100 - refund%) / 100``) over
+    sold, non-banned lots, which makes ``gross == total_to_sellers + club_profit_raw`` exactly.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("gross_creator", "gross@example.com", "pw")
+        self.club = Club.objects.create(name="Gross Club")
+        self._n = 0
+
+    def _auction(self, *, club_pct=25, lot_entry_fee=0, unsold_lot_fee=0):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Gross Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=club_pct,
+            lot_entry_fee=lot_entry_fee,
+            unsold_lot_fee=unsold_lot_fee,
+        )
+        PickupLocation.objects.create(name="Gross Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _sold_lot(self, auction, seller, buyer, price, *, banned=False, donation=False, refund=0):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            partial_refund_percent=refund,
+            active=False,
+            banned=banned,
+            donation=donation,
+            quantity=1,
+        )
+
+    def _unsold_lot(self, auction, seller):
+        return Lot.objects.create(
+            lot_name="Unsold lot",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=None,
+            active=False,
+            quantity=1,
+        )
+
+    def test_gross_simple_known_prices(self):
+        # Two sold lots, $100 and $40, no refunds: gross is the plain hammer total, 140.
+        auction = self._auction()
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 40)
+        self.assertEqual(auction.gross, Decimal("140.00"))
+        self.assertIsInstance(auction.gross, Decimal)
+
+    def test_gross_includes_donations(self):
+        # A donation is still billed to the buyer at the hammer price (it all goes to the club),
+        # so it is genuine gross even though the seller's cut is 0.
+        auction = self._auction()
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 50, donation=True)
+        self.assertEqual(auction.gross, Decimal("150.00"))
+
+    def test_gross_excludes_banned_lots(self):
+        # The $200 banned lot is pulled from the sale and never charged, so it must not inflate
+        # gross above the $100 that actually sold.
+        auction = self._auction()
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 200, banned=True)
+        self.assertEqual(auction.gross, Decimal("100.00"))
+
+    def test_gross_excludes_unsold_lots(self):
+        # An unsold lot has no winning_price and contributes nothing to gross.
+        auction = self._auction(unsold_lot_fee=2)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._unsold_lot(auction, seller)
+        self.assertEqual(auction.gross, Decimal("100.00"))
+
+    def test_gross_nets_out_partial_refund(self):
+        # A 25% partial refund on a $100 lot reduces both the buyer's bill and the seller's payout,
+        # so refund-adjusted gross is 75, not the full 100 hammer price. A second un-refunded $40
+        # lot adds its full price: 75 + 40 = 115.
+        auction = self._auction()
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100, refund=25)
+        self._sold_lot(auction, seller, buyer, 40)
+        self.assertEqual(auction.gross, Decimal("115.00"))
+
+    def test_gross_ties_out_to_seller_and_club_cuts(self):
+        # The whole point of the refund-adjusted basis: gross must equal what sellers are credited
+        # plus the club's raw cut of the same lots, refunds and all.
+        auction = self._auction(club_pct=25, lot_entry_fee=0)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100, refund=20)  # final 80: seller 60, club 20
+        self._sold_lot(auction, seller, buyer, 40)  # final 40: seller 30, club 10
+        expected = auction.total_to_sellers + Decimal(auction.club_profit_raw)
+        self.assertEqual(auction.gross, expected)
+        self.assertEqual(auction.gross, Decimal("120.00"))
+
+    def test_gross_and_total_sold_lots_count_the_same_lots(self):
+        # "N lots sold, $X gross" must be coherent: the lots counted by total_sold_lots are exactly
+        # the ones summed by gross. The banned and unsold lots are excluded from both.
+        auction = self._auction()
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        self._sold_lot(auction, seller, buyer, 40)
+        self._sold_lot(auction, seller, buyer, 999, banned=True)
+        self._unsold_lot(auction, seller)
+        self.assertEqual(auction.total_sold_lots, 2)
+        # Recompute gross independently over the same filter the count uses.
+        sold = auction.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
+        manual = sum(
+            (lot.winning_price * (100 - lot.partial_refund_percent) / 100 for lot in sold),
+            Decimal("0.00"),
+        )
+        self.assertEqual(auction.gross, manual)
+        self.assertEqual(auction.gross, Decimal("140.00"))
+
+    def test_gross_empty_auction_is_zero(self):
+        # No lots at all: gross is a sane Decimal 0, never a crash or None.
+        auction = self._auction()
+        self.assertEqual(auction.gross, Decimal("0.00"))
+        self.assertIsInstance(auction.gross, Decimal)
+
+    def test_gross_only_unsold_is_zero(self):
+        auction = self._auction(unsold_lot_fee=5)
+        seller = self._tos(auction)
+        self._unsold_lot(auction, seller)
+        self.assertEqual(auction.gross, Decimal("0.00"))
+
+
 class ClubMoneyLedgerCashBasisTests(TestCase):
     """The cash-basis club ledger booked from invoices (Invoice.sync_club_money).
 
@@ -20782,6 +22156,579 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertTrue(
             ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
         )
+
+    # --- Cash-basis dating: entries date to when the cash moved, not auction.date_start ---
+    #
+    # Every auction built by self._auction() starts on 2026-03-15. An online invoice can be
+    # paid weeks later, and the ledger must book that revenue to the settlement date so the
+    # treasurer's date-range reports attribute it to the right period.
+    AUCTION_START = datetime.date(2026, 3, 15)
+    PAID_ON = datetime.datetime(2026, 4, 20, 10, 0, tzinfo=datetime.timezone.utc)
+
+    def _record_payment(self, invoice, when, amount="100.00"):
+        """Attach a recorded payment dated ``when`` (bypassing createdon's auto_now_add)."""
+        payment = InvoicePayment.objects.create(invoice=invoice, amount=Decimal(amount))
+        InvoicePayment.objects.filter(pk=payment.pk).update(createdon=when)
+        return payment
+
+    def _entry_dates(self, invoice):
+        return {entry.date for entry in ClubMoney.objects.filter(invoice=invoice)}
+
+    def test_ledger_dates_to_payment_date_not_auction_start(self):
+        # An invoice paid weeks after the auction opened books to the payment date.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        self._record_payment(buyer_invoice, self.PAID_ON)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertTrue(ClubMoney.objects.filter(invoice=buyer_invoice).exists())
+        self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
+        self.assertNotIn(self.AUCTION_START, self._entry_dates(buyer_invoice))
+
+    def test_ledger_dates_to_date_paid_when_no_recorded_payment(self):
+        # Cash paid at the door has no InvoicePayment; the stamped date_paid drives the date.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        buyer_invoice.date_paid = self.PAID_ON
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
+
+    def test_date_paid_is_stamped_on_paid_transition(self):
+        # Marking an invoice PAID stamps date_paid, and the ledger books to that date.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = self._paid_invoice(buyer)
+        buyer_invoice.refresh_from_db()
+        self.assertIsNotNone(buyer_invoice.date_paid)
+        self.assertEqual(self._entry_dates(buyer_invoice), {timezone.localdate(buyer_invoice.date_paid)})
+
+    def test_resync_does_not_shift_entry_dates(self):
+        # A re-sync appends its deltas under the ORIGINAL booking date rather than moving them to
+        # a new period. Settled invoices are frozen against plain re-saves (see Invoice.save), so
+        # the legitimate way to re-book is the admin un-pay -> edit -> re-pay correction cycle;
+        # that cycle must still respect the original settlement date.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        self._record_payment(buyer_invoice, self.PAID_ON)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
+        # Un-pay, add an adjustment, record a brand-new (later) payment, then re-pay. The reversal,
+        # the re-booking, and the new adjustment delta must all land on the original settlement
+        # date -- never on the later payment's date.
+        buyer_invoice.status = "UNPAID"
+        buyer_invoice.save()
+        InvoiceAdjustment.objects.create(invoice=buyer_invoice, adjustment_type="ADD", amount=5, notes="late fee")
+        self._record_payment(buyer_invoice, datetime.datetime(2026, 6, 1, 9, 0, tzinfo=datetime.timezone.utc), "5.00")
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("5.00"))
+        self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
+
+    def test_paid_unpaid_paid_keeps_stable_date(self):
+        # Toggling PAID -> UNPAID -> PAID never overwrites date_paid and books every reversal
+        # and re-booking to the one stable date, so the entries stay in a single period.
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        self._record_payment(buyer_invoice, self.PAID_ON)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        original_date_paid = Invoice.objects.get(pk=buyer_invoice.pk).date_paid
+        buyer_invoice.status = "UNPAID"
+        buyer_invoice.save()
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        self.assertEqual(Invoice.objects.get(pk=buyer_invoice.pk).date_paid, original_date_paid)
+        self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
+        self.assertEqual(self._ledger_total(invoice=buyer_invoice), Decimal("100.00"))
+
+    def test_treasurer_report_attributes_revenue_to_payment_period(self):
+        # The revenue lands in the month the invoice was paid (April), not the month the
+        # auction opened (March).
+        from .views import ClubTreasurerReportView
+
+        auction = self._auction(club_pct=20)
+        seller, buyer = self._tos(auction), self._tos(auction)
+        self._sold_lot(auction, seller, buyer, 100)
+        buyer_invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        self._record_payment(buyer_invoice, self.PAID_ON)
+        buyer_invoice.status = "PAID"
+        buyer_invoice.save()
+        view = ClubTreasurerReportView()
+        view.club = self.club
+        march = view._report_summary(
+            view._filtered_entries(datetime.date(2026, 3, 1), datetime.date(2026, 3, 31)),
+            datetime.date(2026, 3, 1),
+            datetime.date(2026, 3, 31),
+        )
+        april = view._report_summary(
+            view._filtered_entries(datetime.date(2026, 4, 1), datetime.date(2026, 4, 30)),
+            datetime.date(2026, 4, 1),
+            datetime.date(2026, 4, 30),
+        )
+        self.assertEqual(march["auction_sales"], Decimal("0.00"))
+        self.assertEqual(april["auction_sales"], Decimal("100.00"))
+
+
+class PaidInvoiceFreezeTests(StandardTestCase):
+    """Item 9: once an invoice is PAID it is settled and frozen.
+
+    Viewing it must not recalculate its total, and a plain re-save must not re-sync the
+    ClubMoney ledger from current auction/club settings -- otherwise a later change to
+    membership_annual_fee or the auction's tax rate would silently rewrite booked history the
+    next time a settled invoice is merely touched. Only a status transition books (mark paid) or
+    reverses (un-pay) the ledger; un-paying is the correction escape hatch that thaws the invoice.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Freeze Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self.online_auction.club = self.club
+        self.online_auction.tax = 25
+        self.online_auction.save(update_fields=["club", "tax"])
+        ClubMoney.objects.all().delete()
+
+    def _ledger_by_category(self, invoice):
+        result = {}
+        for entry in ClubMoney.objects.filter(invoice=invoice):
+            result[entry.category] = result.get(entry.category, Decimal("0.00")) + entry.amount
+        return result
+
+    def _ledger_rows(self, invoice):
+        """A stable snapshot of the booked rows -- byte-for-byte equal iff nothing re-booked."""
+        return sorted(ClubMoney.objects.filter(invoice=invoice).values_list("pk", "amount", "date", "category"))
+
+    def _ledger_total(self, invoice):
+        return sum((entry.amount for entry in ClubMoney.objects.filter(invoice=invoice)), Decimal("0.00"))
+
+    def _view_invoice(self, invoice):
+        # A real admin GET of the invoice page -- this is the exact path (InvoiceView.get ->
+        # recalculate) that used to silently rewrite a settled invoice's total on every view.
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        return self.client.get(reverse("invoice_by_pk", kwargs={"pk": invoice.pk}))
+
+    def test_marking_paid_books_correct_ledger(self):
+        # tosB bought three $10 lots (sale 30) in a 25%-tax auction and renews (dues 25).
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        by_cat = self._ledger_by_category(self.invoiceB)
+        self.assertEqual(by_cat[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("30.00"))
+        self.assertEqual(by_cat[ClubMoney.CATEGORY_TAX], Decimal("7.50"))
+        self.assertEqual(by_cat[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+        self.invoiceB.refresh_from_db()
+        # The settled total is snapshotted at the transition, and the booked entries reconcile
+        # to it (buyer entries are the cash into the club, i.e. -rounded_net).
+        self.assertEqual(self.invoiceB.calculated_total, self.invoiceB.rounded_net)
+        self.assertEqual(self._ledger_total(self.invoiceB), -Decimal(self.invoiceB.rounded_net))
+
+    def test_paid_invoice_frozen_against_fee_and_tax_changes(self):
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        self.invoiceB.refresh_from_db()
+        frozen_total = self.invoiceB.calculated_total
+        frozen_ledger = self._ledger_rows(self.invoiceB)
+        self.assertIsNotNone(frozen_total)
+        self.assertEqual(self._ledger_by_category(self.invoiceB)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+
+        # The club triples its dues and the auction drops its tax -- the classic "rewrite settled
+        # history" triggers. None of this may touch the already-settled invoice.
+        self.club.membership_annual_fee = Decimal("75.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.online_auction.tax = 0
+        self.online_auction.save(update_fields=["tax"])
+
+        # Viewing the invoice (InvoiceView.get -> recalculate) must not rewrite the total...
+        self.assertEqual(self._view_invoice(self.invoiceB).status_code, 200)
+        # ...and neither may a plain re-save nor a direct recalculate() re-sync the ledger.
+        self.invoiceB.save()
+        self.invoiceB.recalculate()
+
+        self.invoiceB.refresh_from_db()
+        self.assertEqual(self.invoiceB.calculated_total, frozen_total)
+        self.assertEqual(self._ledger_rows(self.invoiceB), frozen_ledger)
+        # The membership dues stay at the settled 25, not the new 75.
+        self.assertEqual(self._ledger_by_category(self.invoiceB)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
+
+    def test_unpay_reverses_ledger_and_thaws_recalculation(self):
+        self.invoiceB.renewal_needed = True
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        self.invoiceB.refresh_from_db()
+        paid_total = self.invoiceB.calculated_total
+        self.assertNotEqual(self._ledger_total(self.invoiceB), Decimal("0.00"))
+
+        # Un-pay: the ledger reverses to zero (existing behavior) and the invoice thaws.
+        self.invoiceB.status = "UNPAID"
+        self.invoiceB.save()
+        self.assertEqual(self._ledger_total(self.invoiceB), Decimal("0.00"))
+
+        # Now a settings change DOES flow through, because the invoice is no longer settled.
+        self.online_auction.tax = 0
+        self.online_auction.save(update_fields=["tax"])
+        # Reload the invoice so it sees the auction's new tax (as a fresh request would), rather
+        # than the auction object cached on this in-memory instance from the earlier saves.
+        invoice = Invoice.objects.get(pk=self.invoiceB.pk)
+        invoice.recalculate()
+        invoice.refresh_from_db()
+        self.assertNotEqual(invoice.calculated_total, paid_total)
+        # With tax removed the buyer owes less, so the (negative) total moved toward zero.
+        self.assertGreater(invoice.calculated_total, paid_total)
+
+    def test_refund_on_paid_invoice_keeps_totals_and_ledger_frozen(self):
+        # Record the buyer's payment, then settle the invoice.
+        payment = InvoicePayment.objects.create(
+            invoice=self.invoiceB,
+            external_id="PAY-FREEZE-1",
+            amount=Decimal("62.50"),
+            amount_available_to_refund=Decimal("62.50"),
+            currency="USD",
+            payment_method="PayPal",
+        )
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        self.invoiceB.refresh_from_db()
+        frozen_total = self.invoiceB.calculated_total
+        frozen_ledger = self._ledger_rows(self.invoiceB)
+
+        # A refund arrives: the webhook records a negative InvoicePayment, decrements the
+        # refundable balance, then calls invoice.recalculate() (see handle_refund).
+        InvoicePayment.objects.create(
+            invoice=self.invoiceB,
+            external_id="REFUND-FREEZE-1",
+            amount=Decimal("-20.00"),
+            currency="USD",
+            payment_method="PayPal Refund",
+        )
+        payment.amount_available_to_refund -= Decimal("20.00")
+        payment.save()
+        self.invoiceB.recalculate()
+
+        # The refund is recorded (payment row + reduced refundable balance) but the settled
+        # line-item total and the booked ledger are untouched -- exactly the freeze.
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount_available_to_refund, Decimal("42.50"))
+        self.assertTrue(InvoicePayment.objects.filter(external_id="REFUND-FREEZE-1", amount=Decimal("-20.00")).exists())
+        self.invoiceB.refresh_from_db()
+        self.assertEqual(self.invoiceB.calculated_total, frozen_total)
+        self.assertEqual(self._ledger_rows(self.invoiceB), frozen_ledger)
+
+
+class InvoiceDedupeLedgerTests(StandardTestCase):
+    """Item 10: Invoice.save() dedupes duplicate invoices for one AuctionTOS, keeping the oldest
+    and deleting the rest. ClubMoney.invoice is SET_NULL, so a deleted duplicate that carried
+    booked ledger rows used to orphan them (invoice=NULL), break ledger<->invoice traceability,
+    and (for a PAID duplicate) leave the club double-booked.
+
+    The dedupe now re-homes a duplicate's ledger rows onto the canonical invoice and reverses the
+    duplicate's own contribution, so nothing is orphaned, nothing is double-booked, and a settled
+    (PAID) canonical stays frozen (Item 9) because it is never re-derived from current settings.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Dedupe Club", enable_membership=True, membership_annual_fee=Decimal("25.00")
+        )
+        self.online_auction.club = self.club
+        self.online_auction.save(update_fields=["club"])
+        ClubMoney.objects.all().delete()
+
+    # --- helpers -----------------------------------------------------------------------------
+
+    def _by_category(self, invoice):
+        result = {}
+        for entry in ClubMoney.objects.filter(invoice=invoice):
+            result[entry.category] = result.get(entry.category, Decimal("0.00")) + entry.amount
+        return result
+
+    def _ledger_rows(self, invoice):
+        """Byte-for-byte snapshot of an invoice's booked rows -- equal iff nothing re-booked them."""
+        return sorted(ClubMoney.objects.filter(invoice=invoice).values_list("pk", "amount", "date", "category"))
+
+    def _ledger_total(self, **filters):
+        return sum((entry.amount for entry in ClubMoney.objects.filter(**filters)), Decimal("0.00"))
+
+    def _paid_canonical(self):
+        """Mark self.invoiceB PAID so it books its own ledger, and return it as the canonical."""
+        self.invoiceB.status = "PAID"
+        self.invoiceB.save()
+        self.invoiceB.refresh_from_db()
+        return self.invoiceB
+
+    def _make_duplicate(self, canonical, paid=True):
+        """Create a second invoice for the canonical's AuctionTOS that coexists with it.
+
+        bulk_create bypasses Invoice.save(), so the duplicate is not immediately deduped and can
+        carry booked ledger rows -- the state production reaches via races or backdated imports.
+        The duplicate is dated after the canonical so the canonical stays the oldest.
+        """
+        tos = canonical.auctiontos_user
+        Invoice.objects.bulk_create(
+            [Invoice(auctiontos_user=tos, auction=canonical.auction, status="PAID" if paid else "DRAFT")]
+        )
+        dup = Invoice.objects.filter(auctiontos_user=tos).exclude(pk=canonical.pk).get()
+        Invoice.objects.filter(pk=dup.pk).update(date=canonical.date + datetime.timedelta(days=1))
+        dup.refresh_from_db()
+        if paid:
+            # Book the duplicate's ledger exactly as marking it PAID would have.
+            dup.sync_club_money()
+        return dup
+
+    def _assert_no_orphans(self):
+        self.assertFalse(
+            ClubMoney.objects.filter(invoice__isnull=True).exists(),
+            "dedupe left ClubMoney rows orphaned with invoice=NULL",
+        )
+
+    # --- tests -------------------------------------------------------------------------------
+
+    def test_dedupe_unpaid_duplicate_leaves_canonical_untouched(self):
+        canonical = self._paid_canonical()
+        frozen_ledger = self._ledger_rows(canonical)
+        frozen_total = canonical.calculated_total
+        self.assertTrue(frozen_ledger)
+
+        self._make_duplicate(canonical, paid=False)
+        # A plain re-save of the PAID canonical runs the dedupe (Path 2) without a status change.
+        canonical.save()
+
+        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
+        self._assert_no_orphans()
+        canonical.refresh_from_db()
+        self.assertEqual(canonical.calculated_total, frozen_total)
+        self.assertEqual(self._ledger_rows(canonical), frozen_ledger)
+
+    def test_dedupe_paid_duplicate_path2_no_double_booking(self):
+        # Path 2: the canonical (oldest) is the one being saved; newer PAID duplicate is absorbed.
+        canonical = self._paid_canonical()
+        canonical_total = self._ledger_total(invoice=canonical)
+        canonical_by_cat = self._by_category(canonical)
+
+        dup = self._make_duplicate(canonical, paid=True)
+        dup_total = self._ledger_total(invoice=dup)
+        self.assertNotEqual(dup_total, Decimal("0.00"))  # the duplicate really carries booked rows
+        # Bug precondition: the club is double-booked while both invoices exist.
+        self.assertEqual(self._ledger_total(club=self.club), canonical_total + dup_total)
+
+        canonical.save()  # triggers dedupe Path 2
+
+        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
+        self._assert_no_orphans()
+        # The double-booking is gone: the ledger reflects only the canonical's own booking.
+        self.assertEqual(self._ledger_total(club=self.club), canonical_total)
+        self.assertEqual(self._by_category(canonical), canonical_by_cat)
+
+    def test_dedupe_paid_duplicate_path1_no_double_booking(self):
+        # Path 1: the newer duplicate is the one being saved and merges itself into the canonical.
+        canonical = self._paid_canonical()
+        canonical_total = self._ledger_total(invoice=canonical)
+        canonical_by_cat = self._by_category(canonical)
+
+        dup = self._make_duplicate(canonical, paid=True)
+        self.assertNotEqual(self._ledger_total(invoice=dup), Decimal("0.00"))
+
+        dup.save()  # dup is newer than canonical -> dedupe Path 1
+
+        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
+        self._assert_no_orphans()
+        self.assertEqual(self._ledger_total(club=self.club), canonical_total)
+        self.assertEqual(self._by_category(canonical), canonical_by_cat)
+
+    def test_dedupe_paid_duplicate_keeps_canonical_frozen(self):
+        # Item 9 guard: dedupe of a duplicate must not re-derive the settled canonical from
+        # current settings -- its snapshotted total and its own booked rows stay put.
+        canonical = self._paid_canonical()
+        frozen_total = canonical.calculated_total
+        frozen_ledger = set(self._ledger_rows(canonical))
+        canonical_by_cat = self._by_category(canonical)
+
+        # The classic "rewrite settled history" triggers fire between payment and dedupe.
+        self.club.membership_annual_fee = Decimal("75.00")
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.online_auction.tax = 0
+        self.online_auction.save(update_fields=["tax"])
+
+        self._make_duplicate(canonical, paid=True)
+        canonical.save()  # dedupe Path 2
+
+        self._assert_no_orphans()
+        canonical.refresh_from_db()
+        self.assertEqual(canonical.calculated_total, frozen_total)
+        # The canonical's own rows are still present, byte-for-byte, and its net per category is
+        # unchanged -- the tax drop and dues hike never touched the settled ledger.
+        self.assertTrue(frozen_ledger.issubset(set(self._ledger_rows(canonical))))
+        self.assertEqual(self._by_category(canonical), canonical_by_cat)
+
+    def test_unpay_after_dedupe_reverses_ledger_cleanly(self):
+        canonical = self._paid_canonical()
+        self._make_duplicate(canonical, paid=True)
+        canonical.save()  # dedupe Path 2 -> ledger reflects only the canonical's booking
+        self.assertNotEqual(self._ledger_total(invoice=canonical), Decimal("0.00"))
+
+        canonical.refresh_from_db()
+        canonical.status = "UNPAID"
+        canonical.save()
+
+        self._assert_no_orphans()
+        self.assertEqual(self._ledger_total(invoice=canonical), Decimal("0.00"))
+        self.assertEqual(self._ledger_total(club=self.club), Decimal("0.00"))
+
+
+class ClubMembershipDuesReversalTests(TestCase):
+    """Item 11: un-paying a club-only (no-auction) membership/dues invoice must reverse the dues
+    entry it booked into the club ledger (ClubMoney).
+
+    Club-only membership invoices have no auction, so they don't share the auction-invoice ledger
+    computation; their single membership-dues entry is booked and reversed by
+    Invoice.sync_club_money on the PAID/un-pay status transition. The ledger stays append-only:
+    un-paying appends a negated reversal row (the original is never deleted), repeated saves in the
+    un-paid state don't stack reversals, and re-paying books a fresh entry so the net stays correct.
+    Previously the entry was booked directly by _process_invoice_membership_renewal and un-paying
+    never reversed it, so the ledger permanently overstated dues income.
+    """
+
+    def setUp(self):
+        self.member_user = User.objects.create_user("dues_member", "dues_member@example.com", "pw")
+        self.club = Club.objects.create(
+            name="Dues Reversal Club",
+            enable_membership=True,
+            enable_club_page=True,
+            membership_system="rolling",
+            membership_annual_fee=Decimal("40.00"),
+        )
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.member_user, name="Dues Member", email="dues_member@example.com"
+        )
+
+    def _invoice(self, status="UNPAID"):
+        return Invoice.objects.create(
+            club=self.club,
+            club_member=self.member,
+            buyer=self.member_user,
+            status=status,
+            renewal_needed=True,
+        )
+
+    def _membership_rows(self, invoice):
+        return ClubMoney.objects.filter(invoice=invoice, category=ClubMoney.CATEGORY_MEMBERSHIP)
+
+    def _ledger_total(self, invoice):
+        return sum((row.amount for row in ClubMoney.objects.filter(invoice=invoice)), Decimal("0.00"))
+
+    def _row_count(self, invoice):
+        return ClubMoney.objects.filter(invoice=invoice).count()
+
+    def test_pay_books_single_dues_entry(self):
+        invoice = self._invoice()
+        invoice.status = "PAID"
+        invoice.save()
+        rows = self._membership_rows(invoice)
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.first().amount, Decimal("40.00"))
+        self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
+
+    def test_unpay_appends_reversal_and_nets_to_zero(self):
+        invoice = self._invoice()
+        invoice.status = "PAID"
+        invoice.save()
+        self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
+        booked_pks = set(self._membership_rows(invoice).values_list("pk", flat=True))
+
+        invoice.status = "UNPAID"
+        invoice.save()
+
+        # Reversal appended -> net zero, and the original booked row is still there (append-only).
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+        self.assertEqual(self._membership_rows(invoice).count(), 2)
+        self.assertTrue(booked_pks.issubset(set(self._membership_rows(invoice).values_list("pk", flat=True))))
+
+    def test_repeated_unpaid_saves_do_not_stack_reversals(self):
+        invoice = self._invoice()
+        invoice.status = "PAID"
+        invoice.save()
+        invoice.status = "UNPAID"
+        invoice.save()
+        rows_after_first_unpay = self._row_count(invoice)
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+
+        # Saving again while un-paid (a DRAFT hop and even a direct re-sync) must not append more
+        # reversals -- the ledger is already reconciled to zero for this invoice.
+        invoice.save()
+        invoice.status = "DRAFT"
+        invoice.save()
+        invoice.sync_club_money()
+        self.assertEqual(self._row_count(invoice), rows_after_first_unpay)
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+
+    def test_repay_books_fresh_entry_with_correct_net(self):
+        invoice = self._invoice()
+        invoice.status = "PAID"
+        invoice.save()
+        invoice.status = "UNPAID"
+        invoice.save()
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+
+        invoice.status = "PAID"
+        invoice.save()
+
+        # A fresh dues entry is appended (three rows: book, reverse, re-book) and the net is one fee.
+        self.assertEqual(self._membership_rows(invoice).count(), 3)
+        self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
+
+    def test_ledger_rows_are_never_deleted_across_toggles(self):
+        invoice = self._invoice()
+        counts = []
+        for status in ("PAID", "UNPAID", "PAID", "DRAFT", "PAID"):
+            invoice.status = status
+            invoice.save()
+            counts.append(self._row_count(invoice))
+        # Every transition only ever appends, so the row count is monotonically non-decreasing.
+        self.assertEqual(counts, sorted(counts))
+        self.assertEqual(counts[0], 1)  # the first PAID booked exactly one row
+        # The final state is PAID, so the net is exactly one membership fee.
+        self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
+
+    def test_non_renewal_club_invoice_books_nothing(self):
+        # A club-only invoice that isn't renewing dues (renewal_needed False) moves no cash, so
+        # marking it PAID must not book a membership entry.
+        invoice = Invoice.objects.create(
+            club=self.club, club_member=self.member, buyer=self.member_user, status="UNPAID", renewal_needed=False
+        )
+        invoice.status = "PAID"
+        invoice.save()
+        self.assertEqual(self._membership_rows(invoice).count(), 0)
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+
+    def test_full_admin_endpoint_pay_then_unpay(self):
+        # End-to-end through the admin pay-invoice endpoint: the dues entry is booked exactly once
+        # (by sync_club_money, no longer by the renewal helper) and un-paying reverses it to zero.
+        User.objects.create_superuser("dues_admin", "dues_admin@example.com", "pw")
+        invoice = self._invoice()
+        client = Client()
+        client.login(username="dues_admin", password="pw")
+
+        self.assertEqual(client.post(f"/api/payinvoice/{invoice.pk}/PAID").status_code, 200)
+        self.assertEqual(self._membership_rows(invoice).count(), 1)
+        self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
+
+        self.assertEqual(client.post(f"/api/payinvoice/{invoice.pk}/UNPAID").status_code, 200)
+        self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
+        # Append-only: the reversal is a new row, the original booking is retained.
+        self.assertEqual(self._membership_rows(invoice).count(), 2)
 
 
 class MakeClubAdminAssignsAuctionsTests(TestCase):
@@ -21128,6 +23075,17 @@ class ClubTreasurerOutstandingInvoiceTests(TestCase):
         result = self._summary()
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["amount"], Decimal("50.00"))
+
+    def test_invoice_owing_cents_is_outstanding(self):
+        """A member owing $0.75 must be counted and its balance reported.
+
+        Regression for calculated_total being an IntegerField: -0.75 was truncated to 0, so the
+        balance came out to 0 and the invoice was silently dropped from the outstanding total.
+        """
+        self._invoice(calculated_total=Decimal("-0.75"), status="UNPAID")
+        result = self._summary()
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["amount"], Decimal("0.75"))
 
     def test_fully_paid_invoice_is_not_outstanding(self):
         # Paid in full but still UNPAID (admin hasn't flipped status) — must NOT be counted.
@@ -26166,3 +28124,1370 @@ class CloudflareImagesTests(StandardTestCase):
         with patch("auctions.cloudflare_images.requests.post", return_value=response) as mock_post:
             call_command("migrate_to_cloudflare_images", "--setup")
         self.assertEqual(mock_post.call_count, len(cloudflare_images.VARIANTS))
+
+
+class PayPalCreateOrderPartialRefundTests(StandardTestCase):
+    """Regression tests for PayPal order creation with partially refunded lots.
+
+    PayPal validates that the sum of every item's unit_amount equals item_total (and that the
+    per-item taxes sum to tax_total). A partially refunded lot has a refund-adjusted final_price
+    that is lower than its raw winning_price, so building the line items from winning_price while
+    item_total came from the refund-adjusted invoice total made the sums disagree and PayPal
+    rejected the order -- the buyer could not pay online.
+    """
+
+    def _buyer_invoice(self, lots_spec):
+        """Create a buyer, their bought lots (list of (winning_price, refund_percent)) and an invoice."""
+        buyer = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        for winning_price, refund_percent in lots_spec:
+            Lot.objects.create(
+                lot_name="paypal refund test lot",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                auctiontos_winner=buyer,
+                quantity=1,
+                winning_price=Decimal(str(winning_price)),
+                partial_refund_percent=refund_percent,
+                active=False,
+            )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer)
+        return invoice
+
+    def _order_payload(self, invoice):
+        """Call create_order with post_to_paypal mocked; return the payload it was handed."""
+        from django.test import RequestFactory
+
+        from auctions.views import CreatePayPalOrderView
+
+        view = CreatePayPalOrderView()
+        view.request = RequestFactory().get("/")
+        with patch.object(CreatePayPalOrderView, "post_to_paypal") as mock_post:
+            mock_post.return_value = {
+                "id": "ORDER-TEST",
+                "links": [{"rel": "approve", "href": "https://www.paypal.com/checkoutnow?token=ORDER-TEST"}],
+            }
+            approval_url = view.create_order(invoice)
+        self.assertEqual(mock_post.call_count, 1)
+        endpoint, payload = mock_post.call_args.args
+        self.assertEqual(endpoint, "v2/checkout/orders")
+        return payload, approval_url
+
+    def _assert_breakdown_valid(self, payload):
+        """Assert the PayPal breakdown satisfies PayPal's validation arithmetic."""
+        unit = payload["purchase_units"][0]
+        breakdown = unit["amount"]["breakdown"]
+        items = unit["items"]
+        item_total = Decimal(breakdown["item_total"]["value"])
+        tax_total = Decimal(breakdown["tax_total"]["value"])
+        item_sum = sum((Decimal(i["unit_amount"]["value"]) for i in items), Decimal("0.00"))
+        tax_sum = sum((Decimal(i["tax"]["value"]) for i in items if "tax" in i), Decimal("0.00"))
+        # PayPal: sum(items) == item_total and sum(item taxes) == tax_total.
+        self.assertEqual(item_sum, item_total)
+        self.assertEqual(tax_sum, tax_total)
+        # PayPal: amount == item_total + tax_total + handling/shipping/insurance - discount.
+        discount = Decimal(breakdown.get("discount", {}).get("value", "0.00"))
+        self.assertEqual(Decimal(unit["amount"]["value"]), item_total + tax_total - discount)
+
+    def test_partial_refund_uses_refund_adjusted_price(self):
+        # tax is 25%; invoice rounding off so the amounts are exact and easy to read.
+        self.online_auction.invoice_rounding = False
+        self.online_auction.save()
+        # Lot A: $20, no refund -> item $20.00, tax $5.00. Lot B: $20 with a 50% refund -> item
+        # $10.00 (refund-adjusted), tax $2.50 (tax base consistent with the item price).
+        invoice = self._buyer_invoice([(20, 0), (20, 50)])
+        payload, approval_url = self._order_payload(invoice)
+        self.assertEqual(approval_url, "https://www.paypal.com/checkoutnow?token=ORDER-TEST")
+
+        items = payload["purchase_units"][0]["items"]
+        self.assertEqual(len(items), 2)
+        unit_values = sorted(Decimal(i["unit_amount"]["value"]) for i in items)
+        # The refunded lot must bill the refund-adjusted $10.00, not the raw $20.00 winning price.
+        self.assertEqual(unit_values, [Decimal("10.00"), Decimal("20.00")])
+        refunded_item = min(items, key=lambda i: Decimal(i["unit_amount"]["value"]))
+        self.assertEqual(refunded_item["unit_amount"]["value"], "10.00")
+        self.assertEqual(refunded_item["tax"]["value"], "2.50")
+
+        breakdown = payload["purchase_units"][0]["amount"]["breakdown"]
+        self.assertEqual(breakdown["item_total"]["value"], "30.00")
+        self.assertEqual(breakdown["tax_total"]["value"], "7.50")
+        self.assertEqual(payload["purchase_units"][0]["amount"]["value"], "37.50")
+        self._assert_breakdown_valid(payload)
+
+    def test_no_refund_line_items_unchanged(self):
+        self.online_auction.invoice_rounding = False
+        self.online_auction.save()
+        invoice = self._buyer_invoice([(20, 0), (15, 0)])
+        payload, _ = self._order_payload(invoice)
+
+        items = payload["purchase_units"][0]["items"]
+        self.assertEqual(len(items), 2)
+        # With no refunds the unit_amount equals the raw winning price (unchanged behavior).
+        unit_values = sorted(Decimal(i["unit_amount"]["value"]) for i in items)
+        self.assertEqual(unit_values, [Decimal("15.00"), Decimal("20.00")])
+
+        breakdown = payload["purchase_units"][0]["amount"]["breakdown"]
+        self.assertEqual(breakdown["item_total"]["value"], "35.00")
+        self.assertEqual(breakdown["tax_total"]["value"], "8.75")
+        self.assertEqual(payload["purchase_units"][0]["amount"]["value"], "43.75")
+        self._assert_breakdown_valid(payload)
+
+    def test_fractional_cent_refund_items_sum_matches_item_total(self):
+        # A 50% refund on an odd-cent price yields a fractional-cent per-item value. Because
+        # item_total is summed from the same quantized per-item values that are sent, the item
+        # sum matches item_total exactly and PayPal accepts the order -- no rounding drift.
+        self.online_auction.invoice_rounding = False
+        self.online_auction.save()
+        invoice = self._buyer_invoice([(Decimal("10.03"), 50), (Decimal("10.03"), 50)])
+        payload, _ = self._order_payload(invoice)
+
+        # The invariant that PayPal enforces holds regardless of how the DB rounds the aggregate.
+        self._assert_breakdown_valid(payload)
+
+        # Each per-item unit_amount is quantized to 2 dp and the breakdown item_total is exactly
+        # their sum, so summing the sent line items can never disagree with item_total.
+        items = payload["purchase_units"][0]["items"]
+        item_sum = sum((Decimal(i["unit_amount"]["value"]) for i in items), Decimal("0.00"))
+        self.assertEqual(item_sum, Decimal(payload["purchase_units"][0]["amount"]["breakdown"]["item_total"]["value"]))
+
+
+class MedianLotValueTests(TestCase):
+    """Auction.median_lot_price and the median_value() helper (Item 16).
+
+    Two defects fixed here:
+      * median_value() indexed the sorted values with ``int(round(count / 2))``. Python's round()
+        uses banker's rounding, so for many counts it selected the wrong element -- e.g.
+        round(3 / 2) == 2 picks the *last* of 3 values, round(7 / 2) == 4 picks past the middle of
+        7 -- an off-by-one that shifted with the count. Even counts also returned the upper of the
+        two middle values instead of their mean.
+      * median_lot_price included banned (removed) lots, which are never charged and are excluded
+        from every other money stat on the auction.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("median_creator", "median@example.com", "pw")
+        self.club = Club.objects.create(name="Median Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Median Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=25,
+            tax=0,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+        )
+        PickupLocation.objects.create(name="Median Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, price, *, banned=False, sold=True):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=Decimal(price) if sold else None,
+            banned=banned,
+            active=False,
+            quantity=1,
+        )
+
+    def test_odd_count_three_lots_returns_true_middle(self):
+        # Prices 10, 20, 30 -> median 20. The old round(3/2)==2 indexed the LAST value (30).
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (10, 30, 20):  # insertion order deliberately not sorted
+            self._lot(auction, seller, price)
+        self.assertEqual(auction.median_lot_price, Decimal(20))
+
+    def test_odd_count_five_lots_returns_true_middle(self):
+        # Prices 5, 10, 15, 20, 25 -> median 15 (index 2 of the sorted values).
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (25, 5, 20, 10, 15):
+            self._lot(auction, seller, price)
+        self.assertEqual(auction.median_lot_price, Decimal(15))
+
+    def test_odd_count_seven_lots_returns_true_middle(self):
+        # Prices 1..7 -> median 4 (index 3). The old round(7/2)==4 wrongly returned 5.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (7, 6, 5, 4, 3, 2, 1):
+            self._lot(auction, seller, price)
+        self.assertEqual(auction.median_lot_price, Decimal(4))
+
+    def test_even_count_four_lots_returns_mean_of_two_middle(self):
+        # Prices 10, 20, 30, 40 -> mean of the two middle values (20, 30) == 25.
+        # This documents the chosen convention: even counts return the mean, not a single element.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (40, 10, 30, 20):
+            self._lot(auction, seller, price)
+        self.assertEqual(auction.median_lot_price, Decimal(25))
+
+    def test_even_count_mean_can_be_fractional(self):
+        # Prices 10, 15 -> mean 12.5, proving the even-count branch averages rather than snapping
+        # to one of the two middle values (both old and naive lower/upper medians would give 10 or 15).
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (10, 15):
+            self._lot(auction, seller, price)
+        self.assertEqual(auction.median_lot_price, Decimal("12.5"))
+
+    def test_banned_lots_excluded_from_median(self):
+        # Sold non-banned prices 10, 20, 30 -> median 20. A banned lot priced far higher (1000)
+        # must not shift the median; if it were counted the sorted set (10,20,30,1000) would move it.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (10, 20, 30):
+            self._lot(auction, seller, price)
+        self._lot(auction, seller, 1000, banned=True)
+        self.assertEqual(auction.median_lot_price, Decimal(20))
+
+    def test_banned_lot_removal_changes_result(self):
+        # Guard against a false pass: with the banned lot counted the set (10,20,30,1000) is even and
+        # its median would be 25, so excluding it (median 20) is a genuine, observable difference.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (10, 20, 30):
+            self._lot(auction, seller, price)
+        # Confirm the non-banned median.
+        self.assertEqual(auction.median_lot_price, Decimal(20))
+        # A banned lot at 1000 does not pull the median toward 25.
+        self._lot(auction, seller, 1000, banned=True)
+        self.assertEqual(auction.median_lot_price, Decimal(20))
+
+    def test_unsold_lots_ignored(self):
+        # Only lots with a winning_price count; an unsold lot (winning_price is NULL) is ignored.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (10, 20, 30):
+            self._lot(auction, seller, price)
+        self._lot(auction, seller, 0, sold=False)
+        self.assertEqual(auction.median_lot_price, Decimal(20))
+
+    def test_empty_auction_returns_zero_without_crashing(self):
+        # No sold lots -> the property returns 0 rather than raising (matches the codebase's
+        # "no data" convention used by the other stat properties).
+        auction = self._auction()
+        self._tos(auction)  # a registrant but no sold lots
+        self.assertEqual(auction.median_lot_price, 0)
+
+    def test_median_value_helper_raises_on_empty_queryset(self):
+        # The helper's documented contract: an empty queryset raises IndexError, which both callers
+        # (median_lot_price and the image-stats charts) already guard for.
+        from auctions.models import median_value
+
+        with self.assertRaises(IndexError):
+            median_value(Lot.objects.none(), "winning_price")
+
+
+class SellPriceChartBinTests(TestCase):
+    """Sell-price distribution histogram: labels and bins must always describe the same buckets
+    (Item 20).
+
+    Two defects fixed here:
+      * AuctionStatsLotSellPricesJSONView had a *fallback* path (used when Auction.cached_stats has
+        no "lot_sell_prices" entry -- e.g. a freshly ended auction whose stats haven't been baked).
+        get_labels() and get_data() each rederived the bins with different arithmetic:
+        get_labels() used num_bins = (max_price - 1) // 2 and end_bin = start + num_bins * 2, while
+        get_data() used num_bins = max_price // 2 and end_bin = max_price - 1. For a $25 top price
+        that produced 16 labels against 17 data points, and a bin_size of 1.87 under labels claiming
+        width-2 buckets -- so bars were attributed to the wrong price ranges and one bar had no label.
+      * The histogram counted banned (removed) lots, while the "Not sold" bar (total_unsold_lots) and
+        every other money stat exclude them -- so the priced bars over-counted relative to "Not sold".
+
+    The fix routes both the model (set_stat_lot_sell_prices) and the view fallback through a single
+    source of truth (_lot_sell_price_bins), and excludes banned lots from the priced side.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("sellprice_creator", "sellprice@example.com", "pw")
+        self.club = Club.objects.create(name="Sell Price Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Sell Price Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            winning_bid_percent_to_club=25,
+            tax=0,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+        )
+        PickupLocation.objects.create(name="Sell Price Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, price, *, banned=False, sold=True):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=Decimal(price) if sold else None,
+            banned=banned,
+            active=False,
+            quantity=1,
+        )
+
+    def _fallback_view(self, auction):
+        """A view instance wired for the *fallback* branch (cached_stats is None on a fresh auction)."""
+        from auctions.views import AuctionStatsLotSellPricesJSONView
+
+        view = AuctionStatsLotSellPricesJSONView()
+        view.auction = auction
+        view.compare_auction = None
+        return view
+
+    @staticmethod
+    def _bar_range(label):
+        """Return (lower, upper) integers for a priced label like "$3-5", or None for non-priced bars."""
+        nums = re.findall(r"\d+", label)
+        if len(nums) < 2:
+            return None
+        return int(nums[0]), int(nums[1])
+
+    def _assert_price_in_labeled_bar(self, labels, row, price):
+        """The bucket holding a single ``price`` (count 1) must be the one whose label range contains it,
+        left-inclusive/right-exclusive. Returns nothing; asserts alignment."""
+        self.assertEqual(len(labels), len(row), "labels and data must have one entry per bar")
+        hit_index = next(i for i, count in enumerate(row) if count == 1)
+        rng = self._bar_range(labels[hit_index])
+        self.assertIsNotNone(rng, f"price {price} landed on a non-priced bar '{labels[hit_index]}'")
+        lower, upper = rng
+        self.assertTrue(
+            lower <= price < upper,
+            f"price {price} counted in bar '{labels[hit_index]}' ({lower}-{upper}), which does not contain it",
+        )
+
+    # ------------------------------------------------------------------ length parity
+
+    def test_model_labels_and_data_have_equal_length(self):
+        # The model's stat dict must have exactly one label per data point across a range of top prices,
+        # including the small-price branch (bin_width collapses to 1) and the 30-bin cap.
+        for prices in ([25], [5, 7, 9], [3], [1000], list(range(1, 40))):
+            auction = self._auction()
+            seller = self._tos(auction)
+            for price in prices:
+                self._lot(auction, seller, price)
+            stats = auction.set_stat_lot_sell_prices()
+            self.assertEqual(
+                len(stats["labels"]),
+                len(stats["data"][0]),
+                f"length mismatch for prices {prices}",
+            )
+
+    def test_view_fallback_labels_and_data_have_equal_length(self):
+        # The regression: for a $25 top price the old fallback produced 16 labels vs 17 data points.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 25)
+        view = self._fallback_view(auction)
+        self.assertIsNone(auction.cached_stats)  # confirm we are exercising the fallback branch
+        labels = view.get_labels()
+        row = view.get_data()[0]
+        self.assertEqual(len(labels), len(row))
+
+    # ------------------------------------------------------------------ bucket alignment
+
+    def test_fallback_priced_lot_lands_in_labeled_bar(self):
+        # Fallback path: a lot priced X is counted in the bar whose label range contains X.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 25)
+        view = self._fallback_view(auction)
+        self.assertIsNone(auction.cached_stats)
+        self._assert_price_in_labeled_bar(view.get_labels(), view.get_data()[0], 25)
+
+    def test_cached_priced_lot_lands_in_labeled_bar(self):
+        # Non-fallback path: the view reads a baked cached_stats blob; same alignment property holds.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 25)
+        auction.cached_stats = {"lot_sell_prices": auction.set_stat_lot_sell_prices()}
+        auction.save()
+        view = self._fallback_view(auction)
+        self._assert_price_in_labeled_bar(view.get_labels(), view.get_data()[0], 25)
+
+    def test_view_fallback_matches_cached_stats(self):
+        # Both view branches (fallback recompute vs reading cached_stats) must agree bar-for-bar,
+        # since they now share one source of truth.
+        auction = self._auction()
+        seller = self._tos(auction)
+        for price in (5, 12, 25, 500):
+            self._lot(auction, seller, price)
+        fallback = self._fallback_view(auction)
+        fallback_labels = fallback.get_labels()
+        fallback_data = fallback.get_data()
+
+        auction.cached_stats = {"lot_sell_prices": auction.set_stat_lot_sell_prices()}
+        auction.save()
+        cached = self._fallback_view(auction)
+        self.assertEqual(fallback_labels, cached.get_labels())
+        self.assertEqual(fallback_data, cached.get_data())
+
+    def test_boundary_value_goes_to_upper_bin(self):
+        # Documented convention: buckets are left-inclusive/right-exclusive. With width-2 bins
+        # (1-3, 3-5, ...), a lot priced exactly 3 belongs to "3-5", never "1-3". A $25 lot forces
+        # bin_width to stay 2 (otherwise small tops collapse to width 1).
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 3)
+        self._lot(auction, seller, 25)
+        stats = auction.set_stat_lot_sell_prices()
+        labels, row = stats["labels"], stats["data"][0]
+        lower_index = next(i for i, lbl in enumerate(labels) if self._bar_range(lbl) == (1, 3))
+        upper_index = next(i for i, lbl in enumerate(labels) if self._bar_range(lbl) == (3, 5))
+        self.assertEqual(row[lower_index], 0, "price 3 must not fall in the 1-3 bucket")
+        self.assertEqual(row[upper_index], 1, "price 3 must fall in the 3-5 bucket")
+
+    def test_top_of_range_value_not_silently_dropped(self):
+        # A price above the last labeled bucket lands in the "{end_bin}+" overflow bar rather than
+        # vanishing. With a $1000 top the range caps at 30 width-2 bins (end_bin 61), so 1000 overflows.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 5)
+        self._lot(auction, seller, 1000)
+        stats = auction.set_stat_lot_sell_prices()
+        labels, row = stats["labels"], stats["data"][0]
+        self.assertTrue(labels[-1].endswith("+"), "last bar should be the high-overflow bucket")
+        self.assertGreaterEqual(row[-1], 1, "the $1000 lot must be counted in the overflow bar")
+        # Every sold lot is accounted for somewhere in the priced bars + overflow (index 1..end),
+        # i.e. none were silently discarded.
+        self.assertEqual(sum(row[1:]), 2)
+
+    # ------------------------------------------------------------------ banned exclusion
+
+    def test_banned_lots_excluded_from_priced_bars(self):
+        # A banned (removed) sold lot must not be counted in any priced bar -- consistent with the
+        # "Not sold" bar and every other money stat. With exclusion the single non-banned $5 lot is
+        # the only thing counted; if banned lots leaked in, the $5 bucket would be 2.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 5)
+        self._lot(auction, seller, 5, banned=True)
+        stats = auction.set_stat_lot_sell_prices()
+        row = stats["data"][0]
+        self.assertEqual(sum(row[1:]), 1, "banned sold lot must not be counted among priced bars")
+
+    def test_banned_unsold_lot_excluded_from_not_sold_bar(self):
+        # The "Not sold" bar (index 0) must exclude banned unsold lots too, so both sides of the chart
+        # treat removed lots the same way.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 0, sold=False)  # a genuine unsold lot
+        self._lot(auction, seller, 0, sold=False, banned=True)  # removed, must not count
+        stats = auction.set_stat_lot_sell_prices()
+        self.assertEqual(stats["labels"][0], "Not sold")
+        self.assertEqual(stats["data"][0][0], 1)
+
+    def test_banned_exclusion_is_observable(self):
+        # Guard against a false pass: prove the banned lot would change the result if counted, by
+        # confirming the non-banned-only total, then adding a banned lot in the same bucket and
+        # showing the total does not move.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 25)
+        before = sum(auction.set_stat_lot_sell_prices()["data"][0][1:])
+        self.assertEqual(before, 1)
+        self._lot(auction, seller, 25, banned=True)
+        after = sum(auction.set_stat_lot_sell_prices()["data"][0][1:])
+        self.assertEqual(after, 1, "adding a banned lot must not change the priced-bar totals")
+
+
+class ParticipantCountTests(TestCase):
+    """Auction buyer/seller/participant counting properties (Item 18).
+
+    ``number_of_sellers``, ``number_of_buyers``, ``number_of_sellers_who_didnt_buy`` and
+    ``number_of_participants`` were computed with reverse joins from AuctionTOS through Lot that did
+    not exclude removed (``banned``) or soft-deleted (``is_deleted``) lots -- so a person whose only
+    lot was pulled from the sale still counted as a seller, and someone whose only won lot was
+    removed still counted as a buyer. A "seller" now needs at least one non-banned, non-deleted lot;
+    a "buyer" needs to have won (``winning_price`` set) at least one non-banned, non-deleted lot.
+    ``.distinct()`` keeps people with several lots from being counted more than once.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("participant_creator", "participant@example.com", "pw")
+        self.club = Club.objects.create(name="Participant Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Participant Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Participant Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, *, winner=None, price=None, banned=False, is_deleted=False):
+        return Lot.objects.create(
+            lot_name=f"Lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=winner,
+            winning_price=Decimal(price) if price is not None else None,
+            banned=banned,
+            is_deleted=is_deleted,
+            active=False,
+            quantity=1,
+        )
+
+    def test_seller_with_only_banned_lot_not_counted(self):
+        # A person whose single lot was removed (banned) is not a seller.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, banned=True)
+        self.assertEqual(auction.number_of_sellers, 0)
+        self.assertEqual(auction.number_of_participants, 0)
+
+    def test_seller_with_only_deleted_lot_not_counted(self):
+        # A soft-deleted lot does not make its owner a seller either.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, is_deleted=True)
+        self.assertEqual(auction.number_of_sellers, 0)
+        self.assertEqual(auction.number_of_participants, 0)
+
+    def test_seller_with_banned_and_live_lot_counted_once(self):
+        # One banned + one live lot -> still exactly one seller (the live lot qualifies, distinct).
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, banned=True)
+        self._lot(auction, seller, price=10)
+        self.assertEqual(auction.number_of_sellers, 1)
+
+    def test_multiple_lots_same_seller_counted_once(self):
+        # Three live lots by one person -> counted once (reverse join must be distinct).
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, price=5)
+        self._lot(auction, seller, price=10)
+        self._lot(auction, seller, price=15)
+        self.assertEqual(auction.number_of_sellers, 1)
+
+    def test_buyer_with_only_banned_won_lot_not_counted(self):
+        # Winning a lot that was later removed (banned) does not make you a buyer.
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer = self._tos(auction)
+        self._lot(auction, seller, winner=buyer, price=10, banned=True)
+        self.assertEqual(auction.number_of_buyers, 0)
+        # The seller still has no live lot, so nobody participated.
+        self.assertEqual(auction.number_of_participants, 0)
+
+    def test_buyer_with_only_deleted_won_lot_not_counted(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer = self._tos(auction)
+        self._lot(auction, seller, winner=buyer, price=10, is_deleted=True)
+        self.assertEqual(auction.number_of_buyers, 0)
+
+    def test_buyer_without_winning_price_not_counted(self):
+        # auctiontos_winner set but no winning_price (e.g. an unsold lot) is not a buyer.
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer = self._tos(auction)
+        self._lot(auction, seller, winner=buyer, price=None)
+        self.assertEqual(auction.number_of_buyers, 0)
+
+    def test_multiple_won_lots_same_buyer_counted_once(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer = self._tos(auction)
+        self._lot(auction, seller, winner=buyer, price=10)
+        self._lot(auction, seller, winner=buyer, price=20)
+        self.assertEqual(auction.number_of_buyers, 1)
+
+    def test_known_scenario_two_sellers_one_buyer(self):
+        # seller1 sells a lot won by buyer1; seller2 has an unsold (but live) lot; buyer1 only buys.
+        #   sellers: seller1, seller2                       -> 2
+        #   buyers: buyer1                                  -> 1
+        #   sellers who didn't buy: seller1, seller2        -> 2
+        #   participants (union of buyers+sellers): 3
+        auction = self._auction()
+        seller1 = self._tos(auction)
+        seller2 = self._tos(auction)
+        buyer1 = self._tos(auction)
+        self._lot(auction, seller1, winner=buyer1, price=10)
+        self._lot(auction, seller2, price=None)  # unsold but live
+        self.assertEqual(auction.number_of_sellers, 2)
+        self.assertEqual(auction.number_of_buyers, 1)
+        self.assertEqual(auction.number_of_sellers_who_didnt_buy, 2)
+        self.assertEqual(auction.number_of_participants, 3)
+
+    def test_person_who_buys_and_sells_counted_once_in_participants(self):
+        # A person who both sells a live lot and wins a live lot is one participant, and is excluded
+        # from sellers_who_didnt_buy.
+        auction = self._auction()
+        both = self._tos(auction)
+        other = self._tos(auction)
+        self._lot(auction, both, price=10)  # `both` sells a live lot
+        self._lot(auction, other, winner=both, price=20)  # `both` also wins a live lot from `other`
+        self.assertEqual(auction.number_of_sellers, 2)  # both, other
+        self.assertEqual(auction.number_of_buyers, 1)  # both
+        self.assertEqual(auction.number_of_sellers_who_didnt_buy, 1)  # other only
+        self.assertEqual(auction.number_of_participants, 2)  # both, other (no double count)
+
+    def test_banned_lots_removed_from_scenario_counts(self):
+        # Regression for the reported defect: seller2's only lot and buyer1's only won lot are both
+        # removed, so the counts drop them even though the reverse joins would otherwise include them.
+        auction = self._auction()
+        seller1 = self._tos(auction)
+        seller2 = self._tos(auction)
+        buyer1 = self._tos(auction)
+        buyer2 = self._tos(auction)
+        # seller1 -> live sale to buyer2 (both stay)
+        self._lot(auction, seller1, winner=buyer2, price=10)
+        # seller2's only lot is removed -> seller2 drops
+        self._lot(auction, seller2, banned=True)
+        # buyer1's only won lot is removed -> buyer1 drops (seller of it is seller1, already counted)
+        self._lot(auction, seller1, winner=buyer1, price=15, banned=True)
+        self.assertEqual(auction.number_of_sellers, 1)  # seller1 only
+        self.assertEqual(auction.number_of_buyers, 1)  # buyer2 only
+        self.assertEqual(auction.number_of_participants, 2)  # seller1, buyer2
+
+
+class ViewsAndWinnersStatsTests(TestCase):
+    """Auction unique-view counting and total_winners (Item 19).
+
+    Two verified defects:
+
+    * ``total_unique_views`` double-counted the anonymous -> logged-in transition. PageView rows
+      store identity two ways (see the page-view tracking view): a logged-in visit stores
+      ``user=<id>`` / ``session_id=NULL``, an anonymous visit stores ``user=NULL`` /
+      ``session_id=<key>``. The old code did ``distinct(session_id) + distinct(user)``, which
+      counted a person who browsed anonymously and then logged in twice and, worse, added a bogus
+      NULL bucket to each side (every logged-in row has a NULL session; every anonymous row has a
+      NULL user). ``Auction.unique_views`` now counts distinct users plus the anonymous sessions
+      that never appear alongside a user.
+
+    * ``total_winners`` joined ``User`` through the ``Lot.winner`` User FK, silently dropping
+      admin-declared winners (check-in / set-lot-winner set ``auctiontos_winner`` + winning_price
+      but never the winner User FK) and winners with no user account. It now counts via
+      ``buyer_tos_qs`` (winning AuctionTOS), which captures every sold, live lot's winner.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("stats19_creator", "stats19@example.com", "pw")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Stats19 Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+        )
+        PickupLocation.objects.create(name="Stats19 Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction, user=None):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            user=user,
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, *, winner=None, winner_user=None, price=None):
+        self._n += 1
+        return Lot.objects.create(
+            lot_name=f"Lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=winner,
+            winner=winner_user,
+            winning_price=Decimal(price) if price is not None else None,
+            active=False,
+            quantity=1,
+        )
+
+    def _view(self, auction, *, user=None, session_id=None):
+        # A page view of the auction's rules page (auction set) -- counted by unique_views.
+        return PageView.objects.create(auction=auction, user=user, session_id=session_id)
+
+    # ---- Bug A: unique view de-duplication -------------------------------------------------
+
+    def test_anonymous_then_logged_in_same_session_counted_once(self):
+        # One person: browsed anonymously (session "sessA"), then logged in on the same session.
+        # When the session key is carried onto the logged-in row it maps to a user, so the person
+        # is counted once (via their user), not once per identity.
+        auction = self._auction()
+        user = User.objects.create_user("stats19_visitor", "v@example.com", "pw")
+        self._view(auction, user=None, session_id="sessA")
+        self._view(auction, user=user, session_id="sessA")
+        result = auction.unique_views
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["logged_in"], 1)
+        self.assertEqual(result["anonymous"], 0)
+
+    def test_two_different_visitors_counted_twice(self):
+        # A logged-in visitor and a genuinely different anonymous visitor -> 2.
+        # (The old distinct-session + distinct-user formula returned 4 here: the anon row's NULL
+        # user and the logged-in row's NULL session each added a spurious bucket.)
+        auction = self._auction()
+        user = User.objects.create_user("stats19_loggedin", "li@example.com", "pw")
+        self._view(auction, user=user, session_id=None)
+        self._view(auction, user=None, session_id="anonB")
+        result = auction.unique_views
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["logged_in"], 1)
+        self.assertEqual(result["anonymous"], 1)
+
+    def test_two_distinct_anonymous_sessions_counted_twice(self):
+        auction = self._auction()
+        self._view(auction, user=None, session_id="s1")
+        self._view(auction, user=None, session_id="s1")  # same visitor, second page
+        self._view(auction, user=None, session_id="s2")
+        self.assertEqual(auction.unique_views["total"], 2)
+
+    def test_repeat_logged_in_views_counted_once(self):
+        auction = self._auction()
+        user = User.objects.create_user("stats19_repeat", "r@example.com", "pw")
+        self._view(auction, user=user, session_id=None)
+        self._view(auction, user=user, session_id=None)
+        self._view(auction, user=user, session_id=None)
+        self.assertEqual(auction.unique_views["total"], 1)
+
+    def test_lot_page_views_are_counted(self):
+        # unique_views spans both auction-rules views and views of the auction's lots.
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller, price=10)
+        user = User.objects.create_user("stats19_lotviewer", "lv@example.com", "pw")
+        PageView.objects.create(lot_number=lot, user=user, session_id=None)
+        PageView.objects.create(lot_number=lot, user=None, session_id="lotsess")
+        self.assertEqual(auction.unique_views["total"], 2)
+
+    # ---- Bug B: total_winners counts admin-declared winners --------------------------------
+
+    def test_admin_declared_winner_counted(self):
+        # auctiontos_winner + winning_price set, but no winner User FK and no Bid rows -- the
+        # shape produced by check-in / the set-lot-winner form. The old winner__auction join
+        # returned 0; buyer_tos_qs (and therefore total_winners) must count it.
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer = self._tos(auction, user=None)  # in-person buyer, no account
+        self._lot(auction, seller, winner=buyer, winner_user=None, price=10)
+        # Old (buggy) path would have returned 0:
+        self.assertEqual(User.objects.filter(winner__auction=auction).distinct().count(), 0)
+        self.assertEqual(auction.buyer_tos_qs.count(), 1)
+        self.assertEqual(auction.set_stat_misc()["total_winners"], 1)
+
+    def test_bid_flow_winner_still_counted(self):
+        # Normal online flow sets both winner (User FK) and auctiontos_winner.
+        auction = self._auction()
+        seller = self._tos(auction)
+        buyer_user = User.objects.create_user("stats19_bidwinner", "bw@example.com", "pw")
+        buyer = self._tos(auction, user=buyer_user)
+        self._lot(auction, seller, winner=buyer, winner_user=buyer_user, price=20)
+        self.assertEqual(auction.set_stat_misc()["total_winners"], 1)
+
+    def test_admin_and_bid_winners_together_not_double_counted(self):
+        # Same person wins two lots: one via the bid flow (winner User FK + auctiontos_winner) and
+        # one admin-declared (auctiontos_winner only). Distinct on the winning AuctionTOS -> 1.
+        # A second, admin-only winner brings the total to 2.
+        auction = self._auction()
+        seller = self._tos(auction)
+        person_user = User.objects.create_user("stats19_both", "both@example.com", "pw")
+        person = self._tos(auction, user=person_user)
+        self._lot(auction, seller, winner=person, winner_user=person_user, price=10)  # bid flow
+        self._lot(auction, seller, winner=person, winner_user=None, price=15)  # admin declared
+        other = self._tos(auction, user=None)
+        self._lot(auction, seller, winner=other, winner_user=None, price=5)  # admin declared
+        self.assertEqual(auction.set_stat_misc()["total_winners"], 2)
+
+
+class PercentUnsoldLotsTests(TestCase):
+    """Auction.percent_unsold_lots zero-lot guard (Item 21).
+
+    ``percent_unsold_lots`` divided ``total_unsold_lots / total_lots`` inside a bare
+    ``try/except`` that returned 100 on any error. For an auction with zero lots the division
+    raised ZeroDivisionError and the property reported 100% unsold -- nonsensical, since a
+    lotless auction has nothing unsold. It now returns 0 for an empty auction, matching the
+    sibling percent properties on this model (reminder_email_clicks/_joins,
+    weekly_promo_email_click_rate), which all return 0 on an empty base.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("pct_unsold_creator", "pctunsold@example.com", "pw")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Percent Unsold Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+        )
+        PickupLocation.objects.create(name="Percent Unsold Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, *, price=None):
+        self._n += 1
+        return Lot.objects.create(
+            lot_name=f"Lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=Decimal(price) if price is not None else None,
+            active=False,
+            quantity=1,
+        )
+
+    def test_zero_lots_reports_zero_not_hundred(self):
+        # The reported defect: an auction with no lots must not report 100% unsold.
+        auction = self._auction()
+        self.assertEqual(auction.total_lots, 0)
+        self.assertEqual(auction.percent_unsold_lots, 0, "A lotless auction has nothing unsold -> 0%")
+
+    def test_all_lots_unsold_reports_hundred(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, price=None)
+        self._lot(auction, seller, price=None)
+        self.assertEqual(auction.percent_unsold_lots, 100)
+
+    def test_half_unsold_reports_fifty(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, price=10)  # sold
+        self._lot(auction, seller, price=None)  # unsold
+        self.assertEqual(auction.percent_unsold_lots, 50)
+
+    def test_all_lots_sold_reports_zero(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, price=10)
+        self._lot(auction, seller, price=20)
+        self.assertEqual(auction.percent_unsold_lots, 0)
+
+
+class PayPalInvoiceChunkTests(TestCase):
+    """PayPal bulk-invoice CSV chunking agreement (Item 21).
+
+    ``Auction.paypal_invoice_chunks`` counted only invoices with ``calculated_total < 0`` while
+    the export loop advanced its per-row counter for every ``not user_should_be_paid`` invoice --
+    which includes settled ($0) invoices (net not > 0 => user_should_be_paid False). With >150
+    invoices the loop's counter therefore ran ahead of the chunk count the UI offered, and tail
+    invoices could be assigned a chunk number the dropdown never listed, silently dropping them
+    from every export.
+
+    Both sides now derive from ``Auction.paypal_invoices_to_export`` -- the UNPAID invoices whose
+    rounded balance still owes the club (``rounded_net_after_payments < 0``), i.e. exactly the
+    invoices that get written -- so the counter and the offered chunks always agree.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("paypal_chunk_creator", "paypalchunk@example.com", "pw")
+        self.club = Club.objects.create(name="PayPal Chunk Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="PayPal Chunk Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="PayPal Chunk Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            email=f"person{self._n}@example.com",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _owing_invoice(self, auction, *, price=10):
+        # A buyer who bought a lot owes the club -> negative net, negative rounded balance.
+        seller = self._tos(auction)
+        buyer = self._tos(auction)
+        Lot.objects.create(
+            lot_name=f"Lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+        return Invoice.objects.create(auctiontos_user=buyer, auction=auction, status="UNPAID")
+
+    def _settled_invoice(self, auction):
+        # A bidder with no lots at all: net == 0, so user_should_be_paid is False (the old counter
+        # would have advanced on it) but it owes nothing and must not consume a chunk slot.
+        user = self._tos(auction)
+        return Invoice.objects.create(auctiontos_user=user, auction=auction, status="UNPAID")
+
+    def test_settled_invoice_excluded_from_export_set(self):
+        auction = self._auction()
+        owing = self._owing_invoice(auction)
+        settled = self._settled_invoice(auction)
+        export_pks = {inv.pk for inv in auction.paypal_invoices_to_export}
+        self.assertIn(owing.pk, export_pks, "An invoice that owes the club is billed")
+        self.assertNotIn(settled.pk, export_pks, "A settled $0 invoice is not billed")
+        # Document the old defect: the settled invoice would have advanced the old counter.
+        self.assertFalse(settled.user_should_be_paid)
+        self.assertEqual(settled.rounded_net_after_payments, 0)
+
+    def test_chunk_count_matches_export_set_not_counter_drift(self):
+        auction = self._auction()
+        for _ in range(3):
+            self._owing_invoice(auction)
+        for _ in range(4):
+            self._settled_invoice(auction)
+        export = auction.paypal_invoices_to_export
+        self.assertEqual(len(export), 3, "Only the 3 owing invoices are billable")
+        # The chunk count is derived from the export set (3 invoices -> a single chunk).
+        self.assertEqual(auction.paypal_invoice_chunks, [1])
+        # The old counter advanced on every non-payout invoice (owing + settled), so it counted
+        # more invoices than the chunk math offered -- the drift that dropped tail invoices.
+        old_counter_set = [inv for inv in auction.paypal_invoices if not inv.user_should_be_paid]
+        self.assertGreater(
+            len(old_counter_set),
+            len(export),
+            "Old counter advanced on more invoices than were billable (the tail-drop drift)",
+        )
+
+    def test_every_exported_invoice_lands_in_an_offered_chunk(self):
+        # The core invariant the fix guarantees: iterating the export set with the same 150-per-chunk
+        # math the loop uses, every invoice's chunk number is one the UI offers.
+        auction = self._auction()
+        for _ in range(5):
+            self._owing_invoice(auction)
+        offered = set(auction.paypal_invoice_chunks)
+        chunk_size = 150
+        for index, _invoice in enumerate(auction.paypal_invoices_to_export):
+            count = index + 1
+            chunk = (count - 1) // chunk_size + 1
+            self.assertIn(chunk, offered, "Every billed invoice must land in a chunk the UI lists")
+
+
+class InvoiceSummaryWordingTests(TestCase):
+    """Invoice.invoice_summary_short zero-balance wording + user_should_be_paid semantics (Item 21).
+
+    A fully settled ($0) invoice fell into the ``else`` branch and read "owes the club $0.00".
+    The zero case now reads "is settled up". The non-zero wording is unchanged. This also pins
+    ``user_should_be_paid`` (whose docstring had the sense inverted): it is True only when the
+    club owes the user (positive net), False when the user owes the club or is settled.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("summary_creator", "summary@example.com", "pw")
+        self._n = 0
+
+    def _auction(self, *, invoice_rounding=True):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Summary Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            invoice_rounding=invoice_rounding,
+        )
+        PickupLocation.objects.create(name="Summary Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction, name):
+        return AuctionTOS.objects.create(
+            name=name,
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _bought_lot(self, auction, buyer, price):
+        self._n += 1
+        seller = self._tos(auction, f"Seller {self._n}")
+        return Lot.objects.create(
+            lot_name=f"Lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+
+    def test_settled_invoice_reads_settled_up_not_owes_zero(self):
+        auction = self._auction()
+        user = self._tos(auction, "Alice")
+        invoice = Invoice.objects.create(auctiontos_user=user, auction=auction, status="UNPAID")
+        self.assertEqual(invoice.net, 0)
+        self.assertEqual(invoice.invoice_summary_short, "is settled up")
+        self.assertNotIn("owes the club", invoice.invoice_summary)
+        self.assertEqual(invoice.invoice_summary, "Alice is settled up")
+
+    def test_owing_invoice_reads_owes_the_club(self):
+        auction = self._auction()
+        buyer = self._tos(auction, "Bob")
+        self._bought_lot(auction, buyer, price=10)
+        invoice = Invoice.objects.create(auctiontos_user=buyer, auction=auction, status="UNPAID")
+        self.assertEqual(invoice.invoice_summary_short, "owes the club $10.00")
+        self.assertFalse(invoice.user_should_be_paid)
+
+    def test_payout_invoice_reads_needs_to_be_paid(self):
+        auction = self._auction()
+        user = self._tos(auction, "Carol")
+        invoice = Invoice.objects.create(auctiontos_user=user, auction=auction, status="UNPAID")
+        # A flat DISCOUNT with nothing else on the invoice makes the net positive: the club owes them.
+        InvoiceAdjustment.objects.create(invoice=invoice, adjustment_type="DISCOUNT", amount=5)
+        self.assertGreater(invoice.net, 0)
+        self.assertTrue(invoice.user_should_be_paid, "Positive net means the club owes the user")
+        self.assertEqual(invoice.invoice_summary_short, "needs to be paid $5.00")
+
+
+class LedgerPercentAdjustmentBaseTests(TestCase):
+    """Ledger percent-adjustment base matches net's base (Item 21).
+
+    ``net`` applies a legacy percent adjustment to the running base
+    ``subtotal + first_bid_payout + club_member_discount + flat_adjustments``, but the club-ledger
+    booking (``sync_club_money``) applied the percent to the bare ``subtotal`` only. The gap between
+    the two bases was silently swept into the ledger's ``rounding`` category, so ``rounding`` held
+    far more than genuine sub-cent rounding. Both sides now read
+    ``Invoice.manual_adjustment_amount``, so the ledger books the exact figure ``net`` uses and
+    ``rounding`` only ever holds true whole-dollar rounding.
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("ledger_pct_creator", "ledgerpct@example.com", "pw")
+        self.club = Club.objects.create(name="Ledger Pct Club")
+        self._n = 0
+
+    def _auction(self, *, first_bid_payout=0):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Ledger Pct Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+            first_bid_payout=first_bid_payout,
+            tax=0,
+        )
+        PickupLocation.objects.create(name="Ledger Pct Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction, name):
+        return AuctionTOS.objects.create(
+            name=name,
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _buyer_invoice(self, auction, *, price):
+        seller = self._tos(auction, "Seller")
+        buyer = self._tos(auction, "Buyer")
+        Lot.objects.create(
+            lot_name="Ledger Lot",
+            auction=auction,
+            auctiontos_seller=seller,
+            auctiontos_winner=buyer,
+            winning_price=Decimal(price),
+            active=False,
+            quantity=1,
+        )
+        return Invoice.objects.create(auctiontos_user=buyer, auction=auction, status="UNPAID")
+
+    def _booked(self, invoice):
+        """Return {category: summed amount} for the invoice's ledger rows."""
+        booked = {}
+        for row in ClubMoney.objects.filter(invoice=invoice):
+            booked[row.category] = booked.get(row.category, Decimal("0.00")) + row.amount
+        return booked
+
+    def test_percent_adjustment_booked_on_net_base_whole_dollar(self):
+        # subtotal = -100, first_bid = +10, flat = -20 (an ADD of 20), percent = 20%.
+        # net's percent base = -100 + 10 - 20 = -110; manual_adjustment_amount = -20 + (-110*0.2) = -42.
+        # net = -100 + 10 - 42 = -132 (a whole dollar, so genuine rounding is 0).
+        # The OLD ledger applied 20% to the bare subtotal (-100) -> adjustment 40, dumping the
+        # remaining $2 into rounding. The fix books adjustment 42 and rounding 0.
+        auction = self._auction(first_bid_payout=10)
+        invoice = self._buyer_invoice(auction, price=100)
+        InvoiceAdjustment.objects.create(invoice=invoice, adjustment_type="ADD", amount=20)
+        InvoiceAdjustment.objects.create(invoice=invoice, adjustment_type="ADD_PERCENT", amount=20)
+
+        self.assertEqual(invoice.manual_adjustment_amount, Decimal(-42))
+        self.assertEqual(invoice.net, Decimal(-132))
+        self.assertEqual(invoice.rounded_net, Decimal(-132))
+
+        invoice.status = "PAID"
+        invoice.save()
+        booked = self._booked(invoice)
+
+        self.assertEqual(
+            booked[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT],
+            Decimal("42.00"),
+            "Adjustment booked on net's base (subtotal+first_bid+flat), not the bare subtotal",
+        )
+        # The old subtotal-only base would have booked 40.00 here.
+        self.assertNotEqual(booked[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("40.00"))
+        # No phantom rounding: net is a whole dollar, so rounding is exactly 0 (old code: $2).
+        self.assertEqual(booked.get(ClubMoney.CATEGORY_ROUNDING, Decimal("0.00")), Decimal("0.00"))
+        # The whole ledger reconciles to the rounded invoice total.
+        self.assertEqual(sum(booked.values()), -invoice.rounded_net)
+
+    def test_rounding_only_holds_subcent_after_fix(self):
+        # subtotal = -100, first_bid = +10, flat = -21 (ADD 21), percent = 20%.
+        # base = -111; manual_adjustment_amount = -21 + (-111*0.2) = -43.2; net = -133.2 -> rounded -133.
+        # Genuine rounding is only $0.20. The OLD base-mismatch would have inflated rounding to ~$2.
+        auction = self._auction(first_bid_payout=10)
+        invoice = self._buyer_invoice(auction, price=100)
+        InvoiceAdjustment.objects.create(invoice=invoice, adjustment_type="ADD", amount=21)
+        InvoiceAdjustment.objects.create(invoice=invoice, adjustment_type="ADD_PERCENT", amount=20)
+
+        self.assertEqual(invoice.manual_adjustment_amount, Decimal("-43.2"))
+        self.assertEqual(invoice.net, Decimal("-133.2"))
+        self.assertEqual(invoice.rounded_net, Decimal(-133))
+
+        invoice.status = "PAID"
+        invoice.save()
+        booked = self._booked(invoice)
+
+        self.assertEqual(booked[ClubMoney.CATEGORY_INVOICE_ADJUSTMENT], Decimal("43.20"))
+        rounding = booked.get(ClubMoney.CATEGORY_ROUNDING, Decimal("0.00"))
+        self.assertEqual(rounding, Decimal("-0.20"))
+        self.assertLess(abs(rounding), Decimal("1.00"), "Rounding only ever holds genuine sub-dollar rounding")
+        self.assertEqual(sum(booked.values()), -invoice.rounded_net)
+
+
+class StatsBannedExclusionReviewTests(TestCase):
+    """Follow-up stats-review fixes: several stats read over a lot set that still included banned
+    (removed) or soft-deleted lots, unlike gross/median_lot_price and every other money figure.
+
+      * set_stat_images ("importance of images on sell price" chart) counted banned AND soft-deleted
+        sold lots, so a single removed lot could multiply the displayed median/average sell price.
+      * total_donations counted banned donation lots.
+      * set_stat_auctioneer_speed / set_stat_attrition plotted banned lots as extra scatter points
+        (both share the identical one-line exclude fix; the auctioneer-speed point count is asserted
+        here as the representative case).
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user("bannedstats_creator", "bannedstats@example.com", "pw")
+        self.club = Club.objects.create(name="Banned Stats Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Banned Stats Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Banned Stats Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, price, *, banned=False, is_deleted=False, donation=False, date_end=None):
+        return Lot.objects.create(
+            lot_name=f"Lot {price}",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=Decimal(price) if price is not None else None,
+            banned=banned,
+            is_deleted=is_deleted,
+            donation=donation,
+            date_end=date_end,
+            active=False,
+            quantity=1,
+        )
+
+    def test_images_chart_excludes_banned_and_deleted_sold_lots(self):
+        # The "No images" bucket should reflect only the two genuine sold lots ($10, $30): median
+        # $20, count 2. A banned $500 lot and a soft-deleted $999 lot must not leak in -- if they
+        # did, the median would jump to $265 (median of 10, 30, 500, 999).
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 10)
+        self._lot(auction, seller, 30)
+        self._lot(auction, seller, 500, banned=True)
+        self._lot(auction, seller, 999, is_deleted=True)
+
+        stats = auction.set_stat_images()
+        # index 0 == "No images" (none of these lots have LotImages)
+        self.assertEqual(stats["data"][2][0], 2, "only the two non-banned, non-deleted sold lots should be counted")
+        self.assertEqual(stats["data"][0][0], 20, "median sell price must exclude banned/deleted lots")
+
+    def test_total_donations_excludes_banned(self):
+        # Two genuine donation lots ($10 + $20 = $30); a banned $100 donation lot must not count.
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, 10, donation=True)
+        self._lot(auction, seller, 20, donation=True)
+        self._lot(auction, seller, 100, donation=True, banned=True)
+        self.assertEqual(auction.total_donations, Decimal(30))
+
+    def test_auctioneer_speed_excludes_banned(self):
+        # Three sold lots ended one minute apart yield two inter-lot gaps (two scatter points). A
+        # banned lot ended between them must not add a third point.
+        auction = self._auction()
+        seller = self._tos(auction)
+        base = datetime.datetime(2026, 3, 15, 18, 0, tzinfo=datetime.timezone.utc)
+        self._lot(auction, seller, 10, date_end=base)
+        self._lot(auction, seller, 12, date_end=base - datetime.timedelta(minutes=1))
+        self._lot(auction, seller, 14, date_end=base - datetime.timedelta(minutes=2))
+        self._lot(auction, seller, 500, banned=True, date_end=base - datetime.timedelta(seconds=30))
+
+        stats = auction.set_stat_auctioneer_speed()
+        self.assertEqual(len(stats["data"][0]), 2, "banned lot must not add an extra auctioneer-speed point")
+
+
+class StatsBiddersChartReviewTests(TestCase):
+    """AuctionLotBiddersChartData follow-up fix: lots with more than six bidders were silently
+    dropped (the >6 branch reassigned a local but never incremented a bucket), a sold lot with no
+    recorded bids was tallied under "Not sold", and raw Bid rows were counted despite the labels
+    reading "N users"."""
+
+    def setUp(self):
+        self.creator = User.objects.create_user("bidderstats_creator", "bidderstats@example.com", "pw")
+        self.club = Club.objects.create(name="Bidder Stats Club")
+        self._n = 0
+
+    def _auction(self):
+        auction = Auction.objects.create(
+            created_by=self.creator,
+            title="Bidder Stats Auction",
+            is_online=True,
+            date_start=datetime.datetime(2026, 3, 15, 12, 0, tzinfo=datetime.timezone.utc),
+            date_end=datetime.datetime(2026, 3, 16, 12, 0, tzinfo=datetime.timezone.utc),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="Bidder Stats Pickup", auction=auction, pickup_time=timezone.now())
+        return auction
+
+    def _tos(self, auction):
+        self._n += 1
+        return AuctionTOS.objects.create(
+            name=f"Person {self._n}",
+            auction=auction,
+            pickup_location=PickupLocation.objects.filter(auction=auction).first(),
+        )
+
+    def _lot(self, auction, seller, *, sold=True):
+        self._n += 1
+        return Lot.objects.create(
+            lot_name=f"Bidder lot {self._n}",
+            auction=auction,
+            auctiontos_seller=seller,
+            winning_price=Decimal(10) if sold else None,
+            active=False,
+            quantity=1,
+        )
+
+    def _chart_data(self, auction):
+        from auctions.views import AuctionLotBiddersChartData
+
+        view = AuctionLotBiddersChartData()
+        view.auction = auction
+        return json.loads(view.get().content)["data"]
+
+    def test_more_than_six_bidders_counted_in_top_bucket(self):
+        # A lot with seven distinct bidders must land in the "6 or more" bucket (index 6), not vanish.
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller)
+        for i in range(7):
+            bidder = User.objects.create_user(f"bidder7_{i}", f"bidder7_{i}@example.com", "pw")
+            Bid.objects.create(user=bidder, lot_number=lot, amount=10 + i)
+        data = self._chart_data(auction)
+        self.assertEqual(data[6], 1, "a lot with 7 bidders must be counted in the 6+ bucket")
+        self.assertEqual(sum(data), 1, "the 7-bidder lot must not be dropped")
+
+    def test_sold_lot_with_no_bids_not_counted_as_unsold(self):
+        # A sold lot with no Bid rows (buy-now / admin-declared) belongs in a sold bucket, never
+        # "Not sold" (index 0).
+        auction = self._auction()
+        seller = self._tos(auction)
+        self._lot(auction, seller, sold=True)
+        data = self._chart_data(auction)
+        self.assertEqual(data[0], 0, "a sold lot must never be counted as 'Not sold'")
+        self.assertEqual(data[1], 1, "a sold lot with no recorded bids floors at the 1-bidder bucket")
+
+    def test_distinct_bidders_counted_not_raw_bid_rows(self):
+        # One user bidding three times is one bidder (the labels say "users"), so the lot lands in
+        # the 1-user bucket, not the 3-user bucket.
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller)
+        bidder = User.objects.create_user("repeat_bidder", "repeat_bidder@example.com", "pw")
+        for amount in (10, 11, 12):
+            Bid.objects.create(user=bidder, lot_number=lot, amount=amount)
+        data = self._chart_data(auction)
+        self.assertEqual(data[1], 1, "repeated bids from one user count as a single bidder")
+        self.assertEqual(data[3], 0, "raw Bid rows must not be counted as distinct bidders")
+
+
+class StatsCompareSlugGuardReviewTests(StandardTestCase):
+    """AuctionStats follow-up fix: an invalid ?compare= slug returned None from .first() and then
+    500'd on None.permission_check. The stats page must degrade gracefully instead."""
+
+    def test_invalid_compare_slug_does_not_crash(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/?compare=this-slug-does-not-exist"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, "a bad ?compare= slug must not 500")
+        self.assertIsNone(response.context.get("compare_auction"), "a bad compare slug must not set compare_auction")

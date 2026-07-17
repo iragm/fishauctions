@@ -47,7 +47,6 @@ from django.db.models import (
     F,
     FloatField,
     IntegerField,
-    Max,
     OuterRef,
     Q,
     Subquery,
@@ -696,22 +695,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            if club.membership_annual_fee and not locked.auction:
-                # Club-only invoices: create the membership ClubMoney here.
-                # Auction invoices: Invoice.sync_club_money (via Invoice.save) already books the
-                # membership dues, including the reversal when the invoice is un-paid. Booking it
-                # here too would double-count membership revenue.
-                ClubMoney.objects.create(
-                    club=club,
-                    created_by=acting_user,
-                    date=today,
-                    amount=Decimal(club.membership_annual_fee),
-                    invoice=locked,
-                    description=f"Membership renewal via {payment_method} ({external_id})"
-                    if external_id
-                    else f"Membership renewal via {payment_method} (invoice #{locked.pk})",
-                    category=ClubMoney.CATEGORY_MEMBERSHIP,
-                )
+            # Membership dues are NOT booked to the club ledger here. Both auction and club-only
+            # invoices book (and reverse) their membership ClubMoney entry through
+            # Invoice.sync_club_money on the PAID/un-pay status transition (Item 11). Booking it here
+            # too would double-count, and for club-only invoices it would leave an entry that
+            # un-paying the invoice could never reverse -- the bug this replaces.
             locked.renewal_processed = True
             locked.save(update_fields=["renewal_processed"])
             # Keep the in-memory invoice in sync for the caller.
@@ -2292,35 +2280,39 @@ class PageViewCreate(APIView):
 class InvoicePaid(APIView):
     """Mark an invoice as paid/ready/open - POST only
 
-    Accessible via two URL patterns:
-    - /api/payinvoice/<int:pk>/<str:status>: requires an authenticated auction admin
-    - /api/payinvoice/<uuid:uuid>/<str:status>: accepts the invoice's no-login UUID, no login required
+    Restricted to authenticated auction admins (or club admins for renewal-only invoices).
+    The status change books/reverses club-ledger (ClubMoney) entries and can trigger a
+    membership renewal, so it must never be reachable via the invoice's no-login UUID:
+    that link is emailed to the bidder, who could otherwise mark their own invoice PAID.
+    UUID access to an invoice is view-only and handled separately by ``InvoiceNoLoginView``.
     """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [AllowAny]  # Auth is enforced manually in post()
 
     def post(self, request, *args, **kwargs):
-        if "uuid" in kwargs:
-            # UUID-based access: anyone with the invoice's no-login link may update status
-            invoice = get_object_or_404(Invoice, no_login_link=kwargs["uuid"])
-            auction = invoice.auction
-        else:
-            # PK-based access: requires an authenticated admin
-            if not request.user.is_authenticated:
-                raise NotAuthenticated()
-            invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
-            auction = invoice.auction
-            if auction:
-                if not auction.permission_check(request.user):
-                    raise PermissionDenied()
-            elif invoice.club:
-                # Renewal-only invoice (no auction): check club permission
-                if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
-                    raise PermissionDenied()
-            else:
-                raise PermissionDenied()
+        # Only accept statuses that are real choices on the model. An unvalidated status
+        # (e.g. "BANANA") would be written straight to the DB and silently break every
+        # `status == "PAID"` / `status in ("DRAFT", "UNPAID")` check across the codebase.
         new_status = kwargs["status"]
+        valid_statuses = {value for value, _label in Invoice._meta.get_field("status").choices}
+        if new_status not in valid_statuses:
+            msg = "Invalid invoice status"
+            raise Http404(msg)
+        # Changing invoice status is an admin-only action (see class docstring).
+        if not request.user.is_authenticated:
+            raise NotAuthenticated()
+        invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
+        auction = invoice.auction
+        if auction:
+            if not auction.permission_check(request.user):
+                raise PermissionDenied()
+        elif invoice.club:
+            # Renewal-only invoice (no auction): check club permission
+            if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
+                raise PermissionDenied()
+        else:
+            raise PermissionDenied()
         if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
         # Core: persist the new invoice status. Everything else is "extra"
@@ -2365,7 +2357,7 @@ class InvoicePaid(APIView):
                 )
             except Exception:
                 logger.exception("create_history failed for invoice %s", invoice.pk)
-        is_admin = "pk" in kwargs  # UUID-based access is member-facing, not admin
+        is_admin = True  # This endpoint is now admin-only (no UUID/member-facing access)
         buttons_html = render_to_string("invoice_buttons.html", {"invoice": invoice})
         renewal_ctx = {"invoice": invoice, "is_admin": is_admin}
         renewal_html = render_to_string("auctions/partials/invoice_membership_renewal.html", renewal_ctx)
@@ -3070,53 +3062,57 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         count = 0
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         no_email_count = 0
+        # Keep every unpaid invoice's stored total fresh before billing (side effect preserved).
         for invoice in self.auction.paypal_invoices:
             invoice.recalculate()
-            # we loop through everything regardless of which chunk
-            if not invoice.user_should_be_paid:
-                count += 1
-                if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
-                    reference = ""
-                    itemName = "Auction total"
-                    description = ""
-                    shippingAmount = 0
-                    discountAmount = 0
-                    currencyCode = self.auction.created_by.userdata.currency
-                    noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
-                    termsAndConditions = ""
-                    memoToSelf = invoice.auctiontos_user.memo
-                    # Bill the rounded balance so the PayPal invoice matches the invoice total the
-                    # buyer sees (and skip anyone who only owes a rounded-away residual).
-                    if invoice.rounded_net_after_payments < 0:
-                        if invoice.auctiontos_user.email:
-                            name_parts = (invoice.auctiontos_user.name or "").split()
-                            if len(name_parts) >= 2:
-                                first_name = name_parts[0][:20]
-                                last_name = name_parts[-1][:20]
-                            else:
-                                first_name = ""
-                                last_name = name_parts[0][:20] if name_parts else ""
-                            writer.writerow(
-                                [
-                                    invoice.auctiontos_user.email,
-                                    first_name,
-                                    last_name,
-                                    invoice.pk,
-                                    due_date,
-                                    reference,
-                                    itemName,
-                                    description,
-                                    abs(invoice.rounded_net_after_payments),
-                                    shippingAmount,
-                                    discountAmount,
-                                    currencyCode,
-                                    noteToCustomer,
-                                    termsAndConditions,
-                                    memoToSelf,
-                                ]
-                            )
-                        else:
-                            no_email_count += 1
+        # Bill only the invoices that still owe the club after rounding, advancing the chunk
+        # counter over the exact same set that auction.paypal_invoice_chunks counts
+        # (auction.paypal_invoices_to_export), so every billed invoice lands in a chunk the UI
+        # offers -- see Item 21.
+        for invoice in self.auction.paypal_invoices_to_export:
+            count += 1
+            if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
+                reference = ""
+                itemName = "Auction total"
+                description = ""
+                shippingAmount = 0
+                discountAmount = 0
+                currencyCode = self.auction.created_by.userdata.currency
+                noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
+                termsAndConditions = ""
+                memoToSelf = invoice.auctiontos_user.memo
+                # Bill the rounded balance so the PayPal invoice matches the invoice total the
+                # buyer sees. Every invoice here already owes the club (rounded_net_after_payments
+                # < 0); a missing email is reported via no_email_count but still consumes its slot.
+                if invoice.auctiontos_user.email:
+                    name_parts = (invoice.auctiontos_user.name or "").split()
+                    if len(name_parts) >= 2:
+                        first_name = name_parts[0][:20]
+                        last_name = name_parts[-1][:20]
+                    else:
+                        first_name = ""
+                        last_name = name_parts[0][:20] if name_parts else ""
+                    writer.writerow(
+                        [
+                            invoice.auctiontos_user.email,
+                            first_name,
+                            last_name,
+                            invoice.pk,
+                            due_date,
+                            reference,
+                            itemName,
+                            description,
+                            abs(invoice.rounded_net_after_payments),
+                            shippingAmount,
+                            discountAmount,
+                            currencyCode,
+                            noteToCustomer,
+                            termsAndConditions,
+                            memoToSelf,
+                        ]
+                    )
+                else:
+                    no_email_count += 1
         self.auction.create_history(
             applies_to="USERS",
             action=f"Exported PayPal invoices CSV.  {no_email_count} users had no email address and were not included in the CSV.",
@@ -4377,8 +4373,9 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             compare_slug = self.request.GET.get("compare")
             if compare_slug:
                 compare_auction = Auction.objects.filter(slug=compare_slug, is_deleted=False).first()
-                # Verify user has access to this auction
-                if compare_auction.permission_check(self.request.user):
+                # Verify user has access to this auction. .first() returns None for a bad/stale
+                # slug, so guard before permission_check to avoid a 500 on an invalid ?compare=.
+                if compare_auction and compare_auction.permission_check(self.request.user):
                     context["compare_auction"] = compare_auction
 
         # Check if stats need recalculation (older than 20 minutes or missing)
@@ -10373,15 +10370,29 @@ class PayPalAPIMixin:
         currency = invoice.currency
 
         items = []
+        # Build item_total / tax_total from the exact per-item values sent below rather than from
+        # invoice.total_bought / invoice.tax. PayPal validates that the item unit_amounts sum to
+        # item_total (and the item taxes sum to tax_total); a partially refunded lot has a
+        # refund-adjusted final_price that is lower than its winning_price, so using winning_price
+        # for the line item while item_total came from the (refund-adjusted) total made the sums
+        # disagree and PayPal rejected the order. Summing the quantized per-item values here keeps
+        # the breakdown internally consistent no matter how the DB rounds the aggregate totals.
+        item_total = Decimal("0.00")
+        tax_total = Decimal("0.00")
         for lot in invoice.bought_lots_queryset:
+            # final_price = winning_price reduced by partial_refund_percent (see Invoice.bought_lots_queryset).
+            unit_amount = Decimal(str(lot.final_price)).quantize(Decimal("0.01"))
+            item_tax = Decimal(str(lot.tax)).quantize(Decimal("0.01"))
+            item_total += unit_amount
+            tax_total += item_tax
             items.append(
                 {
                     "name": f"{lot.lot_number_display} - {lot.lot_name}",
                     "quantity": "1",
-                    "unit_amount": {"currency_code": currency, "value": f"{lot.winning_price:.2f}"},
+                    "unit_amount": {"currency_code": currency, "value": f"{unit_amount:.2f}"},
                     "category": "PHYSICAL_GOODS",
                     "url": lot.full_lot_link,
-                    "tax": {"currency_code": currency, "value": f"{lot.tax:.2f}"},
+                    "tax": {"currency_code": currency, "value": f"{item_tax:.2f}"},
                 }
             )
 
@@ -10389,9 +10400,8 @@ class PayPalAPIMixin:
         # breakdown below absorbs the rounding delta as an adjustment/discount line. Falls back to
         # the exact amount when invoice rounding is off (rounded_net_after_payments handles that).
         target_total = (Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)).quantize(Decimal("0.01"))
-        # Base components from items
-        item_total = Decimal(str(invoice.total_bought)).quantize(Decimal("0.01"))
-        tax_total = Decimal(str(invoice.tax)).quantize(Decimal("0.01"))
+        item_total = item_total.quantize(Decimal("0.01"))
+        tax_total = tax_total.quantize(Decimal("0.01"))
 
         # Adjustment needed to make breakdown sum to target_total
         # target_total = item_total + tax_total + handling/shipping/insurance - discount
@@ -10779,8 +10789,11 @@ class PayPalAPIMixin:
 
         refund_amt_signed = -abs(refund_amt)  # ensure negative
 
-        original_payment.amount_available_to_refund = original_payment.amount_available_to_refund - abs(refund_amt)
-        original_payment.save()
+        # PayPal redelivers webhooks until it gets a 2xx. Capture the prior refund amount for this
+        # refund id before update_or_create overwrites it, then move the refundable balance only by
+        # the delta so a duplicate delivery is a no-op and an amount change adjusts correctly.
+        existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
+        previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
         # Create a new InvoicePayment record for the refund.
         refund_payment, created = InvoicePayment.objects.update_or_create(
             external_id=refund_id,
@@ -10796,9 +10809,15 @@ class PayPalAPIMixin:
             },
         )
 
+        refund_delta = abs(refund_amt) - previous_refund_abs
+        if refund_delta:
+            original_payment.amount_available_to_refund -= refund_delta
+            original_payment.save()
+
         invoice.recalculate()
-        action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
-        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+        if created:
+            action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
+            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         return invoice, refund_payment
 
 
@@ -13807,12 +13826,15 @@ class AuctionFunnelChartData(AuctionChartView):
     """
 
     def get(self, *args, **kwargs):
-        all_views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
-        anonymous_views = all_views.values("session_id").annotate(session_count=Count("session_id")).count()
-        user_views = all_views.values("user").annotate(user_count=Count("user")).count()
-        total_views = anonymous_views + user_views
+        # See Auction.unique_views for why we can't just add distinct sessions + distinct users:
+        # that double-counts anyone who browsed anonymously and then logged in.
+        unique_views = self.auction.unique_views
+        total_views = unique_views["total"]
+        user_views = unique_views["logged_in"]
         total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
-        total_winners = User.objects.filter(winner__auction=self.auction).annotate(dcount=Count("id")).count()
+        # Count every sold, live lot's winner -- including admin-declared winners and winners with
+        # no user account, which the old winner__auction join silently dropped.
+        total_winners = self.auction.buyer_tos_qs.count()
         labels = [
             "Total unique views",
             "Views from users with accounts",
@@ -13852,11 +13874,12 @@ class AuctionLotBiddersChartData(AuctionChartView):
             if not lot.winning_price:
                 data[0] += 1
             else:
-                bids = len(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot))
-                if bids > 6:
-                    bids = 6
-                else:
-                    data[bids] += 1
+                # Count distinct bidders (the labels say "users"), not raw Bid rows. Clamp into the
+                # final "6 or more" bucket so lots with >6 bidders are counted rather than silently
+                # dropped. A sold lot with no recorded bids (buy-now / admin-declared winner) still
+                # had a buyer, so floor it at bucket 1 -- never "Not sold" (bucket 0).
+                bidders = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).values("user").distinct().count()
+                data[min(max(bidders, 1), 6)] += 1
         return JsonResponse(
             data={
                 "labels": labels,
@@ -14239,57 +14262,32 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
 
 
 class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
+    def _fallback_stats(self):
+        """Recompute the sell-price chart when cached_stats is missing.
+
+        Delegates to Auction.set_stat_lot_sell_prices so the fallback labels, providers and
+        data come from the same single source of truth -- previously get_labels() and get_data()
+        each rederived the bins with different math (num_bins = (max-1)//2 vs max//2, and
+        end_bin = start+num*width vs max-1), so the labels and bars disagreed about both the bar
+        count and the bin boundaries. Memoized so the three getters compute it once per request.
+        """
+        if not hasattr(self, "_fallback_stats_cache"):
+            self._fallback_stats_cache = self.auction.set_stat_lot_sell_prices()
+        return self._fallback_stats_cache
+
     def get_labels(self):
         # Check if we have cached stats
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             return self.auction.cached_stats["lot_sell_prices"]["labels"]
-
-        # Fallback: generate dynamic labels based on actual prices
-        sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-        if sold_lots.exists():
-            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
-            max_price = int((max_price + 9) // 10 * 10)
-
-            # Create bins matching the logic in set_stat_lot_sell_prices
-            # Use whole number bin boundaries
-            bin_width = 2  # Each bin covers $2
-            num_bins = min((max_price - 1) // bin_width, 30)
-            if num_bins < 10:
-                num_bins = 10
-                bin_width = max((max_price - 1) // num_bins, 1)
-
-            start_bin = 1
-            end_bin = start_bin + num_bins * bin_width
-
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
-            return labels
-        else:
-            # No sold lots, use default with whole number boundaries
-            start_bin = 1
-            bin_width = 2
-            num_bins = 19
-            end_bin = start_bin + num_bins * bin_width
-
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
-            return labels
+        # Fallback: recompute from the single source of truth
+        return self._fallback_stats()["labels"]
 
     def get_providers(self):
-        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             providers = self.auction.cached_stats["lot_sell_prices"]["providers"]
         else:
-            providers = ["Number of lots"]
+            providers = self._fallback_stats()["providers"]
 
         # Add comparison auction providers if available
         if (
@@ -14310,35 +14308,8 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             data = self.auction.cached_stats["lot_sell_prices"]["data"]
         else:
-            # Fallback: calculate dynamically
-            sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-            if sold_lots.exists():
-                max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
-                max_price = int((max_price + 9) // 10 * 10)
-                num_bins = min(max_price // 2, 30)
-                if num_bins < 10:
-                    num_bins = 10
-
-                histogram = bin_data(
-                    sold_lots,
-                    "winning_price",
-                    number_of_bins=num_bins,
-                    start_bin=1,
-                    end_bin=max_price - 1,
-                    add_column_for_high_overflow=True,
-                )
-                data = [[self.auction.total_unsold_lots] + histogram]
-            else:
-                # No sold lots, use default
-                histogram = bin_data(
-                    sold_lots,
-                    "winning_price",
-                    number_of_bins=19,
-                    start_bin=1,
-                    end_bin=39,
-                    add_column_for_high_overflow=True,
-                )
-                data = [[self.auction.total_unsold_lots] + histogram]
+            # Fallback: recompute from the single source of truth
+            data = self._fallback_stats()["data"]
 
         # Add comparison auction data if available
         if (
@@ -14509,9 +14480,12 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "images" in self.auction.cached_stats:
             data = self.auction.cached_stats["images"]["data"]
         else:
-            # Fallback to original calculation
-            lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
-                num_images=Count("lotimage")
+            # Fallback to original calculation -- exclude banned/soft-deleted lots to match
+            # set_stat_images and every other sold-lot money stat (see models.Auction.set_stat_images).
+            lots = (
+                self.auction.lots_qs.filter(winning_price__isnull=False)
+                .exclude(banned=True)
+                .annotate(num_images=Count("lotimage"))
             )
             lots_with_no_images = lots.filter(num_images=0)
             lots_with_one_image = lots.filter(num_images=1)
@@ -15926,10 +15900,18 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 "receipt_number": receipt_number,
                             },
                         )
-                        # If payment already existed, make sure amount_available_to_refund is set
+                        # If the payment already existed, never restore refundability that refunds
+                        # have consumed. Square fires payment.updated for many lifecycle changes, so a
+                        # fully-refunded payment (amount_available_to_refund == 0) must not become
+                        # refundable again -- otherwise a second full refund could be issued.
+                        # amount_available_to_refund is initialized once, when the record is created
+                        # (in the get_or_create defaults above).
                         if not created:
-                            if payment_record.amount_available_to_refund == Decimal("0.00"):
-                                payment_record.amount_available_to_refund = amount_value
+                            # If the payment amount itself legitimately changed, move the refundable
+                            # balance by the delta so accounting stays correct without resetting it.
+                            if amount_value != payment_record.amount:
+                                payment_record.amount_available_to_refund += amount_value - payment_record.amount
+                                payment_record.amount = amount_value
                             # Update receipt_number if it wasn't set before
                             if receipt_number and not payment_record.receipt_number:
                                 payment_record.receipt_number = receipt_number
@@ -16002,10 +15984,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                 payment_record = InvoicePayment.objects.filter(external_id=payment_id).first()
                 if payment_record and refund_id:
                     refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
-                    payment_record.amount_available_to_refund -= refund_amount
-                    payment_record.save()
 
-                    refund_payment, _ = InvoicePayment.objects.update_or_create(
+                    # Square redelivers/re-fires events for the same refund. Capture the prior refund
+                    # amount for this refund id before update_or_create overwrites it, then move the
+                    # refundable balance only by the delta so a duplicate delivery is a no-op and an
+                    # amount change adjusts correctly.
+                    existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
+                    previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
+
+                    refund_payment, created = InvoicePayment.objects.update_or_create(
                         external_id=refund_id,
                         defaults={
                             "invoice": payment_record.invoice,
@@ -16015,9 +16002,16 @@ class SquareWebhookView(SquareAPIMixin, View):
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
+
+                    refund_delta = refund_amount - previous_refund_abs
+                    if refund_delta:
+                        payment_record.amount_available_to_refund -= refund_delta
+                        payment_record.save()
+
                     payment_record.invoice.recalculate()
-                    action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
-                    payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                    if created:
+                        action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                        payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
         elif event_type == "oauth.authorization.revoked":
