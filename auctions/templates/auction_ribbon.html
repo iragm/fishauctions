@@ -115,6 +115,7 @@
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
           <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
+          <a class="dropdown-item" href="{% url 'auction_lot_map' slug=auction.slug %}"><i class="bi bi-geo-alt"></i> Lot map</a>
           {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web print-labels link there. {% endcomment %}
           {% if not auction.is_online and not request.is_mobile_app %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>

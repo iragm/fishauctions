@@ -73,3 +73,5 @@ djangorestframework
 djangorestframework-simplejwt
 google-auth
 firebase-admin
+numpy
+scipy

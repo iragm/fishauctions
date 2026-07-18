@@ -3643,7 +3643,16 @@ class Auction(models.Model):
 
     @property
     def number_of_lots_with_scanned_qr(self):
-        return self.lots_qs.filter(pageview__source__icontains="qr", auction__pk=self.pk).distinct().count()
+        # Count a lot as "scanned" when its page was opened from a QR scan (src=qr) or from AR mode
+        # (src=ar) — the app opens lots it recognises in AR as lot_link?src=ar.
+        return (
+            self.lots_qs.filter(
+                Q(pageview__source__icontains="qr") | Q(pageview__source__iexact="ar"),
+                auction__pk=self.pk,
+            )
+            .distinct()
+            .count()
+        )
 
     @property
     def labels_qs(self):
@@ -11116,3 +11125,53 @@ class PushNotificationSent(models.Model):
 
     def __str__(self):
         return f"push[{self.category}] to {self.user} at {self.sent_at:%Y-%m-%d %H:%M}"
+
+
+class LotObservation(models.Model):
+    """One AR sighting of a lot label from a phone camera frame.
+
+    Raw solver input, pruned aggressively — this is a rolling measurement buffer, not history. All
+    detections sharing (session_id, frame_id) were seen in the same camera frame, which is what
+    makes them mutually constraining (their bearing differences pin the lots relative to each other).
+    """
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_observations")
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="ar_observations")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    session_id = models.UUIDField()  # one per AR screen mount
+    frame_id = models.CharField(max_length=32)  # unique per camera frame within a session
+    captured_at = models.DateTimeField()  # client clock, clamped to <= now on ingest
+    created_at = models.DateTimeField(auto_now_add=True)
+    bearing_deg = models.FloatField()  # horizontal angle in that frame's camera coords, +right
+    depression_deg = models.FloatField()  # ray angle below horizontal (gravity-referenced), +down
+    quality = models.FloatField(default=1.0)  # 0..1, detection sharpness
+    fov_calibrated = models.BooleanField(default=False)  # bearings from device-reported FOV?
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["auction", "captured_at"]),
+            models.Index(fields=["session_id", "frame_id"]),
+        ]
+
+    def __str__(self):
+        return f"obs lot={self.lot_id} @{self.bearing_deg:.1f}°/{self.depression_deg:.1f}°"
+
+
+class LotPosition(models.Model):
+    """Solved 2D position of a lot in an auction-local frame.
+
+    Coordinates are meters in an arbitrary but solve-to-solve stable frame (origin/orientation
+    pinned by priors). Layout is bearing-accurate; absolute scale comes only from the soft
+    phone-height prior (±30%), so treat as a relative map.
+    """
+
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="ar_position")
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_positions")
+    x = models.FloatField()
+    y = models.FloatField()
+    confidence = models.FloatField(default=0)  # 0..1
+    observation_count = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"pos lot={self.lot_id} ({self.x:.2f}, {self.y:.2f})"

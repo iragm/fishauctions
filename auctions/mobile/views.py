@@ -304,11 +304,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs
+from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
 from .serializers import (
+    ArObservationBatchSerializer,
     CommandPaletteLogSerializer,
     MobileClubSerializer,
     MobileDeviceSerializer,
@@ -320,6 +321,7 @@ from .serializers import (
     MobilePaymentCreateSerializer,
     MobileUserSerializer,
 )
+from .services import ar as ar_service
 from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
@@ -970,3 +972,97 @@ class MobileCommandPaletteLogView(APIView):
             result_object_id=data.get("result_object_id"),
         )
         return Response({"id": search_id})
+
+
+# ---------------------------------------------------------------------------
+# AR lot scanning
+# ---------------------------------------------------------------------------
+
+
+def _get_ar_auction(slug):
+    """Resolve a non-deleted auction by slug for the AR endpoints, or None (→ 404)."""
+    if not slug:
+        return None
+    return Auction.objects.filter(slug=slug, is_deleted=False).first()
+
+
+class MobileArLotsView(APIView):
+    """GET /api/mobile/ar/lots/?auction=<slug>&lots=<pk,pk,...> — overlay + card metadata.
+
+    Any authenticated user: returns nothing beyond the public lot page plus the caller's own
+    watch/recommendation state. Up to 50 scanned pks per call.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_ar"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        auction = _get_ar_auction(request.GET.get("auction"))
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        pks = []
+        for raw in (request.GET.get("lots") or "").split(","):
+            raw = raw.strip()
+            if raw.isdigit():
+                pks.append(int(raw))
+        # De-dupe while preserving order, then cap.
+        seen = set()
+        pks = [p for p in pks if not (p in seen or seen.add(p))][: ar_service.MAX_LOTS_PER_METADATA_CALL]
+
+        lots = ar_service.build_lot_metadata(auction, pks, request.user, request)
+        return Response(
+            {
+                "auction": {"slug": auction.slug, "title": auction.title},
+                "lots": lots,
+            }
+        )
+
+
+class MobileArObservationsView(APIView):
+    """POST /api/mobile/ar/observations/ — ingest a batch of QR angle sightings.
+
+    Any authenticated user (every scanning attendee is a data source). Junk detections (bad angles,
+    stray/removed lots) are dropped silently; the batch still returns 202 with the accepted count.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_ar"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = ArObservationBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        auction = _get_ar_auction(str(data["auction"]))
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        accepted = ar_service.ingest_observations(
+            auction,
+            request.user,
+            session_id=data["session_id"],
+            fov_hdeg=data.get("fov_hdeg"),
+            frames=data["frames"],
+        )
+        return Response({"accepted": accepted}, status=status.HTTP_202_ACCEPTED)
+
+
+class MobileArPositionsView(APIView):
+    """GET /api/mobile/ar/positions/?auction=<slug> — solved positions for not-sold, not-removed lots.
+
+    Any authenticated user (locate mode needs it).
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_ar"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        auction = _get_ar_auction(request.GET.get("auction"))
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(ar_service.positions_payload(auction))

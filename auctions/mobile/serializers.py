@@ -1,6 +1,7 @@
 from django.urls import reverse
 from rest_framework import serializers
 
+from auctions.mobile.services.ar import MAX_DETECTIONS_PER_FRAME, MAX_FRAMES_PER_BATCH
 from auctions.models import MobileDevice, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
@@ -217,3 +218,38 @@ class CommandPaletteLogSerializer(serializers.Serializer):
     result_type = serializers.CharField(required=False, allow_blank=True, default="")
     result_url = serializers.CharField(required=False, allow_blank=True, default="")
     result_object_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+# ---------------------------------------------------------------------------
+# AR lot scanning
+# ---------------------------------------------------------------------------
+
+
+class ArDetectionSerializer(serializers.Serializer):
+    """One QR sighting inside a camera frame. Angle bounds are checked in the service (a junk
+    detection is dropped, not a 400), so only structure is validated here."""
+
+    lot = serializers.IntegerField()
+    bearing_deg = serializers.FloatField()
+    depression_deg = serializers.FloatField()
+    quality = serializers.FloatField(required=False, default=1.0)
+
+
+class ArFrameSerializer(serializers.Serializer):
+    """All detections seen in a single camera frame (they share a pose, so they constrain lots
+    relative to each other)."""
+
+    frame_id = serializers.CharField(max_length=32)
+    captured_at = serializers.DateTimeField()
+    detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
+
+
+class ArObservationBatchSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/ar/observations/."""
+
+    auction = serializers.CharField()
+    session_id = serializers.UUIDField()
+    # Device-reported horizontal camera FOV the bearings were computed against. Present ⇒ the batch's
+    # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
+    fov_hdeg = serializers.FloatField(required=False, allow_null=True)
+    frames = ArFrameSerializer(many=True, max_length=MAX_FRAMES_PER_BATCH)

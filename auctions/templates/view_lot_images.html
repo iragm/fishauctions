@@ -219,6 +219,12 @@ function deactivate_lot() {
                                 </a>
                                 {% endif %}
                             {% endif %}
+                            {% comment %} App-only: open AR mode aimed at this lot and walk the user to it. Visible to every user. {% endcomment %}
+                            {% if request.is_mobile_app and lot.auction %}
+                                <a class="btn btn-primary" href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}">
+                                    <i class="bi bi-geo-alt"></i> Locate with AR
+                                </a>
+                            {% endif %}
                             {% if request.user.is_superuser %}
                                 <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
                                     Admin

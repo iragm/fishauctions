@@ -693,6 +693,17 @@ def promo_push_notifications(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def update_ar_positions(self):
+    """
+    Fuse AR lot sightings into a 2D map for flagged auctions, and prune the observation buffer.
+
+    Runs every 60 seconds; solves auctions the observations endpoint flagged dirty and deletes
+    LotObservation rows older than 24 hours.
+    """
+    call_command("update_ar_positions")
+
+
+@shared_task(bind=True, ignore_result=True)
 def set_user_location(self):
     """
     Set user lat/long based on their IP address.

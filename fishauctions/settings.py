@@ -981,6 +981,9 @@ REST_FRAMEWORK = {
         # Search-as-you-type: each query fires a search + a log call on a ~300ms debounce, so a fast
         # typer briefly peaks ~6 req/sec. 120/min tolerates that burst while capping sustained abuse.
         "mobile_search": "120/min",
+        # AR scanning: an active session ships a metadata fetch or an observation batch every few
+        # seconds. mobile_api's 1000/hour would starve it, so it gets its own generous scope.
+        "mobile_ar": "240/min",
     },
 }
 

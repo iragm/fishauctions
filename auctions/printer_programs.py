@@ -390,7 +390,9 @@ SEED_PROFILES = [
         "notify_characteristic_uuid": "",
         "chunk_size": 200,
         "chunk_delay_ms": 20,
-        "print_width_px": 96,
+        # 384 dots = a full 58 mm ESC/POS printhead (203 dpi). The D11s rows use 96 (their 12 mm
+        # head); this generic fallback must span a normal thermal head or it prints a ~12 mm strip.
+        "print_width_px": 384,
         "dpi": 203,
         # Just the standard GS v 0 raster header + bitmap + feed — no vendor wrapper commands.
         "print_program": [

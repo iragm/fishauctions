@@ -171,6 +171,7 @@ urlpatterns = [
     ),
     path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
+    path("lots/my-last-auction/", views.MyLastAuctionLots.as_view(), name="my_last_auction_lots"),
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
@@ -424,6 +425,9 @@ urlpatterns = [
         name="auction_lot_list",
     ),
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
+    path("auctions/<slug:slug>/lot-map/", views.AuctionLotMap.as_view(), name="auction_lot_map"),
+    path("auctions/<slug:slug>/lot-map/data/", views.AuctionLotMapData.as_view(), name="auction_lot_map_data"),
+    path("auctions/<slug:slug>/lot-map/clear/", views.AuctionLotMapClear.as_view(), name="auction_lot_map_clear"),
     path("auctions/<slug:slug>/report/", views.AuctionReportView.as_view(), name="user_list"),
     path(
         "auctions/<slug:slug>/add-to-club/",

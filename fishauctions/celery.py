@@ -38,6 +38,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.sendnotifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Fuse AR lot sightings into a 2D map + prune the observation buffer - every minute
+    "update_ar_positions": {
+        "task": "auctions.tasks.update_ar_positions",
+        "schedule": 60.0,  # Run every minute
+    },
     # Welcome and print reminder emails - every 15 minutes
     "auctiontos_notifications": {
         "task": "auctions.tasks.auctiontos_notifications",

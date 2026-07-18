@@ -3754,6 +3754,43 @@ class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         return kwargs
 
 
+class AuctionLotMap(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Admin 2D map of located, unsold lots (works on desktop too).
+
+    Admin-only via AuctionViewMixin (``allow_non_admins`` defaults False → PermissionDenied for a
+    buyer). The SVG map + locate search are rendered client-side from the JSON data endpoint, which
+    the page polls; this view only frames it.
+    """
+
+    template_name = "auction_lot_map.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+
+class AuctionLotMapData(LoginRequiredMixin, AuctionViewMixin, View):
+    """Admin-only JSON feed for the lot map: positions (+ lot number/name) and the full unsold-lot
+    list for the locate search, polled every ~10 s."""
+
+    def get(self, request, *args, **kwargs):
+        from auctions.mobile.services import ar as ar_service
+
+        return JsonResponse(ar_service.positions_payload(self.auction, include_lot_details=True))
+
+
+class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
+    """Admin-only "clear all locations": wipe this auction's AR observations + positions (POST)."""
+
+    def post(self, request, *args, **kwargs):
+        from auctions.mobile.services import ar as ar_service
+
+        ar_service.clear_positions(self.auction)
+        messages.success(request, "Cleared all AR lot locations for this auction.")
+        return redirect(reverse("auction_lot_map", kwargs={"slug": self.auction.slug}))
+
+
 class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
@@ -8973,6 +9010,22 @@ class ToDefaultLandingPage(View):
 class MyAccount(LoginRequiredMixin, RedirectView):
     def get_redirect_url(self, *args, **kwargs):
         return reverse("userpage", kwargs={"slug": self.request.user.username})
+
+
+class MyLastAuctionLots(LoginRequiredMixin, RedirectView):
+    """GET /lots/my-last-auction/ — the app's "Lots in my last auction" home-screen shortcut.
+
+    Redirects to the lot list filtered to the user's last-used auction when there is one (and it
+    hasn't been deleted), otherwise to the plain lot list. Kept server-side so the app can deep-link
+    a stable URL without knowing the user's current auction.
+    """
+
+    def get_redirect_url(self, *args, **kwargs):
+        lots_url = reverse("allLots")
+        auction = self.request.user.userdata.last_auction_used
+        if auction and not auction.is_deleted:
+            return f"{lots_url}?auction={auction.slug}"
+        return lots_url
 
 
 class AllAuctions(LocationMixin, HTMxTableView):

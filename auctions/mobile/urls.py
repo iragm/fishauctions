@@ -1,6 +1,9 @@
 from django.urls import path
 
 from .views import (
+    MobileArLotsView,
+    MobileArObservationsView,
+    MobileArPositionsView,
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
@@ -51,4 +54,8 @@ urlpatterns = [
     # Command palette
     path("command-palette/", MobileCommandPaletteView.as_view(), name="mobile-command-palette"),
     path("command-palette/log/", MobileCommandPaletteLogView.as_view(), name="mobile-command-palette-log"),
+    # AR lot scanning
+    path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
+    path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
+    path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
 ]

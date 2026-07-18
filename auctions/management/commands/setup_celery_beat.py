@@ -30,6 +30,7 @@ class Command(BaseCommand):
             name__in=[
                 "endauctions",
                 "sendnotifications",
+                "update_ar_positions",
                 "auctiontos_notifications",
                 "email_invoice",
                 "send_queued_mail",
