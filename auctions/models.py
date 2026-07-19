@@ -11049,6 +11049,39 @@ class MobileDevice(models.Model):
         return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"
 
 
+class MobileOfflineOp(models.Model):
+    """Idempotency ledger for offline-sync ops applied via POST /api/mobile/offline/sync/.
+
+    The Flutter app queues add_user / add_lot / set_winner operations while an admin is running an
+    in-person sale disconnected, then replays the whole queue when the connection returns — possibly
+    more than once, because a dropped response makes it resend. One row per successfully-applied (or
+    already-applied) ``op_id`` lets a retry return the original result instead of duplicating the
+    row, and lets a later op reference an earlier offline-created row by ``op:<op_id>``.
+
+    Conflicted ops are deliberately NOT recorded: the server copy always wins, so a conflict must
+    re-evaluate on the next replay (the admin may have resolved it on the website in between).
+    """
+
+    op_id = models.CharField(max_length=64, unique=True, db_index=True)
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="offline_ops")
+    # The syncing admin the applied op is attributed to (matches the web equivalents' AuctionHistory).
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    op_type = models.CharField(max_length=20)
+    # pk of the row this op created (AuctionTOS for add_user, Lot for add_lot); null for set_winner.
+    # Used to resolve `op:<op_id>` references from later ops.
+    result_pk = models.IntegerField(null=True, blank=True)
+    # The result fields echoed to the app on the original apply (the honored bidder_number/lot_number),
+    # so a replay can return the same numbers alongside an ``already_applied`` status.
+    result_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["auction", "op_type"])]
+
+    def __str__(self):
+        return f"{self.op_type} {self.op_id} (auction {self.auction_id})"
+
+
 class ThermalPrinterProfile(models.Model):
     """A Bluetooth thermal label printer the mobile app knows how to drive.
 

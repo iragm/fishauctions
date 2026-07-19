@@ -14,6 +14,8 @@ from .views import (
     MobileLoginView,
     MobileLotLabelView,
     MobileMyClubsView,
+    MobileOfflineSnapshotView,
+    MobileOfflineSyncView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
     MobilePrinterProfilesView,
@@ -58,4 +60,7 @@ urlpatterns = [
     path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
     path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
     path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
+    # Offline mode (in-person sale)
+    path("offline/snapshot/", MobileOfflineSnapshotView.as_view(), name="mobile-offline-snapshot"),
+    path("offline/sync/", MobileOfflineSyncView.as_view(), name="mobile-offline-sync"),
 ]

@@ -2,6 +2,7 @@ from django.urls import reverse
 from rest_framework import serializers
 
 from auctions.mobile.services.ar import MAX_DETECTIONS_PER_FRAME, MAX_FRAMES_PER_BATCH
+from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
 from auctions.models import MobileDevice, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
@@ -253,3 +254,26 @@ class ArObservationBatchSerializer(serializers.Serializer):
     # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
     fov_hdeg = serializers.FloatField(required=False, allow_null=True)
     frames = ArFrameSerializer(many=True, max_length=MAX_FRAMES_PER_BATCH)
+
+
+# ---------------------------------------------------------------------------
+# Offline mode (in-person sale)
+# ---------------------------------------------------------------------------
+
+
+class OfflineSyncSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/offline/sync/.
+
+    ``ops`` is deliberately validated loosely — as a list of free-form dicts — not with a per-type
+    serializer. The contract is per-op and never all-or-nothing: a malformed or conflicting op must
+    still let the rest of the batch apply, so structure/semantics are checked op-by-op in
+    ``auctions.mobile.services.offline`` (which returns a per-op status), not rejected here. Only the
+    batch envelope is enforced: an auction slug and at most ``MAX_OPS_PER_SYNC`` ops (the app chunks).
+    """
+
+    auction = serializers.CharField()
+    ops = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=True,
+        max_length=MAX_OPS_PER_SYNC,
+    )

@@ -320,6 +320,7 @@ from .serializers import (
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
     MobileUserSerializer,
+    OfflineSyncSerializer,
 )
 from .services import ar as ar_service
 from .services.auth import MobileAuthService
@@ -1066,3 +1067,58 @@ class MobileArPositionsView(APIView):
         if auction is None:
             return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(ar_service.positions_payload(auction))
+
+
+# ---------------------------------------------------------------------------
+# Offline mode (in-person sale)
+# ---------------------------------------------------------------------------
+
+
+class MobileOfflineSnapshotView(APIView):
+    """GET /api/mobile/offline/snapshot/ — the caller's last admin auction + offline-screen data.
+
+    Returns ``auction: null`` (still 200) when the caller administers no auction. A real 404 means
+    the deployment predates this endpoint, and the app disables offline mode for the process.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        from .services import offline
+
+        auction = offline.get_last_admin_auction(request.user)
+        return Response(offline.build_snapshot(auction))
+
+
+class MobileOfflineSyncView(APIView):
+    """POST /api/mobile/offline/sync/ — apply a batch of queued offline ops, then return a snapshot.
+
+    The named auction must belong to the caller (``permission_check``); 403 otherwise. Ops apply in
+    order, idempotently and per-op (never all-or-nothing); the response pairs each op's result with a
+    fresh snapshot so one round trip both drains the queue and refreshes the phone.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from .services import offline
+
+        serializer = OfflineSyncSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        auction = Auction.objects.filter(slug=serializer.validated_data["auction"], is_deleted=False).first()
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not auction.permission_check(request.user):
+            return Response(
+                {"detail": "You do not have permission to sync this auction."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        results = offline.apply_ops(auction, request.user, serializer.validated_data["ops"])
+        return Response({"results": results, "snapshot": offline.build_snapshot(auction)})

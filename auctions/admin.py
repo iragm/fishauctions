@@ -34,6 +34,7 @@ from .models import (
     Lot,
     LotHistory,
     MobileDevice,
+    MobileOfflineOp,
     PageView,
     PickupLocation,
     Product,
@@ -378,6 +379,18 @@ class MobileDeviceAdmin(admin.ModelAdmin):
     @admin.display(boolean=True, description="Has push token")
     def has_token(self, obj):
         return bool(obj.fcm_token)
+
+
+@admin.register(MobileOfflineOp)
+class MobileOfflineOpAdmin(admin.ModelAdmin):
+    """Idempotency ledger for offline-sync ops. Read-only — rows are written by the sync endpoint."""
+
+    list_display = ("op_id", "op_type", "auction", "user", "result_pk", "created_at")
+    list_filter = ("op_type",)
+    search_fields = ("op_id", "auction__title", "user__username")
+    readonly_fields = ("op_id", "op_type", "auction", "user", "result_pk", "result_data", "created_at")
+    raw_id_fields = ("auction", "user")
+    date_hierarchy = "created_at"
 
 
 @admin.register(AppleDeviceRegistration)
