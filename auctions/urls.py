@@ -384,6 +384,16 @@ urlpatterns = [
         name="auction_unsell_lot",
     ),
     path(
+        "auctions/<slug:slug>/queue/",
+        views.LotQueueView.as_view(),
+        name="auction_lot_queue",
+    ),
+    path(
+        "auctions/<slug:slug>/queue/kiosk/",
+        views.LotQueueKioskView.as_view(),
+        name="auction_lot_queue_kiosk",
+    ),
+    path(
         "auctions/<slug:slug>/checkout",
         views.QuickCheckout.as_view(),
         name="auction_quick_checkout",

@@ -63,6 +63,7 @@ from .models import (
     Lot,
     LotHistory,
     LotImage,
+    LotQueueEntry,
     PageView,
     PayPalSeller,
     PickupLocation,
@@ -2963,6 +2964,272 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         )
         assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
         assert payload["tag"] == f"lot_sell_notification_{self.in_person_lot.pk}"
+
+
+class LotQueueViewTestCase(StandardTestCase):
+    """Tests for the in-person Lot queue tool (LotQueueView / LotQueueKioskView) and its
+    integration with the set-lot-winners page and watcher push notifications."""
+
+    def get_url(self):
+        return reverse("auction_lot_queue", kwargs={"slug": self.in_person_auction.slug})
+
+    def kiosk_url(self):
+        return reverse("auction_lot_queue_kiosk", kwargs={"slug": self.in_person_auction.slug})
+
+    def _make_in_person_lot(self, name):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+
+    def _watch_with_push(self, lot, user):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        ud = UserData.objects.get(user=user)
+        ud.push_notifications_when_lots_sell = True
+        ud.save()
+        Watch.objects.create(lot_number=lot, user=user)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint=f"https://fcm.googleapis.com/push/{user.pk}_{lot.pk}",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        return PushInformation.objects.create(user=user, subscription=sub)
+
+    def _login_admin(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+
+    # --- permissions ---------------------------------------------------------
+    def test_anonymous_user_redirected(self):
+        response = self.client.get(self.get_url())
+        assert response.status_code == 302
+        response = self.client.post(self.get_url(), data={"action": "add", "value": "101-1"})
+        assert response.status_code == 302
+
+    def test_non_admin_user_denied(self):
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        assert self.client.get(self.get_url()).status_code == 403
+        assert self.client.post(self.get_url(), data={"action": "add", "value": "101-1"}).status_code == 403
+        assert self.client.get(self.kiosk_url()).status_code == 403
+
+    def test_online_auction_has_no_queue(self):
+        """The queue is in-person only; the online auction 404s."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("auction_lot_queue", kwargs={"slug": self.online_auction.slug})
+        assert self.client.get(url).status_code == 404
+
+    def test_admin_can_view_queue_page(self):
+        self._login_admin()
+        response = self.client.get(self.get_url())
+        assert response.status_code == 200
+        self.assertContains(response, "Lot queue")
+
+    # --- adding --------------------------------------------------------------
+    def test_add_by_qr_value(self):
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"action": "add", "value": self.in_person_lot.qr_code})
+        assert response.status_code == 200
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+
+    def test_add_by_partial_qr_value(self):
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"action": "add", "value": f"/qr/{self.in_person_lot.pk}/"})
+        assert response.status_code == 200
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+
+    def test_add_by_typed_lot_number(self):
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"action": "add", "value": "101-1"})
+        assert response.status_code == 200
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+
+    def test_add_by_scanner_lot_pk_returns_json(self):
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+
+    def test_add_unknown_number_shows_error(self):
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"action": "add", "value": "does-not-exist"})
+        assert response.status_code == 200
+        self.assertContains(response, "No lot found")
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction).count() == 0
+
+    def test_duplicate_add_rejected(self):
+        self._login_admin()
+        self.client.post(self.get_url(), data={"action": "add", "value": self.in_person_lot.qr_code})
+        response = self.client.post(self.get_url(), data={"action": "add", "value": self.in_person_lot.qr_code})
+        assert response.status_code == 200
+        self.assertContains(response, "already in the queue")
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).count() == 1
+
+    def test_duplicate_add_via_scanner_returns_error_json(self):
+        self._login_admin()
+        self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        response = self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        data = response.json()
+        assert data["ok"] is False
+        assert "already in the queue" in data["message"]
+
+    def test_sold_lot_rejected(self):
+        self._login_admin()
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.winning_price = 10
+        self.in_person_lot.save()
+        response = self.client.post(self.get_url(), data={"action": "add", "value": self.in_person_lot.qr_code})
+        assert response.status_code == 200
+        self.assertContains(response, "already been sold")
+        assert LotQueueEntry.objects.filter(auction=self.in_person_auction).count() == 0
+
+    def test_lot_from_other_auction_rejected(self):
+        """A lot QR from a different auction is refused."""
+        self._login_admin()
+        response = self.client.post(self.get_url(), data={"lot_pk": self.lot.pk})
+        data = response.json()
+        assert data["ok"] is False
+        assert "not part of this auction" in data["message"]
+
+    # --- reorder / remove ----------------------------------------------------
+    def test_reorder(self):
+        self._login_admin()
+        lot_a = self._make_in_person_lot("A")
+        lot_b = self._make_in_person_lot("B")
+        lot_c = self._make_in_person_lot("C")
+        e_a = LotQueueEntry.objects.create(auction=self.in_person_auction, lot=lot_a, order=1)
+        e_b = LotQueueEntry.objects.create(auction=self.in_person_auction, lot=lot_b, order=2)
+        e_c = LotQueueEntry.objects.create(auction=self.in_person_auction, lot=lot_c, order=3)
+        response = self.client.post(self.get_url(), data={"action": "reorder", "order[]": [e_c.pk, e_a.pk, e_b.pk]})
+        assert response.status_code == 200
+        e_a.refresh_from_db()
+        e_b.refresh_from_db()
+        e_c.refresh_from_db()
+        assert (e_c.order, e_a.order, e_b.order) == (1, 2, 3)
+
+    def test_remove(self):
+        self._login_admin()
+        entry = LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        response = self.client.post(self.get_url(), data={"action": "remove", "entry_id": entry.pk})
+        assert response.status_code == 200
+        assert not LotQueueEntry.objects.filter(pk=entry.pk).exists()
+
+    # --- kiosk ---------------------------------------------------------------
+    def test_kiosk_shows_head_lot(self):
+        self._login_admin()
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        response = self.client.get(self.kiosk_url())
+        assert response.status_code == 200
+        self.assertContains(response, self.in_person_lot.lot_name)
+
+    # --- set-winner integration ----------------------------------------------
+    def test_set_winner_pops_queue_and_returns_next(self):
+        self._login_admin()
+        next_lot = self._make_in_person_lot("Next up")
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=next_lot, order=2)
+        winners_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.post(
+            winners_url, data={"lot": "101-1", "price": "10", "winner": "555", "action": "save"}
+        )
+        data = response.json()
+        assert data["success_message"] is not None
+        # The sold lot's entry is popped, and the new head's number is reported back.
+        assert not LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+        assert data["next_queued_lot_number"] == next_lot.lot_number_display
+
+    def test_set_winner_last_lot_returns_null_next(self):
+        self._login_admin()
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        winners_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.post(
+            winners_url, data={"lot": "101-1", "price": "10", "winner": "555", "action": "save"}
+        )
+        data = response.json()
+        assert data["next_queued_lot_number"] is None
+
+    def test_set_winners_page_prefills_head_lot(self):
+        self._login_admin()
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        winners_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.get(winners_url)
+        assert response.status_code == 200
+        # The head lot number is threaded into the page for the JS prefill (escapejs escapes the
+        # hyphen to -, so assert on the context value rather than the rendered string).
+        assert response.context["queue_head_lot_number"] == "101-1"
+
+    # --- notifications -------------------------------------------------------
+    def test_queue_add_notifies_watcher_once(self):
+        self._login_admin()
+        self._watch_with_push(self.in_person_lot, self.user_with_no_lots)
+        other = self._make_in_person_lot("Other")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+            # Adding another lot re-runs the top-10 pass, but the watched lot must not notify twice.
+            self.client.post(self.get_url(), data={"lot_pk": other.pk})
+        assert mock_notify.call_count == 1
+        assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
+
+    def test_notification_only_for_top_ten(self):
+        self._login_admin()
+        # Fill positions 1-10 with already-processed unwatched entries.
+        for i in range(10):
+            filler = self._make_in_person_lot(f"filler {i}")
+            LotQueueEntry.objects.create(
+                auction=self.in_person_auction, lot=filler, order=i + 1, notification_sent=True
+            )
+        watched = self._make_in_person_lot("watched")
+        self._watch_with_push(watched, self.user_with_no_lots)
+        # Adding it at position 11 must NOT notify yet.
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": watched.pk})
+        assert mock_notify.call_count == 0
+        watched_entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=watched)
+        assert watched_entry.notification_sent is False
+        # Remove the head so the watched lot moves into position 10 -> it now notifies once.
+        head = LotQueueEntry.objects.filter(auction=self.in_person_auction).order_by("order").first()
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"action": "remove", "entry_id": head.pk})
+        assert mock_notify.call_count == 1
+        watched_entry.refresh_from_db()
+        assert watched_entry.notification_sent is True
+
+    def test_notification_deduped_across_queue_then_view(self):
+        """A lot that notified from the queue does not notify again when pulled up in ViewLotSimple."""
+        self._login_admin()
+        self._watch_with_push(self.in_person_lot, self.user_with_no_lots)
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        assert mock_notify.call_count == 1
+        view_url = reverse(
+            "htmx_lot",
+            kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": self.in_person_lot.custom_lot_number},
+        )
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.get(view_url)
+        assert mock_notify.call_count == 0
+
+    def test_notification_deduped_across_view_then_queue(self):
+        """A lot that notified from ViewLotSimple does not notify again when added to the queue."""
+        self._login_admin()
+        self._watch_with_push(self.in_person_lot, self.user_with_no_lots)
+        view_url = reverse(
+            "htmx_lot",
+            kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": self.in_person_lot.custom_lot_number},
+        )
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.get(view_url)
+        assert mock_notify.call_count == 1
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        assert mock_notify.call_count == 0
+        # The queue entry is still marked processed so it is never revisited.
+        entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=self.in_person_lot)
+        assert entry.notification_sent is True
 
 
 class AlternativeSplitLabelTests(StandardTestCase):

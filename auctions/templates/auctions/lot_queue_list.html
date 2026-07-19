@@ -1,0 +1,40 @@
+{% comment %}
+Lot queue list partial. Rendered on the queue page and swapped in after every add/remove/reorder.
+Context: auction, entries (ordered LotQueueEntry list), error (optional string).
+{% endcomment %}
+{% if error %}
+<div class="alert alert-danger" role="alert">
+  <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
+</div>
+{% endif %}
+{% if entries %}
+<p class="text-muted small mb-2">{{ entries|length }} lot{{ entries|length|pluralize }} queued. Drag the <i class="bi bi-grip-vertical"></i> handle to reorder. The lot at the top is sold next.</p>
+<ul id="queue-sortable" class="list-group">
+  {% for entry in entries %}
+  <li class="list-group-item d-flex align-items-center gap-2" data-entry-id="{{ entry.pk }}">
+    <span class="queue-drag-handle text-muted" style="cursor:grab;" title="Drag to reorder" aria-label="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <span class="badge bg-secondary">{{ forloop.counter }}</span>
+    {% if entry.lot.thumbnail %}
+    <img src="{{ entry.lot.thumbnail.thumbnail_url }}" alt="" style="width:56px;height:42px;object-fit:cover;" class="rounded">
+    {% else %}
+    <span class="text-muted d-inline-flex align-items-center justify-content-center rounded" style="width:56px;height:42px;background:#303030;"><i class="bi bi-image"></i></span>
+    {% endif %}
+    <span class="flex-grow-1 text-truncate">
+      <strong>Lot {{ entry.lot.lot_number_display }}</strong>
+      <span class="d-none d-sm-inline">&mdash; {{ entry.lot.lot_name }}</span>
+    </span>
+    <button type="button" class="btn btn-sm btn-outline-danger"
+            hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
+            hx-vals='{"action": "remove", "entry_id": "{{ entry.pk }}"}'
+            hx-target="#queue-list" hx-swap="innerHTML"
+            title="Remove from queue" aria-label="Remove lot {{ entry.lot.lot_number_display }} from the queue">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="alert alert-info mb-0" role="alert">
+  <i class="bi bi-info-circle"></i> The queue is empty. Scan a lot's QR code or type a lot number above to add the first lot.
+</div>
+{% endif %}

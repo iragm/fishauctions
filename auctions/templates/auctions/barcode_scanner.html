@@ -12,11 +12,14 @@ Context:
                              barcode (a KeyboardEvent.key value; default "F9")
   barcode_check_in_only   -- optional; True on the self check-in kiosk to restrict
                              scans to membership cards only
+  barcode_lot_scan_url    -- optional; when set (the Lot queue page) scanned lot QR codes are
+                             posted here to build the queue instead of being treated as member cards
 {% endcomment %}
 {% if auction.club_id %}
 <script>
   window.AUCTION_BARCODE_CONFIG = window.AUCTION_BARCODE_CONFIG || {
     scanUrl: "{% url 'auction_barcode_scan' slug=auction.slug %}",
+    lotScanUrl: "{{ barcode_lot_scan_url|default:''|escapejs }}",
     csrfToken: "{{ csrf_token }}",
     prefixKey: "{{ barcode_scanner_prefix|default:'F9'|escapejs }}",
     checkInOnly: {% if barcode_check_in_only %}true{% else %}false{% endif %},

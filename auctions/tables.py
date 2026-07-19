@@ -331,7 +331,7 @@ class AuctionHTMxTable(tables.Table):
         auction = record
         result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
         if auction.is_last_used:
-            result += " <span class='ms-1 badge bg-success text-black'>Your last auction</span>"
+            result += " <span class='ms-1 badge bg-success text-dark'>Your last auction</span>"
         if auction.is_online and not auction.in_progress:
             result += " <span class='badge bg-primary'>Online</span>"
         if auction.in_progress or auction.in_person_in_progress:
@@ -348,7 +348,7 @@ class AuctionHTMxTable(tables.Table):
                 distance_value, distance_unit = distance_result
                 result += f" <span class='badge bg-primary'>{distance_value} {distance_unit} from you</span>"
         if auction.joined and not auction.is_last_used:
-            result += " <span class='badge bg-success text-black'>Joined</span>"
+            result += " <span class='badge bg-success text-dark'>Joined</span>"
         result += auction.template_lot_link_first_column + auction.template_promo_info
         return mark_safe(result)
 

@@ -419,7 +419,7 @@ function deactivate_lot() {
                                                 {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                             </span>
                                             {% else %}
-                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-dark' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                             {% endif %}
                                         {% endif %}
                                     {% endif %}
@@ -430,7 +430,7 @@ function deactivate_lot() {
                         <tr>
                             <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
                                 {% if request.user.userdata.location in lot.shipping_locations.all %}
-                                <span class="badge bg-light text-black">Ships to {{ request.user.userdata.location }}</span>
+                                <span class="badge bg-light text-dark">Ships to {{ request.user.userdata.location }}</span>
                                 {% endif %}
                             </td>
                         </tr>
@@ -532,7 +532,7 @@ function deactivate_lot() {
                             </div>
                         </div>
                         <div class="col-auto">
-                            <button class='btn btn-success text-black' id='bid_button' style='min-width: 150px;'>Place bid</button>
+                            <button class='btn btn-success text-dark' id='bid_button' style='min-width: 150px;'>Place bid</button>
                         </div>
                     </div>
                     <div class="invalid-feedback">Enter a number</div>
@@ -723,7 +723,7 @@ function deactivate_lot() {
             </div>
             <div id='confirmDialogText' class="modal-body">Enter an amount</div>
             <div class="modal-footer">
-                <button type="button" id='finalize-bid' class="btn btn-success text-black">Place bid</button>
+                <button type="button" id='finalize-bid' class="btn btn-success text-dark">Place bid</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
             </div>
         </div>

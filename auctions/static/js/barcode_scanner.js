@@ -18,6 +18,9 @@
   }
   var config = window.AUCTION_BARCODE_CONFIG || {};
   var scanUrl = config.scanUrl || "";
+  // Optional: when set (the Lot queue page), lot QR codes are posted here to build the queue
+  // instead of being treated as an unrecognized member-card scan. Other pages leave this empty.
+  var lotScanUrl = config.lotScanUrl || "";
   var csrfToken = config.csrfToken || "";
   var prefixKey = config.prefixKey || "F9";
   var checkInOnly = !!config.checkInOnly;
@@ -142,6 +145,37 @@
     return true;
   }
 
+  // Lot queue: post a scanned lot's pk to the queue add endpoint. Returns false on a rejected read
+  // so the camera scanner re-arms quickly. Also fires an "auction-lot-queued" event so the queue
+  // page can refresh its list.
+  async function postLotScan(lotPk) {
+    var formData = new FormData();
+    formData.append("lot_pk", lotPk);
+    var payload = null;
+    try {
+      var response = await fetch(lotScanUrl, {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken },
+        body: formData,
+      });
+      payload = await response.json();
+    } catch (e) {
+      payload = null;
+    }
+    if (!payload || !payload.ok) {
+      beep("error");
+      var message = (payload && payload.message) || "Scan failed -- check your connection and try again.";
+      showToast(message, "danger");
+      announce({ ok: false, message: message });
+      return false;
+    }
+    beep("checkin");
+    showToast(payload.message || "Added to the queue", "success");
+    announce({ ok: true, payload: payload });
+    document.dispatchEvent(new CustomEvent("auction-lot-queued", { detail: payload }));
+    return true;
+  }
+
   async function applyAdjustmentToBidder(bidderNumber) {
     var adjustment = pendingAdjustment;
     var formData = new FormData();
@@ -183,6 +217,13 @@
     var value = String(rawValue || "").trim();
     if (!value) {
       return;
+    }
+    // Lot QR codes look like https://{domain}/qr/{pk}/. When a lotScanUrl is configured (the Lot
+    // queue page) they build the queue; on every other page lotScanUrl is empty and lot QRs fall
+    // through to the existing member-card handling below, unchanged.
+    var lotQrMatch = value.match(/\/qr\/(\d+)/);
+    if (lotQrMatch && lotScanUrl) {
+      return await postLotScan(lotQrMatch[1]);
     }
     if (checkInOnly) {
       // Kiosk mode: membership cards only. Paddle and adjustment barcodes are refused

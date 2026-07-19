@@ -1,0 +1,35 @@
+{% comment %}
+Kiosk (projector) partial, polled by the queue page via htmx. Shows the current head lot big
+(reusing view_lot_simple.html, WITHOUT ViewLotSimple's notification side effect) plus a strip of
+the next few upcoming lots. Context: auction, lot (head lot or None), upcoming (list of Lots).
+{% endcomment %}
+{% if lot %}
+<div class="text-center mb-2">
+  <span class="badge bg-primary fs-6"><i class="bi bi-megaphone"></i> Selling now: lot {{ lot.lot_number_display }}</span>
+</div>
+{% include 'view_lot_simple.html' %}
+{% else %}
+<div class="container mt-5">
+  <div class="alert alert-info text-center fs-4" role="alert">
+    <i class="bi bi-info-circle"></i> No lots are queued yet.
+  </div>
+</div>
+{% endif %}
+{% if upcoming %}
+<div class="container mt-4">
+  <h5 class="text-muted"><i class="bi bi-list-ol"></i> Coming up next</h5>
+  <div class="d-flex flex-wrap gap-3 justify-content-center">
+    {% for next_lot in upcoming %}
+    <div class="text-center" style="width:140px;">
+      {% if next_lot.thumbnail %}
+      <img src="{{ next_lot.thumbnail.thumbnail_url }}" alt="" style="width:140px;height:105px;object-fit:cover;" class="rounded">
+      {% else %}
+      <span class="d-inline-flex align-items-center justify-content-center rounded" style="width:140px;height:105px;background:#303030;"><i class="bi bi-image fs-3 text-muted"></i></span>
+      {% endif %}
+      <div class="mt-1"><strong>Lot {{ next_lot.lot_number_display }}</strong></div>
+      <div class="small text-truncate">{{ next_lot.lot_name }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

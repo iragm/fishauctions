@@ -1995,7 +1995,7 @@ class CreateAuctionForm(forms.ModelForm):
                 "online",
                 "Create online auction",
                 css_id="auction-online",
-                css_class="submit-button create-auction bg-success text-black",
+                css_class="submit-button create-auction bg-success text-dark",
             ),
             Div(
                 HTML(
@@ -2006,7 +2006,7 @@ class CreateAuctionForm(forms.ModelForm):
                 "offline",
                 value="Create in-person auction",
                 css_id="auction-offline",
-                css_class="submit-button bg-success text-black",
+                css_class="submit-button bg-success text-dark",
             ),
             Div(
                 HTML(

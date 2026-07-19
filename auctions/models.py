@@ -5953,6 +5953,11 @@ class Lot(models.Model):
     donation = models.BooleanField(default=False)
     donation.help_text = "All proceeds from this lot will go to the club"
     watch_warning_email_sent = models.BooleanField(default=False)
+    selling_push_notification_sent = models.BooleanField(default=False)
+    selling_push_notification_sent.help_text = (
+        "Set once this lot has notified its watchers that it's being sold or is coming up in the queue, "
+        "so watchers only ever get one 'coming up' push per lot."
+    )
     # seller and buyer invoice are no longer needed and can safely be removed in a future migration
     seller_invoice = models.ForeignKey(
         "Invoice",
@@ -11175,3 +11180,29 @@ class LotPosition(models.Model):
 
     def __str__(self):
         return f"pos lot={self.lot_id} ({self.x:.2f}, {self.y:.2f})"
+
+
+class LotQueueEntry(models.Model):
+    """An ordered queue of lots about to be sold at an in-person auction.
+
+    Admins build this on the "Lot queue" page by scanning lot QR codes or typing lot numbers.
+    The set-lot-winners page pulls the head of the queue automatically, and a kiosk view projects
+    the current lot for the room. Watchers of a lot get a "coming up soon" push once it reaches the
+    top of the queue (see notification_sent below and Lot.selling_push_notification_sent)."""
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="queue_entry")
+    order = models.PositiveIntegerField()
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True)
+    notification_sent = models.BooleanField(default=False)
+    notification_sent.help_text = (
+        "Set once this entry has been processed for a 'coming up soon' push while in the top of the "
+        "queue, so each queue entry is only ever considered once regardless of dedupe on the lot."
+    )
+
+    class Meta:
+        ordering = ["auction", "order"]
+
+    def __str__(self):
+        return f"queue entry lot={self.lot_id} order={self.order}"

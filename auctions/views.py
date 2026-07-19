@@ -47,6 +47,7 @@ from django.db.models import (
     F,
     FloatField,
     IntegerField,
+    Max,
     OuterRef,
     Q,
     Subquery,
@@ -209,6 +210,7 @@ from .models import (
     Lot,
     LotHistory,
     LotImage,
+    LotQueueEntry,
     MobileDevice,
     PageView,
     PayPalSeller,
@@ -4513,7 +4515,20 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["auction"] = self.auction
         # Don't want notifications to show up on the projector
         # context['disable_websocket'] = True
+        # Prefill the lot field from the head of the in-person lot queue (if any), so scanning lots
+        # into the queue elsewhere flows straight into selling them here.
+        head_lot = queue_head_lot(self.auction)
+        context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
         return context
+
+    def pop_queue_and_set_next(self, lot, result):
+        """Drop the just-sold/ended lot from the in-person queue and report the new head lot number.
+
+        Sets result["next_queued_lot_number"] to the new top lot's display number, or None when the
+        queue is now empty. The set-winners JS uses this to auto-advance to the next lot."""
+        pop_lot_from_queue(self.auction, lot)
+        next_lot = queue_head_lot(self.auction)
+        result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
 
     def validate_lot(self, lot, action):
         """Returns (Lot or None, error or None)"""
@@ -4677,6 +4692,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             "success_message": None,
             "online_high_bidder_message": None,
             "auction_minutes_to_end": None,
+            "next_queued_lot_number": None,
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
@@ -4694,6 +4710,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
+            self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
@@ -4708,6 +4725,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
+            self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
         if (
             not price_error
@@ -4750,6 +4768,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     )
                 except Exception:
                     logger.exception("create_history failed for lot %s", lot.pk)
+                self.pop_queue_and_set_next(lot, result)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -4766,6 +4785,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 lot.save()
                 result["success_message"] = "This lot has been double checked"
                 result["last_sold_lot_number"] = lot.lot_number_display
+                self.pop_queue_and_set_next(lot, result)
             else:
                 # Mismatch between what's been saved in the db and the current request
                 result = {
@@ -4828,6 +4848,267 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
 
     def get(self, request, *args, **kwargs):
         return self.http_method_not_allowed(request, *args, **kwargs)
+
+
+def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
+    """Send a one-time "coming up soon / about to be sold" web push to a lot's watchers.
+
+    Deduped per lot via ``Lot.selling_push_notification_sent``: each lot notifies its watchers at
+    most once, whether the trigger is the lot being pulled up on the set-winners screen
+    (``position=None``) or the lot reaching the top of the in-person lot queue (``position`` given).
+    This also fixes the previous re-fire-on-every-view behavior of ViewLotSimple.
+
+    ``request_user`` (the admin viewing/projecting the lot) is excluded from the push so their own
+    screen doesn't light up. ``position`` is the lot's 1-indexed spot in the queue and only changes
+    the wording. Returns True when a fresh notification pass ran, False when it was skipped as a
+    dedupe. The transient websocket "about to be sold" chat message is handled by the caller, not
+    here, because it is intentionally not deduped."""
+    if not lot or lot.sold or not lot.auction:
+        return False
+    if lot.selling_push_notification_sent:
+        return False
+    lot.selling_push_notification_sent = True
+    lot.save(update_fields=["selling_push_notification_sent"])
+    if position and position > 1:
+        head = f"{lot.lot_name} is coming up soon"
+        body = (
+            f"Lot {lot.lot_number_display} is coming up soon -- {position} lots away. Don't miss out!  "
+            "You're getting this notification because you watched this lot."
+        )
+    else:
+        head = f"{lot.lot_name} is about to be sold"
+        body = (
+            f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
+            "You're getting this notification because you watched this lot."
+        )
+    watchers = Watch.objects.filter(lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True)
+    if request_user is not None:
+        # it would be awkward to have notifications pop up when you're projecting an image of the lot
+        watchers = watchers.exclude(user=request_user)
+    for watch in watchers:
+        # does the user actually have a subscription?
+        push_info = PushInformation.objects.filter(user=watch.user).first()
+        if not push_info:
+            continue
+        payload = {
+            "head": head,
+            "body": body,
+            "url": "https://" + lot.full_lot_link,
+            "tag": f"lot_sell_notification_{lot.pk}",
+        }
+        if lot.thumbnail:
+            payload["icon"] = lot.thumbnail.display_url
+        try:
+            send_user_notification(user=watch.user, payload=payload, ttl=10000)
+        except (requests.exceptions.RequestException, WebPushException):
+            # The push endpoint is invalid or unreachable; remove the stale subscription
+            # and record the failure in the auction history so admins can see it.
+            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
+            # HTTP 404 for expired tokens, so we must also handle that here.
+            push_info.delete()
+            AuctionHistory.objects.create(
+                auction=lot.auction,
+                user=None,
+                action=f"push notification error occurred for {watch.user.username}",
+                applies_to="USERS",
+            )
+    return True
+
+
+def process_queue_notifications(auction):
+    """Notify watchers of any not-yet-notified lot now in the top 10 of the queue.
+
+    Each queue entry is processed at most once (LotQueueEntry.notification_sent), and each lot
+    pushes at most once total (Lot.selling_push_notification_sent, shared with the set-winners
+    trigger). Call this after any queue mutation (add/remove/reorder/pop-on-sale)."""
+    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
+    for index, entry in enumerate(entries, start=1):
+        if index > 10:
+            break
+        if entry.notification_sent or entry.lot.sold:
+            continue
+        notify_watchers_lot_selling_soon(entry.lot, position=index)
+        entry.notification_sent = True
+        entry.save(update_fields=["notification_sent"])
+
+
+def queue_head_lot(auction):
+    """The lot at the top of the queue (sold next), or None if the queue is empty."""
+    entry = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order").first()
+    return entry.lot if entry else None
+
+
+def pop_lot_from_queue(auction, lot):
+    """Remove a lot's queue entry, wherever it sits, and re-run notifications for the new top.
+
+    Used when a lot is sold / ended on the set-winners page so it drops out of the queue."""
+    if lot is None:
+        return
+    deleted, _ = LotQueueEntry.objects.filter(auction=auction, lot=lot).delete()
+    if deleted:
+        process_queue_notifications(auction)
+
+
+class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
+    """Shared helpers for the in-person "Lot queue" tool.
+
+    The queue is an ordered list of lots about to be sold (LotQueueEntry). Admins build it by
+    scanning lot QR codes / typing lot numbers on the queue page; the set-lot-winners page pulls
+    the head of the queue automatically. This is an in-person-only feature."""
+
+    club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
+
+    def dispatch(self, request, *args, **kwargs):
+        # Let LoginRequiredMixin redirect anonymous users to login before we run any auction lookup.
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        # get_auction runs the admin permission check (raises PermissionDenied for non-admins).
+        self.get_auction(kwargs.get("slug", ""))
+        if self.auction and self.auction.is_online:
+            msg = "The lot queue is only available for in-person auctions"
+            raise Http404(msg)
+        return super().dispatch(request, *args, **kwargs)
+
+    def queue_entries(self):
+        return list(LotQueueEntry.objects.filter(auction=self.auction).select_related("lot").order_by("order"))
+
+    def resolve_lot_from_value(self, value):
+        """Turn a scanned value (a full/partial lot QR URL) or a typed lot number into a Lot.
+
+        Returns (Lot or None, error string or None)."""
+        value = (value or "").strip()
+        if not value:
+            return None, "Enter or scan a lot number"
+        # A lot QR code is https://{domain}/qr/{pk}/ -- a USB scanner types the whole URL.
+        qr_match = re.search(r"/qr/(\d+)", value)
+        if qr_match:
+            lot = self.auction.lots_qs.filter(pk=qr_match.group(1)).first()
+            if not lot:
+                return None, "That lot is not part of this auction"
+            return lot, None
+        # Otherwise treat it as a typed lot number, using this auction's numbering scheme.
+        if self.auction.use_seller_dash_lot_numbering:
+            result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=value)
+        else:
+            try:
+                number = int(value)
+            except (ValueError, TypeError):
+                return None, "Lot number must be a number"
+            result_lot_qs = self.auction.lots_qs.filter(lot_number_int=number)
+        if result_lot_qs.count() > 1:
+            return None, "More than one lot has this number -- scan the lot's QR code instead"
+        lot = result_lot_qs.first()
+        if not lot:
+            return None, "No lot found with that number"
+        return lot, None
+
+    def add_lot(self, lot):
+        """Add a lot to the end of the queue. Returns an error string, or None on success."""
+        if not lot:
+            return "No lot found"
+        if lot.sold:
+            return f"Lot {lot.lot_number_display} has already been sold"
+        if LotQueueEntry.objects.filter(auction=self.auction, lot=lot).exists():
+            return f"Lot {lot.lot_number_display} is already in the queue"
+        max_order = LotQueueEntry.objects.filter(auction=self.auction).aggregate(m=Max("order"))["m"] or 0
+        LotQueueEntry.objects.create(auction=self.auction, lot=lot, order=max_order + 1, added_by=self.request.user)
+        process_queue_notifications(self.auction)
+        return None
+
+    def apply_reorder(self, ordered_ids):
+        """Persist a new order given a list of entry ids (top first)."""
+        entries = {e.pk: e for e in LotQueueEntry.objects.filter(auction=self.auction)}
+        order = 1
+        for raw in ordered_ids:
+            try:
+                pk = int(raw)
+            except (ValueError, TypeError):
+                continue
+            entry = entries.pop(pk, None)
+            if entry:
+                if entry.order != order:
+                    entry.order = order
+                    entry.save(update_fields=["order"])
+                order += 1
+        # Any entries the client didn't mention keep going after, preserving their relative order.
+        for entry in sorted(entries.values(), key=lambda e: e.order):
+            entry.order = order
+            entry.save(update_fields=["order"])
+            order += 1
+        process_queue_notifications(self.auction)
+
+    def render_list(self, error=None):
+        context = {"auction": self.auction, "entries": self.queue_entries(), "error": error}
+        return render(self.request, "auctions/lot_queue_list.html", context)
+
+
+class LotQueueView(LotQueueMixin, TemplateView):
+    """The Lot queue page: scan/type lots to build an ordered queue, drag to reorder, remove.
+
+    GET renders the full page (or just the list partial with ?partial=list). POST handles the
+    htmx-style mutations add/remove/reorder (returning the refreshed list partial) and the
+    scanner add path (lot_pk present -> JSON, for the USB HID / camera pipeline)."""
+
+    template_name = "auctions/lot_queue.html"
+
+    def get(self, request, *args, **kwargs):
+        if request.GET.get("partial") == "list":
+            return self.render_list()
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["entries"] = self.queue_entries()
+        context["show_camera_scanner"] = True
+        # Threaded into the (club-only) ribbon barcode_scanner.html include so lot QR scans on a club
+        # auction build the queue; the no-club path wires the same URL up itself in the template.
+        context["barcode_lot_scan_url"] = self.request.path
+        return context
+
+    def post(self, request, *args, **kwargs):
+        # Scanner (USB HID / camera) path: adds by lot pk and expects a JSON reply.
+        if "lot_pk" in request.POST:
+            pk = (request.POST.get("lot_pk") or "").strip()
+            lot = self.auction.lots_qs.filter(pk=pk).first() if pk.isdigit() else None
+            if not lot:
+                return JsonResponse({"ok": False, "message": "That lot is not part of this auction"})
+            error = self.add_lot(lot)
+            if error:
+                return JsonResponse({"ok": False, "message": error})
+            return JsonResponse({"ok": True, "message": f"Added lot {lot.lot_number_display} to the queue"})
+        action = request.POST.get("action", "")
+        if action == "add":
+            lot, error = self.resolve_lot_from_value(request.POST.get("value", ""))
+            if lot and not error:
+                error = self.add_lot(lot)
+            return self.render_list(error=error)
+        if action == "remove":
+            LotQueueEntry.objects.filter(auction=self.auction, pk=request.POST.get("entry_id")).delete()
+            process_queue_notifications(self.auction)
+            return self.render_list()
+        if action == "reorder":
+            ordered_ids = request.POST.getlist("order[]") or request.POST.get("order", "").split(",")
+            self.apply_reorder(ordered_ids)
+            return self.render_list()
+        return self.render_list(error="Unknown action")
+
+
+class LotQueueKioskView(LotQueueMixin, TemplateView):
+    """Kiosk (projector) partial: the current head lot rendered big plus the next few queued lots.
+
+    Polled by the queue page via htmx so it updates as lots are sold on another device. Renders the
+    head lot with view_lot_simple.html WITHOUT ViewLotSimple's notification side effect."""
+
+    template_name = "auctions/lot_queue_kiosk.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        entries = self.queue_entries()
+        context["auction"] = self.auction
+        context["lot"] = entries[0].lot if entries else None
+        context["upcoming"] = [entry.lot for entry in entries[1:6]]
+        return context
 
 
 class CSVContactImportMixin:
@@ -6854,6 +7135,7 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
         if lot and lot.auction:
             self.auction = lot.auction
             if self.is_auction_admin and self.auction.message_users_when_lots_sell and not lot.sold:
+                # The websocket chat message is transient and keeps firing on every view.
                 result = {
                     "type": "chat_message",
                     "info": "CHAT",
@@ -6862,38 +7144,9 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                     "username": "System",
                 }
                 lot.send_websocket_message(result)
-                watchers = Watch.objects.filter(
-                    lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
-                ).exclude(
-                    # it would be awkward to have notifications pop up when you're projecting an image of the lot
-                    user=self.request.user
-                )
-                for watch in watchers:
-                    # does the user actually have a subscription?
-                    push_info = PushInformation.objects.filter(user=watch.user).first()
-                    if push_info:
-                        payload = {
-                            "head": lot.lot_name + " is about to be sold",
-                            "body": f"Lot {lot.lot_number_display}  Don't miss out, bid now!  You're getting this notification because you watched this lot.",
-                            "url": "https://" + lot.full_lot_link,
-                            "tag": f"lot_sell_notification_{lot.pk}",
-                        }
-                        if lot.thumbnail:
-                            payload["icon"] = lot.thumbnail.display_url
-                        try:
-                            send_user_notification(user=watch.user, payload=payload, ttl=10000)
-                        except (requests.exceptions.RequestException, WebPushException):
-                            # The push endpoint is invalid or unreachable; remove the stale subscription
-                            # and record the failure in the auction history so admins can see it.
-                            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
-                            # HTTP 404 for expired tokens, so we must also handle that here.
-                            push_info.delete()
-                            AuctionHistory.objects.create(
-                                auction=lot.auction,
-                                user=None,
-                                action=f"push notification error occurred for {watch.user.username}",
-                                applies_to="USERS",
-                            )
+                # Web push goes through the deduped helper so a lot that already notified from the
+                # queue does not notify again when it's pulled up to be sold (and vice versa).
+                notify_watchers_lot_selling_soon(lot, request_user=self.request.user)
         return context
 
 

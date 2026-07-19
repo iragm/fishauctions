@@ -69,6 +69,13 @@ ruff.toml            # Linting/format config
 
 **URLs:** `auctions/urls.py` and `fishauctions/urls.py`
 
+## Frontend / Templates
+
+- Read `style_reference.md` before making any frontend/template/CSS change. It
+  documents the palette, text-on-color rules, outline-button and pagination
+  fixes, the unavailable-action ("stay clickable") standard, and the message-type
+  taxonomy. Never edit vendor CSS; site-wide overrides go in `auctions/static/css/auction_site.css`.
+
 ## Model Changes
 
 - Always create migrations after model changes (`makemigrations` then `migrate`).

@@ -127,18 +127,25 @@ document.addEventListener("DOMContentLoaded", function() {
 
         {% if invoice.show_payment_button and not hide_payment_button%}
           {% if invoice.reason_for_payment_not_available %}
+              {# Unavailable-action standard: keep the button clickable and explain why on click (see /style_reference.md). #}
               <button
-                type="submit"
-                class="btn btn-secondary disabled mr-1 mt-1"
-                data-bs-toggle="popover"
-                data-bs-placement="bottom"
-                data-bs-html="true"
-                data-bs-title="Payment not available"
-                data-bs-content="{{ invoice.reason_for_payment_not_available }}"
-                data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-secondary text-white"></div><div class="popover-body"></div></div>'
+                type="button"
+                class="btn btn-secondary mr-1 mt-1"
+                id="payment-not-available"
+                data-reason="{{ invoice.reason_for_payment_not_available }}"
               >
                 Pay now
               </button>
+              <script>
+                document.getElementById('payment-not-available').addEventListener('click', function () {
+                  window.jQuery.toast({
+                    title: 'Payment not available',
+                    content: this.getAttribute('data-reason'),
+                    type: 'info',
+                    delay: 8000
+                  });
+                });
+              </script>
           {% else %}
             {% comment %}
               Web PayPal/Square pay buttons redirect to the provider's hosted checkout, which doesn't
