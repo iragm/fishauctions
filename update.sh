@@ -168,6 +168,21 @@ ensure_permissions() {
         echo "Please rerun with sudo if needed:"
         echo "  sudo chown -R $puid:$pgid ${writable_paths[*]}"
     fi
+
+    # Wallet credential files are copied into the repo root by hand (often via
+    # sudo/root scp), which leaves them unreadable by the container's app user and
+    # breaks pass signing until someone remembers the chown. Fix them here.
+    local wallet_file
+    for wallet_file in "$(get_env_value "APPLE_WALLET_CERT_FILE")" \
+                       "$(get_env_value "APPLE_WALLET_WWDR_FILE")" \
+                       "$(get_env_value "GOOGLE_WALLET_KEYFILE")"; do
+        if [ -n "$wallet_file" ] && [ -f "./$wallet_file" ]; then
+            if ! chown "$puid:$pgid" "./$wallet_file" 2>/dev/null || ! chmod 600 "./$wallet_file"; then
+                echo "Could not fix ownership of ./$wallet_file (wallet credential)."
+                echo "  Run: sudo chown $puid:$pgid ./$wallet_file && sudo chmod 600 ./$wallet_file"
+            fi
+        fi
+    done
 }
 
 render_nginx_domain() {
@@ -181,6 +196,17 @@ render_nginx_domain() {
     local template="./nginx.prod.conf.template"
     local output="./nginx.prod.conf"
     local site_domain escaped_site_domain
+    # If any docker compose command runs while the rendered config is missing
+    # (fresh clone, or the one-time upgrade across the commit that un-tracked
+    # nginx.prod.conf), Docker auto-creates the bind-mount source as a DIRECTORY
+    # and swag silently serves its default config. Self-heal: drop the directory
+    # (it holds at most swag-created droppings, never operator data) and render.
+    if [ -d "$output" ]; then
+        echo "WARNING: $output is a directory -- docker compose ran before the nginx config was"
+        echo "         rendered, so Docker created the missing bind-mount source as a directory."
+        echo "         Removing it and rendering the real config."
+        rm -rf "$output"
+    fi
     site_domain="$(get_env_value "SITE_DOMAIN")"
     if [ ! -f "$template" ]; then
         echo "WARNING: $template not found; $output not rendered."

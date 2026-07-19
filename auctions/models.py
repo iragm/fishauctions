@@ -1589,6 +1589,19 @@ class ClubMember(ContactRecord):
         return self.club.membership_system != "none" and not self.is_paid_member
 
     @property
+    def wallet_header_text(self):
+        """Pass-type line for wallet passes (the "Membership" slot under the club name).
+
+        Clubs that run memberships AND charge dues get a live status: "Active Paid
+        Membership" while dues are current, "Unpaid Membership" once lapsed or never
+        paid. Free-membership clubs (and clubs without memberships) keep the static
+        "Membership" — nobody there can be "unpaid".
+        """
+        if self.club.membership_system != "none" and (self.club.membership_annual_fee or 0) > 0:
+            return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
+        return "Membership"
+
+    @property
     def discord_role(self):
         """Return the ClubDiscordRole that should be assigned to this member.
 

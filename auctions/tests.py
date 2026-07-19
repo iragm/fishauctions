@@ -23770,8 +23770,14 @@ class AppleWalletPassTests(TestCase):
         self.member = ClubMember.objects.create(club=self.club, name="Test Member", user=self.user)
 
     @staticmethod
-    def _make_cert_files(tmp_path):
-        """Generate a self-signed cert + WWDR-stand-in cert and return their paths."""
+    def _make_cert_files(tmp_path, chained=True, wwdr_encoding="PEM"):
+        """Generate a WWDR-stand-in CA plus a signer cert and return their paths.
+
+        By default the signer is issued by the WWDR stand-in (a real chain, which
+        _load_signing_certs now verifies). chained=False produces an unrelated
+        self-signed signer to exercise the chain-mismatch error. wwdr_encoding
+        may be "DER" to mimic Apple's .cer download format.
+        """
         import datetime as _dt
 
         from cryptography import x509
@@ -23780,24 +23786,27 @@ class AppleWalletPassTests(TestCase):
         from cryptography.hazmat.primitives.serialization import pkcs12
         from cryptography.x509.oid import NameOID
 
-        def _make_cert(subject):
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        def _build_cert(subject, key, issuer_name=None, issuer_key=None):
             name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
             now = _dt.datetime.now(_dt.timezone.utc)
-            cert = (
+            return (
                 x509.CertificateBuilder()
                 .subject_name(name)
-                .issuer_name(name)
+                .issuer_name(issuer_name or name)
                 .public_key(key.public_key())
                 .serial_number(x509.random_serial_number())
                 .not_valid_before(now - _dt.timedelta(minutes=1))
                 .not_valid_after(now + _dt.timedelta(days=1))
-                .sign(key, hashes.SHA256())
+                .sign(issuer_key or key, hashes.SHA256())
             )
-            return key, cert
 
-        signer_key, signer_cert = _make_cert("Pass Type Cert")
-        _wwdr_key, wwdr_cert = _make_cert("WWDR Stand-in")
+        wwdr_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        wwdr_cert = _build_cert("WWDR Stand-in", wwdr_key)
+        signer_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        if chained:
+            signer_cert = _build_cert("Pass Type Cert", signer_key, issuer_name=wwdr_cert.subject, issuer_key=wwdr_key)
+        else:
+            signer_cert = _build_cert("Pass Type Cert", signer_key)
 
         # .p12 with no password — encryption=NoEncryption matches APPLE_WALLET_CERT_PASSWORD="".
         p12_bytes = pkcs12.serialize_key_and_certificates(
@@ -23810,9 +23819,9 @@ class AppleWalletPassTests(TestCase):
         p12_path = tmp_path / "cert.p12"
         p12_path.write_bytes(p12_bytes)
 
-        wwdr_pem = wwdr_cert.public_bytes(serialization.Encoding.PEM)
-        wwdr_path = tmp_path / "wwdr.pem"
-        wwdr_path.write_bytes(wwdr_pem)
+        encoding = serialization.Encoding.DER if wwdr_encoding == "DER" else serialization.Encoding.PEM
+        wwdr_path = tmp_path / ("wwdr.cer" if wwdr_encoding == "DER" else "wwdr.pem")
+        wwdr_path.write_bytes(wwdr_cert.public_bytes(encoding))
         return p12_path, wwdr_path
 
     def test_generate_pkpass_contains_required_files(self):
@@ -29758,3 +29767,259 @@ class StatsCompareSlugGuardReviewTests(StandardTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200, "a bad ?compare= slug must not 500")
         self.assertIsNone(response.context.get("compare_auction"), "a bad compare slug must not set compare_auction")
+
+
+def _raising_context_processor(request):
+    """Used by ErrorPageLoggingTests to make base.html-extending pages unrenderable."""
+    msg = "context processor boom"
+    raise RuntimeError(msg)
+
+
+class ErrorPageLoggingTests(TestCase):
+    """Custom 404/500 handlers (auctions/error_views.py) must log the traceback that Django's
+    get_exception_response() otherwise swallows -- prod was emailing traceback-less
+    "Report at /byp8.php" 500s with no way to see the real cause."""
+
+    def _broken_templates(self):
+        import copy
+
+        from django.conf import settings
+
+        templates = copy.deepcopy(settings.TEMPLATES)
+        templates[0]["OPTIONS"]["context_processors"].append("auctions.tests._raising_context_processor")
+        return templates
+
+    def test_normal_404_still_renders_the_404_page(self):
+        with override_settings(DEBUG=False):
+            response = self.client.get("/this-page-does-not-exist.php")
+        self.assertEqual(response.status_code, 404)
+        self.assertContains(response, "Page not found", status_code=404)
+
+    def test_404_render_failure_logs_the_real_traceback(self):
+        # The 404 page extends base.html, so a broken context processor makes its render raise.
+        # Django then falls back to the 500 handler; the handler must have logged the cause first.
+        client = Client(raise_request_exception=False)
+        with override_settings(DEBUG=False, TEMPLATES=self._broken_templates()):
+            with self.assertLogs("auctions.errorpages", level="ERROR") as logs:
+                response = client.get("/this-page-does-not-exist.php")
+        self.assertEqual(response.status_code, 500, "a failed 404 render must fall back to the 500 page")
+        joined = "\n".join(logs.output)
+        self.assertIn("404 page render failed", joined)
+        self.assertIn("context processor boom", joined, "the log must contain the swallowed traceback")
+
+    def test_500_render_failure_serves_plaintext_and_logs(self):
+        from django.test import RequestFactory
+
+        from auctions import error_views
+
+        request = RequestFactory().get("/whatever/")
+        with patch.object(error_views.defaults, "server_error", side_effect=RuntimeError("500 template boom")):
+            with self.assertLogs("auctions.errorpages", level="ERROR") as logs:
+                response = error_views.error_500(request)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response["Content-Type"], "text/plain")
+        self.assertIn("500 template boom", "\n".join(logs.output))
+
+
+class WalletHeaderTextTests(TestCase):
+    """wallet_header_text drives the pass-type line on wallet passes: live paid/unpaid
+    status for dues-charging clubs, static "Membership" everywhere else."""
+
+    def _member(self, membership_system="january_first", fee=25, paid=True):
+        from decimal import Decimal
+
+        from .models import Club, ClubMember
+
+        club = Club.objects.create(
+            name=f"Header club {membership_system} {fee} {paid}",
+            membership_system=membership_system,
+            membership_annual_fee=Decimal(fee),
+        )
+        expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+        return ClubMember.objects.create(club=club, name="M", membership_expiration_date=expiration)
+
+    def test_paid_member_of_fee_charging_club(self):
+        self.assertEqual(self._member(paid=True).wallet_header_text, "Active Paid Membership")
+
+    def test_lapsed_member_of_fee_charging_club(self):
+        self.assertEqual(self._member(paid=False).wallet_header_text, "Unpaid Membership")
+
+    def test_never_paid_member_of_fee_charging_club(self):
+        from decimal import Decimal
+
+        from .models import Club, ClubMember
+
+        club = Club.objects.create(
+            name="Header club never paid", membership_system="rolling", membership_annual_fee=Decimal(25)
+        )
+        member = ClubMember.objects.create(club=club, name="M")
+        self.assertEqual(member.wallet_header_text, "Unpaid Membership")
+
+    def test_free_membership_club_stays_static(self):
+        self.assertEqual(self._member(fee=0, paid=False).wallet_header_text, "Membership")
+
+    def test_club_without_memberships_stays_static(self):
+        self.assertEqual(self._member(membership_system="none", paid=False).wallet_header_text, "Membership")
+
+
+@override_settings(
+    GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+)
+class GoogleWalletStatusDisplayTests(TestCase):
+    """The class template must show the membership_status module on the card front
+    (cardTemplateOverride replaces the default layout, so an unlisted module is
+    invisible there — this is why expiration dates were "not present"), and object
+    PATCHes must keep the header (pass-type line) current."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from .models import Club, ClubMember
+
+        self.club = Club.objects.create(
+            name="Status Display Club", membership_system="january_first", membership_annual_fee=Decimal(25)
+        )
+        self.member = ClubMember.objects.create(club=self.club, name="M")
+
+    def test_class_template_includes_status_row(self):
+        from .google_wallet import _class_body
+
+        rows = _class_body(self.club)["classTemplateInfo"]["cardTemplateOverride"]["cardRowTemplateInfos"]
+        field_paths = [row["oneItem"]["item"]["firstValue"]["fields"][0]["fieldPath"] for row in rows]
+        self.assertIn("object.textModulesData['member_id']", field_paths)
+        self.assertIn(
+            "object.textModulesData['membership_status']",
+            field_paths,
+            "without this row the 'Valid through ...' status never shows on the card front",
+        )
+
+    def test_object_patch_includes_live_header(self):
+        from .google_wallet import update_generic_object_for_member
+
+        resp = MagicMock()
+        resp.status_code = 200
+        with patch("auctions.google_wallet.get_access_token", return_value="t"):
+            with patch("auctions.google_wallet.requests.patch", return_value=resp) as patch_mock:
+                self.assertTrue(update_generic_object_for_member(self.member))
+        body = patch_mock.call_args.kwargs["json"]
+        self.assertEqual(
+            body["header"]["defaultValue"]["value"],
+            "Unpaid Membership",
+            "the pass-type line must update when membership status changes",
+        )
+
+    def test_save_url_jwt_uses_live_header(self):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        from .templatetags.membership_tags import google_wallet_save_url
+
+        key_pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        with self.settings(GOOGLE_WALLET_SERVICE_ACCOUNT_KEY=key_pem.decode()):
+            url = google_wallet_save_url(self.member)
+        self.assertTrue(url.startswith("https://pay.google.com/gp/v/save/"))
+        import jwt as _jwt
+
+        payload = _jwt.decode(url.rsplit("/", 1)[1], options={"verify_signature": False})
+        generic_object = payload["payload"]["genericObjects"][0]
+        self.assertEqual(generic_object["header"]["defaultValue"]["value"], "Unpaid Membership")
+
+
+class AppleWalletCertValidationTests(TestCase):
+    """_load_signing_certs must accept Apple's DER .cer WWDR format and reject a WWDR
+    that did not issue the Pass Type ID cert — a mismatched chain surfaces on devices
+    as 'WWDR certificate missing' with no server-side trace otherwise."""
+
+    def _settings(self, tmp_path, p12_path, wwdr_path):
+        return self.settings(
+            BASE_DIR=tmp_path,
+            APPLE_WALLET_CERT_FILE=p12_path.name,
+            APPLE_WALLET_CERT_PASSWORD="",
+            APPLE_WALLET_WWDR_FILE=wwdr_path.name,
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+            APPLE_WALLET_TEAM_IDENTIFIER="ABCDE12345",
+            APPLE_WALLET_ORGANIZATION_NAME="Test Org",
+        )
+
+    def test_der_encoded_wwdr_is_accepted(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+        from .models import Club, ClubMember
+
+        member = ClubMember.objects.create(club=Club.objects.create(name="DER club"), name="M")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path, wwdr_encoding="DER")
+            apple_wallet._load_signing_certs.cache_clear()
+            with self._settings(tmp_path, p12_path, wwdr_path):
+                pkpass = apple_wallet.generate_pkpass_for_member(member)
+        self.assertGreater(len(pkpass), 0)
+
+    def test_mismatched_wwdr_raises_actionable_error(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path, chained=False)
+            apple_wallet._load_signing_certs.cache_clear()
+            with self._settings(tmp_path, p12_path, wwdr_path):
+                with self.assertRaises(ValueError) as ctx:
+                    apple_wallet._load_signing_certs()
+        self.assertIn("WWDR", str(ctx.exception))
+        self.assertIn("did not issue", str(ctx.exception))
+
+    def test_missing_wwdr_file_raises_actionable_error(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, _wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path)
+            apple_wallet._load_signing_certs.cache_clear()
+            with self._settings(tmp_path, p12_path, Path(tmpdir) / "nonexistent.pem"):
+                with self.assertRaises(ValueError) as ctx:
+                    apple_wallet._load_signing_certs()
+        self.assertIn("does not exist", str(ctx.exception))
+
+    def test_check_apple_wallet_command_reports_success(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path)
+            apple_wallet._load_signing_certs.cache_clear()
+            out = io.StringIO()
+            with self._settings(tmp_path, p12_path, wwdr_path):
+                call_command("check_apple_wallet", stdout=out)
+        self.assertIn("looks good", out.getvalue())
+
+    def test_check_apple_wallet_command_reports_chain_mismatch(self):
+        import tempfile
+        from pathlib import Path
+
+        from . import apple_wallet
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            p12_path, wwdr_path = AppleWalletPassTests._make_cert_files(tmp_path, chained=False)
+            apple_wallet._load_signing_certs.cache_clear()
+            out = io.StringIO()
+            with self._settings(tmp_path, p12_path, wwdr_path):
+                call_command("check_apple_wallet", stdout=out)
+        self.assertIn("did not issue", out.getvalue())

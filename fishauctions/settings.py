@@ -178,8 +178,10 @@ LOGGING = {
             "level": "WARNING",
             "propagate": False,
         },
+        # django_file too, not just mail: without it 500s are unfindable on the
+        # host after the email is skimmed/deleted (grep logs/django.log).
         "django.request": {
-            "handlers": ["mail_admins"],
+            "handlers": ["mail_admins", "django_file"],
             "level": "ERROR",
             "propagate": False,
         },
@@ -200,6 +202,14 @@ LOGGING = {
         },
         # Unhandled exceptions escaping the websocket ASGI app (see asgi.py middleware).
         "auctions.websocket": {
+            "handlers": ["console", "root_file", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        # Exceptions raised while rendering the 404/500 pages themselves. Django
+        # swallows these (traceback-less "Report at /path" emails); the custom
+        # handlers in auctions/error_views.py log them here instead.
+        "auctions.errorpages": {
             "handlers": ["console", "root_file", "mail_admins"],
             "level": "ERROR",
             "propagate": False,
