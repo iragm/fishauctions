@@ -15,8 +15,9 @@
 </div>
 {% endif %}
 
+{{ members_json|json_script:"club-members-data" }}
 <script>
-var MEMBERS = {{ members_json }};
+var MEMBERS = JSON.parse(document.getElementById("club-members-data").textContent);
 var CLUB = {
   name: "{{ club.name|escapejs }}",
   lat: {{ club.latitude|default:"null" }},

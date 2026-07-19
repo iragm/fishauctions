@@ -25,7 +25,7 @@ jobs:
           python-version: "3.11"
 
       - name: Prepare environment
-        run: ./.github/scripts/prepare-ci.sh
+        run: ./.github/scripts/prepare-ci.sh --force
 
       - name: Build Docker images
         run: docker compose build

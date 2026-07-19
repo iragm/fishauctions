@@ -1,6 +1,10 @@
 #!/bin/sh
 # Celery beat entrypoint script
 
+# Disable core dumps: CWD is the bind-mounted repo root, so a native crash would
+# drop a large core file into the source tree. See entrypoint.sh for context.
+ulimit -c 0
+
 echo "Waiting for database..."
 python << END
 import sys

@@ -3,9 +3,29 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import views
+from . import passkit_views, views
 
 urlpatterns = [
+    # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
+    # by Apple's spec — devices build them from the webServiceURL in pass.json — and
+    # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
+    # APPEND_SLASH redirect).
+    path(
+        "passkit/v1/devices/<str:device_library_id>/registrations/<str:pass_type_id>/<str:serial_number>",
+        passkit_views.PassKitRegistrationView.as_view(),
+        name="passkit_registration",
+    ),
+    path(
+        "passkit/v1/devices/<str:device_library_id>/registrations/<str:pass_type_id>",
+        passkit_views.PassKitDeviceRegistrationsView.as_view(),
+        name="passkit_device_registrations",
+    ),
+    path(
+        "passkit/v1/passes/<str:pass_type_id>/<str:serial_number>",
+        passkit_views.PassKitPassView.as_view(),
+        name="passkit_pass",
+    ),
+    path("passkit/v1/log", passkit_views.PassKitLogView.as_view(), name="passkit_log"),
     path(
         "api/auctiontos-autocomplete/",
         views.AuctionTOSAutocomplete.as_view(),
@@ -39,7 +59,6 @@ urlpatterns = [
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
-    path("api/payinvoice/<uuid:uuid>/<str:status>", views.InvoicePaid.as_view()),
     path("api/watchitem/<int:pk>/", views.WatchOrUnwatch.as_view()),
     path("api/clubs/", views.GetClubs.as_view()),
     path("api/lots/deactivate/<int:pk>/", views.LotDeactivate.as_view()),
@@ -152,6 +171,7 @@ urlpatterns = [
     ),
     path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
+    path("lots/my-last-auction/", views.MyLastAuctionLots.as_view(), name="my_last_auction_lots"),
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
@@ -364,6 +384,16 @@ urlpatterns = [
         name="auction_unsell_lot",
     ),
     path(
+        "auctions/<slug:slug>/queue/",
+        views.LotQueueView.as_view(),
+        name="auction_lot_queue",
+    ),
+    path(
+        "auctions/<slug:slug>/queue/kiosk/",
+        views.LotQueueKioskView.as_view(),
+        name="auction_lot_queue_kiosk",
+    ),
+    path(
         "auctions/<slug:slug>/checkout",
         views.QuickCheckout.as_view(),
         name="auction_quick_checkout",
@@ -405,6 +435,9 @@ urlpatterns = [
         name="auction_lot_list",
     ),
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
+    path("auctions/<slug:slug>/lot-map/", views.AuctionLotMap.as_view(), name="auction_lot_map"),
+    path("auctions/<slug:slug>/lot-map/data/", views.AuctionLotMapData.as_view(), name="auction_lot_map_data"),
+    path("auctions/<slug:slug>/lot-map/clear/", views.AuctionLotMapClear.as_view(), name="auction_lot_map_clear"),
     path("auctions/<slug:slug>/report/", views.AuctionReportView.as_view(), name="user_list"),
     path(
         "auctions/<slug:slug>/add-to-club/",
@@ -805,6 +838,11 @@ urlpatterns = [
         "clubs/<slug:slug>/member/<uuid:uuid>/apple-wallet.pkpass",
         views.ClubMemberAppleWalletByUUIDView.as_view(),
         name="club_member_apple_wallet_by_uuid",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-embed/",
+        views.BapEmbedView.as_view(),
+        name="bap_embed",
     ),
     path(
         "clubs/<slug:slug>/print-barcodes/",

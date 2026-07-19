@@ -88,7 +88,7 @@
             <span class="text-info">View your membership</span>
           </div>
           {% else %}
-          <div class="mb-3 text-muted small fst-italic">
+          <div class="mb-3 small fst-italic">
             (Once you have a club membership on this site, a link to your membership page will appear here.)
           </div>
           {% endif %}
@@ -110,7 +110,7 @@
 
           <div class="mt-3 pt-3 border-top">
             {% if club.icon %}
-              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
             {% endif %}
             <span>{{ club.name }}</span>
           </div>
@@ -138,14 +138,14 @@
             {% endif %}
           </div>
 
-          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
+          <div class="mb-3 fst-italic small">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
 
           {% if preview_member_link %}
           <div class="mb-3">
             <span class="text-info">View your membership</span>
           </div>
           {% else %}
-          <div class="mb-3 text-muted small fst-italic">
+          <div class="mb-3 small fst-italic">
             (Once you have a club membership on this site, a link to your membership page will appear here.)
           </div>
           {% endif %}
@@ -167,7 +167,7 @@
 
           <div class="mt-3 pt-3 border-top">
             {% if club.icon %}
-              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
             {% endif %}
             <span>{{ club.name }}</span>
           </div>
@@ -183,7 +183,7 @@
 
       <div class="tab-pane fade" id="expiring-tab-content" role="tabpanel">
         <div class="email-preview-frame border rounded p-4 mb-3" style="background:#ffffff;color:#222;">
-          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership expires in 30 days <span class="text-muted small">(or "…expires tomorrow" for the day-before reminder)</span></div>
+          <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership expires in 30 days <span class="small">(or "…expires tomorrow" for the day-before reminder)</span></div>
           <hr class="my-2">
 
           <div class="mb-3">Dear {{ preview_name }},</div>
@@ -195,14 +195,14 @@
             {% endif %}
           </div>
 
-          <div class="mb-3 text-muted fst-italic small">Your {{ club.name }} membership expires in 30 days. <span class="text-muted">(Or "…expires tomorrow" for the day-before reminder.)</span></div>
+          <div class="mb-3 fst-italic small">Your {{ club.name }} membership expires in 30 days. <span>(Or "…expires tomorrow" for the day-before reminder.)</span></div>
 
           {% if preview_member_link %}
           <div class="mb-3">
             <span class="text-info">View your membership</span>
           </div>
           {% else %}
-          <div class="mb-3 text-muted small fst-italic">
+          <div class="mb-3 small fst-italic">
             (Once you have a club membership on this site, a link to your membership page will appear here.)
           </div>
           {% endif %}
@@ -224,7 +224,7 @@
 
           <div class="mt-3 pt-3 border-top">
             {% if club.icon %}
-              <img src="{{ club.icon.url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
+              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
             {% endif %}
             <span>{{ club.name }}</span>
           </div>

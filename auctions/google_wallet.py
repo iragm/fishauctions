@@ -29,6 +29,10 @@ ISSUER_SCOPE = "https://www.googleapis.com/auth/wallet_object.issuer"
 
 # Default class background — neutral dark, looks readable with white text.
 DEFAULT_HEX_BG = "#1f2937"
+# Background used when a membership is lapsed/expired — a dark red, still readable
+# with white text. Wallet passes can't color an individual field red, so we tint the
+# whole card to signal the "Unpaid/expired" state.
+EXPIRED_HEX_BG = "#991b1b"
 
 _token_lock = threading.Lock()
 _cached_token: dict = {"value": None, "expires_at": 0.0}
@@ -98,6 +102,13 @@ def _absolute_icon_url(club) -> str:
         return ""
     try:
         from django.contrib.sites.models import Site
+
+        from auctions import cloudflare_images
+
+        cloudflare_url = cloudflare_images.image_url(None, club.cloudflare_image_id, "google_wallet_logo")
+        if cloudflare_url:
+            # imagedelivery.net URLs are already absolute and publicly reachable
+            return cloudflare_url
         from easy_thumbnails.files import get_thumbnailer
 
         thumbnailer = get_thumbnailer(club.icon)
@@ -129,14 +140,15 @@ def _class_body(club) -> dict:
     }
 
 
-def _object_visuals(club) -> dict:
+def _object_visuals(club, expired: bool = False) -> dict:
     """Logo + background color fields for a GenericObject, derived from the club.
 
     These belong on the per-member GenericObject (not the GenericClass), so they
     must be merged into both the initial save-to-wallet JWT payload and any
-    subsequent PATCH that refreshes member metadata.
+    subsequent PATCH that refreshes member metadata. When ``expired`` is True the
+    card is tinted red to signal a lapsed membership.
     """
-    visuals: dict = {"hexBackgroundColor": DEFAULT_HEX_BG}
+    visuals: dict = {"hexBackgroundColor": EXPIRED_HEX_BG if expired else DEFAULT_HEX_BG}
     icon_url = _absolute_icon_url(club)
     if icon_url:
         visuals["logo"] = {
@@ -144,6 +156,34 @@ def _object_visuals(club) -> dict:
             "contentDescription": {"defaultValue": {"language": "en-US", "value": f"{club.name} logo"}},
         }
     return visuals
+
+
+def _status_text_module(member) -> dict | None:
+    """A 'Membership' text module carrying the member's wallet status line, or None.
+
+    None when the club doesn't run memberships, so those passes are unchanged.
+    """
+    status = member.wallet_status_text
+    if not status:
+        return None
+    return {"id": "membership_status", "header": "Membership", "body": status}
+
+
+def member_text_modules(member) -> list:
+    """textModulesData for a member's GenericObject: member ID plus (if applicable) status."""
+    modules = [{"id": "member_id", "header": "Member ID", "body": str(member.membership_number)}]
+    status_module = _status_text_module(member)
+    if status_module:
+        modules.append(status_module)
+    return modules
+
+
+def member_valid_time_interval(member) -> dict | None:
+    """validTimeInterval end for a member, based on the effective expiration date, or None."""
+    expiration = member.effective_expiration_date
+    if not expiration:
+        return None
+    return {"end": {"date": f"{expiration.isoformat()}T23:59:59"}}
 
 
 def _object_id_for_member(member) -> str:
@@ -167,13 +207,6 @@ def update_generic_object_for_member(member) -> bool:
         return False
     object_id = _object_id_for_member(member)
     member_name = _member_display_name(member)
-    text_modules = [
-        {"id": "member_id", "header": "Member ID", "body": str(member.membership_number)},
-    ]
-    if member.membership_expiration_date:
-        text_modules.append(
-            {"id": "expires", "header": "Expires", "body": member.membership_expiration_date.strftime("%B %-d, %Y")}
-        )
     body = {
         "cardTitle": {
             "defaultValue": {"language": "en-US", "value": member.club.name},
@@ -181,16 +214,17 @@ def update_generic_object_for_member(member) -> bool:
         "subheader": {
             "defaultValue": {"language": "en-US", "value": member_name},
         },
-        "textModulesData": text_modules,
+        "textModulesData": member_text_modules(member),
         "barcode": {
             "type": "CODE_128",
             "value": str(member.membership_number),
             "alternateText": str(member.membership_number),
         },
-        **_object_visuals(member.club),
+        **_object_visuals(member.club, expired=member.wallet_status_is_expired),
     }
-    if member.membership_expiration_date:
-        body["validTimeInterval"] = {"end": {"date": f"{member.membership_expiration_date.isoformat()}T23:59:59"}}
+    valid_time_interval = member_valid_time_interval(member)
+    if valid_time_interval:
+        body["validTimeInterval"] = valid_time_interval
     resp = requests.patch(
         f"{WALLET_API_BASE}/genericObject/{object_id}",
         json=body,

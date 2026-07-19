@@ -1,0 +1,27 @@
+{% comment %}
+Rendered under the print-method dropdown on /printing/ (included from UserLabelPrefsForm's crispy
+layout). Server-side warnings alert + the in-app Bluetooth connect card. The JS that reacts to
+dropdown changes and talks to the app bridge lives in user_labels.html's extra_js block.
+{% endcomment %}
+<div id="print-method-warnings" class="mt-2">
+  {% for warning in warnings %}
+  <div class="alert alert-warning alert-dismissible fade show" role="alert">
+    {{ warning }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  </div>
+  {% endfor %}
+</div>
+
+{% if request.is_mobile_app %}
+<div id="bluetooth-printer-card" class="card mb-3"{% if label_prefs.print_method != 'bluetooth' %} style="display:none"{% endif %}>
+  <div class="card-body">
+    <h5 class="card-title"><i class="bi bi-printer"></i> Bluetooth label printer</h5>
+    <div id="bt-printer-state" class="text-muted">Checking for a connected printer…</div>
+    <div id="bt-printer-actions" class="mt-2"></div>
+    <div id="bt-printer-size" class="mt-2"></div>
+  </div>
+</div>
+{% endif %}
+
+{# Live-warning map: {"method|preset": [warning, ...]} so the dropdown re-renders without a round-trip. #}
+{{ warning_map|json_script:"print-warning-map" }}

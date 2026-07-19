@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Lot map for {{ auction.title }}{% endblock %}
+{% block content %}
+<div class="container">
+  {% include 'auction_ribbon.html' %}
+
+  <h4 class="mt-3"><i class="bi bi-geo-alt"></i> Lot map</h4>
+  <p class="text-muted small">
+    A relative map of where unsold lots are, built from AR scans by app users. Lots drop off the
+    moment they're marked sold. The layout is accurate; the absolute scale is a rough estimate
+    (±30%), so treat distances as approximate.
+  </p>
+
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <span id="ar-coverage" class="badge bg-primary">Loading…</span>
+    <div class="flex-grow-1"></div>
+    <form method="post" action="{% url 'auction_lot_map_clear' slug=auction.slug %}"
+          onsubmit="return confirm('Clear ALL AR lot locations for this auction? Every scan will need to be redone.');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
+    </form>
+  </div>
+
+  <div class="mb-3">
+    <label for="ar-locate-input" class="form-label mb-1">Locate a lot</label>
+    <input list="ar-lot-list" id="ar-locate-input" class="form-control" placeholder="Lot number or name…" autocomplete="off">
+    <datalist id="ar-lot-list"></datalist>
+    <div id="ar-locate-msg" class="form-text"></div>
+  </div>
+
+  <div class="position-relative border rounded bg-body-tertiary" style="overflow:auto;">
+    <svg id="ar-map" width="100%" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" style="min-height:60vh; display:block;">
+      <g id="ar-map-content"></g>
+    </svg>
+    <div id="ar-popover" class="card shadow-sm" style="display:none; position:absolute; z-index:5; max-width:240px;"></div>
+  </div>
+  <div id="ar-empty" class="text-muted text-center py-5" style="display:none;">
+    No lot locations yet. Ask attendees to scan lots in the app's AR mode — locations appear here within a minute.
+  </div>
+</div>
+
+<script>
+(function(){
+  const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById('ar-map');
+  const content = document.getElementById('ar-map-content');
+  const coverage = document.getElementById('ar-coverage');
+  const datalist = document.getElementById('ar-lot-list');
+  const locateInput = document.getElementById('ar-locate-input');
+  const locateMsg = document.getElementById('ar-locate-msg');
+  const emptyMsg = document.getElementById('ar-empty');
+  const popover = document.getElementById('ar-popover');
+  let lots = [];
+  let unit = 1;          // world units per viewBox span, for sizing marks
+  const dotByLot = {};
+
+  function escapeHtml(s){ const d=document.createElement('div'); d.textContent = s==null?'':s; return d.innerHTML; }
+
+  function render(data){
+    lots = data.lots || [];
+    const pct = data.unsold_total ? Math.round(100 * data.unsold_with_position / data.unsold_total) : 0;
+    coverage.textContent = `${data.unsold_with_position} of ${data.unsold_total} unsold lots located (${pct}%)`;
+    datalist.innerHTML = lots.map(l => `<option value="${escapeHtml(l.lot_number)} — ${escapeHtml(l.name)}">`).join('');
+
+    content.innerHTML = '';
+    Object.keys(dotByLot).forEach(k => delete dotByLot[k]);
+    hidePopover();
+    const pts = data.positions || [];
+    if(!pts.length){ emptyMsg.style.display='block'; svg.style.display='none'; return; }
+    emptyMsg.style.display='none'; svg.style.display='block';
+
+    const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
+    let minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
+    let w=Math.max(maxX-minX, 1), h=Math.max(maxY-minY, 1);
+    const pad = 0.12*Math.max(w,h);
+    minX-=pad; minY-=pad; w+=2*pad; h+=2*pad;
+    unit = Math.max(w,h);
+    // Equal axis scale (square viewBox span each way via preserveAspectRatio); flip Y so +y points up.
+    svg.setAttribute('viewBox', `${minX} ${-(minY+h)} ${w} ${h}`);
+    pts.forEach(drawDot);
+  }
+
+  function drawDot(p){
+    const r = 0.02*unit;
+    const g = document.createElementNS(SVGNS,'g');
+    g.setAttribute('transform', `translate(${p.x}, ${-p.y})`);
+    g.style.cursor='pointer';
+    const c = document.createElementNS(SVGNS,'circle');
+    c.setAttribute('r', r);
+    c.setAttribute('fill', 'var(--bs-primary)');
+    c.setAttribute('fill-opacity', Math.max(0.25, Math.min(1, p.confidence || 0.3)).toFixed(2));
+    const t = document.createElementNS(SVGNS,'text');
+    t.setAttribute('y', -1.5*r);
+    t.setAttribute('font-size', (2.2*r).toFixed(3));
+    t.setAttribute('text-anchor','middle');
+    t.setAttribute('fill','var(--bs-body-color)');
+    t.textContent = p.lot_number;
+    g.appendChild(c); g.appendChild(t);
+    g.addEventListener('click', (ev)=> showPopover(p, ev));
+    content.appendChild(g);
+    dotByLot[p.lot] = {g, c, r};
+  }
+
+  function showPopover(p, ev){
+    popover.innerHTML =
+      `<div class="card-body p-2">
+         <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
+         <div class="small text-muted mb-1">${escapeHtml(p.name)}</div>
+         <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
+       </div>`;
+    const wrap = svg.parentElement.getBoundingClientRect();
+    const x = ev ? ev.clientX - wrap.left : wrap.width/2;
+    const y = ev ? ev.clientY - wrap.top : wrap.height/2;
+    popover.style.left = Math.min(x, wrap.width-240) + 'px';
+    popover.style.top = y + 'px';
+    popover.style.display='block';
+  }
+  function hidePopover(){ popover.style.display='none'; }
+  svg.addEventListener('click', (e)=>{ if(e.target===svg) hidePopover(); });
+
+  function locate(){
+    const val = locateInput.value.trim();
+    if(!val){ locateMsg.textContent=''; return; }
+    const num = val.split('—')[0].trim();
+    const lot = lots.find(l => `${l.lot_number} — ${l.name}` === val)
+             || lots.find(l => String(l.lot_number) === num);
+    if(!lot){ locateMsg.textContent = 'No matching lot.'; return; }
+    const dot = dotByLot[lot.pk];
+    if(!dot){ locateMsg.className='form-text text-warning'; locateMsg.textContent = `Lot ${lot.lot_number} has no location known yet.`; return; }
+    locateMsg.className='form-text'; locateMsg.textContent = `Showing lot ${lot.lot_number}.`;
+    // Pulse the target dot.
+    dot.g.classList.remove('ar-pulse'); void dot.g.offsetWidth; dot.g.classList.add('ar-pulse');
+    dot.g.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+  }
+  locateInput.addEventListener('change', locate);
+
+  async function poll(){
+    try {
+      const res = await fetch(dataUrl, {headers:{'X-Requested-With':'XMLHttpRequest'}});
+      if(res.ok){ render(await res.json()); }
+    } catch(e) { /* transient; retry next tick */ }
+  }
+  poll();
+  setInterval(poll, 10000);
+})();
+</script>
+<style>
+  @keyframes ar-pulse-kf { 0%{ opacity:1; } 50%{ opacity:0.2; } 100%{ opacity:1; } }
+  #ar-map .ar-pulse circle { animation: ar-pulse-kf 0.6s ease-in-out 3; stroke: var(--bs-danger); stroke-width: 0.4; }
+</style>
+{% endblock %}

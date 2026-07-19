@@ -18,6 +18,9 @@
   }
   var config = window.AUCTION_BARCODE_CONFIG || {};
   var scanUrl = config.scanUrl || "";
+  // Optional: when set (the Lot queue page), lot QR codes are posted here to build the queue
+  // instead of being treated as an unrecognized member-card scan. Other pages leave this empty.
+  var lotScanUrl = config.lotScanUrl || "";
   var csrfToken = config.csrfToken || "";
   var prefixKey = config.prefixKey || "F9";
   var checkInOnly = !!config.checkInOnly;
@@ -123,7 +126,8 @@
       var message = (payload && payload.message) || "Scan failed -- check your connection and try again.";
       showToast(message, "danger");
       announce({ ok: false, message: message });
-      return;
+      // Signal the camera scanner that this read was rejected so it re-arms quickly for a retry.
+      return false;
     }
     beep("checkin");
     pendingBidderNumber = "";
@@ -131,13 +135,45 @@
     if (checkInOnly) {
       // the self check-in kiosk shows its own full-screen welcome instead of a toast
       announce({ ok: true, payload: payload });
-      return;
+      return true;
     }
     var suffix = assignedBidderNumber ? " and assigned bidder number " + assignedBidderNumber : "";
     var adjSuffix = payload.adjustment_desc ? " | " + payload.adjustment_desc + " applied" : "";
     var verb = payload.verb || "Checked in";
     showToast(verb + " " + payload.name + suffix + adjSuffix, "success");
     announce({ ok: true, payload: payload });
+    return true;
+  }
+
+  // Lot queue: post a scanned lot's pk to the queue add endpoint. Returns false on a rejected read
+  // so the camera scanner re-arms quickly. Also fires an "auction-lot-queued" event so the queue
+  // page can refresh its list.
+  async function postLotScan(lotPk) {
+    var formData = new FormData();
+    formData.append("lot_pk", lotPk);
+    var payload = null;
+    try {
+      var response = await fetch(lotScanUrl, {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken },
+        body: formData,
+      });
+      payload = await response.json();
+    } catch (e) {
+      payload = null;
+    }
+    if (!payload || !payload.ok) {
+      beep("error");
+      var message = (payload && payload.message) || "Scan failed -- check your connection and try again.";
+      showToast(message, "danger");
+      announce({ ok: false, message: message });
+      return false;
+    }
+    beep("checkin");
+    showToast(payload.message || "Added to the queue", "success");
+    announce({ ok: true, payload: payload });
+    document.dispatchEvent(new CustomEvent("auction-lot-queued", { detail: payload }));
+    return true;
   }
 
   async function applyAdjustmentToBidder(bidderNumber) {
@@ -163,7 +199,7 @@
       var errMessage = (payload && payload.message) || "Scan failed -- check your connection and try again.";
       showToast(errMessage, "danger");
       announce({ ok: false, message: errMessage });
-      return;
+      return false;
     }
     beep("checkin");
     // Clear both the adjustment and any pending bidder number from the form
@@ -172,12 +208,22 @@
     var adjSuffix = payload.adjustment_desc ? " | " + payload.adjustment_desc + " applied" : "";
     showToast("Adjusted " + payload.name + " (bidder " + payload.bidder_number + ")" + adjSuffix, "success");
     announce({ ok: true, payload: payload });
+    return true;
   }
 
+  // Returns false when the value was rejected (unrecognized or a failed server scan) so a camera
+  // caller can re-arm quickly; true/undefined otherwise. The USB HID path ignores the return value.
   async function handleCode(rawValue) {
     var value = String(rawValue || "").trim();
     if (!value) {
       return;
+    }
+    // Lot QR codes look like https://{domain}/qr/{pk}/. When a lotScanUrl is configured (the Lot
+    // queue page) they build the queue; on every other page lotScanUrl is empty and lot QRs fall
+    // through to the existing member-card handling below, unchanged.
+    var lotQrMatch = value.match(/\/qr\/(\d+)/);
+    if (lotQrMatch && lotScanUrl) {
+      return await postLotScan(lotQrMatch[1]);
     }
     if (checkInOnly) {
       // Kiosk mode: membership cards only. Paddle and adjustment barcodes are refused
@@ -186,10 +232,9 @@
         beep("error");
         showToast("Unrecognized barcode", "danger");
         announce({ ok: false, message: "Unrecognized barcode" });
-        return;
+        return false;
       }
-      await postScan(value);
-      return;
+      return await postScan(value);
     }
     var paddleBidderNumber = parsePaddleBarcode(value);
     if (paddleBidderNumber) {
@@ -197,13 +242,12 @@
         // Adjustment scanned first, now a paddle: look up the bidder holding that number and
         // apply the pending adjustment straight to their invoice (no member card, no check-in).
         beep("scan");
-        await applyAdjustmentToBidder(paddleBidderNumber);
-        return;
+        return await applyAdjustmentToBidder(paddleBidderNumber);
       }
       beep("scan");
       pendingBidderNumber = paddleBidderNumber;
       showToast("Scan the user to assign bidder number " + pendingBidderNumber + " to.", "warning");
-      return;
+      return true;
     }
     var adjustment = parseAdjustmentBarcode(value);
     if (adjustment) {
@@ -211,9 +255,9 @@
       pendingAdjustment = adjustment;
       var sign = adjustment.adjustmentType === "ADD" ? "+" : "-";
       showToast("Scan a member card or bidder number to apply " + sign + "$" + adjustment.amount + " " + adjustment.label + " to their invoice.", "warning");
-      return;
+      return true;
     }
-    await postScan(value);
+    return await postScan(value);
   }
 
   // --- USB HID (keyboard wedge) listener -----------------------------------

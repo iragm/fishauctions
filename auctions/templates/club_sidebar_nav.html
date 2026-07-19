@@ -1,5 +1,4 @@
 {% comment %}Club navigation links. Included by club_sidebar.html for both the desktop column and the mobile offcanvas. Context comes from the club_sidebar tag.{% endcomment %}
-{% load thumbnail %}
 <nav class="nav flex-column">
   <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
 
@@ -12,6 +11,18 @@
   <h6 class="px-3 text-muted text-truncate mb-1" title="{{ sidebar_auction.title }}">{{ sidebar_auction.title }}</h6>
   {% if members_through_auction %}
   <a class="nav-link {% if active_tab == 'users' %}active{% endif %}" href="{% url 'auction_tos_list' slug=sidebar_auction.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
+  {% endif %}
+  {% comment %} Add user opens the same modal the auction users table uses: a club member form for
+  club-managed auctions (with the auction pre-linked in check-in mode), or the AuctionTOS form otherwise.
+  Loads over whatever page the sidebar is on via #modals-here (present globally in base.html). {% endcomment %}
+  {% if sidebar_auction.is_club_managed %}
+  <a class="nav-link" href="{% url 'clubmember_create' slug=sidebar_auction.club.slug %}{% if sidebar_auction.use_check_in_mode %}?auction={{ sidebar_auction.slug }}{% endif %}"
+     hx-get="{% url 'clubmember_create' slug=sidebar_auction.club.slug %}{% if sidebar_auction.use_check_in_mode %}?auction={{ sidebar_auction.slug }}{% endif %}"
+     hx-target="#modals-here" hx-trigger="click"><i class="bi bi-person-fill-add me-1"></i> Add user</a>
+  {% else %}
+  <a class="nav-link" href="{% url 'auctiontosadmin' pk=sidebar_auction.slug %}"
+     hx-get="{% url 'auctiontosadmin' pk=sidebar_auction.slug %}"
+     hx-target="#modals-here" hx-trigger="click"><i class="bi bi-person-fill-add me-1"></i> Add user</a>
   {% endif %}
   <a class="nav-link" href="{% url 'auction_main' slug=sidebar_auction.slug %}"><i class="bi bi-file-text me-1"></i> Rules</a>
   <a class="nav-link" href="{{ sidebar_auction.view_lot_link }}"><i class="bi bi-grid me-1"></i> Lots</a>

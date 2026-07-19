@@ -38,6 +38,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.sendnotifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Fuse AR lot sightings into a 2D map + prune the observation buffer - every minute
+    "update_ar_positions": {
+        "task": "auctions.tasks.update_ar_positions",
+        "schedule": 60.0,  # Run every minute
+    },
     # Welcome and print reminder emails - every 15 minutes
     "auctiontos_notifications": {
         "task": "auctions.tasks.auctiontos_notifications",
@@ -61,6 +66,11 @@ app.conf.beat_schedule = {
     # Weekly promo email - every hour (per-user scheduling via next_promo_email_at allows local timezone delivery)
     "weekly_promo": {
         "task": "auctions.tasks.weekly_promo",
+        "schedule": 3600.0,  # Run every hour
+    },
+    # Promo push notifications for nearby auctions (push analogue of weekly_promo) - every hour
+    "promo_push_notifications": {
+        "task": "auctions.tasks.promo_push_notifications",
         "schedule": 3600.0,  # Run every hour
     },
     # Set user locations - every 2 hours
@@ -93,10 +103,25 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Refresh Google Wallet passes for members who recently expired so the pass status/color updates - every 24 hours
+    "refresh_google_wallet_membership_status": {
+        "task": "auctions.tasks.refresh_google_wallet_membership_status",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Same for Apple Wallet: push updates to registered devices of recently-expired members - every 24 hours
+    "refresh_apple_wallet_membership_status": {
+        "task": "auctions.tasks.refresh_apple_wallet_membership_status",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
     "flush_expired_tokens": {
         "task": "auctions.tasks.flush_expired_tokens",
         "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Move one local image to Cloudflare Images - every minute (no-op unless CLOUDFLARE_IMAGES_* is set in .env)
+    "migrate_to_cloudflare_images": {
+        "task": "auctions.tasks.migrate_to_cloudflare_images",
+        "schedule": 60.0,  # Run every minute
     },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next

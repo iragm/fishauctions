@@ -108,6 +108,8 @@
   </div>
 </span>
 
+{% include "auctions/partials/htmx_table_filters.html" with filter_button_class="btn-primary mt-2 mb-2" %}
+
 {% if auction.use_check_in_mode and can_manage_check_in %}
   <a class="btn btn-sm mt-2 mb-2 btn-primary" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
 {% endif %}

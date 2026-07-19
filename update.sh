@@ -13,7 +13,10 @@ set_env_value() {
     local value="$2"
     if grep -q "^${key}=" "$ENV_FILE"; then
         local escaped_value
-        escaped_value="$(printf '%s' "$value" | sed 's/[@&]/\\&/g')"
+        # Escape sed replacement metacharacters: backslash FIRST, then the @
+        # delimiter and & (whole-match backreference). Missing the backslash meant
+        # a value containing '\' (or '@') silently corrupted the written line.
+        escaped_value="$(printf '%s' "$value" | sed 's/[\\@&]/\\&/g')"
         sed -i "s@^${key}=.*@${key}=${escaped_value}@" "$ENV_FILE"
     else
         printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
@@ -151,7 +154,9 @@ prompt_for_site_domain() {
 ensure_permissions() {
     local puid
     local pgid
-    local writable_paths=(./mediafiles ./logs ./auctions/static)
+    # Only dirs the containers WRITE to. auctions/static is no longer listed: the
+    # container just reads it (collectstatic source); STATIC_ROOT is a named volume.
+    local writable_paths=(./mediafiles ./logs)
     puid="$(get_env_value "PUID")"
     pgid="$(get_env_value "PGID")"
     puid="${puid:-1000}"
@@ -165,16 +170,61 @@ ensure_permissions() {
     fi
 }
 
-update_nginx_domain() {
-    local site_domain
-    local escaped_site_domain
+render_nginx_domain() {
+    # Render nginx.prod.conf from the tracked nginx.prod.conf.template, substituting
+    # __SITE_DOMAIN__ with SITE_DOMAIN. The OUTPUT is gitignored, which is the whole
+    # point: `git restore .` / `git pull` above never revert it to a broken
+    # placeholder (a code-only deploy can no longer take the site down), and
+    # rendering never dirties the tree, so the live domain can't be committed by
+    # accident. The template is always clean, so this is fully idempotent -- no
+    # reliance on the current rendered value.
+    local template="./nginx.prod.conf.template"
+    local output="./nginx.prod.conf"
+    local site_domain escaped_site_domain
     site_domain="$(get_env_value "SITE_DOMAIN")"
-    escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&]/\\&/g')"
-    if grep -q "server_name _;" ./nginx.prod.conf; then
-        sed -i "s@server_name _;@server_name $escaped_site_domain;@" "./nginx.prod.conf"
+    if [ ! -f "$template" ]; then
+        echo "WARNING: $template not found; $output not rendered."
+        return
     fi
+    if ! grep -q "__SITE_DOMAIN__" "$template"; then
+        echo "WARNING: __SITE_DOMAIN__ placeholder not found in $template; $output not rendered."
+        echo "         Is the file checked out cleanly?"
+        return
+    fi
+    # An empty SITE_DOMAIN would render `server_name ;`, which nginx rejects and
+    # which would take the site down. Refuse to overwrite a possibly-good existing
+    # config and abort the deploy loudly -- git has already advanced, so the old
+    # containers keep serving until SITE_DOMAIN is fixed and ./update.sh re-run.
+    if [ -z "$site_domain" ]; then
+        echo "Update failed: SITE_DOMAIN is empty; refusing to render $output (would break nginx)."
+        echo "Set SITE_DOMAIN in .env and re-run ./update.sh. Containers were NOT restarted."
+        exit 1
+    fi
+    # Escape sed replacement metacharacters (& and the @ delimiter).
+    escaped_site_domain="$(printf '%s' "$site_domain" | sed 's/[@&\\]/\\&/g')"
+    sed "s@__SITE_DOMAIN__@${escaped_site_domain}@g" "$template" > "$output"
 }
 
+# Preflight: a custom NGINX_IMAGE (prod uses lscr.io/linuxserver/swag) without
+# NGINX_TAG resolves to swag:<default tag>, which only exists for the stock dev
+# nginx image -- the deploy would then die at `docker compose pull`, AFTER git has
+# already advanced. Fail here instead, before anything changes.
+if [ -f "$ENV_FILE" ]; then
+    nginx_image="$(get_env_value "NGINX_IMAGE")"
+    nginx_tag="$(get_env_value "NGINX_TAG")"
+    if [ -n "$nginx_image" ] && [ "$nginx_image" != "nginx" ] && [ -z "$nginx_tag" ]; then
+        echo "Update failed: NGINX_IMAGE is set to '$nginx_image' but NGINX_TAG is not set."
+        echo "Set NGINX_TAG in .env to the release this host currently runs; find it with:"
+        echo "  docker inspect nginx --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}'"
+        echo "then add e.g. NGINX_TAG='2.11.0' to .env and re-run. Nothing was changed."
+        exit 1
+    fi
+fi
+
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+deploy_branch="${DEPLOY_BRANCH:-$current_branch}"
+
+echo "Deploying branch: $deploy_branch"
 echo "This will erase any local uncommited changes. Did you make a snapshot? (y/n)"
 if [ -t 0 ]; then
     read -r response
@@ -189,8 +239,19 @@ if [[ "$response" != "y" ]]; then
 fi
 
 git restore .
-if ! git pull; then
-    echo "Update failed. Docker services were not restarted."
+# A plain `git pull` silently deploys whatever branch is checked out. Pin the ref
+# (override with DEPLOY_BRANCH) so the deployed branch is explicit, and use
+# --ff-only so a branch that has diverged from its remote fails loudly instead of
+# creating a merge commit / conflict on the server.
+if [ "$deploy_branch" != "$current_branch" ]; then
+    if ! git checkout "$deploy_branch"; then
+        echo "Update failed: could not checkout '$deploy_branch'. Docker services were not restarted."
+        exit 1
+    fi
+fi
+if ! git pull --ff-only origin "$deploy_branch"; then
+    echo "Update failed: origin/$deploy_branch could not be fast-forwarded (diverged branch or network error)."
+    echo "Docker services were not restarted."
     exit 1
 fi
 
@@ -200,11 +261,39 @@ generate_missing_values
 ensure_db_credentials
 ensure_permissions
 set_env_value "SETUP_COMPLETE" "\"1\""
-update_nginx_domain
+render_nginx_domain
 
-# Rebuild images and recreate every container. --force-recreate is required because the
-# source tree is bind-mounted into the app containers (see docker-compose.yaml): a git pull
-# changes the mounted code but not the image, so a plain `up -d` would leave the long-running
-# gunicorn/celery processes serving the OLD code until they are restarted. Force-recreating
-# also picks up new .env values and pulled nginx config in a single step.
-docker compose up -d --build --force-recreate
+# Refresh base images so security patches actually arrive. `up --build` alone
+# never re-pulls tags that already exist locally, so pinned images (mariadb,
+# redis, nginx/swag) and the python base in our Dockerfile's FROM would be frozen
+# at whatever was first pulled. `pull` refreshes the pre-built service images;
+# `build --pull` re-pulls the base image referenced by FROM before building ours.
+# From here on git has already advanced, so on any failure say so explicitly:
+# the old containers are still running the previous build, and re-running
+# ./update.sh after fixing the error is the recovery path.
+if ! docker compose pull; then
+    echo "Update failed during 'docker compose pull' (registry error or bad image tag in .env)."
+    echo "Code was already updated by git, but containers were NOT restarted -- the site is"
+    echo "still running the previous build. Fix the error above and re-run ./update.sh."
+    exit 1
+fi
+if ! docker compose build --pull; then
+    echo "Update failed during 'docker compose build'. Code was already updated by git, but"
+    echo "containers were NOT restarted -- the site is still running the previous build."
+    echo "Fix the error above and re-run ./update.sh."
+    exit 1
+fi
+# --force-recreate is REQUIRED, not optional. App code is bind-mounted (not baked
+# into the image), so a routine code-only deploy rebuilds a byte-identical image and
+# a plain `up -d` recreates NOTHING -- gunicorn/celery keep serving the pre-pull code
+# until manually restarted. Worse, nginx proxies to a STATIC `proxy_pass http://web:8000`
+# (nginx_fishauctions.conf), resolving web's container IP once at startup; if web is
+# ever replaced without nginx also restarting, nginx proxies to a dead IP. Recreating
+# the whole graph fixes both: every app container restarts with fresh code, and nginx
+# (which depends_on web) comes up AFTER web and re-resolves its current IP. This is why
+# past deploys needed a manual `docker compose restart` -- that bounced nginx too.
+if ! docker compose up -d --force-recreate; then
+    echo "Update failed during 'docker compose up'. Some services may not have restarted;"
+    echo "check 'docker compose ps' and the container logs, then re-run ./update.sh."
+    exit 1
+fi

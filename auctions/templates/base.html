@@ -50,10 +50,16 @@ window.onload = function() {
                 {% endwith %}
             {% endblock %}
         </title>
+        {% if club and club.icon %}
+        <link rel="icon" type="image/png" href="{{ club.icon_display_url }}"/>
+        <link rel="shortcut icon" href="{{ club.icon_display_url }}"/>
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ club.icon_display_url }}"/>
+        {% else %}
         <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}"/>
         <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}"/>
         <link rel="shortcut icon" href="{% static 'favicon.ico' %}"/>
         <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}"/>
+        {% endif %}
         <link rel="manifest" href="{% url 'site_webmanifest' %}"/>
         <meta name="description" content="" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -202,7 +208,7 @@ window.onload = function() {
           var $ = window.jQuery;
   // toast
   (function(b){b.toast=function(a,h,g,l,k){b("#toast-container").length||(b("body").prepend('<div id="toast-container" aria-live="polite" aria-atomic="true"></div>'),b("#toast-container").append('<div id="toast-wrapper"></div>'));var c="",d="",e="text-muted",f="",m="object"===typeof a?a.title||"":a||"Notice!";h="object"===typeof a?a.subtitle||"":h||"";g="object"===typeof a?a.content||"":g||"";k="object"===typeof a?a.delay||3E3:k||3E3;switch("object"===typeof a?a.type||"":l||"info"){case "info":c="bg-info";
-  f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;case "warning":case "warn":c="bg-warning";f=e=d="text-white";break;case "error":case "danger":c="bg-danger",f=e=d="text-white"}a='<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="'+k+'">'+('<div class="toast-header '+c+" "+d+'">')+('<strong class="me-auto">'+m+"</strong>");a+='<small class="'+e+'">'+h+"</small>";a+='<button type="button" class="ms-2 mb-1 btn-close" data-bs-dismiss="toast" aria-label="Close"></button>';
+  f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-dark";break;case "warning":case "warn":c="bg-warning";f=e=d="text-dark";break;case "error":case "danger":c="bg-danger",f=e=d="text-white"}a='<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="'+k+'">'+('<div class="toast-header '+c+" "+d+'">')+('<strong class="me-auto">'+m+"</strong>");a+='<small class="'+e+'">'+h+"</small>";a+='<button type="button" class="ms-2 mb-1 btn-close" data-bs-dismiss="toast" aria-label="Close"></button>';
   ""!==g&&(a+='<div class="toast-body">',a+=g,a+="</div>");a+="</div>";b("#toast-wrapper").append(a);b("#toast-wrapper .toast:last").toast("show")}})(jQuery);
       {# the following lines are for a user messaging websocket which does not seem needed at this time #}
       // {% if request.user.is_authenticated and not disable_websocket %}
@@ -329,7 +335,7 @@ window.onload = function() {
                       <a class="dropdown-item" href="{% url 'clubs' %}">Find a club</a>
                       <div class="dropdown-divider"></div>
                       {% for club in user_clubs %}
-                      <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon.url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>
+                      <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon_thumbnail_url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>
                       {% endfor %}
                     </div>
                     {% else %}
@@ -423,12 +429,12 @@ window.onload = function() {
         {% if messages %}
             {% for message in messages %}
             <div class="alert
-            {% if "error" in message.tags %}
+            {% if "error" in message.level_tag %}
             alert-danger
             {% else %}
-            alert-{{ message.tags }}
+            alert-{{ message.level_tag }}
             {% endif %}
-            alert-dismissible fade show" role="alert">{{ message|safe }}
+            alert-dismissible fade show" role="alert">{% if message.extra_tags and "safe" in message.extra_tags %}{{ message|safe }}{% else %}{{ message }}{% endif %}
             <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
             </div>
             {% endfor %}

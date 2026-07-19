@@ -1,16 +1,24 @@
 from django.urls import path
 
 from .views import (
+    MobileArLotsView,
+    MobileArObservationsView,
+    MobileArPositionsView,
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
     MobileDeviceRegisterView,
+    MobileDeviceUnregisterView,
     MobileGoogleAuthView,
+    MobileLabelPrefsView,
     MobileLoginView,
     MobileLotLabelView,
     MobileMyClubsView,
+    MobileOfflineSnapshotView,
+    MobileOfflineSyncView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
+    MobilePrinterProfilesView,
     MobileTokenRefreshView,
     MobileUserMeView,
     MobileWebSessionConsumeView,
@@ -36,7 +44,11 @@ urlpatterns = [
     path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
+    path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),
+    # Printers
+    path("printers/profiles/", MobilePrinterProfilesView.as_view(), name="mobile-printer-profiles"),
     # Labels
+    path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
     # Payments
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),
@@ -44,4 +56,11 @@ urlpatterns = [
     # Command palette
     path("command-palette/", MobileCommandPaletteView.as_view(), name="mobile-command-palette"),
     path("command-palette/log/", MobileCommandPaletteLogView.as_view(), name="mobile-command-palette-log"),
+    # AR lot scanning
+    path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
+    path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
+    path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
+    # Offline mode (in-person sale)
+    path("offline/snapshot/", MobileOfflineSnapshotView.as_view(), name="mobile-offline-snapshot"),
+    path("offline/sync/", MobileOfflineSyncView.as_view(), name="mobile-offline-sync"),
 ]

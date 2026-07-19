@@ -52,6 +52,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
+from . import cloudflare_images
 from .email_routing import admin_routing_email, build_routed_sender_address
 from .helper_functions import bin_data, get_currency_symbol
 
@@ -98,8 +99,31 @@ def nearby_auctions(
 
 
 def median_value(queryset, term):
+    """Median of ``term`` across ``queryset`` (values sorted ascending).
+
+    For an odd number of rows this is the middle value; for an even number it is the
+    mean of the two middle values -- the standard median convention. Raises IndexError
+    on an empty queryset, which is the contract both callers already rely on
+    (``Auction.median_lot_price`` guards with ``if lots`` and the image-stats charts
+    wrap the call in ``try/except`` and substitute 0).
+
+    The previous implementation indexed with ``int(round(count / 2))``. Python's
+    ``round`` uses banker's rounding, so e.g. ``round(3 / 2) == 2`` and
+    ``round(7 / 2) == 4`` selected an element past the true middle, giving an
+    off-by-one that shifted with the count, and even counts returned the upper of the
+    two middle values rather than their mean.
+    """
     count = queryset.count()
-    return queryset.values_list(term, flat=True).order_by(term)[int(round(count / 2))]
+    if not count:
+        # Match the old behaviour of indexing an empty queryset.
+        msg = "median_value() called on an empty queryset"
+        raise IndexError(msg)
+    values = queryset.values_list(term, flat=True).order_by(term)
+    middle = count // 2
+    if count % 2:
+        return values[middle]
+    lower, upper = values[middle - 1 : middle + 1]
+    return (lower + upper) / 2
 
 
 def add_price_info(qs):
@@ -120,6 +144,10 @@ def add_price_info(qs):
         ),
         your_cut=ExpressionWrapper(
             Case(
+                # Removed (banned) lots are never charged -- see the ``banned`` field help text.
+                # This restores the original ``payout`` property's ``if self.banned: return payout``
+                # guard, which was dropped when the cut logic became a queryset annotation.
+                When(banned=True, then=Value(Decimal(0))),
                 When(
                     Q(auctiontos_seller__isnull=True, winning_price__isnull=False),
                     then=F("winning_price"),
@@ -130,7 +158,12 @@ def add_price_info(qs):
                 ),
                 When(donation=True, then=Value(Decimal(0))),
                 When(
-                    Q(winning_price__isnull=False, active=False),
+                    # A completed buy-now sale sets winning_price + buy_now_used but deliberately
+                    # leaves active=True: the lot stays visible in the browse view until the
+                    # endauctions cron flips it inactive. Credit the seller the moment buy now
+                    # completes -- keying only on active=False books the entire sale price to the
+                    # club (club_cut default = winning_price - your_cut) until the cron catches up.
+                    Q(winning_price__isnull=False) & (Q(active=False) | Q(buy_now_used=True)),
                     then=(
                         (
                             F("winning_price")
@@ -196,6 +229,8 @@ def add_price_info(qs):
         ),
         club_cut=ExpressionWrapper(
             Case(
+                # Removed (banned) lots are never charged, so the club earns nothing on them either.
+                When(banned=True, then=Value(Decimal(0))),
                 When(Q(active=False, winning_price__isnull=True), then=Value(Decimal(0))),
                 When(winning_price__isnull=True, then=Value(Decimal(0))),
                 default=(F("winning_price") * (100 - Cast(F("partial_refund_percent"), money_field)) / 100)
@@ -477,6 +512,36 @@ def guess_category(text):
     return None
 
 
+# Tags Summernote legitimately emits for rich-text formatting. Anything not on this
+# allowlist is stripped. An allowlist (unlike the previous fixed blocklist) can't be
+# bypassed by novel or foreign elements -- e.g. <svg>/<math>, which open a foreign
+# parsing context that browsers use for mutation-XSS and which no blocklist enumerates
+# completely.
+ALLOWED_SUMMERNOTE_TAGS = frozenset(
+    {
+        "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col",
+        "colgroup", "dd", "del", "dfn", "div", "dl", "dt", "em", "figcaption",
+        "figure", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
+        "kbd", "li", "mark", "ol", "p", "pre", "q", "s", "samp", "small", "span",
+        "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
+        "thead", "time", "tr", "u", "ul", "var",
+    }
+)  # fmt: skip
+
+# Disallowed tags whose *contents* must also be dropped (not just the tag itself): these
+# carry executable code, foreign (SVG/MathML) or embedded/external content, or raw-text
+# parsing contexts that mutation-XSS relies on. Any other disallowed tag is unwrapped so
+# its plain text survives.
+UNSAFE_SUMMERNOTE_TAGS = frozenset(
+    {
+        "applet", "audio", "base", "canvas", "embed", "form", "frame", "frameset",
+        "iframe", "img", "link", "map", "math", "meta", "noembed", "noscript",
+        "object", "param", "plaintext", "script", "source", "style", "svg",
+        "template", "textarea", "title", "track", "video", "xmp",
+    }
+)  # fmt: skip
+
+
 def sanitize_summernote_html(text):
     """Remove disallowed Summernote content while preserving supported formatting."""
     if text is None:
@@ -486,11 +551,20 @@ def sanitize_summernote_html(text):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    # Block executable, externally embedded, or page-hijacking content.
-    # <style>/<link> enable CSS injection; <base> hijacks relative URLs; <meta> can redirect;
-    # <form> enables phishing overlays (Summernote never generates forms).
-    for tag in soup.find_all(["base", "embed", "form", "iframe", "img", "link", "meta", "object", "script", "style"]):
-        tag.decompose()
+    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order (parents
+    # before children), so decomposing a parent marks its descendants ``decomposed`` and we
+    # skip them below. Executable/foreign tags are removed with their subtree; any other
+    # unexpected tag is unwrapped so its text content is preserved.
+    for tag in soup.find_all(True):
+        if getattr(tag, "decomposed", False):
+            continue
+        name = (tag.name or "").lower()
+        if name in ALLOWED_SUMMERNOTE_TAGS:
+            continue
+        if name in UNSAFE_SUMMERNOTE_TAGS:
+            tag.decompose()
+        else:
+            tag.unwrap()
 
     for tag in soup.find_all():
         for attr_name, attr_value in list(tag.attrs.items()):
@@ -590,6 +664,38 @@ def _pick_unique_membership_number():
     raise RuntimeError(msg)
 
 
+class CloudflareImageMixin(models.Model):
+    """For models with an image field that can be mirrored to Cloudflare Images.
+
+    `cloudflare_image_id` is set by the migrate_to_cloudflare_images management command;
+    once set (and Cloudflare Images is enabled, see .env.example), image URLs come from
+    Cloudflare's CDN instead of locally generated thumbnails.  Replacing the image file
+    clears a stale id so the new file gets picked up by the next migration run.
+    Set IMAGE_FIELD_NAME on the subclass if its image field isn't called `image`.
+    """
+
+    IMAGE_FIELD_NAME = "image"
+    cloudflare_image_id = models.CharField(max_length=100, blank=True, default="", editable=False, db_index=True)
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if self.pk and self.cloudflare_image_id and (update_fields is None or self.IMAGE_FIELD_NAME in update_fields):
+            old = type(self).objects.filter(pk=self.pk).values(self.IMAGE_FIELD_NAME, "cloudflare_image_id").first()
+            if (
+                old
+                and old[self.IMAGE_FIELD_NAME] != getattr(self, self.IMAGE_FIELD_NAME).name
+                and old["cloudflare_image_id"] == self.cloudflare_image_id
+            ):
+                # the image file changed but the id didn't: it now points at the old image
+                self.cloudflare_image_id = ""
+                if update_fields is not None:
+                    kwargs["update_fields"] = set(update_fields) | {"cloudflare_image_id"}
+        super().save(*args, **kwargs)
+
+
 class BlogPost(models.Model):
     """
     A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
@@ -631,9 +737,10 @@ class GeneralInterest(models.Model):
         return str(self.name)
 
 
-class Club(models.Model):
+class Club(CloudflareImageMixin, models.Model):
     """Users can self-select which club they belong to"""
 
+    IMAGE_FIELD_NAME = "icon"
     name = models.CharField(max_length=255, db_index=True)
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
@@ -735,24 +842,34 @@ class Club(models.Model):
     membership_email_template = models.TextField(blank=True, default="")
     include_next_auction_in_emails = models.BooleanField(default=True)
     welcome_opening = models.TextField(
-        blank=True, default="Thanks for joining!", verbose_name="Welcome email opening text"
+        blank=True,
+        default="Thanks for joining!\n\nYou can view your membership below:",
+        verbose_name="Welcome email opening text",
     )
-    welcome_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Welcome email closing text")
+    welcome_closing = models.TextField(
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Welcome email closing text"
+    )
     welcome_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
     )
     renewal_opening = models.TextField(
-        blank=True, default="Your membership has been renewed!", verbose_name="Renewal email opening text"
+        blank=True,
+        default="Thanks for being a club member, and we'll see you at our next meeting.",
+        verbose_name="Renewal email opening text",
     )
-    renewal_closing = models.TextField(blank=True, default="Best wishes,", verbose_name="Renewal email closing text")
+    renewal_closing = models.TextField(
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Renewal email closing text"
+    )
     renewal_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
     )
     expiring_soon_opening = models.TextField(
-        blank=True, default="Your membership expires soon", verbose_name="Expiring soon email opening text"
+        blank=True,
+        default="It's time to renew your membership!  You can pay at this link:",
+        verbose_name="Expiring soon email opening text",
     )
     expiring_soon_closing = models.TextField(
-        blank=True, default="Best wishes,", verbose_name="Expiring soon email closing text"
+        blank=True, default="See you there!\n\nBest wishes,", verbose_name="Expiring soon email closing text"
     )
     expiring_soon_include_auction = models.BooleanField(
         default=True, verbose_name="Also include information about the next auction"
@@ -973,6 +1090,16 @@ class Club(models.Model):
     def brevo_connected(self):
         """True when this club has an active Brevo connection (API key) with a list selected."""
         return bool(self.brevo_api_key and self.brevo_list_id)
+
+    @property
+    def icon_display_url(self):
+        """Full-size icon URL; from Cloudflare when migrated, else the local file"""
+        return cloudflare_images.image_url(self.icon, self.cloudflare_image_id)
+
+    @property
+    def icon_thumbnail_url(self):
+        """Small square icon (the club_icon alias/variant), shown beside the club name"""
+        return cloudflare_images.image_url(self.icon, self.cloudflare_image_id, "club_icon")
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
@@ -1360,6 +1487,14 @@ class ClubMember(ContactRecord):
         max_length=50, blank=True, help_text="Brevo internal contact id, used to build the 'View in Brevo' link."
     )
     brevo_last_synced = models.DateTimeField(null=True, blank=True)
+    # Apple Wallet (PassKit web service) bookkeeping.  The auth token is the shared
+    # secret baked into the member's .pkpass; devices present it as
+    # "Authorization: ApplePass <token>" when talking to the web service.  Generated
+    # lazily the first time a pass is built (see apple_wallet.ensure_apple_pass_auth_token).
+    apple_pass_auth_token = models.CharField(max_length=64, blank=True, default="", editable=False)
+    # Bumped whenever pass-visible content changes; drives Last-Modified / If-Modified-Since
+    # on pass delivery and the passesUpdatedSince filter on the device registration list.
+    apple_pass_updated = models.DateTimeField(default=timezone.now, editable=False)
 
     @property
     def has_any_permission(self):
@@ -1408,6 +1543,50 @@ class ClubMember(ContactRecord):
                 return self.membership_last_paid >= datetime.date(today.year, 1, 1)
             return self.membership_last_paid >= today - datetime.timedelta(days=365)
         return False
+
+    @property
+    def effective_expiration_date(self):
+        """The date this membership is (or was) valid through, or None.
+
+        Returns None when the club doesn't run memberships (membership_system 'none')
+        or the member has no payment on record. Prefers an explicit
+        membership_expiration_date, otherwise derives it from membership_last_paid
+        under the club's renewal system — mirroring is_paid_member and
+        calculate_membership_expiration_reminder_due so every surface agrees.
+        """
+        if self.club.membership_system == "none":
+            return None
+        if self.membership_expiration_date:
+            return self.membership_expiration_date
+        if self.membership_last_paid:
+            paid = self.membership_last_paid
+            if self.club.membership_system == "january_first":
+                return datetime.date(paid.year + 1, 1, 1)
+            return paid + datetime.timedelta(days=365)
+        return None
+
+    @property
+    def wallet_status_text(self):
+        """Short membership-status line for Google/Apple Wallet passes, or None.
+
+        None when the club doesn't run memberships — in that case passes omit the
+        status entirely and behave exactly as before. Otherwise returns
+        "Unpaid/expired" when dues are lapsed or never paid, or
+        "Valid through 1 Jan 2025" using the effective expiration date.
+        """
+        if self.club.membership_system == "none":
+            return None
+        if not self.is_paid_member:
+            return "Unpaid/expired"
+        expiration = self.effective_expiration_date
+        if expiration:
+            return f"Valid through {expiration.strftime('%-d %b %Y')}"
+        return "Valid"
+
+    @property
+    def wallet_status_is_expired(self):
+        """True when the wallet pass should render its expired styling (red)."""
+        return self.club.membership_system != "none" and not self.is_paid_member
 
     @property
     def discord_role(self):
@@ -1950,6 +2129,30 @@ class ClubMember(ContactRecord):
         return self.bidder_number
 
 
+class AppleDeviceRegistration(models.Model):
+    """A device that holds a member's Apple Wallet pass (PassKit web service).
+
+    Created when an iPhone/Watch registers via POST /passkit/v1/devices/..., removed
+    when the user deletes the pass.  push_token is the APNs token we notify when the
+    pass content changes so the device re-fetches the latest .pkpass.
+    """
+
+    member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="apple_device_registrations")
+    device_library_identifier = models.CharField(max_length=255, db_index=True)
+    push_token = models.CharField(max_length=255)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["member", "device_library_identifier"], name="unique_member_device_registration"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.device_library_identifier} for {self.member}"
+
+
 class ClubHistory(models.Model):
     """Changelog of changes made to a club"""
 
@@ -2213,6 +2416,8 @@ class Auction(models.Model):
     reprint_reminder_sent = models.BooleanField(default=False)
     weekly_promo_emails_sent = models.PositiveIntegerField(default=0)
     weekly_promo_emails_sent.help_text = "Number of times this auction was included in weekly promotional emails"
+    promo_push_notifications_sent = models.PositiveIntegerField(default=0)
+    promo_push_notifications_sent.help_text = "Number of push notifications sent promoting this auction"
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -2311,7 +2516,7 @@ class Auction(models.Model):
     )
     reserve_price.help_text = "Allow users to set a minimum bid on their lots"
     tax = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
-    tax.help_text = "Added to invoices for all won lots"
+    tax.help_text = "A percent added to the buyer's invoice for all won lots (e.g. enter 7 for 7% sales tax). Leave at 0 for no tax."
     advanced_lot_adding = models.BooleanField(default=False)
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
     use_quantity_field = models.BooleanField(default=False, blank=True)
@@ -3076,36 +3281,181 @@ class Auction(models.Model):
         return add_price_info(self.lots_qs).aggregate(total_sold=Sum("club_cut"))["total_sold"] or 0
 
     @property
+    def _auction_tax_collected(self):
+        """Total sales tax collected across this auction's invoices.
+
+        Tax is money the club collects on behalf of a taxing authority and must remit, so it is a
+        pass-through liability, not club profit (see ``club_profit`` and the treasurer report, which
+        reports ``tax_collected`` as its own line, never folded into auction commission). Computed
+        from the live sold, non-banned lots -- for the common case of an untaxed auction this is a
+        no-op. Mirrors ``Invoice.tax`` (final price after any partial refund, times the rate), but
+        quantizes the auction-wide total once rather than per invoice, so it can differ from the sum
+        of per-invoice tax by up to a fraction of a cent on oddly priced taxed auctions.
+        """
+        if not self.tax:
+            return Decimal("0.00")
+        money = DecimalField(max_digits=12, decimal_places=2)
+        total_final = self.lots_qs.filter(winning_price__isnull=False, banned=False).aggregate(
+            total=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        Cast(F("winning_price"), money)
+                        * (Value(Decimal("100.00")) - Cast(F("partial_refund_percent"), money))
+                        / Value(Decimal("100.00")),
+                        output_field=money,
+                    ),
+                    output_field=money,
+                ),
+                Value(Decimal("0.00")),
+                output_field=money,
+            )
+        )["total"]
+        rate = Decimal(self.tax) / Decimal(100)
+        return (Decimal(total_final) * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @property
+    def _auction_membership_dues(self):
+        """Total membership/renewal dues collected on this auction's invoices.
+
+        Dues are separate club revenue added on top of lot prices (a renewing member pays their
+        winning bids plus the annual fee), so they are not part of what the club nets from *auction*
+        activity and are excluded from ``club_profit`` -- matching the treasurer report, which lists
+        ``membership_dues`` as its own line. Each renewing invoice charges exactly the club's annual
+        fee (see ``Invoice.membership_fee_amount``), so this is fee * number of renewing invoices.
+        """
+        club = self.club
+        if not club or not club.membership_annual_fee:
+            return Decimal("0.00")
+        renewals = Invoice.objects.filter(auction=self.pk, renewal_needed=True).count()
+        return Decimal(club.membership_annual_fee) * renewals
+
+    @property
     def club_profit(self):
-        """Total amount made by the club in this auction, including rounding in the customer's favor in invoices"""
-        return abs(
-            Invoice.objects.filter(auction=self.pk).aggregate(total_sold=Sum("calculated_total"))["total_sold"] or 0
-        )
+        """What the club nets from AUCTION activity in this auction, positive when it made money.
+
+        This is the invoice-realized counterpart of ``club_profit_raw`` (the club's raw cut of the
+        lots): it reflects the actual money the club keeps once invoice rounding (always in the
+        customer's favor), promotional first-bid payouts, club-member discounts and manual invoice
+        adjustments are taken into account.
+
+        Semantics (kept consistent with the treasurer report, which breaks the same figures out):
+          * Sales tax is EXCLUDED. It is collected on behalf of a taxing authority and remitted, so
+            it is a pass-through liability, not profit.
+          * Membership/renewal dues are EXCLUDED. They are separate club revenue added on top of lot
+            prices, not margin on auction sales.
+          * A genuine loss (the club paid out more to sellers -- via payouts, promos or discounts --
+            than it collected) is returned as a NEGATIVE number. It is never abs()'d, or a loss
+            would masquerade as a profit.
+
+        Invoices whose ``calculated_total`` was never stamped (NULL -- e.g. a freshly created draft
+        that has not been recalculated) are NOT dropped: their live ``rounded_net`` is used instead,
+        so they contribute the same amount they would once stamped. PAID invoices use their frozen
+        ``calculated_total`` (see ``Invoice.recalculate``). All arithmetic stays in ``Decimal`` so
+        cents are preserved end to end.
+        """
+        invoices = Invoice.objects.filter(auction=self.pk)
+        # Sum the stamped/settled totals in one query, then add the live rounded_net for any invoice
+        # whose calculated_total was never stamped so those are not silently excluded.
+        total_net = invoices.filter(calculated_total__isnull=False).aggregate(total=Sum("calculated_total"))[
+            "total"
+        ] or Decimal("0.00")
+        for invoice in invoices.filter(calculated_total__isnull=True):
+            total_net += Decimal(invoice.rounded_net)
+        # calculated_total is negative when a buyer owes the club, so negate (never abs()) to make a
+        # club gain positive while keeping a genuine loss negative.
+        profit = -Decimal(total_net)
+        # Back out tax and dues so this reflects only auction-activity margin (see docstring).
+        profit -= self._auction_tax_collected
+        profit -= self._auction_membership_dues
+        return profit
 
     @property
     def gross(self):
-        """Total value of all lots sold"""
-        return self.lots_qs.aggregate(Sum("winning_price"))["winning_price__sum"] or 0
+        """Refund-adjusted gross sales: the total buyers were billed for lots that sold here.
+
+        This is the sum of each sold lot's *final price* -- the winning (hammer) price reduced by
+        any ``partial_refund_percent`` -- over the sold, non-banned lots. Three deliberate choices,
+        each matching a sibling money stat so the figures on the stats page tie out:
+
+          * Removed (banned) lots are EXCLUDED. A banned lot is pulled from the sale and never
+            charged: ``add_price_info`` credits it $0, and it is dropped from ``total_to_sellers``
+            and ``median_lot_price``. The old ``Sum("winning_price")`` over ``lots_qs`` still counted
+            a banned lot's hammer price, overstating gross above every other stat.
+          * Partial refunds are NETTED OUT. A refund proportionally reduces BOTH what the buyer pays
+            (``Invoice.bought_lots_queryset.final_price``) and what the seller receives (``your_cut``/
+            ``club_cut`` in ``add_price_info``), so it is a real reduction in money that changed
+            hands, not a display-only adjustment. Reporting the full hammer price would make gross
+            disagree with the refund-adjusted ``club_profit`` and ``total_to_sellers`` shown beside
+            it (and shown as a "% of gross"), and the totals would not reconcile. With this basis
+            ``gross == total_to_sellers + club_profit_raw`` exactly (seller cut + club raw cut).
+          * The filter matches ``total_sold_lots`` exactly (``winning_price`` set, not banned), so
+            "N lots sold, $X gross" is always coherent -- the same lots are counted and summed.
+
+        Donations are included: the buyer still pays the hammer price (it simply all goes to the
+        club), so it is genuine gross. Returned as a ``Decimal`` (``Decimal("0.00")`` when nothing
+        sold), so downstream ``club_profit / gross`` arithmetic stays cent-exact.
+        """
+        money = DecimalField(max_digits=12, decimal_places=2)
+        return self.lots_qs.filter(winning_price__isnull=False, banned=False).aggregate(
+            total=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        Cast(F("winning_price"), money)
+                        * (Value(Decimal("100.00")) - Cast(F("partial_refund_percent"), money))
+                        / Value(Decimal("100.00")),
+                        output_field=money,
+                    ),
+                    output_field=money,
+                ),
+                Value(Decimal("0.00")),
+                output_field=money,
+            )
+        )["total"]
 
     @property
     def total_to_sellers(self):
-        """Total amount paid out to all sellers"""
-        return self.gross - self.club_profit
+        """Total credited to sellers for lots that sold in this auction.
+
+        This is the sum of every seller's cut (``your_cut`` from :func:`add_price_info`) over the
+        sold, non-banned lots -- the winning price minus the club's commission, the lot entry fee
+        and any partial refund, with donations and banned/removed lots contributing nothing. It is
+        the seller-side mirror of ``club_profit_raw`` (the club's raw cut of the same lots).
+
+        Computed DIRECTLY rather than as ``gross - club_profit``. That subtraction became wrong once
+        ``club_profit`` stopped being a mirror image of gross: club_profit now excludes sales tax and
+        membership dues (neither was ever part of gross) and reflects buyer-side promotions such as
+        the first-bid payout, so ``gross - club_profit`` would, for example, count a buyer's first-bid
+        payout as money paid to a seller and would be skewed by tax/dues that touch neither side of a
+        seller payout. Summing ``your_cut`` counts only what sellers are actually owed and is immune
+        to tax, dues and buyer promotions. Returned as a ``Decimal``.
+        """
+        total = add_price_info(self.lots_qs.filter(winning_price__isnull=False, banned=False)).aggregate(
+            total=Sum("your_cut")
+        )["total"]
+        return total if total is not None else Decimal("0.00")
 
     @property
     def percent_to_club(self):
-        """Percent of gross that went to the club"""
-        if self.gross:
-            return self.club_profit / self.gross * 100
-        else:
-            return 0
+        """The club's net auction take as a percentage of gross sales (``club_profit / gross``).
+
+        Returns ``Decimal("0")`` when there are no gross sales, avoiding division by zero. On a club
+        loss ``club_profit`` is negative, so this is correctly negative -- the abs()-distorted
+        club_profit that Item 14 removed used to mask losses as positive percentages. All arithmetic
+        stays in ``Decimal``; ``gross`` shares the currency label so the ratio is reported "% of gross".
+        """
+        gross = self.gross
+        if not gross:
+            return Decimal(0)
+        return Decimal(self.club_profit) / Decimal(gross) * 100
 
     @property
     def total_donations(self):
+        # Exclude banned (removed) lots to stay consistent with gross/club_profit and the other
+        # money figures on the stats table -- a pulled lot never contributed any money.
         return (
-            self.lots_qs.filter(winning_price__isnull=False, donation=True).aggregate(total=Sum("winning_price"))[
-                "total"
-            ]
+            self.lots_qs.filter(winning_price__isnull=False, donation=True)
+            .exclude(banned=True)
+            .aggregate(total=Sum("winning_price"))["total"]
             or 0
         )
 
@@ -3183,16 +3533,41 @@ class Auction(models.Model):
         return self.tos_qs.count()
 
     @property
+    def seller_tos_qs(self):
+        """AuctionTOS who submitted at least one live lot to this auction.
+
+        Removed (``banned``) and soft-deleted (``is_deleted``) lots are excluded, so a person whose
+        only lot was pulled from the sale no longer counts as a seller -- consistent with ``lots_qs``
+        and every money stat on this auction. ``.distinct()`` collapses sellers with multiple lots to
+        a single row.
+        """
+        return AuctionTOS.objects.filter(
+            auctiontos_seller__auction=self.pk,
+            auctiontos_seller__banned=False,
+            auctiontos_seller__is_deleted=False,
+        ).distinct()
+
+    @property
+    def buyer_tos_qs(self):
+        """AuctionTOS who won at least one sold, live lot in this auction.
+
+        A "buyer" won a lot with ``winning_price`` set that was not later removed (``banned``) or
+        soft-deleted (``is_deleted``). ``.distinct()`` collapses buyers of multiple lots to one row.
+        """
+        return AuctionTOS.objects.filter(
+            auctiontos_winner__auction=self.pk,
+            auctiontos_winner__winning_price__isnull=False,
+            auctiontos_winner__banned=False,
+            auctiontos_winner__is_deleted=False,
+        ).distinct()
+
+    @property
     def number_of_sellers(self):
-        return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).distinct().count()
-        # return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).distinct().count()
-        # users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
-        # users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
+        return self.seller_tos_qs.count()
 
     @property
     def number_of_sellers_who_didnt_buy(self):
-        buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).values_list("id", flat=True).distinct()
-        return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct().count()
+        return self.seller_tos_qs.exclude(id__in=self.buyer_tos_qs.values_list("id", flat=True)).count()
 
     # @property
     # def number_of_unsuccessful_sellers(self):
@@ -3203,13 +3578,15 @@ class Auction(models.Model):
 
     @property
     def number_of_buyers(self):
-        # users = User.objects.values('lot__winner').annotate(Sum('lot')).filter(lot__auction=self.pk)
-        return AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct().count()
-        # users = User.objects.filter(winner__auction=self.pk).distinct()
+        return self.buyer_tos_qs.count()
 
     @property
     def median_lot_price(self):
-        lots = self.lots_qs.filter(winning_price__isnull=False)
+        # Only sold, non-banned lots count -- removed (banned) lots are never charged and are
+        # excluded from every other money stat on this auction (see ``total_sold_lots`` and
+        # ``add_price_info``). Price basis is the raw hammer price (``winning_price``), matching
+        # the sibling "median sell price" image chart; partial refunds are not netted out here.
+        lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
         if lots:
             return median_value(lots, "winning_price")
         else:
@@ -3227,6 +3604,18 @@ class Auction(models.Model):
 
     @property
     def total_sold_lots_with_buy_now_percent(self):
+        """Percentage of sold lots that went via "buy now".
+
+        Online auctions have an explicit ``buy_now_used`` flag set when a bidder takes the
+        buy-now price, so that branch is exact.
+
+        In-person auctions have no such flag: admins enter results by typing the hammer price,
+        and when a lot sells at buy-now they simply type the buy-now amount. So "bought via buy
+        now" is inferred by ``winning_price == buy_now_price``. This is BY DESIGN, but note the
+        caveat that it also counts any lot whose hammer price *coincidentally* equals its
+        buy_now_price (e.g. bidding happened to land exactly on the buy-now amount). There is no
+        separate flag to disambiguate, so a small over-count is expected and accepted here.
+        """
         if not self.total_sold_lots:
             return 0
         if self.is_online:
@@ -3254,7 +3643,16 @@ class Auction(models.Model):
 
     @property
     def number_of_lots_with_scanned_qr(self):
-        return self.lots_qs.filter(pageview__source__icontains="qr", auction__pk=self.pk).distinct().count()
+        # Count a lot as "scanned" when its page was opened from a QR scan (src=qr) or from AR mode
+        # (src=ar) — the app opens lots it recognises in AR as lot_link?src=ar.
+        return (
+            self.lots_qs.filter(
+                Q(pageview__source__icontains="qr") | Q(pageview__source__iexact="ar"),
+                auction__pk=self.pk,
+            )
+            .distinct()
+            .count()
+        )
 
     @property
     def labels_qs(self):
@@ -3269,10 +3667,14 @@ class Auction(models.Model):
 
     @property
     def percent_unsold_lots(self):
-        try:
-            return self.total_unsold_lots / self.total_lots * 100
-        except:
-            return 100
+        # An auction with zero lots has nothing unsold, so report 0% -- not the 100% the old
+        # bare `except` returned on the ZeroDivisionError, which nonsensically flagged a lotless
+        # auction as entirely unsold. This matches the sibling percent properties on this model
+        # (reminder_email_clicks/_joins, weekly_promo_email_click_rate), which all return 0 on an
+        # empty base (Item 21).
+        if not self.total_lots:
+            return 0
+        return self.total_unsold_lots / self.total_lots * 100
 
     @property
     def lots_sold_per_minute(self):
@@ -3390,13 +3792,15 @@ class Auction(models.Model):
     @property
     def number_of_participants(self):
         """
-        Number of users who bought or sold at least one lot
+        Number of AuctionTOS who bought or sold at least one live lot in this auction.
+
+        This is the union of buyers and sellers: banned/soft-deleted lots are excluded via
+        ``buyer_tos_qs``/``seller_tos_qs``, so a person whose only lot (bought or sold) was removed
+        does not count.
         """
-        buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct()
-        sellers = AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct()
-        # buyers = User.objects.filter(winner__auction=self.pk).distinct()
-        # sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
-        return sellers.count() + buyers.count()
+        buyer_ids = self.buyer_tos_qs.values_list("id", flat=True)
+        sellers_who_didnt_buy = self.seller_tos_qs.exclude(id__in=buyer_ids).count()
+        return sellers_who_didnt_buy + self.buyer_tos_qs.count()
 
     @property
     def preregistered_users(self):
@@ -3490,12 +3894,29 @@ class Auction(models.Model):
         return Invoice.objects.filter(auction=self, status="DRAFT", calculated_total__lt=0).count()
 
     @property
+    def paypal_invoices_to_export(self):
+        """The UNPAID invoices that actually get written to the PayPal bulk-invoice CSV.
+
+        A row is written (and the export loop advances its chunk counter) for exactly those
+        invoices whose rounded balance still owes the club money -- ``rounded_net_after_payments
+        < 0``. This is the single source of truth shared by ``paypal_invoice_chunks`` and the
+        export view (``AuctionInvoicesPayPalCSV``), so with >150 invoices every billed invoice
+        lands in a chunk number the UI offers.
+
+        Previously the two disagreed: the chunk count filtered ``calculated_total < 0`` while the
+        export loop advanced its counter for every non-payout invoice (``not user_should_be_paid``,
+        which includes settled $0 invoices), so the loop's counter ran ahead of the offered chunk
+        count and tail invoices could land in a chunk the UI never listed (Item 21).
+        """
+        return [invoice for invoice in self.paypal_invoices if invoice.rounded_net_after_payments < 0]
+
+    @property
     def paypal_invoice_chunks(self):
         """
         Needed to know how many chunks to split the invoice list to
         chunk size 150 per https://www.paypal.com/invoice/batch
         """
-        invoices_count = self.paypal_invoices.filter(calculated_total__lt=0).count()
+        invoices_count = len(self.paypal_invoices_to_export)
         chunk_size = 150
         chunks = (invoices_count + chunk_size - 1) // chunk_size
         return list(range(1, chunks + 1))
@@ -3626,6 +4047,43 @@ class Auction(models.Model):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
 
+    @property
+    def auction_admins_user_pks(self):
+        """User pks of everyone on this auction's admin team, for ban enforcement.
+
+        Unlike auction_admins_pks this always includes the creator (who may not have an
+        AuctionTOS row of their own) and never contains None (admin TOS rows that aren't
+        linked to a user account)."""
+        pks = {pk for pk in self.auction_admins_pks if pk}
+        if self.created_by_id:
+            pks.add(self.created_by_id)
+        return pks
+
+    def user_banned_by_admins(self, user):
+        """True if `user` has been banned by anyone on this auction's admin team.
+
+        UserBans are personal ban lists, but they apply to every auction the banning user
+        administers, not just ones they created: the no-show flow's "ban this user from
+        future auctions" records the ban under the acting admin, and co-admins running a
+        club's auction expect their bans to hold there."""
+        if not user or not getattr(user, "pk", None):
+            return False
+        return UserBan.objects.filter(banned_user=user.pk, user__pk__in=self.auction_admins_user_pks).exists()
+
+    def tos_for_user(self, user):
+        """Resolve the AuctionTOS for a signed-in user in this auction, or None.
+
+        The single source of truth for "which TOS is this user": matched on the user FK or
+        the account email (emails are verified at signup), newest record first. Bid
+        enforcement and the lot page UI must both use this so duplicate TOS records can't
+        make them disagree about whether someone can bid."""
+        if not user or not getattr(user, "is_authenticated", False):
+            return None
+        query = Q(user=user)
+        if user.email:
+            query |= Q(email=user.email)
+        return AuctionTOS.objects.filter(query, auction=self).order_by("-createdon").first()
+
     # Stat getter/setter properties
     @property
     def get_stat_activity(self):
@@ -3686,7 +4144,7 @@ class Auction(models.Model):
         """Calculate and return attrition chart data"""
         ignore_percent = 10
         lots = (
-            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True) | Q(banned=True))
             .filter(auction=self, winning_price__isnull=False)
             .order_by("-date_end")
         )
@@ -3727,7 +4185,7 @@ class Auction(models.Model):
     def set_stat_auctioneer_speed(self):
         """Calculate and return auctioneer speed chart data"""
         lots = (
-            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True) | Q(banned=True))
             .filter(auction=self, winning_price__isnull=False)
             .order_by("-date_end")
         )
@@ -3750,14 +4208,24 @@ class Auction(models.Model):
             return self.cached_stats["lot_sell_prices"]
         return {"labels": [], "providers": [], "data": []}
 
-    def set_stat_lot_sell_prices(self):
-        """Calculate and return lot sell prices chart data"""
-        sold_lots = self.lots_qs.filter(winning_price__isnull=False)
+    def _lot_sell_price_bins(self):
+        """Single source of truth for the sell-price histogram.
+
+        Returns ``(start_bin, bin_width, num_bins)``. The bins are always whole-dollar,
+        equal width, and contiguous, so the labels built from ``(start_bin, bin_width)`` and
+        the counts produced by ``bin_data`` (whose bin_size == bin_width by construction, since
+        ``end_bin - start_bin == num_bins * bin_width``) describe exactly the same buckets.
+        Every bucket is left-inclusive/right-exclusive: a price of exactly ``bin_end`` lands in
+        the next bucket, and prices >= the final ``end_bin`` fall in the high-overflow bar.
+
+        Banned (removed) lots are excluded here to match ``total_unsold_lots`` and every other
+        money stat on the auction -- otherwise the "Not sold" bar would exclude banned lots while
+        the priced bars counted them.
+        """
+        sold_lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
 
         # Make bins dynamic based on actual sell prices
         if sold_lots.exists():
-            from django.db.models import Max
-
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
@@ -3769,59 +4237,46 @@ class Auction(models.Model):
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
                 bin_width = max((max_price - 1) // num_bins, 1)  # Adjust bin width if needed
-
-            start_bin = 1
-            end_bin = start_bin + num_bins * bin_width
-            histogram = bin_data(
-                sold_lots,
-                "winning_price",
-                number_of_bins=num_bins,
-                start_bin=start_bin,
-                end_bin=end_bin,
-                add_column_for_high_overflow=True,
-            )
-
-            # Generate labels with whole number boundaries
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.currency_symbol}{end_bin}+")
-
-            return {
-                "labels": labels,
-                "providers": ["Number of lots"],
-                "data": [[self.total_unsold_lots] + histogram],
-            }
         else:
-            # No sold lots, use default bins with whole number boundaries
-            start_bin = 1
+            # No sold lots, use default bins
             bin_width = 2
             num_bins = 19
-            end_bin = start_bin + num_bins * bin_width  # Results in 39
-            histogram = bin_data(
-                sold_lots,
-                "winning_price",
-                number_of_bins=num_bins,
-                start_bin=start_bin,
-                end_bin=end_bin,
-                add_column_for_high_overflow=True,
-            )
 
-            # Generate labels with whole number boundaries
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.currency_symbol}{end_bin}+")
+        return 1, bin_width, num_bins
 
-            return {
-                "labels": labels,
-                "providers": ["Number of lots"],
-                "data": [[self.total_unsold_lots] + histogram],
-            }
+    def set_stat_lot_sell_prices(self):
+        """Calculate and return lot sell prices chart data.
+
+        Labels and counts are both derived from ``_lot_sell_price_bins`` so they can never
+        disagree about how many bars there are or where the boundaries fall.
+        """
+        sold_lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
+        start_bin, bin_width, num_bins = self._lot_sell_price_bins()
+        end_bin = start_bin + num_bins * bin_width
+
+        histogram = bin_data(
+            sold_lots,
+            "winning_price",
+            number_of_bins=num_bins,
+            start_bin=start_bin,
+            end_bin=end_bin,
+            add_column_for_high_overflow=True,
+        )
+
+        # Generate labels with whole number boundaries. One label per histogram bucket:
+        # "Not sold", then num_bins priced buckets, then the high-overflow "{end_bin}+" bar.
+        labels = ["Not sold"]
+        for i in range(num_bins):
+            bin_start = start_bin + i * bin_width
+            bin_end = start_bin + (i + 1) * bin_width
+            labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+        labels.append(f"{self.currency_symbol}{end_bin}+")
+
+        return {
+            "labels": labels,
+            "providers": ["Number of lots"],
+            "data": [[self.total_unsold_lots] + histogram],
+        }
 
     @property
     def get_stat_referrers(self):
@@ -3870,7 +4325,13 @@ class Auction(models.Model):
         """Calculate and return images chart data"""
         from django.db.models import Avg
 
-        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(num_images=Count("lotimage"))
+        # Use the same sold-lot base as every other money stat (lots_qs excludes is_deleted and
+        # joins via auctiontos_seller__auction): exclude banned (removed) lots, otherwise a lot that
+        # was pulled from the sale -- or a soft-deleted one -- would still drag the displayed
+        # "median/average sell price" figures, which are computed only over lots that actually sold.
+        lots = (
+            self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).annotate(num_images=Count("lotimage"))
+        )
         lots_with_no_images = lots.filter(num_images=0)
         lots_with_one_image = lots.filter(num_images=1)
         lots_with_one_or_more_images = lots.filter(num_images__gt=1)
@@ -4115,6 +4576,43 @@ class Auction(models.Model):
             ],
         }
 
+    @property
+    def unique_views(self):
+        """Distinct visitors who viewed this auction's rules page or any of its lots.
+
+        PageView rows record identity two different ways (see the page-view tracking view in
+        ``views.py``): a logged-in visit stores ``user=<id>`` with ``session_id=NULL``, while an
+        anonymous visit stores ``user=NULL`` with ``session_id=<session key>``. A single person
+        who browses anonymously and *then* logs in therefore leaves behind both a session-only
+        row and a user row.
+
+        Naively counting ``distinct(session_id) + distinct(user)`` double-counts that login
+        transition, and also tacks on a bogus NULL bucket to each side (every logged-in row has a
+        NULL session, every anonymous row has a NULL user). Instead we count distinct logged-in
+        users, then add only the anonymous sessions that never appear alongside a user -- i.e.
+        ``distinct users + distinct sessions-that-never-have-a-user-row``. The anonymous session
+        key is not preserved once someone logs in, so a pre-login session cannot be perfectly
+        reunited with its eventual account, but this removes the *structural* double count of the
+        login transition (and the two stray NULL buckets).
+
+        Returns a dict with the total plus the logged-in / anonymous breakdown, reused by the
+        auction stats page and the participation funnel chart.
+        """
+        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
+        # Sessions that ever appear on a logged-in row belong to a counted user; drop them so the
+        # same person isn't also counted as an anonymous session (robust even if a future code
+        # path stores both user and session_id on one row).
+        sessions_with_a_user = all_views.filter(user__isnull=False, session_id__isnull=False).values("session_id")
+        anonymous = (
+            all_views.filter(user__isnull=True, session_id__isnull=False)
+            .exclude(session_id__in=sessions_with_a_user)
+            .values("session_id")
+            .distinct()
+            .count()
+        )
+        return {"total": logged_in + anonymous, "logged_in": logged_in, "anonymous": anonymous}
+
     def get_stat_misc(self):
         """A few one-off stats that are slow to calculate and/or dependent on page views"""
         if self.cached_stats and "misc" in self.cached_stats:
@@ -4124,13 +4622,17 @@ class Auction(models.Model):
     def set_stat_misc(self):
         """A few one-off stats that are slow to calculate and/or dependent on page views"""
 
-        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
-        anonymous_views = all_views.values("session_id").annotate(c=Count("session_id")).count()
-        user_views = all_views.values("user").annotate(c=Count("user")).count()
-        total_views = anonymous_views + user_views
+        unique_views = self.unique_views
+        total_views = unique_views["total"]
+        user_views = unique_views["logged_in"]
+        anonymous_views = unique_views["anonymous"]
 
         total_bidders = User.objects.filter(bid__lot_number__auction=self).annotate(c=Count("id")).count()
-        total_winners = User.objects.filter(winner__auction=self).annotate(c=Count("id")).count()
+        # Count winners via the winning AuctionTOS, not the Lot.winner User FK. Admin-declared
+        # winners (check-in mode, the set-lot-winner form) set auctiontos_winner + winning_price but
+        # never set the winner User FK, and winners with no user account have no User FK at all; both
+        # are missed by a winner__auction join. buyer_tos_qs captures every sold, live lot's winner.
+        total_winners = self.buyer_tos_qs.count()
 
         # Additional email/reminder stats
         reminder_emails_sent = self.number_of_reminder_emails
@@ -4867,7 +5369,14 @@ class AuctionTOS(models.Model):
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
             if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
-                if not self.manually_added:
+                # Only unlink on a *real* email change to an address that isn't the linked user's own.
+                # Filling in a previously blank email (the auction-join flow) is not a change that
+                # invalidates the link, and unlinking so auto-matching can "find the correct user" is
+                # self-defeating when the new email already belongs to the linked user.
+                user_owns_new_email = bool(
+                    self.user and self.user.email and normalize_email(self.user.email) == self.email
+                )
+                if not self.manually_added and saved_tos.email and not user_owns_new_email:
                     # Clear the linked account so future auto-matching during auction joins can link this record
                     # to the correct user for the updated email address.
                     self.user = None
@@ -5049,6 +5558,11 @@ class AuctionTOS(models.Model):
         For club-managed auctions, also merges the associated ClubMember records.
         Pass user=request.user when this is triggered by an admin action.
         """
+        if self.pk is None or duplicate.pk is None:
+            # Both records must already exist; an unsaved instance here means a caller merged in the
+            # wrong order and let a save()-time auto-merge delete one out from under it.
+            msg = "Cannot merge AuctionTOS records that have not been saved (or were already deleted)."
+            raise ValueError(msg)
         if duplicate == self:
             msg = "Cannot merge an AuctionTOS record with itself."
             raise ValueError(msg)
@@ -5248,7 +5762,9 @@ class AuctionTOS(models.Model):
                 other_users = UserData.objects.filter(last_ip_address=userData.last_ip_address).exclude(pk=userData.pk)
                 for other_user in other_users:
                     logger.debug("%s is also known as %s", self.user, other_user.user)
-                    banned = UserBan.objects.filter(banned_user=other_user.user, user=self.auction.created_by).first()
+                    banned = UserBan.objects.filter(
+                        banned_user=other_user.user, user__pk__in=self.auction.auction_admins_user_pks
+                    ).first()
                     if banned:
                         url = reverse("userpage", kwargs={"slug": other_user.user.username})
                         return f"<a href='{url}'>{other_user.user.username}</a>"
@@ -5437,6 +5953,11 @@ class Lot(models.Model):
     donation = models.BooleanField(default=False)
     donation.help_text = "All proceeds from this lot will go to the club"
     watch_warning_email_sent = models.BooleanField(default=False)
+    selling_push_notification_sent = models.BooleanField(default=False)
+    selling_push_notification_sent.help_text = (
+        "Set once this lot has notified its watchers that it's being sold or is coming up in the queue, "
+        "so watchers only ever get one 'coming up' push per lot."
+    )
     # seller and buyer invoice are no longer needed and can safely be removed in a future migration
     seller_invoice = models.ForeignKey(
         "Invoice",
@@ -5913,6 +6434,8 @@ class Lot(models.Model):
             )
             if originalImage.image:
                 newImage.image = get_thumbnailer(originalImage.image)
+                # both rows now share the same file, so they can share the same Cloudflare image
+                newImage.cloudflare_image_id = originalImage.cloudflare_image_id
             # if the original lot sold, this picture sure isn't of the actual item
             if originalImage.image_source == "ACTUAL":
                 newImage.image_source = "REPRESENTATIVE"
@@ -5958,16 +6481,13 @@ class Lot(models.Model):
         if not (self.auctiontos_winner or self.winner):
             return None
 
-        try:
-            query = Q()
-            if self.auctiontos_winner:
-                query |= Q(auctiontos_user=self.auctiontos_winner)
-            if self.winner:
-                query |= Q(user=self.winner, auction=self.auction)
+        query = Q()
+        if self.auctiontos_winner:
+            query |= Q(auctiontos_user=self.auctiontos_winner)
+        if self.winner:
+            query |= Q(auctiontos_user__user=self.winner, auction=self.auction)
 
-            return Invoice.objects.filter(query).first()
-        except Exception:
-            return None
+        return Invoice.objects.filter(query).first()
 
     @property
     def sellers_invoice(self):
@@ -5979,16 +6499,13 @@ class Lot(models.Model):
         if not (self.auctiontos_seller or self.user):
             return None
 
-        try:
-            query = Q()
-            if self.auctiontos_seller:
-                query |= Q(auctiontos_user=self.auctiontos_seller)
-            if self.user:
-                query |= Q(user=self.user, auction=self.auction)
+        query = Q()
+        if self.auctiontos_seller:
+            query |= Q(auctiontos_user=self.auctiontos_seller)
+        if self.user:
+            query |= Q(auctiontos_user__user=self.user, auction=self.auction)
 
-            return Invoice.objects.filter(query).first()
-        except Exception:
-            return None
+        return Invoice.objects.filter(query).first()
 
     @property
     def square_refund_possible(self):
@@ -6472,7 +6989,7 @@ class Lot(models.Model):
     def pre_registered(self):
         """True if this lot will get a discount for being pre-registered"""
         if self.auction:
-            if self.auction.pre_register_lot_discount_percent or self.auction.pre_register_lot_entry_fee_discount:
+            if self.auction.pre_register_lot_discount_percent:
                 if self.added_by and self.user:
                     if self.added_by == self.user:
                         return True
@@ -7305,10 +7822,17 @@ class Invoice(models.Model):
         max_length=20,
         choices=(
             ("DRAFT", "Open"),
-            ("UNPAID", "Waiting for payment"),
+            ("UNPAID", "Ready"),
             ("PAID", "Paid"),
         ),
         default="DRAFT",
+    )
+    date_paid = models.DateTimeField(null=True, blank=True)
+    date_paid.help_text = (
+        "When this invoice first became PAID, i.e. when the cash actually changed hands. Set "
+        "automatically the first time the invoice is saved as PAID and never overwritten "
+        "afterwards, so the club ledger (ClubMoney) can book on a cash basis. Left unset until "
+        "then; recorded online payments (InvoicePayment) take precedence over this as the cash date."
     )
     opened = models.BooleanField(default=False)
     printed = models.BooleanField(default=False)
@@ -7323,7 +7847,7 @@ class Invoice(models.Model):
         blank=True,
         verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in",
     )
-    calculated_total = models.IntegerField(null=True, blank=True)
+    calculated_total = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
@@ -7588,12 +8112,30 @@ class Invoice(models.Model):
         return f"Active (expires in {days_until_expiration} day(s))"
 
     def recalculate(self):
-        """Store the current net in the calculated_total field.
+        """Store the current net in the calculated_total field -- unless the invoice is frozen.
 
-        Call this method every time you add or remove a lot from this invoice.
-        This method should be called explicitly, not accessed as a property,
-        as it has side effects (modifies and saves database records).
+        Call this method every time you add or remove a lot from this invoice. It has side
+        effects (it saves), so call it explicitly rather than reading it as a property.
+
+        Freeze rule: once an invoice is PAID it is *settled*, and its ``calculated_total`` is
+        booked history. This method will NOT re-derive that total while the invoice is PAID in
+        the database. That stops a mere view of the invoice (``InvoiceView.get`` calls
+        ``recalculate``) or any incidental re-save from silently rewriting the stored total from
+        *current* auction/club settings -- e.g. a later change to ``membership_annual_fee`` or
+        the auction's tax rate. The settled number is captured once, at the PAID transition (see
+        ``save``), and only an admin un-paying the invoice (PAID -> UNPAID, the correction escape
+        hatch) thaws it so it can be recalculated again.
+
+        Refunds are deliberately unaffected by the freeze. A refund arrives as a negative
+        ``InvoicePayment`` (see the PayPal/Square webhooks, which call ``recalculate`` afterwards),
+        and ``calculated_total`` is the invoice's line-item net -- it never included payments -- so
+        refusing to re-derive it drops no refund information. Refund state lives on the payment
+        rows (``amount_available_to_refund``); the frozen line-item total is exactly what should
+        be preserved. Refunds that must actually re-book the ledger (e.g. a lot's
+        ``partial_refund_percent``) require the invoice to be un-paid first.
         """
+        if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
+            return
         self.calculated_total = self.rounded_net
         self.save()
 
@@ -7647,6 +8189,28 @@ class Invoice(models.Model):
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
+    def manual_adjustment_amount(self):
+        """Net dollar value of the manual invoice adjustments (flat + legacy percent).
+
+        The legacy percent adjustment is applied to the SAME running base ``net`` builds up before
+        it reaches the adjustments -- the subtotal plus the first-bid payout, the club-member
+        discount and the flat adjustments -- NOT to the bare subtotal. ``net`` and the club-ledger
+        booking (``sync_club_money``) both read this one property, so the two always agree to the
+        penny and the ledger's ``rounding`` category only ever absorbs genuine sub-cent rounding
+        instead of silently absorbing a percent-base mismatch (Item 21). All arithmetic stays in
+        ``Decimal``.
+        """
+        percent_base = (
+            Decimal(self.subtotal)
+            + Decimal(self.first_bid_payout)
+            + Decimal(self.club_member_discount)
+            + Decimal(self.flat_value_adjustments)
+        )
+        return Decimal(self.flat_value_adjustments) + (
+            percent_base * Decimal(self.percent_value_adjustments) / Decimal(100)
+        )
+
+    @property
     def net(self):
         """Factor in:
         Total bought
@@ -7659,8 +8223,10 @@ class Invoice(models.Model):
         subtotal += Decimal(self.first_bid_payout)
         # if this auction gives paid club members a discount on their purchases
         subtotal += Decimal(self.club_member_discount)
-        subtotal += Decimal(self.flat_value_adjustments)
-        subtotal += Decimal(subtotal * self.percent_value_adjustments / 100)
+        # flat + legacy percent manual adjustments; the percent is applied to the running base
+        # above (subtotal + first-bid payout + club-member discount + flat), and the ledger books
+        # this exact figure -- see manual_adjustment_amount.
+        subtotal += Decimal(self.manual_adjustment_amount)
         subtotal -= Decimal(self.membership_fee_amount)
         subtotal -= Decimal(self.tax)
         if not subtotal:
@@ -7674,7 +8240,12 @@ class Invoice(models.Model):
 
     @property
     def user_should_be_paid(self):
-        """Return true if the user owes the club money.  Most invoices will be negative unless the user is a vendor"""
+        """Return True if the CLUB owes the user money (the user should be paid out).
+
+        A positive net means money flows from the club to the user -- e.g. a seller/vendor whose
+        payout exceeds their purchases. Most invoices are negative (the user owes the club), so
+        this is False for them.
+        """
         if self.net > 0:
             return True
         else:
@@ -7724,6 +8295,9 @@ class Invoice(models.Model):
                 winning_price__isnull=False,
                 auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
+                # Removed (banned) lots are not charged -- a buyer never pays for a lot that
+                # was pulled, so it must not appear in (nor be summed into) their purchases.
+                banned=False,
             ).order_by("pk")
             if self.auctiontos_user
             else Lot.objects.none()
@@ -7936,10 +8510,11 @@ class Invoice(models.Model):
         )
 
         if display_amount > 0:
-            result += "needs to be paid"
-        else:
-            result += "owes the club"
-        return result + " $" + f"{abs(display_amount):.2f}"
+            return result + f"needs to be paid ${abs(display_amount):.2f}"
+        if display_amount < 0:
+            return result + f"owes the club ${abs(display_amount):.2f}"
+        # A fully settled ($0) invoice owes nothing -- don't render "owes the club $0.00".
+        return result + "is settled up"
 
     @property
     def invoice_summary(self):
@@ -7997,42 +8572,141 @@ class Invoice(models.Model):
             previous_status = Invoice.objects.filter(pk=self.pk).values_list("status", flat=True).first()
         if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
+        # Freeze settled numbers. When an invoice transitions INTO paid we snapshot its total and
+        # (once) stamp the cash date; from then on neither recalculate() nor a plain re-save may
+        # re-derive them from live auction/club settings. See recalculate() and the sync guard at
+        # the end of this method for the rest of the freeze.
+        # ``self.pk`` guards the very first insert: rounded_net reads related rows
+        # (InvoiceAdjustment.objects.filter(invoice=self)), which cannot be queried before this
+        # row exists. A brand-new invoice created directly as PAID is not a real settlement path
+        # (production always flips an existing invoice), so it simply skips the snapshot here.
+        entering_paid = self.status == "PAID" and previous_status != "PAID" and self.pk is not None
+        newly_written_fields = []
+        if entering_paid:
+            # Capture the exact settled net now, from the live line items, so a later change to
+            # membership_annual_fee or the auction's tax/fees can never rewrite this stored total.
+            self.calculated_total = self.rounded_net
+            newly_written_fields.append("calculated_total")
+        # Stamp the cash-basis paid date the first time this invoice is PAID and never overwrite
+        # it. Keeping the *first* paid date (rather than clearing it on un-pay) means an invoice
+        # toggled PAID -> UNPAID -> PAID keeps booking to one stable date, so the ledger stays
+        # deterministic across re-syncs and never fragments an invoice across reporting periods.
+        if self.status == "PAID" and self.date_paid is None:
+            self.date_paid = timezone.now()
+            newly_written_fields.append("date_paid")
+        # If the caller restricted the columns being written (e.g. save(update_fields=["status"]))
+        # make sure the freshly-set fields above are persisted alongside them.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and newly_written_fields:
+            update_fields = list(update_fields)
+            kwargs["update_fields"] = update_fields + [f for f in newly_written_fields if f not in update_fields]
         super().save(*args, **kwargs)
         # Ensure there is only one invoice per AuctionTOS.
         # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
-        # Club-only invoices (no auctiontos_user) skip this deduplication.
-        if not self.auctiontos_user:
-            return
-        oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
-        if oldest and oldest.pk != self.pk:
-            # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
-            duplicate_pk = self.pk
-            InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
-            InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
-            Invoice.objects.filter(pk=duplicate_pk).delete()
-            # Rebind this in-memory instance to the canonical (oldest) invoice so callers
-            # do not hold a reference to a deleted object.
-            self.pk = oldest.pk
-            self.id = oldest.pk
-            self._state.adding = False
-            self._state.db = oldest._state.db
-            self.refresh_from_db()
-            oldest.recalculate()
-            return
-        else:
+        # Club-only invoices (no auctiontos_user) skip this deduplication, but must still fall through
+        # to the ledger sync below so that un-paying a membership/dues invoice reverses its booked
+        # entries (the direct booking in _process_invoice_membership_renewal has no reversal of its own).
+        if self.auctiontos_user:
+            oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
+            if oldest and oldest.pk != self.pk:
+                # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
+                duplicate_pk = self.pk
+                InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
+                InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
+                oldest._absorb_duplicate_ledger(self)
+                Invoice.objects.filter(pk=duplicate_pk).delete()
+                # Rebind this in-memory instance to the canonical (oldest) invoice so callers
+                # do not hold a reference to a deleted object.
+                self.pk = oldest.pk
+                self.id = oldest.pk
+                self._state.adding = False
+                self._state.db = oldest._state.db
+                self.refresh_from_db()
+                oldest.recalculate()
+                return
             # self is the oldest — clean up any newer duplicates that may exist
             newer = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).exclude(pk=self.pk)
             if newer.exists():
                 for dup in newer:
                     InvoiceAdjustment.objects.filter(invoice=dup).update(invoice=self)
                     InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
+                    self._absorb_duplicate_ledger(dup)
                 newer.delete()
                 self.recalculate()
-        # Keep the club ledger in step with the invoice. Reconcile on any status change and
-        # on every save of a PAID invoice (so edits to its lots/adjustments re-flow into the
-        # ledger); sync_club_money books only the delta, so a no-op save costs one query.
-        if previous_status != self.status or previous_status is None or self.status == "PAID":
+        # Keep the club ledger in step with the invoice, but only across a genuine status
+        # transition: non-PAID -> PAID books the settled amounts once, and PAID -> non-PAID
+        # reverses them (the admin un-pay escape hatch). A save of an already-PAID invoice that
+        # stays PAID must NOT re-sync -- re-deriving the amounts from current club/auction
+        # settings would silently rewrite booked accounting the next time a settled invoice is
+        # merely touched. Deliberate post-payment corrections go through un-pay -> edit -> re-pay.
+        if previous_status != self.status or previous_status is None:
             self.sync_club_money()
+
+    def _absorb_duplicate_ledger(self, duplicate):
+        """Re-home a soon-to-be-deleted duplicate invoice's ClubMoney rows onto this canonical
+        invoice and cancel their net effect.
+
+        ClubMoney.invoice is SET_NULL, so deleting a duplicate that carries booked ledger rows
+        would orphan them (invoice=NULL) and break ledger<->invoice traceability; if that
+        duplicate was PAID it would also leave the club double-booked. We re-point the rows at
+        the canonical (no orphans, audit trail preserved) and append an exact reversal of the
+        duplicate's own contribution, so the canonical ends up reflecting only its own booking.
+
+        The reversal deliberately mirrors the duplicate's booked rows rather than re-deriving the
+        canonical via sync_club_money: a re-derive would recompute the canonical from *current*
+        auction/club settings and silently rewrite a settled (PAID) canonical's frozen ledger.
+        The canonical's own rows are never touched, so it stays frozen (see save/sync_club_money).
+        """
+        rows = list(ClubMoney.objects.filter(invoice=duplicate))
+        if not rows:
+            return
+        reversals = [
+            ClubMoney(
+                club=row.club,
+                invoice=self,
+                source_auction=row.source_auction,
+                date=row.date,
+                amount=-row.amount,
+                description=f"Duplicate invoice reversal: {row.description}"[: ClubMoney.DESCRIPTION_MAX_LENGTH],
+                category=row.category,
+            )
+            for row in rows
+        ]
+        ClubMoney.objects.filter(invoice=duplicate).update(invoice=self)
+        ClubMoney.objects.bulk_create(reversals)
+
+    def _ledger_date(self):
+        """The cash-basis date to book this invoice's ClubMoney entries under.
+
+        The ledger records money when it actually changes hands, so an invoice's entries date
+        to when it was *settled*, not when its auction opened (an online invoice can be paid
+        weeks after ``auction.date_start``; booking it to the start date misattributes the
+        revenue to the wrong treasurer-report period). In order of preference:
+
+          1. the date of an entry already booked for this invoice — so a later re-sync appends
+             its deltas under the *original* booking date instead of shifting them to a new
+             period. This makes re-syncs deterministic and keeps an invoice's rows together;
+          2. the date of the most recent recorded payment (``InvoicePayment``) — the moment the
+             balance was actually cleared, the most accurate cash signal when one exists;
+          3. ``date_paid`` — stamped the first time the invoice flipped to PAID, covering cash
+             paid at the door with no recorded online payment;
+          4. today, only as a last resort (e.g. a legacy PAID invoice with neither a recorded
+             payment nor a stamped ``date_paid``).
+
+        Every branch after the first reads a stable underlying signal, so repeated syncs of the
+        same invoice state always resolve to the same date.
+        """
+        booked_date = (
+            ClubMoney.objects.filter(invoice=self).order_by("date", "pk").values_list("date", flat=True).first()
+        )
+        if booked_date:
+            return booked_date
+        latest_payment = self.payments.order_by("-createdon", "-pk").values_list("createdon", flat=True).first()
+        if latest_payment:
+            return timezone.localtime(latest_payment).date()
+        if self.date_paid:
+            return timezone.localtime(self.date_paid).date()
+        return timezone.localdate()
 
     def sync_club_money(self, acting_user=None):
         """Reconcile this invoice's entries in the club ledger (ClubMoney) with its state.
@@ -8057,6 +8731,10 @@ class Invoice(models.Model):
         contributes nothing; outstanding invoices are reported separately rather than booked
         as receivables.
 
+        Club-only membership/dues invoices have no auction; their single membership-dues entry is
+        reconciled here too -- booked when the invoice becomes PAID and reversed when it is
+        un-paid -- under the same append-only, delta-reconciling rules (Item 11).
+
         Reconciliation books, per category, only the *difference* between what the current
         state should show and what is already booked. That keeps the ledger:
           * self-correcting if lots, adjustments or status change,
@@ -8065,10 +8743,17 @@ class Invoice(models.Model):
           * append-only — existing rows are never edited or deleted.
         """
         auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
-        if not auction or not auction.club_id:
+        if auction and auction.club_id:
+            club = auction.club
+        else:
+            # Club-only membership/dues invoice (no auction-club): reconcile against its own club so
+            # its dues entry is booked on the PAID transition and reversed on un-pay, exactly like an
+            # auction invoice. An invoice with neither an auction-club nor a club books nothing.
+            auction = None
+            club = self.club
+        if not club:
             return []
-        club = auction.club
-        event_date = auction.date_start.date() if auction.date_start else timezone.localdate()
+        event_date = self._ledger_date()
         cents = Decimal("0.01")
 
         def _q(value):
@@ -8076,13 +8761,18 @@ class Invoice(models.Model):
 
         if self.auctiontos_user and self.auctiontos_user.name:
             who = self.auctiontos_user.name
+        elif self.club_member:
+            who = self.club_member.display_name
+        elif self.buyer:
+            who = self.buyer.get_full_name().strip() or self.buyer.username
         else:
             who = f"invoice #{self.pk}"
+        where = f" in {auction}" if auction else ""
 
         # What the ledger SHOULD show for this invoice, per category, given its current state.
         desired = {}
         descriptions = {}
-        if self.status == "PAID":
+        if self.status == "PAID" and auction:
             # All amounts are club-cash (+ into the club) and sum to the cash that moves, i.e.
             # the rounded invoice total. Adjustments fold in both the flat and (legacy) percent
             # forms so they net to the invoice; rounding is the remainder so the entries always
@@ -8093,10 +8783,11 @@ class Invoice(models.Model):
             membership = _q(self.membership_fee_amount)
             first_bid = -_q(self.first_bid_payout)
             member_discount = -_q(self.club_member_discount)
-            adjustment_to_net = Decimal(self.flat_value_adjustments) + (
-                Decimal(self.subtotal) * Decimal(self.percent_value_adjustments) / Decimal(100)
-            )
-            adjustment = -_q(adjustment_to_net)
+            # Book the flat + legacy percent adjustment on the SAME base net uses
+            # (manual_adjustment_amount), so the percent isn't computed on the bare subtotal here
+            # while net computes it on the running base. Otherwise the difference would be silently
+            # swept into the rounding category below (Item 21).
+            adjustment = -_q(self.manual_adjustment_amount)
             rounding = -_q(self.rounded_net) - (
                 sale + payout + tax + membership + first_bid + member_discount + adjustment
             )
@@ -8120,6 +8811,17 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_CLUB_MEMBER_DISCOUNT: f"Club member discount for {who} in {auction}",
                 ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
             }
+        elif self.status == "PAID":
+            # Club-only membership/dues invoice: the only cash it moves is the renewal fee. Booking
+            # it through the same delta-reconciliation as the auction path makes it reversible --
+            # un-paying appends a negated MEMBERSHIP row (net zero) and re-paying books a fresh one.
+            # This replaces the fire-and-forget direct booking _process_invoice_membership_renewal
+            # used to do, which could never be reversed (the Item 11 bug). membership_fee_amount is
+            # 0 unless this invoice actually renews dues, so a non-renewal invoice books nothing.
+            membership = _q(self.membership_fee_amount)
+            if membership:
+                desired = {ClubMoney.CATEGORY_MEMBERSHIP: membership}
+                descriptions = {ClubMoney.CATEGORY_MEMBERSHIP: f"Membership dues from {who}"}
 
         # What the ledger ALREADY shows for this invoice, per category.
         booked = {}
@@ -8132,7 +8834,7 @@ class Invoice(models.Model):
         # categories. We leave them alone — migration 0305 rebuilds legacy ledger data — and
         # never emit an unknown category string.
         known_categories = {choice[0] for choice in ClubMoney.CATEGORY_CHOICES}
-        default_description = f"Ledger correction for {who} in {auction}"
+        default_description = f"Ledger correction for {who}{where}"
         entries = []
         for category in (set(desired) | set(booked)) & known_categories:
             delta = _q(desired.get(category, Decimal("0.00"))) - _q(booked.get(category, Decimal("0.00")))
@@ -8183,6 +8885,10 @@ class InvoiceAdjustment(models.Model):
     def display(self):
         """for templates"""
         result = ""
+        # Show an explicit sign so a line reads "+$10.00" (added to the invoice) vs
+        # "-$10.00" (subtracted), instead of a bare amount that gives no direction.
+        if self.adjustment_type in ["ADD", "ADD_PERCENT"]:
+            result += "+"
         if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
             result += "-"
         if self.adjustment_type in ["ADD", "DISCOUNT"]:
@@ -8349,7 +9055,9 @@ class Watch(models.Model):
 class UserBan(models.Model):
     """
     Users can ban other users from bidding on their lots
-    This will prevent the banned_user from bidding on any lots or in auction auctions created by the owned user
+    This will prevent the banned_user from bidding on the banning user's lots and in any
+    auction the banning user administers (created, or is an AuctionTOS admin of) -- see
+    Auction.user_banned_by_admins
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -8515,6 +9223,17 @@ class UserLabelPrefs(models.Model):
         default="lg",
         verbose_name="Label size",
     )
+    PRINT_METHODS = (
+        ("pdf", "PDF download"),
+        ("system", "System printer"),
+        ("bluetooth", "Bluetooth label printer"),
+    )
+    print_method = models.CharField(max_length=20, choices=PRINT_METHODS, default="pdf")
+    print_method.help_text = (
+        "PDF downloads a file to print later. System printer sends the PDF straight "
+        "to a printer configured on your phone. Bluetooth prints directly to a "
+        "thermal label printer. System printer and Bluetooth only work in the app."
+    )
 
 
 def get_default_can_create_auctions():
@@ -8622,6 +9341,13 @@ class UserData(models.Model):
     )
     email_me_about_new_lots_ship_to_location.help_text = (
         "Email me when new lots are created that can be shipped to my location"
+    )
+    push_notifications_instead_of_email = models.BooleanField(default=False, blank=True)
+    push_notifications_instead_of_email.help_text = (
+        "Get notifications in the app instead of emails, for everything "
+        "except account emails like password resets. Requires the app to be installed "
+        "and signed in. The weekly promo email is replaced by a notification for "
+        "promoted auctions near you."
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
     paypal_email_address.help_text = "If different from your email address"
@@ -9331,6 +10057,26 @@ class UserData(models.Model):
             return "CAD"
         return "USD"
 
+    @property
+    def has_push_device(self):
+        """True when the user has at least one push-enabled device carrying an FCM token."""
+        return self.user.mobile_devices.filter(push_enabled=True).exclude(fcm_token="").exists()
+
+    def user_prefers_push(self):
+        """Whether notifications for this user should go to the app (FCM) instead of email.
+
+        True only when the user opted in, has a registered device with a live token, and
+        push is configured globally. Any of these being false falls back to email — the same
+        graceful-degradation pattern as email routing.
+        """
+        from auctions.notifications import push_configured
+
+        if not self.push_notifications_instead_of_email:
+            return False
+        if not push_configured():
+            return False
+        return self.has_push_device
+
 
 class PayPalSeller(models.Model):
     """Extension of user model to store PayPal info for sellers
@@ -9411,6 +10157,27 @@ SQUARE_OAUTH_SCOPES = (
     "ORDERS_WRITE",
     SQUARE_TAP_TO_PAY_SCOPE,
 )
+
+
+def sanitize_square_phone(raw):
+    """Return a Square-acceptable phone string for the checkout pre-fill hint, or "".
+
+    Square validates ``buyer_phone_number`` strictly and rejects the *entire* payment-link
+    request with INVALID_PHONE_NUMBER on a malformed value -- so a junk stored number
+    ("call me", a bare extension, a 7-digit number missing its area code) must be dropped
+    rather than allowed to block checkout, since the field is only a convenience pre-fill
+    the buyer can edit anyway. Keeps a leading "+" (E.164) plus digits and requires a
+    plausible length (10-15 digits); anything else returns "".
+    """
+    if not raw:
+        return ""
+    has_plus = raw.strip().startswith("+")
+    digits = re.sub(r"\D", "", raw)
+    # E.164 caps at 15 digits; a 10-digit floor drops short partials (the most common
+    # INVALID_PHONE_NUMBER trigger) while keeping US 10/11-digit and country-code numbers.
+    if not (10 <= len(digits) <= 15):
+        return ""
+    return f"+{digits}" if has_plus else digits
 
 
 class SquareSeller(models.Model):
@@ -9697,9 +10464,13 @@ class SquareSeller(models.Model):
                         if len(name_parts) >= 2:
                             buyer_name["family_name"] = name_parts[1][:50]
                         pre_populated_data["buyer_name"] = buyer_name
-                # Add phone number if available (20 char limit per Square API)
-                if invoice.auctiontos_user.phone_number:
-                    pre_populated_data["buyer_phone_number"] = invoice.auctiontos_user.phone_number[:20]
+                # Add phone number only when it looks like a real phone (20 char limit per
+                # Square API). This is just a checkout pre-fill hint, but Square rejects the
+                # whole payment-link request with INVALID_PHONE_NUMBER for a malformed value,
+                # so a junk stored number is dropped here rather than allowed to block checkout.
+                buyer_phone = sanitize_square_phone(invoice.auctiontos_user.phone_number)
+                if buyer_phone:
+                    pre_populated_data["buyer_phone_number"] = buyer_phone
                 # Add address if available (500 char limit per Square API)
                 if invoice.auctiontos_user.address:
                     pre_populated_data["buyer_address"] = {
@@ -9766,6 +10537,10 @@ class SquareSeller(models.Model):
                     error_code = errors[0].get("code", "")
                     if error_code == "INVALID_EMAIL_ADDRESS":
                         error_msg = "The email address on your account is not valid for Square payments. Please contact the auction organizer to update your email address."
+                    elif error_code == "INVALID_PHONE_NUMBER":
+                        # Backstop: sanitize_square_phone should already omit bad numbers, but if
+                        # one slips through, tell the buyer what to fix instead of a raw Square code.
+                        error_msg = "The phone number on your account is not valid for Square payments. Please contact the auction organizer to update your phone number."
                     elif error_detail:
                         error_msg = f"Square error: {error_detail}"
             return None, error_msg
@@ -9944,7 +10719,7 @@ class AdCampaignGroup(models.Model):
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
-class AdCampaign(models.Model):
+class AdCampaign(CloudflareImageMixin, models.Model):
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
@@ -9976,6 +10751,11 @@ class AdCampaign(models.Model):
         if self.campaign_group:
             return f"{self.campaign_group.title} - {self.title} ({self.click_rate:.2f}% clicked)"
         return f"{self.title}"
+
+    @property
+    def image_display_url(self):
+        """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "ad")
 
     @property
     def number_of_clicks(self):
@@ -10070,7 +10850,7 @@ class AuctionCampaign(models.Model):
         super().save(*args, **kwargs)
 
 
-class LotImage(models.Model):
+class LotImage(CloudflareImageMixin, models.Model):
     """An image that belongs to a lot.  Each lot can have multiple images"""
 
     PIC_CATEGORIES = (
@@ -10099,10 +10879,14 @@ class LotImage(models.Model):
 
     @property
     def display_url(self):
-        """Return the URL to display this image; prefer uploaded image over url field"""
-        if self.image:
-            return self.image.url
-        return self.url or None
+        """Return the URL to display this image; prefer uploaded image (from Cloudflare
+        when migrated) over the url field"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or self.url or None
+
+    @property
+    def thumbnail_url(self):
+        """Small (250x150) version of display_url for lot tiles and carousel previews"""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "lot_list") or self.url or None
 
 
 class FAQ(models.Model):
@@ -10250,6 +11034,11 @@ class MobileDevice(models.Model):
     device_name = models.CharField(max_length=200, blank=True)
     platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES, blank=True)
     app_version = models.CharField(max_length=50, blank=True)
+    # FCM registration token for push. Blank = no push target for this device (signed out, or the app
+    # never registered one). Tokens follow the app install, not the user, so signing out clears it.
+    fcm_token = models.TextField(blank=True, default="", db_index=False)
+    fcm_token_updated_at = models.DateTimeField(null=True, blank=True)
+    push_enabled = models.BooleanField(default=True)  # per-device kill switch
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
 
@@ -10258,3 +11047,195 @@ class MobileDevice(models.Model):
 
     def __str__(self):
         return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"
+
+
+class MobileOfflineOp(models.Model):
+    """Idempotency ledger for offline-sync ops applied via POST /api/mobile/offline/sync/.
+
+    The Flutter app queues add_user / add_lot / set_winner operations while an admin is running an
+    in-person sale disconnected, then replays the whole queue when the connection returns — possibly
+    more than once, because a dropped response makes it resend. One row per successfully-applied (or
+    already-applied) ``op_id`` lets a retry return the original result instead of duplicating the
+    row, and lets a later op reference an earlier offline-created row by ``op:<op_id>``.
+
+    Conflicted ops are deliberately NOT recorded: the server copy always wins, so a conflict must
+    re-evaluate on the next replay (the admin may have resolved it on the website in between).
+    """
+
+    op_id = models.CharField(max_length=64, unique=True, db_index=True)
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="offline_ops")
+    # The syncing admin the applied op is attributed to (matches the web equivalents' AuctionHistory).
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    op_type = models.CharField(max_length=20)
+    # pk of the row this op created (AuctionTOS for add_user, Lot for add_lot); null for set_winner.
+    # Used to resolve `op:<op_id>` references from later ops.
+    result_pk = models.IntegerField(null=True, blank=True)
+    # The result fields echoed to the app on the original apply (the honored bidder_number/lot_number),
+    # so a replay can return the same numbers alongside an ``already_applied`` status.
+    result_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["auction", "op_type"])]
+
+    def __str__(self):
+        return f"{self.op_type} {self.op_id} (auction {self.auction_id})"
+
+
+class ThermalPrinterProfile(models.Model):
+    """A Bluetooth thermal label printer the mobile app knows how to drive.
+
+    The app downloads all enabled profiles and interprets them; every byte
+    sent to a printer is defined here, not in the app. Adding support for a new
+    printer means adding a row, no app release."""
+
+    slug = models.SlugField(unique=True)  # stable id the app caches/reports
+    name = models.CharField(max_length=100)  # "Fichero / AiYin D11s"
+    enabled = models.BooleanField(default=True)
+    priority = models.PositiveIntegerField(default=100)  # match order, low wins
+    schema_version = models.PositiveIntegerField(default=1)  # command-program schema
+
+    # ── Matching (how the app decides a scanned BLE device uses this profile) ──
+    # JSON list of case-insensitive regexes tested against the advertised name,
+    # e.g. ["^D11", "^Fichero"]. Empty list = never auto-matched (manual pick only).
+    ble_name_patterns = models.JSONField(default=list, blank=True)
+    # Optional exact GATT ids; blank = discover (first writable characteristic).
+    service_uuid = models.CharField(max_length=40, blank=True, default="")
+    write_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
+    notify_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
+
+    # ── Transport pacing ──
+    chunk_size = models.PositiveIntegerField(default=200)  # bytes per BLE write
+    chunk_delay_ms = models.PositiveIntegerField(default=20)  # gap between chunks
+    prefer_write_with_response = models.BooleanField(default=True)
+
+    # ── Raster geometry ──
+    print_width_px = models.PositiveIntegerField(default=96)  # printhead dots
+    dpi = models.PositiveIntegerField(default=203)
+    invert_raster = models.BooleanField(default=False)  # 1 = white printers
+    max_label_width_mm = models.FloatField(null=True, blank=True)
+    max_label_height_mm = models.FloatField(null=True, blank=True)
+
+    # ── Command programs (JSON, see auctions.printer_programs) ──
+    print_program = models.JSONField()  # required
+    status_program = models.JSONField(default=list, blank=True)  # optional pre-flight
+    status_flags = models.JSONField(default=dict, blank=True)  # byte/bit → condition
+    label_size_program = models.JSONField(default=list, blank=True)  # optional size read
+    label_size_parse = models.JSONField(default=dict, blank=True)
+
+    notes = models.TextField(blank=True, default="")  # admin-facing: quirks, sources
+
+    class Meta:
+        ordering = ["priority", "name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.slug})"
+
+    def clean(self):
+        """Validate the command programs so an admin typo is rejected here, not on the printer."""
+        from auctions.printer_programs import ProgramValidationError, validate_profile_programs
+
+        super().clean()
+        try:
+            validate_profile_programs(
+                print_program=self.print_program,
+                status_program=self.status_program,
+                label_size_program=self.label_size_program,
+                status_flags=self.status_flags,
+                label_size_parse=self.label_size_parse,
+            )
+        except ProgramValidationError as exc:
+            raise ValidationError({exc.field or "print_program": str(exc)}) from exc
+
+
+class PushNotificationSent(models.Model):
+    """One row per push actually handed to FCM — dedupe + stats."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    device = models.ForeignKey(MobileDevice, null=True, on_delete=models.SET_NULL)
+    category = models.CharField(max_length=40, db_index=True)
+    auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+    invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "category", "auction"])]
+
+    def __str__(self):
+        return f"push[{self.category}] to {self.user} at {self.sent_at:%Y-%m-%d %H:%M}"
+
+
+class LotObservation(models.Model):
+    """One AR sighting of a lot label from a phone camera frame.
+
+    Raw solver input, pruned aggressively — this is a rolling measurement buffer, not history. All
+    detections sharing (session_id, frame_id) were seen in the same camera frame, which is what
+    makes them mutually constraining (their bearing differences pin the lots relative to each other).
+    """
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_observations")
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="ar_observations")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    session_id = models.UUIDField()  # one per AR screen mount
+    frame_id = models.CharField(max_length=32)  # unique per camera frame within a session
+    captured_at = models.DateTimeField()  # client clock, clamped to <= now on ingest
+    created_at = models.DateTimeField(auto_now_add=True)
+    bearing_deg = models.FloatField()  # horizontal angle in that frame's camera coords, +right
+    depression_deg = models.FloatField()  # ray angle below horizontal (gravity-referenced), +down
+    quality = models.FloatField(default=1.0)  # 0..1, detection sharpness
+    fov_calibrated = models.BooleanField(default=False)  # bearings from device-reported FOV?
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["auction", "captured_at"]),
+            models.Index(fields=["session_id", "frame_id"]),
+        ]
+
+    def __str__(self):
+        return f"obs lot={self.lot_id} @{self.bearing_deg:.1f}°/{self.depression_deg:.1f}°"
+
+
+class LotPosition(models.Model):
+    """Solved 2D position of a lot in an auction-local frame.
+
+    Coordinates are meters in an arbitrary but solve-to-solve stable frame (origin/orientation
+    pinned by priors). Layout is bearing-accurate; absolute scale comes only from the soft
+    phone-height prior (±30%), so treat as a relative map.
+    """
+
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="ar_position")
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_positions")
+    x = models.FloatField()
+    y = models.FloatField()
+    confidence = models.FloatField(default=0)  # 0..1
+    observation_count = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"pos lot={self.lot_id} ({self.x:.2f}, {self.y:.2f})"
+
+
+class LotQueueEntry(models.Model):
+    """An ordered queue of lots about to be sold at an in-person auction.
+
+    Admins build this on the "Lot queue" page by scanning lot QR codes or typing lot numbers.
+    The set-lot-winners page pulls the head of the queue automatically, and a kiosk view projects
+    the current lot for the room. Watchers of a lot get a "coming up soon" push once it reaches the
+    top of the queue (see notification_sent below and Lot.selling_push_notification_sent)."""
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="queue_entry")
+    order = models.PositiveIntegerField()
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True)
+    notification_sent = models.BooleanField(default=False)
+    notification_sent.help_text = (
+        "Set once this entry has been processed for a 'coming up soon' push while in the top of the "
+        "queue, so each queue entry is only ever considered once regardless of dedupe on the lot."
+    )
+
+    class Meta:
+        ordering = ["auction", "order"]
+
+    def __str__(self):
+        return f"queue entry lot={self.lot_id} order={self.order}"

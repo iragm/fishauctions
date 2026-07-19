@@ -12,12 +12,12 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.contrib.sites.models import Site
-from django.db.models import Q
+from django.db import transaction
 from django.utils import timezone
 from post_office import mail
 
 from .consumers import broadcast_bid_result, check_all_permissions
-from .models import AuctionTOS, Bid, Invoice, LotHistory, UserInterestCategory
+from .models import Bid, Invoice, Lot, LotHistory, UserInterestCategory
 
 logger = logging.getLogger(__name__)
 
@@ -34,33 +34,23 @@ def check_bidding_permissions(lot, user):
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     if lot.auction:
-        tos = (
-            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
-            .order_by("-createdon")
-            .first()
-        )
+        tos = lot.auction.tos_for_user(user)
         if not tos:
             return "You haven't joined this auction"
-        else:
-            if not tos.bidding_allowed:
-                return "This auction requires admin approval before you can bid"
-        if not lot.auction.is_online and lot.auction.online_bidding == "disable":
-            return "This auction does not allow online bidding"
-        if (
-            not lot.auction.is_online
-            and lot.auction.online_bidding != "disable"
-            and lot.auction.date_online_bidding_ends
-            and timezone.now() > lot.auction.date_online_bidding_ends
-        ):
-            return "Online bidding has ended for this auction"
-        if (
-            not lot.auction.is_online
-            and lot.auction.online_bidding != "disable"
-            and lot.auction.date_online_bidding_starts
-            and timezone.now() < lot.auction.date_online_bidding_starts
-        ):
-            return "Online bidding hasn't started yet for this auction"
-    return False
+        if lot.auctiontos_seller_id and lot.auctiontos_seller_id == tos.pk:
+            # admin-added lots often have no lot.user set, so the check above misses them;
+            # match the bidder's TOS against the seller's TOS instead
+            return "You can't bid on your own lot"
+        if tos.requires_check_in_before_bidding:
+            # Check-in mode: joining is not enough -- the member must be checked in at the
+            # event before bidding is enabled. Enforced here (not just via bidding_allowed)
+            # so no join/import path can hand out bidding without a check-in.
+            return "You must check in at the event before you can bid"
+        if not tos.bidding_allowed:
+            return "This auction requires admin approval before you can bid"
+    # timing rules (auction started, online bidding windows for in-person auctions,
+    # very new lots, deactivated lots) all live in one place: Lot.bidding_error
+    return lot.bidding_error
 
 
 def reset_lot_end_time(lot):
@@ -146,6 +136,21 @@ def bid_on_lot(lot, user, amount):
                     "date_end": None,
                 }
                 return result
+        if lot.reserve_price and amount < lot.reserve_price:
+            # Without this, an under-reserve first bid would be saved and announced, but
+            # filtered out of lot.bids (amount__gte=reserve_price) -- a ghost bid that can
+            # never win and breaks the raise-your-own-bid path.
+            result = {
+                "type": "ERROR",
+                "message": f"You have to bid at least ${lot.reserve_price}",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
         result = {
             "type": "ERROR",
             "message": "Override this message",
@@ -165,8 +170,11 @@ def bid_on_lot(lot, user, amount):
         if lot.winner or lot.auctiontos_winner:
             result["message"] = "This lot has already been sold"
             return result
-        if lot.auction:
-            invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=lot.auction).first()
+        auction_tos = lot.auction.tos_for_user(user) if lot.auction else None
+        if auction_tos:
+            # resolve the invoice through the TOS (not auctiontos_user__user=user) so users
+            # whose TOS is matched by email, without a linked account, don't bypass this
+            invoice = Invoice.objects.filter(auctiontos_user=auction_tos, auction=lot.auction).first()
             if invoice and invoice.status != "DRAFT":
                 result["message"] = (
                     "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
@@ -227,15 +235,8 @@ def bid_on_lot(lot, user, amount):
             if lot.buy_now_price and not originalHighBidder:
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
-                    if lot.auction:
-                        auctiontos_winner = (
-                            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
-                            .order_by("-createdon")
-                            .first()
-                        )
-                        if auctiontos_winner:
-                            lot.auctiontos_winner = auctiontos_winner
-                            lot.create_update_invoices()
+                    if auction_tos:
+                        lot.auctiontos_winner = auction_tos
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
                     if lot.label_printed:
@@ -247,6 +248,12 @@ def bid_on_lot(lot, user, amount):
                     lot.date_end = timezone.now()
                     lot.watch_warning_email_sent = True
                     lot.save()
+                    if auction_tos:
+                        # Recalculate the buyer AND seller invoices only AFTER the sale is
+                        # persisted. Previously this ran before winning_price/auctiontos_winner
+                        # were saved, so both invoices recalculated from stale (unsold) DB state
+                        # and credited $0 until a later recalculation (e.g. the endauctions cron).
+                        lot.create_update_invoices()
                     result["send_to"] = "everyone"
                     result["high_bidder_pk"] = user.pk
                     result["high_bidder_name"] = user_string
@@ -265,7 +272,9 @@ def bid_on_lot(lot, user, amount):
                         bid_amount=amount,
                     )
                     return result
-            if not originalHighBidder and (created or lot.high_bidder.pk == user.pk):
+            # lot.high_bidder can be False (not just for new lots: raising the reserve
+            # above all existing bids disqualifies them), so guard before .pk
+            if not originalHighBidder and (created or (lot.high_bidder and lot.high_bidder.pk == user.pk)):
                 result["send_to"] = "everyone"
                 result["type"] = "NEW_HIGH_BIDDER"
                 result["message"] = f"{user_string} has placed the first bid on this lot"
@@ -333,18 +342,6 @@ def bid_on_lot(lot, user, amount):
                 result["high_bidder_name"] = str(lot.high_bidder_display)
                 result["current_high_bid"] = lot.high_bid
                 result["send_to"] = "everyone"
-                # email the old one
-                current_site = Site.objects.get_current()
-                logger.debug("%s has been outbid!", originalHighBidder.username)
-                mail.send(
-                    originalHighBidder.email,
-                    template="outbid_notification",
-                    context={
-                        "name": originalHighBidder.first_name,
-                        "domain": current_site.domain,
-                        "lot": lot,
-                    },
-                )
                 LotHistory.objects.create(
                     lot=lot,
                     user=user,
@@ -353,6 +350,25 @@ def bid_on_lot(lot, user, amount):
                     current_price=result["current_high_bid"],
                     bid_amount=amount,
                 )
+                # email the old high bidder; best-effort -- the bid is already saved, so a
+                # bad email address must not turn this success into a reported failure.
+                # originalHighBidder is False (not None) when prior bids were all under a
+                # since-raised reserve, in which case there's no one to notify
+                if originalHighBidder:
+                    try:
+                        current_site = Site.objects.get_current()
+                        logger.debug("%s has been outbid!", originalHighBidder.username)
+                        mail.send(
+                            originalHighBidder.email,
+                            template="outbid_notification",
+                            context={
+                                "name": originalHighBidder.first_name,
+                                "domain": current_site.domain,
+                                "lot": lot,
+                            },
+                        )
+                    except Exception:
+                        logger.exception("Failed to queue outbid notification for lot %s", lot.pk)
                 return result
             # bumped up against a proxy bid
             result["date_end"] = reset_lot_end_time(lot)
@@ -404,14 +420,23 @@ def place_bid_and_broadcast(lot, user, amount):
     """
     if not getattr(user, "is_authenticated", False):
         return _bid_error_result("You must be logged in to bid")
-    error = check_all_permissions(lot, user) or check_bidding_permissions(lot, user)
-    if error:
-        result = _bid_error_result(error)
-    else:
-        result = bid_on_lot(lot, user, amount)
-        if result is None:
-            # bid_on_lot swallows unexpected errors and returns None; surface as an error
-            result = _bid_error_result("Something went wrong placing your bid")
+    with transaction.atomic():
+        # Serialize concurrent bids on the same lot. Without the row lock, two
+        # simultaneous buy-nows can both pass the winner check and both "win"
+        # (double-sell, last write wins), and near-simultaneous proxy bids race
+        # on the same original high bid. The broadcast stays outside the
+        # transaction so clients only ever see committed state.
+        lot = Lot.objects.select_for_update().filter(pk=lot.pk, is_deleted=False).first()
+        if not lot:
+            return _bid_error_result("This lot has been removed")
+        error = check_all_permissions(lot, user) or check_bidding_permissions(lot, user)
+        if error:
+            result = _bid_error_result(error)
+        else:
+            result = bid_on_lot(lot, user, amount)
+            if result is None:
+                # bid_on_lot swallows unexpected errors and returns None; surface as an error
+                result = _bid_error_result("Something went wrong placing your bid")
     try:
         broadcast_bid_result(lot, user, result)
     except Exception:

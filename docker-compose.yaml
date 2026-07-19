@@ -1,11 +1,46 @@
+# Bounded container logs: the default json-file driver never rotates, so a chatty
+# or crash-looping container can fill the host disk. Cap each container's logs at
+# 3 x 10MB; every long-running service references this via *default-logging.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Shared build config for the app image (web + celery). PUID/PGID must reach the
+# Dockerfile's ARGs so the in-container app user matches the host owner of the
+# bind-mounted mediafiles/logs dirs -- update.sh's ensure_permissions chowns those
+# to the same .env values, so declaring the ARG without wiring it here would let
+# the two silently diverge whenever PUID/PGID != 1000.
+x-app-build: &app-build
+  context: .
+  args:
+    PUID: ${PUID-1000}
+    PGID: ${PGID-1000}
+
+# NOTE on container_name: the fixed names (django, db, redis, ...) are intentional.
+# The entire ops workflow -- CLAUDE.md, update-packages.sh, cron/docs -- runs
+# `docker exec django ...` / `docker exec redis ...` against them. Fixed names do
+# prevent `docker compose up --scale` and would collide if two checkouts ran on one
+# host, but this is a single-instance deploy where stable, greppable names win.
 services:
   web:
-    build: .
+    build: *app-build
     container_name: django
+    logging: *default-logging
     volumes:
       - .:/home/app/web
-      - ./auctions/static:/home/app/web/staticfiles
+      # collectstatic output lives in a dedicated volume, NOT bind-mounted onto
+      # the source tree. Previously this was `./auctions/static:.../staticfiles`,
+      # which pointed STATIC_ROOT at the app's own source-static dir -- so
+      # collectstatic dumped third-party statics (admin/, summernote/, ...) into
+      # git and update.sh needed a destructive `git restore .`. The source dir
+      # (auctions/static) is still visible via the repo mount above for Django's
+      # AppDirectoriesFinder to collect FROM.
+      - staticfiles:/home/app/web/staticfiles
       - ./mediafiles:/home/app/web/mediafiles
+      # Django's rotating log files (settings.py LOG_DIR) -- on the host so they
+      # survive container recreation and can be grepped without docker exec.
       - ./logs:/home/logs
     expose:
       - 8000
@@ -16,28 +51,57 @@ services:
       redis:
         condition: service_started
     restart: always
+    # HTTP check: proves a worker actually served a request. A bare TCP connect is
+    # not enough -- the gunicorn master binds the socket before forking, so TCP
+    # succeeds even while every worker crash-loops on an import error. Any HTTP
+    # response (even a 4xx/5xx) counts as alive: 127.0.0.1 is in ALLOWED_HOSTS, and
+    # http.client never follows redirects so the check can't wander off-box.
+    # start_period is generous: entrypoint.sh runs migrate + collectstatic before
+    # gunicorn binds.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          python3 - <<'PY'
+          import http.client
+          conn = http.client.HTTPConnection("127.0.0.1", 8000, timeout=5)
+          conn.request("GET", "/")
+          conn.getresponse()
+          PY
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
 
   celery_worker:
-    build: .
+    build: *app-build
     container_name: celery_worker
+    logging: *default-logging
     entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
     volumes:
       - .:/home/app/web
       - ./logs:/home/logs
     env_file: .env
+    environment:
+      # Own log files (root-celery.log/django-celery.log): RotatingFileHandler is
+      # not multiprocess-safe across services sharing the ./logs mount (settings.py).
+      - LOG_SERVICE_NAME=celery
     depends_on:
       - db
       - redis
     restart: always
 
   celery_beat:
-    build: .
+    build: *app-build
     container_name: celery_beat
+    logging: *default-logging
     entrypoint: ["sh", "./celery_beat_entrypoint.sh"]
     volumes:
       - .:/home/app/web
       - ./logs:/home/logs
     env_file: .env
+    environment:
+      - LOG_SERVICE_NAME=beat # own log files; see celery_worker
     depends_on:
       - db
       - redis
@@ -59,6 +123,7 @@ services:
 
   db:
     container_name: db
+    logging: *default-logging
     # Track a single release series (security patches flow automatically) instead of
     # :latest, which jumps release series on routine pulls and leaves system tables
     # behind unless mariadb-upgrade runs. 11.4 is an LTS series (maintained to 2029).
@@ -66,14 +131,32 @@ services:
     # MARIADB_VERSION in .env to that series -- MariaDB can't downgrade a data dir.
     image: mariadb:${MARIADB_VERSION-11.4}
     restart: always
+    # These were symptom-patches for connection exhaustion / "server has gone away"
+    # from an era of pooled/persistent connections. Django now sets CONN_MAX_AGE=0
+    # (a fresh connection per request, closed at the end -- see settings.py) plus
+    # CONN_HEALTH_CHECKS=True, so the app itself guarantees connection freshness and
+    # never holds idle connections. That makes the old extremes actively harmful:
+    # max_connections=10000 hides connection leaks (and reserves huge per-thread
+    # memory), and the 315M (~10 year) timeouts let any leaked/stuck connection live
+    # forever. But peak concurrency is NOT just the process count: each of the 8
+    # async gunicorn workers runs sync ORM code in a per-worker threadpool, and with
+    # CONN_MAX_AGE=0 every in-flight request holds its own connection -- so an
+    # auction-end spike can legitimately hold a few hundred connections at once
+    # (plus celery, beat, and ops sessions).
     command:
-      - "--max_connections=10000"
+      - "--max_connections=512"       # covers async-worker fan-out at peak while still surfacing leaks
       - "--max_allowed_packet=16M"
-      - "--wait_timeout=315M"
-      - "--interactive_timeout=315M"
-      - "--open_files_limit=100000"
-      - "--net_read_timeout=315M"
-      - "--net_write_timeout=315M"
+      # wait_timeout must outlive the longest gap BETWEEN queries inside one celery
+      # task: celery's Django fixup only closes connections at task boundaries, and
+      # CONN_HEALTH_CHECKS only runs at request start -- so a task that opens a
+      # connection, spends >wait_timeout on non-DB work (image conversion, PDF
+      # generation), then queries again gets "MySQL server has gone away". An hour
+      # still reaps genuine leaks; 600s would cut those long tasks off mid-run.
+      - "--wait_timeout=3600"
+      - "--interactive_timeout=3600"  # keep interactive/CLI sessions alive an hour for ops
+      - "--open_files_limit=100000"   # legitimate: many tables x connections
+      - "--net_read_timeout=120"      # finite (was 315M) so a stalled client frees its connection
+      - "--net_write_timeout=180"     # finite (was 315M); headroom for slow large result streaming
     environment:
       MYSQL_DATABASE: ${DATABASE_NAME-auctions}
       MYSQL_USER: ${DATABASE_USER-mysqluser}
@@ -96,19 +179,40 @@ services:
 
   redis:
     container_name: redis
-    image: redis
-    environment:
-      - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+    logging: *default-logging
+    # Pin a release series like the db (security patches within 7.4 flow on rebuild,
+    # no surprise major jumps). Redis is the Celery broker + result backend + cache
+    # + channels pub/sub layer.
+    image: redis:${REDIS_VERSION-7.4}
     expose:
       - 6379
     volumes:
-      - redis_data:/bitnami/redis/data
+      # The official redis image persists to /data. The old mount at
+      # /bitnami/redis/data was a leftover from a bitnami example, so the volume
+      # was never written and the broker queue/results were wiped on every
+      # container recreate. Enable AOF (appendfsync everysec) so the broker queue
+      # survives restarts with at most ~1s of loss.
+      - redis_data:/data
     restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD-unsecure}
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD-unsecure}
+      --appendonly yes
+      --appendfsync everysec
 
   nginx:
     container_name: nginx
-    image: ${NGINX_IMAGE-nginx}:latest # default setting is for development, use lscr.io/linuxserver/swag for production
+    logging: *default-logging
+    # Pin the tag instead of :latest so a routine rebuild/pull can't drag in a
+    # swag/nginx release that reorganizes its config includes and breaks the site.
+    # NGINX_IMAGE selects dev (nginx) vs prod (lscr.io/linuxserver/swag); NGINX_TAG
+    # pins the version. Both tags still receive rebuilds on `docker compose pull`
+    # (nginx 1.27 patch rebuilds; swag republishes version tags with newer -ls
+    # builds), so security patches flow without surprise major jumps. The 1.27
+    # default only exists for the dev nginx image -- when NGINX_IMAGE is set to
+    # swag, NGINX_TAG MUST be set in .env to the swag release the host runs
+    # (update.sh refuses to deploy otherwise). Bump deliberately.
+    image: ${NGINX_IMAGE-nginx}:${NGINX_TAG-1.27}
     volumes:
       # the root conf file is set for dev, but for production use:
       # NGINX_CONF='./nginx.prod.conf'
@@ -116,14 +220,32 @@ services:
       - ${NGINX_CONF-./nginx.dev.conf}:${NGINX_CONF_LOCATION-/etc/nginx/nginx.conf}
       - ./swag:/config
       - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro
-      - ./auctions/static:/home/app/web/staticfiles:ro
+      # Serve the collected statics from the shared volume that web writes to
+      # (was a bind mount onto the source tree; see the web service for why).
+      - staticfiles:/home/app/web/staticfiles:ro
       - ./mediafiles:/home/app/web/mediafiles:ro
     ports:
       - ${HTTP_PORT-80}:80
       - ${SSL_PORT-443}:443 # this is only used in production
     restart: always
+    # Deliberately NOT condition: service_healthy. Gating nginx on web's health
+    # removes the graceful-degradation path: if web can't become healthy (e.g. a
+    # failed migration crash-looping the container), a service_healthy dependency
+    # means nginx can never start or be recreated -- the public endpoint becomes
+    # connection-refused and swag's cert renewal stops, instead of nginx serving
+    # 502s until web recovers. nginx tolerates an absent upstream fine, so it only
+    # needs start ordering here; web's healthcheck still reports in `ps`/`--wait`.
     depends_on:
-      - web
+      web:
+        condition: service_started
+    # NET_ADMIN is required by the prod swag image only: its bundled fail2ban edits
+    # iptables to ban abusive IPs. The dev plain-nginx image never uses the
+    # capability (it's inert there, a minor over-grant on a local container).
+    # Compose can't conditionally drop a single cap_add entry via env, and removing
+    # it would break swag's fail2ban in prod, so it stays for both. NOTE: the prod
+    # config path (NGINX_CONF=./nginx.prod.conf + swag ssl.conf includes) is only
+    # exercised in production -- there's no dev harness for it, so change
+    # nginx.prod.conf / nginx_fishauctions.conf carefully.
     cap_add:
       - NET_ADMIN
     environment: # none of these get used in development
@@ -136,6 +258,7 @@ services:
 
   selenium:
     container_name: selenium
+    logging: *default-logging
     image: selenium/standalone-chrome:latest
     shm_size: 2gb
     expose:
@@ -154,3 +277,7 @@ services:
 volumes:
   redis_data:
   mariadb_data:
+  # collectstatic output (STATIC_ROOT). A named volume rather than a bind mount
+  # onto ./auctions/static, so collected third-party statics never land in the
+  # source tree / git. Repopulated by collectstatic on container start.
+  staticfiles:

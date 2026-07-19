@@ -11,6 +11,7 @@ from .models import (
     AdCampaign,
     AdCampaignGroup,
     AdCampaignResponse,
+    AppleDeviceRegistration,
     Auction,
     AuctionCampaign,
     AuctionHistory,
@@ -33,10 +34,13 @@ from .models import (
     Lot,
     LotHistory,
     MobileDevice,
+    MobileOfflineOp,
     PageView,
     PickupLocation,
     Product,
+    PushNotificationSent,
     SearchHistory,
+    ThermalPrinterProfile,
     UserBan,
     UserData,
     UserInterestCategory,
@@ -358,8 +362,8 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(MobileDevice)
 class MobileDeviceAdmin(admin.ModelAdmin):
-    list_display = ("user", "platform", "app_version", "device_name", "last_seen", "created_at")
-    list_filter = ("platform", "app_version")
+    list_display = ("user", "platform", "app_version", "device_name", "push_enabled", "has_token", "last_seen")
+    list_filter = ("platform", "app_version", "push_enabled")
     search_fields = (
         "user__username",
         "user__email",
@@ -368,9 +372,90 @@ class MobileDeviceAdmin(admin.ModelAdmin):
         "device_uuid",
         "device_name",
     )
-    readonly_fields = ("created_at", "last_seen")
+    readonly_fields = ("created_at", "last_seen", "fcm_token_updated_at")
     raw_id_fields = ("user",)
     date_hierarchy = "last_seen"
+
+    @admin.display(boolean=True, description="Has push token")
+    def has_token(self, obj):
+        return bool(obj.fcm_token)
+
+
+@admin.register(MobileOfflineOp)
+class MobileOfflineOpAdmin(admin.ModelAdmin):
+    """Idempotency ledger for offline-sync ops. Read-only — rows are written by the sync endpoint."""
+
+    list_display = ("op_id", "op_type", "auction", "user", "result_pk", "created_at")
+    list_filter = ("op_type",)
+    search_fields = ("op_id", "auction__title", "user__username")
+    readonly_fields = ("op_id", "op_type", "auction", "user", "result_pk", "result_data", "created_at")
+    raw_id_fields = ("auction", "user")
+    date_hierarchy = "created_at"
+
+
+@admin.register(AppleDeviceRegistration)
+class AppleDeviceRegistrationAdmin(admin.ModelAdmin):
+    """One row = one iPhone/Watch holding a member's Apple Wallet pass.
+
+    Rows are created/removed by the PassKit web service (auctions/passkit_views.py);
+    this admin exists for debugging pass-update pushes, not for editing.
+    """
+
+    list_display = ("member", "club", "device_library_identifier", "createdon")
+    search_fields = ("member__name", "member__email", "member__club__name", "device_library_identifier")
+    readonly_fields = ("createdon",)
+    raw_id_fields = ("member",)
+    date_hierarchy = "createdon"
+
+    @admin.display(description="Club")
+    def club(self, obj):
+        return obj.member.club
+
+
+@admin.register(ThermalPrinterProfile)
+class ThermalPrinterProfileAdmin(admin.ModelAdmin):
+    """One row = one Bluetooth thermal printer the app can drive. The command programs (JSON) are
+    validated on save via ThermalPrinterProfile.clean(), so a typo is rejected here, not on the
+    printer."""
+
+    list_display = ("name", "slug", "enabled", "priority", "print_width_px", "dpi", "schema_version")
+    list_editable = ("enabled", "priority")
+    list_filter = ("enabled", "schema_version")
+    search_fields = ("name", "slug", "notes")
+    prepopulated_fields = {"slug": ("name",)}
+    fieldsets = (
+        (None, {"fields": ("slug", "name", "enabled", "priority", "schema_version", "notes")}),
+        (
+            "Matching",
+            {
+                "fields": (
+                    "ble_name_patterns",
+                    "service_uuid",
+                    "write_characteristic_uuid",
+                    "notify_characteristic_uuid",
+                )
+            },
+        ),
+        ("Transport pacing", {"fields": ("chunk_size", "chunk_delay_ms", "prefer_write_with_response")}),
+        (
+            "Raster geometry",
+            {"fields": ("print_width_px", "dpi", "invert_raster", "max_label_width_mm", "max_label_height_mm")},
+        ),
+        (
+            "Command programs (JSON)",
+            {"fields": ("print_program", "status_program", "status_flags", "label_size_program", "label_size_parse")},
+        ),
+    )
+
+
+@admin.register(PushNotificationSent)
+class PushNotificationSentAdmin(admin.ModelAdmin):
+    list_display = ("user", "category", "auction", "invoice", "device", "sent_at")
+    list_filter = ("category",)
+    search_fields = ("user__username", "user__email", "auction__title")
+    raw_id_fields = ("user", "device", "auction", "invoice")
+    readonly_fields = ("sent_at",)
+    date_hierarchy = "sent_at"
 
 
 class GeneralInterestAdmin(admin.ModelAdmin):

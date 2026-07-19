@@ -60,6 +60,12 @@ class Command(BaseCommand):
 
         for user in users:
             try:
+                # App users who opted into push get promoted auctions as notifications via
+                # promo_push_notifications instead of this weekly email — skip them here.
+                if user.userdata.user_prefers_push():
+                    emails_skipped += 1
+                    continue
+
                 # If schedule not yet initialized, set it up and skip sending this run
                 if user.userdata.next_promo_email_at is None:
                     if not fake_mode:

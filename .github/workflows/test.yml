@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./.github/scripts/prepare-ci.sh
+      - run: ./.github/scripts/prepare-ci.sh --force
       - run: docker compose build
 
       - name: Start database first and wait for health
@@ -62,7 +62,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - run: ./.github/scripts/prepare-ci.sh
+      - run: ./.github/scripts/prepare-ci.sh --force
       - name: Build containers
         run: |
           docker compose --profile selenium build
@@ -109,9 +109,13 @@ jobs:
             sleep 5
           done
           docker compose ps
-      - name: Install Selenium in Django container
+      - name: Install Selenium + Daphne in Django container
+        # daphne is a test-only dep (moved out of requirements.txt): ChannelsLive-
+        # ServerTestCase runs an in-process Daphne server for LiveBiddingTestCase.
+        # Without it, tests_selenium.py's guarded import sets CHANNELS_LIVE_AVAILABLE
+        # =False and the live-bidding websocket tests silently SKIP.
         run: |
-          docker exec -u root django pip install selenium
+          docker exec -u root django pip install selenium daphne
       - name: Run Selenium tests
         run: |
           docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2

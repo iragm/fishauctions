@@ -1,0 +1,35 @@
+{% comment %}
+Club-admin-only "Add these to your site" control for embedding the BAP leaderboard.
+Shown on the BAP page (which is already gated behind permission_manage_bap). Expects
+`club` and `bap_embed_path` in context. Only names + points are ever exposed — no PII.
+{% endcomment %}
+{% if club.enable_breeder_award_program and bap_embed_path %}
+<div class="my-2">
+  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+          data-bs-target="#bap-embed-snippets" aria-expanded="false" aria-controls="bap-embed-snippets">
+    <i class="bi bi-code-slash"></i> Add these to your site
+  </button>
+  <div class="collapse mt-2" id="bap-embed-snippets">
+    <div class="card card-body">
+      <p class="small mb-2">
+        Embed your current top-10 leaderboard on another website. Only names and points are shown &mdash;
+        never emails or member numbers.
+        {% if club.separate_hap or club.separate_cap %}
+          Add <code>&amp;program=hap</code>{% if club.separate_cap %} or <code>&amp;program=cap</code>{% endif %}
+          to the URL to show a different program.
+        {% endif %}
+      </p>
+      <label class="form-label small fw-bold mb-1">Light-theme iframe</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ request.scheme }}://{{ request.get_host }}{{ bap_embed_path }}?format=iframelight"
+        style="border:0;width:100%;max-width:480px;height:420px"&gt;&lt;/iframe&gt;</pre>
+      <label class="form-label small fw-bold mb-1">Dark-theme iframe</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ request.scheme }}://{{ request.get_host }}{{ bap_embed_path }}?format=iframedark"
+        style="border:0;width:100%;max-width:480px;height:420px"&gt;&lt;/iframe&gt;</pre>
+      <label class="form-label small fw-bold mb-1">Unstyled table (style it yourself)</label>
+      <div class="small mb-2"><code>{{ request.scheme }}://{{ request.get_host }}{{ bap_embed_path }}?format=unstyledhtml</code></div>
+      <label class="form-label small fw-bold mb-1">JSON (for developers)</label>
+      <div class="small mb-0"><code>{{ request.scheme }}://{{ request.get_host }}{{ bap_embed_path }}?format=json</code></div>
+    </div>
+  </div>
+</div>
+{% endif %}

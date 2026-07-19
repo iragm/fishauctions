@@ -88,12 +88,25 @@ function deactivate_lot() {
     window.onload = function() {
     var $ = window.jQuery;
     originalTitle = $(document).prop('title');
+    // Localize the initial "Ends:" value to the browser's timezone. The server renders it in a
+    // fallback timezone (America/New_York) until the tz cookie is set, which made this look hours
+    // off from the tiles and the live websocket update. The server string stays as a no-JS fallback.
+    var endDateEl = document.getElementById('end_date');
+    if (endDateEl) {
+        var endIso = endDateEl.getAttribute('data-end-iso');
+        if (endIso) {
+            var endLocal = new Date(endIso);
+            if (!isNaN(endLocal.getTime())) {
+                endDateEl.textContent = endLocal.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+            }
+        }
+    }
     // recommended lots
     {% if lot.minutes_to_end > 10 %}
     setTimeout( function() {
         $.ajax({
         type: "GET",
-        url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}&keywords={{lot.lot_name|urlencode}}",
+        url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}&keywords={{lot.lot_name|urlencode}}&exclude={{lot.pk}}",
         success : function(result) {
             $("#recommendations").html(result);
         },
@@ -192,13 +205,26 @@ function deactivate_lot() {
                                     <i class="bi bi-calendar-x"></i> Remove or refund
                                 </button>
                             {% endif %}
-                            {% comment %} Label printing is native (Bluetooth) in the mobile app; hide the web single-lot label link there. {% endcomment %}
-                            {% if is_auction_admin or lot.user.pk == request.user.pk %}{% if not request.is_mobile_app %}
+                            {% comment %} In the app with the Bluetooth print method, print natively via a deep link; otherwise use the web label PDF. {% endcomment %}
+                            {% if is_auction_admin or lot.user.pk == request.user.pk %}
+                                {% if request.is_mobile_app and user_print_method == 'bluetooth' %}
+                                <a class="btn btn-primary" href="fishauctions://print/{{ lot.pk }}">
+                                    <i class="bi bi-tag"></i>
+                                    {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
+                                </a>
+                                {% else %}
                                 <a class="btn btn-primary" href="{% url 'single_lot_label' pk=lot.pk %}">
                                     <i class="bi bi-tag"></i>
                                     {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
                                 </a>
-                            {% endif %}{% endif %}
+                                {% endif %}
+                            {% endif %}
+                            {% comment %} App-only: open AR mode aimed at this lot and walk the user to it. Visible to every user. {% endcomment %}
+                            {% if request.is_mobile_app and lot.auction %}
+                                <a class="btn btn-primary" href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}">
+                                    <i class="bi bi-geo-alt"></i> Locate with AR
+                                </a>
+                            {% endif %}
                             {% if request.user.is_superuser %}
                                 <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
                                     Admin
@@ -283,7 +309,7 @@ function deactivate_lot() {
                             {% endif %}
                             {% for image in lot.images %}
                             <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                                <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{% if image.image %}{{ image.image.lot_list.url }}{% else %}{{ image.url }}{% endif %}" class="rounded">
+                                <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{{ image.thumbnail_url }}" class="rounded">
                             </a>
                             {% endfor %}
                         </div>
@@ -393,7 +419,7 @@ function deactivate_lot() {
                                                 {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                             </span>
                                             {% else %}
-                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-dark' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                             {% endif %}
                                         {% endif %}
                                     {% endif %}
@@ -404,7 +430,7 @@ function deactivate_lot() {
                         <tr>
                             <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
                                 {% if request.user.userdata.location in lot.shipping_locations.all %}
-                                <span class="badge bg-light text-black">Ships to {{ request.user.userdata.location }}</span>
+                                <span class="badge bg-light text-dark">Ships to {{ request.user.userdata.location }}</span>
                                 {% endif %}
                             </td>
                         </tr>
@@ -423,7 +449,7 @@ function deactivate_lot() {
                         {% endif %}
 
                         <tr>
-                            <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
+                            <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}" data-end-iso="{% if not lot.is_part_of_in_person_auction or lot.winner_as_str and lot.date_end %}{{ lot.calculated_end|date:'c' }}{% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
                         </tr>
 
                         {% if lot.auction and lot.auction.multi_location and lot.location %}
@@ -437,7 +463,7 @@ function deactivate_lot() {
                         {% endif %}
                         {% if not lot.sealed_bid %}
                         <tr>
-                            <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
+                            <td><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
                         </tr>
                         {% endif %}
                     </table>
@@ -506,7 +532,7 @@ function deactivate_lot() {
                             </div>
                         </div>
                         <div class="col-auto">
-                            <button class='btn btn-success text-black' id='bid_button' style='min-width: 150px;'>Place bid</button>
+                            <button class='btn btn-success text-dark' id='bid_button' style='min-width: 150px;'>Place bid</button>
                         </div>
                     </div>
                     <div class="invalid-feedback">Enter a number</div>
@@ -697,7 +723,7 @@ function deactivate_lot() {
             </div>
             <div id='confirmDialogText' class="modal-body">Enter an amount</div>
             <div class="modal-footer">
-                <button type="button" id='finalize-bid' class="btn btn-success text-black">Place bid</button>
+                <button type="button" id='finalize-bid' class="btn btn-success text-dark">Place bid</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
             </div>
         </div>

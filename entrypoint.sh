@@ -1,15 +1,20 @@
 #!/bin/sh
 
+# Disable core dumps. The worker's CWD is the bind-mounted repo root, so a native
+# crash (see the uvloop heap-corruption SIGABRTs) drops a ~200MB core file into the
+# source tree and, at that size per crash, will fill the host disk. We keep the
+# crash visible via logs/monitoring rather than 200MB forensic dumps in ./.
+ulimit -c 0
+
 check_writable_dir() {
   local dir="$1"
-  local host_dir="$2"
+  local fix_hint="$2"
   if [ ! -w "$dir" ]; then
     owner_uid=$(stat -c "%u" "$dir")
     owner_gid=$(stat -c "%g" "$dir")
     echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
-    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid on the host."
-    echo "👉 Fix on the host by running (from your project root, the same directory as update.sh):"
-    echo "   sudo chown -R $(id -u):$(id -g) $host_dir"
+    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid."
+    echo "👉 $fix_hint"
     echo
   fi
 }
@@ -30,9 +35,17 @@ if [ "$setup_complete" != "true" ]; then
 fi
 
 echo Checking directory permissions...
-check_writable_dir "/home/app/web/mediafiles"   "./mediafiles"
-check_writable_dir "/home/app/web/staticfiles"  "./auctions/static"
-check_writable_dir "/home/app/web/logs"         "./logs"
+check_writable_dir "/home/app/web/mediafiles" \
+  "Fix on the host, from the project root: sudo chown -R $(id -u):$(id -g) ./mediafiles"
+# staticfiles is a named volume (see docker-compose.yaml), NOT a bind mount --
+# chowning something on the host filesystem cannot fix it.
+check_writable_dir "/home/app/web/staticfiles" \
+  "This is the 'staticfiles' named volume. Fix its ownership from the host: docker run --rm -v <compose-project>_staticfiles:/v alpine chown -R $(id -u):$(id -g) /v (find the exact name with: docker volume ls)"
+# /home/logs is the bind mount of the host's ./logs and is where Django writes its
+# log files (settings.py LOG_DIR). Unwritable is non-fatal: settings.py falls back
+# to a container-internal dir, so the site boots but logs stop reaching the host.
+check_writable_dir "/home/logs" \
+  "Fix on the host, from the project root: sudo chown -R $(id -u):$(id -g) ./logs"
 
 python << END
 import sys
@@ -57,8 +70,26 @@ while True:
     time.sleep(1)
 END
 
-python manage.py migrate --no-input
-python manage.py collectstatic --no-input > /dev/null 2>&1
+echo "Applying database migrations..."
+if ! python manage.py migrate --no-input; then
+    echo "FATAL: 'manage.py migrate' failed -- refusing to start on a half-migrated" >&2
+    echo "database (serving against a mismatched schema causes opaque 500s). Fix the" >&2
+    echo "failing migration and redeploy. With restart:always this container will keep" >&2
+    echo "restarting and re-printing the traceback above until migrations apply." >&2
+    exit 1
+fi
+# Do NOT silence this: STATIC_ROOT is an empty named volume on first boot and the
+# third-party statics (admin/, summernote/, ...) are no longer in git, so a failed
+# collectstatic means an unstyled site with no other trace. --verbosity 0 keeps the
+# per-file spam out of the logs while leaving errors on stderr. Failure is loud but
+# non-fatal: on redeploys the volume still holds the previous run's statics, and a
+# stale-CSS site beats a down site.
+echo "Collecting static files..."
+if ! python manage.py collectstatic --no-input --verbosity 0; then
+    echo "ERROR: collectstatic failed (see traceback above). Static assets in the" >&2
+    echo "'staticfiles' volume are missing or stale; pages will load unstyled if the" >&2
+    echo "volume is empty. Starting anyway -- fix the error above and redeploy." >&2
+fi
 python manage.py setup_celery_beat > /dev/null 2>&1 || true
 python manage.py ensure_site_defaults
 python manage.py load_demo_data
@@ -74,8 +105,13 @@ END
 
 if [ "$debug_mode" = "true" ]; then
     echo Starting fishauctions in development mode
-    exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
+    # --loop asyncio: match production. Without it uvicorn's loop="auto" picks
+    # uvloop (still installed via uvicorn[standard]) -- the exact library whose
+    # heap-corruption SIGABRTs gunicorn.conf.py exists to avoid.
+    exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --loop asyncio --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
     echo Starting fishauctions in production mode
-    exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
+    # Worker/loop config lives in gunicorn.conf.py -- it runs uvicorn on the
+    # stdlib asyncio loop instead of uvloop (see that file for the crash history).
+    exec gunicorn fishauctions.asgi:application -c gunicorn.conf.py
 fi

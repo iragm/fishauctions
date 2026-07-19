@@ -96,7 +96,15 @@
           $("#" + field).val('');
         })
         $("#result").html('');
-        $("#lot").focus();
+        // If the lot queue has another lot ready, pull it up automatically: fill the lot number,
+        // load its picture, and jump the cursor straight to the price. Otherwise focus the lot box.
+        if (response.next_queued_lot_number) {
+          $("#lot").val(response.next_queued_lot_number);
+          getLotPicture();
+          $("#price").focus();
+        } else {
+          $("#lot").focus();
+        }
         $("#success_banner").removeClass('d-none');
         if (response.banner == "error") {
           $("#success_banner").removeClass('bg-success');
@@ -524,7 +532,16 @@ $(document).ready(function() {
           clearTimeout(lotSearch);
           getLotPicture();
         });
-        $('#lot').select();
+        // Prefill from the head of the in-person lot queue, if any: load its picture and focus the
+        // price. Otherwise start with the lot box selected as before.
+        var queueHeadLot = "{{ queue_head_lot_number|escapejs }}";
+        if (queueHeadLot) {
+          $("#lot").val(queueHeadLot);
+          getLotPicture();
+          $("#price").focus();
+        } else {
+          $('#lot').select();
+        }
         var input = document.getElementById('lot');
         input.addEventListener('keyup', function () {
           clearTimeout(lotSearch);
@@ -589,9 +606,9 @@ $(document).ready(function() {
 <div class="container">
 
 
-<div class="alert bg-success text-black d-none" id="success_banner">
+<div class="alert bg-success text-dark d-none" id="success_banner">
   <p class="mb-0"><span id='last_sold_lot_number' class="d-none">
-    </span><span id='success_message'></span> <a id='undo_button' class='text-black d-none' onclick="undoSellLot()" href='javascript:void(0)'>Undo</a>
+    </span><span id='success_message'></span> <a id='undo_button' class='text-dark d-none' onclick="undoSellLot()" href='javascript:void(0)'>Undo</a>
   </p>
 </div>
 
@@ -623,9 +640,9 @@ $(document).ready(function() {
     </div>
     <div class="col-12 mb-3">
       <div class="btn-group" role="group" aria-label="Save">
-        <button type="submit" class="btn bg-success text-black">Save</button>
+        <button type="submit" class="btn bg-success text-dark">Save</button>
         <div class="btn-group" role="group">
-          <button id="more_save_options" type="button" class="btn btn-success dropdown-toggle text-black" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button><span id="more_save_options_tooltip"></span>
+          <button id="more_save_options" type="button" class="btn btn-success dropdown-toggle text-dark" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button><span id="more_save_options_tooltip"></span>
           <div class="dropdown-menu" aria-labelledby="more_save_options">
             <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('force_save')">Ignore errors and save</a>
             <a id='sell_to_online_high_bidder' class="d-none dropdown-item" onclick="sendFormData('to_online_high_bidder')" href='javascript:void(0)'></a>

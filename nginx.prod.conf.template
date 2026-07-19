@@ -1,0 +1,44 @@
+# redirect all traffic to https
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# Default/catch-all TLS server. A default_server needs no server_name -- it
+# matches any SNI hostname not claimed by a more specific server block below
+# (mostly bots hitting the raw server IP). Do NOT give this a server_name; the
+# previous `server_name --;` was leftover corruption from a botched sed.
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+
+    include /config/nginx/ssl.conf;
+
+    location / {
+        # block traffic with the wrong url (mostly traffic hitting the server IP)
+        return 404;
+    }
+
+}
+
+# fishauctions server, https only.
+# This is a TEMPLATE. update.sh's render_nginx_domain() copies it to the
+# gitignored nginx.prod.conf, substituting __SITE_DOMAIN__ with SITE_DOMAIN from
+# .env. Keep __SITE_DOMAIN__ literal here so the render stays idempotent and the
+# real domain never lands in git. Do NOT use `server_name _;` here -- that is a
+# wildcard that matches every host, which swallows all traffic and makes the
+# catch-all 404 block above dead code.
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+
+    server_name __SITE_DOMAIN__;
+
+    include /config/nginx/ssl.conf;
+
+    include ./nginx_fishauctions.conf;
+}

@@ -10,8 +10,10 @@ import json
 import logging
 from html import escape
 
+import httpx
 import requests
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
@@ -171,26 +173,42 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     if closing_text:
         text_parts.extend(["", closing_text])
     text_parts.extend(["", member.club.name])
-    club_icon_url = ""
-    if member.club.icon:
-        club_icon_url = f"https://{current_site.domain}{member.club.icon.url}"
-    mail.send(
-        member.email,
-        sender=member.club.contact_sender_email,
-        subject=subject,
-        message="\n".join(text_parts),
-        html_message=_render_membership_email_html(
-            member,
-            intro_text=intro_text,
-            message_text=message_text,
-            membership_link=membership_link,
-            club_icon_url=club_icon_url,
-            barcode_url=barcode_url,
-            next_auction_html=next_html,
-            opening_text=opening_text,
-            closing_text=closing_text,
-        ),
-        headers={"Reply-to": _membership_email_reply_to(member.club)},
+    club_icon_url = member.club.icon_display_url or ""
+    if club_icon_url and not club_icon_url.startswith("http"):
+        club_icon_url = f"https://{current_site.domain}{club_icon_url}"
+    html_message = _render_membership_email_html(
+        member,
+        intro_text=intro_text,
+        message_text=message_text,
+        membership_link=membership_link,
+        club_icon_url=club_icon_url,
+        barcode_url=barcode_url,
+        next_auction_html=next_html,
+        opening_text=opening_text,
+        closing_text=closing_text,
+    )
+
+    def _send_membership_email():
+        mail.send(
+            member.email,
+            sender=member.club.contact_sender_email,
+            subject=subject,
+            message="\n".join(text_parts),
+            html_message=html_message,
+            headers={"Reply-to": _membership_email_reply_to(member.club)},
+        )
+
+    # A member may or may not be a linked site user; notify_user pushes only when that user opted in
+    # (and has a live device), otherwise it emails — so guest members always get the email.
+    from auctions.notifications import notify_user
+
+    notify_user(
+        member.user,
+        category="membership",
+        title=subject,
+        body=message_text or member.club.name,
+        url=membership_link,
+        send_email=_send_membership_email,
     )
     return True
 
@@ -252,6 +270,53 @@ def flush_expired_tokens(self):
     per login and per refresh; without periodic cleanup the token_blacklist tables grow unbounded.
     """
     call_command("flushexpiredtokens")
+
+
+@shared_task
+def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
+    """Send a push notification to every push-enabled device of a user; prune dead tokens.
+
+    FCM data-message keys: title, body, url (absolute), category. On an unregistered / invalid
+    token the offending device's token is cleared. One ``PushNotificationSent`` row is logged per
+    successful device send (dedupe + stats). ``collapse_key`` folds chatty categories so a phone
+    that was off shows one notification, not many.
+    """
+    from django.contrib.auth.models import User
+
+    from auctions import notifications
+    from auctions.models import MobileDevice, PushNotificationSent
+
+    try:
+        user = User.objects.get(pk=user_pk)
+    except User.DoesNotExist:
+        return 0
+
+    devices = MobileDevice.objects.filter(user=user, push_enabled=True).exclude(fcm_token="")
+    sent_count = 0
+    for device in devices:
+        result = notifications.send_fcm_message(
+            device.fcm_token,
+            title=title,
+            body=body,
+            url=url,
+            category=category,
+            collapse_key=collapse_key,
+        )
+        if result == notifications.SEND_INVALID_TOKEN:
+            # Token follows the app install; a dead one never comes back, so clear it.
+            device.fcm_token = ""
+            device.save(update_fields=["fcm_token"])
+            logger.info("Cleared dead FCM token for device %s (user %s)", device.pk, user_pk)
+        elif result == notifications.SEND_OK:
+            PushNotificationSent.objects.create(
+                user=user,
+                device=device,
+                category=category,
+                auction_id=auction_pk,
+                invoice_id=invoice_pk,
+            )
+            sent_count += 1
+    return sent_count
 
 
 def get_invoice_notification_task_name(invoice_pk):
@@ -374,12 +439,30 @@ def send_invoice_notification(self, invoice_pk):
         if not email_routing_enabled():
             send_kwargs["headers"] = {"Reply-to": contact_email}
             send_kwargs["context"]["reply_to_email"] = contact_email
-        mail.send(email, **send_kwargs)
-        # Add history entry about the email being sent
+
+        # Route through the notify_user choke point: an app user who opted into push gets a
+        # notification instead of the email; everyone else is emailed exactly as before. The
+        # bookkeeping below (email_sent, AuctionHistory) is identical on both paths.
+        from auctions.notifications import notify_user
+
+        push_user = invoice.auctiontos_user.user
+        invoice_url = f"https://{current_site.domain}{invoice.get_absolute_url()}"
+        pushed = notify_user(
+            push_user,
+            category="invoice",
+            title=subject,
+            body="Tap to view your invoice.",
+            url=invoice_url,
+            send_email=lambda: mail.send(email, **send_kwargs),
+            auction_pk=invoice.auction.pk,
+            invoice_pk=invoice.pk,
+        )
+        # Add history entry about the notification being sent
+        channel = "push notification" if pushed else "email"
         AuctionHistory.objects.create(
             auction=invoice.auction,
             user=None,
-            action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
+            action=f"Invoice notification {channel} sent to {invoice.auctiontos_user.name} ({email})",
             applies_to="INVOICES",
         )
 
@@ -600,6 +683,27 @@ def weekly_promo(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def promo_push_notifications(self):
+    """
+    Push promotions for nearby auctions to app users who opted into push instead of the weekly email.
+
+    Runs hourly; each promoted auction is pushed to each nearby opted-in user at most once, ever.
+    """
+    call_command("promo_push_notifications")
+
+
+@shared_task(bind=True, ignore_result=True)
+def update_ar_positions(self):
+    """
+    Fuse AR lot sightings into a 2D map for flagged auctions, and prune the observation buffer.
+
+    Runs every 60 seconds; solves auctions the observations endpoint flagged dirty and deletes
+    LotObservation rows older than 24 hours.
+    """
+    call_command("update_ar_positions")
+
+
+@shared_task(bind=True, ignore_result=True)
 def set_user_location(self):
     """
     Set user lat/long based on their IP address.
@@ -638,6 +742,42 @@ def deduplicate_user_interest(self):
     the occasional duplicate and this reconciles them, summing the interest.
     """
     call_command("deduplicate_user_interest")
+
+
+@shared_task(bind=True, ignore_result=True)
+def migrate_to_cloudflare_images(self):
+    """
+    Move all pending locally stored images (originals only, never the generated
+    thumbnails) to Cloudflare Images.
+
+    Runs every minute to pick up new uploads; a no-op unless the CLOUDFLARE_IMAGES_*
+    settings in .env are configured.  A large initial migration is chunked by the
+    task time limit and resumes on the next run.
+    """
+    try:
+        call_command("migrate_to_cloudflare_images")
+    except SoftTimeLimitExceeded:
+        logger.info("migrate_to_cloudflare_images hit the task time limit; the next run will resume")
+
+
+@shared_task(bind=True, ignore_result=True)
+def delete_cloudflare_image(self, image_id):
+    """
+    Delete an image from Cloudflare Images, unless a row still references it
+    (lots copied with "relist" share the Cloudflare image of the original).
+    """
+    from auctions import cloudflare_images
+    from auctions.models import AdCampaign, Club, LotImage
+
+    if not cloudflare_images.enabled():
+        return
+    for model in (LotImage, Club, AdCampaign):
+        if model.objects.filter(cloudflare_image_id=image_id).exists():
+            return
+    try:
+        cloudflare_images.delete(image_id)
+    except cloudflare_images.CloudflareImagesError:
+        logger.exception("Could not delete Cloudflare image %s", image_id)
 
 
 def schedule_auction_stats_update(run_at=None):
@@ -1048,6 +1188,144 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
         except requests.RequestException:
             # Let Celery's autoretry handle transient failures on the outer task.
             raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def refresh_google_wallet_membership_status(self):
+    """Daily: refresh Google Wallet passes for members whose membership status just
+    changed by the passage of time (i.e. their membership recently expired).
+
+    Keeps the on-pass status line ("Valid through …" / "Unpaid/expired") and the
+    expired red styling accurate even when no member edit fired the change signal.
+    Only members who lapsed in the last few days are touched, so this stays cheap.
+
+    The Apple-side equivalent is refresh_apple_wallet_membership_status below.
+    """
+    from auctions.google_wallet import is_configured, update_generic_object_for_member
+    from auctions.models import ClubMember
+
+    if not is_configured():
+        return
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    # Members whose explicit expiration date passed in the last few days just flipped to
+    # expired (is_paid_member goes False the day after membership_expiration_date). The
+    # small window gives slack for a missed daily run.
+    window_start = today - datetime.timedelta(days=3)
+    members = ClubMember.objects.filter(
+        is_deleted=False,
+        club__google_wallet_class_created=True,
+        club__membership_system__in=["january_first", "rolling"],
+        membership_expiration_date__gte=window_start,
+        membership_expiration_date__lt=today,
+    ).select_related("user", "club")
+    for member in members:
+        try:
+            update_generic_object_for_member(member)
+        except requests.RequestException:
+            logger.exception("Google Wallet daily status refresh failed for member=%s", member.pk)
+            raise
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def notify_apple_wallet_devices_for_member(self, member_pk):
+    """Bump a member's Apple pass version and poke every registered device via APNs.
+
+    The bump (apple_pass_updated=now) is what makes the PassKit web service serve
+    fresh content — Last-Modified on pass delivery and the passesUpdatedSince filter
+    both read it — so it happens even when no device is registered (a manual
+    pull-to-refresh on the pass must still see the change). Deleted members are NOT
+    skipped: the update they push is the voided pass.
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    if not ClubMember.objects.filter(pk=member_pk).update(apple_pass_updated=timezone.now()):
+        return
+    for registration in AppleDeviceRegistration.objects.filter(member_id=member_pk):
+        send_pass_update_notification(registration)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def notify_apple_wallet_devices_for_club(self, club_pk):
+    """Club-wide Apple pass refresh: bump every member and poke every registered device.
+
+    Used when something on the club touches all passes at once — name/icon change
+    (pass visuals) or flipping show_member_barcode (which voids/unvoids every pass).
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    ClubMember.objects.filter(club_id=club_pk).update(apple_pass_updated=timezone.now())
+    registrations = AppleDeviceRegistration.objects.filter(member__club_id=club_pk)
+    for registration in registrations:
+        send_pass_update_notification(registration)
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(httpx.HTTPError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def refresh_apple_wallet_membership_status(self):
+    """Daily: push Apple pass updates to members whose membership just lapsed.
+
+    The Apple analogue of refresh_google_wallet_membership_status — when a
+    membership expires by the mere passage of time no signal fires, but the pass's
+    status line and red styling need to change. Only members who lapsed in the last
+    few days AND have at least one registered device are touched, so this stays cheap.
+    """
+    from django.utils import timezone
+
+    from auctions.apple_wallet import is_configured, send_pass_update_notification
+    from auctions.models import AppleDeviceRegistration, ClubMember
+
+    if not is_configured():
+        return
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    window_start = today - datetime.timedelta(days=3)
+    members = ClubMember.objects.filter(
+        is_deleted=False,
+        club__membership_system__in=["january_first", "rolling"],
+        membership_expiration_date__gte=window_start,
+        membership_expiration_date__lt=today,
+        apple_device_registrations__isnull=False,
+    ).distinct()
+    for member in members:
+        ClubMember.objects.filter(pk=member.pk).update(apple_pass_updated=timezone.now())
+        for registration in AppleDeviceRegistration.objects.filter(member=member):
+            send_pass_update_notification(registration)
 
 
 @shared_task(

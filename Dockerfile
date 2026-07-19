@@ -3,7 +3,10 @@
 ###########
 
 # pull official base image
-FROM python:3.11.9 AS builder
+# Pin the 3.11 minor series (not a frozen .9 patch) so `docker compose build --pull`
+# picks up CPython security patch releases. Stays on 3.11 -- the project targets
+# 3.11.x, not 3.12.
+FROM python:3.11 AS builder
 
 # set work directory
 WORKDIR /usr/src/app
@@ -47,7 +50,7 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requir
 #########
 
 # pull official base image
-FROM python:3.11.9-slim AS test
+FROM python:3.11-slim AS test
 COPY ./requirements-test.txt .
 RUN pip install -r requirements-test.txt
 
@@ -67,36 +70,35 @@ RUN pip install -r requirements-test.txt
 #########
 
 # pull official base image
-FROM python:3.11.9-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# create directory for the app user
-RUN mkdir -p /home/app
-
-# create the app user
-#RUN addgroup --system app && adduser --system --group app
-# specifying IDs to be the same as the nginx users, to set permissions correctly on images
-RUN groupadd -r -g ${PUID-1000} app && \
-    useradd -r -u ${PGID-1000} -g app -m -d /home/app -s /bin/bash app
-
-# create the appropriate directories
+# App user. PUID/PGID are build args (default 1000), kept equal to the swag/nginx
+# container's PUID/PGID so bind-mounted media/static share ownership across
+# containers. The USER gets PUID and the GROUP gets PGID -- these were previously
+# swapped (group<-PUID, user<-PGID), silently mismatching ownership whenever the
+# two differed. Declared as ARG so a deployer can wire them via compose build.args.
+ARG PUID=1000
+ARG PGID=1000
 ENV APP_HOME=/home/app/web
-RUN mkdir /home/logs
-RUN mkdir -p /home/app/logs
-RUN touch /home/app/logs/django.log
-RUN mkdir /home/user
-RUN mkdir -p $APP_HOME
-RUN mkdir -p $APP_HOME/staticfiles
-RUN mkdir -p $APP_HOME/mediafiles
-RUN mkdir -p $APP_HOME/mediafiles/images
-RUN mkdir /home/app/.cache
-RUN mkdir /home/app/.gunicorn
+
+RUN groupadd -r -g ${PGID} app && \
+    useradd -r -u ${PUID} -g app -m -d /home/app -s /bin/bash app && \
+    mkdir -p /home/logs /home/app/logs /home/user /home/app/.cache /home/app/.gunicorn \
+             "$APP_HOME/staticfiles" "$APP_HOME/mediafiles/images" && \
+    touch /home/app/logs/django.log
 
 WORKDIR $APP_HOME
 
-# install dependencies
+# System packages. build-essential + pkg-config + default-libmysqlclient-dev are
+# intentionally kept in this "slim" final image (not just runtime libs): update-
+# packages.sh runs `pip-compile` INSIDE this container, and mysqlclient ships no
+# manylinux wheel, so resolving/building it needs the compiler + MySQL headers.
+# (To slim the prod image later, move that pip-compile step to the builder/dev
+# stage.) libheif-dev + libpango* back pyheif/weasyprint; default-mysql-client and
+# nano are ops conveniences; netcat is a lightweight connectivity check.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     netcat-traditional \
@@ -105,12 +107,8 @@ RUN apt-get update && \
     default-libmysqlclient-dev \
     default-mysql-client \
     nano \
-    # python3-pip \
-    # python3-cffi \
-    # python3-brotli \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
-    # libheif dependencies
     libheif-dev \
     && \
     apt-get clean && \
@@ -119,28 +117,18 @@ RUN pip install pip-tools
 
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache /wheels/*
-RUN pip install mysql-connector-python
+RUN pip install --upgrade pip && \
+    pip install --no-cache /wheels/*
 
-# volume instead
-#COPY . $APP_HOME
+# No `COPY . $APP_HOME`: this deploy bind-mounts the repo into every service (see
+# docker-compose.yaml) and updates via `git pull` + restart, so app code is
+# intentionally not baked into the image.
 
-# chown all the files to the app user
-# I am not sure that these are actually doing anything
-# Docker bind mount permissions are from the host and need to be set there
-# There's a test in entrypoint.sh that will show the user and permissions
-RUN chown -R app:app $APP_HOME
-RUN chown -R app:app /home/logs
-RUN chown -R app:app /home/app/logs/
-RUN chown -R app:app /home/user
-RUN chown -R app:app /var/log/
-RUN chown -R app:app /var/log/
-RUN chown -R app:app /home/app/web/mediafiles
-RUN chown -R app:app /home/app/web/mediafiles/images
-RUN chown -R app:app /home/app/web/staticfiles
-RUN chown -R app:app /home/app/.cache
-RUN chown -R app:app /home/app/.gunicorn
+# chown app-owned trees. Everything the app writes lives under /home/app (incl.
+# $APP_HOME, staticfiles, mediafiles, .cache, .gunicorn), so one recursive chown
+# covers them; /home/logs and /var/log are separate. Bind-mounted paths get their
+# real ownership from the host mount at runtime (entrypoint.sh warns if unwritable).
+RUN chown -R app:app /home/app /home/logs /home/user /var/log
 USER app
 
 EXPOSE 8000

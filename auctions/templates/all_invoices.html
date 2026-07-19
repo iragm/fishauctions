@@ -24,11 +24,17 @@
               <td>{% if invoice.user_should_be_paid or invoice.net == 0 %}
                   {{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }}
                 {% else %}
-                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }})</span>
+                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.absolute_amount|floatformat:2 }})</span>
                 {% endif %}
                 </td>
               <td>{{ invoice.get_status_display }}</td>
               <td>{{ invoice.date }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="4" class="text-center text-muted p-3">
+                You don't have any invoices yet. An invoice is created automatically once you buy or sell a lot in an auction.
+              </td>
             </tr>
             {% endfor %}
         </tbody>

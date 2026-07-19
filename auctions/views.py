@@ -35,6 +35,7 @@ from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 from django.db.models import (
     Avg,
@@ -75,6 +76,7 @@ from django.utils.decorators import method_decorator
 from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
+from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
 from django.views.generic.base import ContextMixin
@@ -127,6 +129,7 @@ from .filters import (
     rhyming_name_q,
 )
 from .forms import (
+    IMAGE_PROCESSING_EXCEPTIONS,
     AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
@@ -207,6 +210,7 @@ from .models import (
     Lot,
     LotHistory,
     LotImage,
+    LotQueueEntry,
     MobileDevice,
     PageView,
     PayPalSeller,
@@ -693,22 +697,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            if club.membership_annual_fee and not locked.auction:
-                # Club-only invoices: create the membership ClubMoney here.
-                # Auction invoices: Invoice.sync_club_money (via Invoice.save) already books the
-                # membership dues, including the reversal when the invoice is un-paid. Booking it
-                # here too would double-count membership revenue.
-                ClubMoney.objects.create(
-                    club=club,
-                    created_by=acting_user,
-                    date=today,
-                    amount=Decimal(club.membership_annual_fee),
-                    invoice=locked,
-                    description=f"Membership renewal via {payment_method} ({external_id})"
-                    if external_id
-                    else f"Membership renewal via {payment_method} (invoice #{locked.pk})",
-                    category=ClubMoney.CATEGORY_MEMBERSHIP,
-                )
+            # Membership dues are NOT booked to the club ledger here. Both auction and club-only
+            # invoices book (and reverse) their membership ClubMoney entry through
+            # Invoice.sync_club_money on the PAID/un-pay status transition (Item 11). Booking it here
+            # too would double-count, and for club-only invoices it would leave an entry that
+            # un-paying the invoice could never reverse -- the bug this replaces.
             locked.renewal_processed = True
             locked.save(update_fields=["renewal_processed"])
             # Keep the in-memory invoice in sync for the caller.
@@ -1563,7 +1556,13 @@ class RecommendedLots(ListView):
             for word in lotWords:
                 if word not in settings.IGNORE_WORDS:
                     keywords.append(word)
-        return get_recommended_lots(user=self.request.user, auction=auction, qty=qty, keywords=keywords)
+        try:
+            exclude_pk = int(data.get("exclude")) if data.get("exclude") else None
+        except (ValueError, TypeError):
+            exclude_pk = None
+        return get_recommended_lots(
+            user=self.request.user, auction=auction, qty=qty, keywords=keywords, exclude_pk=exclude_pk
+        )
 
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
@@ -1650,7 +1649,7 @@ class MyLots(HTMxTableView):
                 msg += (
                     f""" with new messages.  <a href="{reverse("messages")}">Go to your messages page to see them</a>"""
                 )
-                messages.info(self.request, msg)
+                messages.info(self.request, msg, extra_tags="safe")
         return super().get(*args, **kwargs)
 
 
@@ -1936,29 +1935,42 @@ class CreateUserBan(APIView):
             user=user,
             defaults={},
         )
-        auctionsList = Auction.objects.exclude(is_deleted=True).filter(created_by=user.pk)
-        # delete all bids the banned user has made on active lots or in active auctions created by the request user
-        bids = Bid.objects.exclude(is_deleted=True).filter(user=bannedUser)
+        # bans apply to every auction this user administers (matching Auction.user_banned_by_admins),
+        # not just auctions they created
+        auctionsList = (
+            Auction.objects.exclude(is_deleted=True)
+            .filter(Q(created_by=user.pk) | Q(auctiontos__user=user, auctiontos__is_admin=True))
+            .distinct()
+        )
+        # delete all bids the banned user has made on active lots or in active auctions this user administers
+        bids = (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(user=bannedUser, lot_number__is_deleted=False)
+            .filter(Q(lot_number__user=user.pk) | Q(lot_number__auction__in=auctionsList))
+            .select_related("lot_number__auction")
+        )
         for bid in bids:
-            lot = Lot.objects.get(pk=bid.lot_number.pk, is_deleted=False)
-            if lot.user == user or lot.auction in auctionsList:
-                if not lot.ended:
-                    logger.info("Deleting bid %s", str(bid))
-                    bid.delete()
+            if not bid.lot_number.ended:
+                logger.info("Deleting bid %s", str(bid))
+                bid.delete()
+        # undo buy now purchases by the banned user in these auctions.  Clear auctiontos_winner
+        # along with winner so the sale isn't left half-undone
+        buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction__in=auctionsList)
+        for lot in buy_now_lots:
+            lot.winner = None
+            lot.auctiontos_winner = None
+            lot.winning_price = None
+            lot.save()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
-        for auction in auctionsList:
-            buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction=auction.pk)
-            for lot in buy_now_lots:
-                lot.winner = None
-                lot.winning_price = None
+        lots = Lot.objects.exclude(is_deleted=True).filter(
+            Q(user=bannedUser) | Q(auctiontos_seller__user=bannedUser), auction__in=auctionsList
+        )
+        for lot in lots:
+            if not lot.ended:
+                logger.info("User %s has banned lot %s", str(user), lot)
+                lot.banned = True
+                lot.ban_reason = "The seller of this lot has been banned from this auction"
                 lot.save()
-            lots = Lot.objects.exclude(is_deleted=True).filter(user=bannedUser, auction=auction.pk)
-            for lot in lots:
-                if not lot.ended:
-                    logger.info("User %s has banned lot %s", str(user), lot)
-                    lot.banned = True
-                    lot.ban_reason = "The seller of this lot has been banned from this auction"
-                    lot.save()
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
@@ -2270,35 +2282,39 @@ class PageViewCreate(APIView):
 class InvoicePaid(APIView):
     """Mark an invoice as paid/ready/open - POST only
 
-    Accessible via two URL patterns:
-    - /api/payinvoice/<int:pk>/<str:status>: requires an authenticated auction admin
-    - /api/payinvoice/<uuid:uuid>/<str:status>: accepts the invoice's no-login UUID, no login required
+    Restricted to authenticated auction admins (or club admins for renewal-only invoices).
+    The status change books/reverses club-ledger (ClubMoney) entries and can trigger a
+    membership renewal, so it must never be reachable via the invoice's no-login UUID:
+    that link is emailed to the bidder, who could otherwise mark their own invoice PAID.
+    UUID access to an invoice is view-only and handled separately by ``InvoiceNoLoginView``.
     """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [AllowAny]  # Auth is enforced manually in post()
 
     def post(self, request, *args, **kwargs):
-        if "uuid" in kwargs:
-            # UUID-based access: anyone with the invoice's no-login link may update status
-            invoice = get_object_or_404(Invoice, no_login_link=kwargs["uuid"])
-            auction = invoice.auction
-        else:
-            # PK-based access: requires an authenticated admin
-            if not request.user.is_authenticated:
-                raise NotAuthenticated()
-            invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
-            auction = invoice.auction
-            if auction:
-                if not auction.permission_check(request.user):
-                    raise PermissionDenied()
-            elif invoice.club:
-                # Renewal-only invoice (no auction): check club permission
-                if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
-                    raise PermissionDenied()
-            else:
-                raise PermissionDenied()
+        # Only accept statuses that are real choices on the model. An unvalidated status
+        # (e.g. "BANANA") would be written straight to the DB and silently break every
+        # `status == "PAID"` / `status in ("DRAFT", "UNPAID")` check across the codebase.
         new_status = kwargs["status"]
+        valid_statuses = {value for value, _label in Invoice._meta.get_field("status").choices}
+        if new_status not in valid_statuses:
+            msg = "Invalid invoice status"
+            raise Http404(msg)
+        # Changing invoice status is an admin-only action (see class docstring).
+        if not request.user.is_authenticated:
+            raise NotAuthenticated()
+        invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
+        auction = invoice.auction
+        if auction:
+            if not auction.permission_check(request.user):
+                raise PermissionDenied()
+        elif invoice.club:
+            # Renewal-only invoice (no auction): check club permission
+            if not check_club_permission(request.user, invoice.club, "permission_add_edit"):
+                raise PermissionDenied()
+        else:
+            raise PermissionDenied()
         if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
         # Core: persist the new invoice status. Everything else is "extra"
@@ -2343,7 +2359,7 @@ class InvoicePaid(APIView):
                 )
             except Exception:
                 logger.exception("create_history failed for invoice %s", invoice.pk)
-        is_admin = "pk" in kwargs  # UUID-based access is member-facing, not admin
+        is_admin = True  # This endpoint is now admin-only (no UUID/member-facing access)
         buttons_html = render_to_string("invoice_buttons.html", {"invoice": invoice})
         renewal_ctx = {"invoice": invoice, "is_admin": is_admin}
         renewal_html = render_to_string("auctions/partials/invoice_membership_renewal.html", renewal_ctx)
@@ -3048,53 +3064,57 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         count = 0
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         no_email_count = 0
+        # Keep every unpaid invoice's stored total fresh before billing (side effect preserved).
         for invoice in self.auction.paypal_invoices:
             invoice.recalculate()
-            # we loop through everything regardless of which chunk
-            if not invoice.user_should_be_paid:
-                count += 1
-                if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
-                    reference = ""
-                    itemName = "Auction total"
-                    description = ""
-                    shippingAmount = 0
-                    discountAmount = 0
-                    currencyCode = self.auction.created_by.userdata.currency
-                    noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
-                    termsAndConditions = ""
-                    memoToSelf = invoice.auctiontos_user.memo
-                    # Bill the rounded balance so the PayPal invoice matches the invoice total the
-                    # buyer sees (and skip anyone who only owes a rounded-away residual).
-                    if invoice.rounded_net_after_payments < 0:
-                        if invoice.auctiontos_user.email:
-                            name_parts = (invoice.auctiontos_user.name or "").split()
-                            if len(name_parts) >= 2:
-                                first_name = name_parts[0][:20]
-                                last_name = name_parts[-1][:20]
-                            else:
-                                first_name = ""
-                                last_name = name_parts[0][:20] if name_parts else ""
-                            writer.writerow(
-                                [
-                                    invoice.auctiontos_user.email,
-                                    first_name,
-                                    last_name,
-                                    invoice.pk,
-                                    due_date,
-                                    reference,
-                                    itemName,
-                                    description,
-                                    abs(invoice.rounded_net_after_payments),
-                                    shippingAmount,
-                                    discountAmount,
-                                    currencyCode,
-                                    noteToCustomer,
-                                    termsAndConditions,
-                                    memoToSelf,
-                                ]
-                            )
-                        else:
-                            no_email_count += 1
+        # Bill only the invoices that still owe the club after rounding, advancing the chunk
+        # counter over the exact same set that auction.paypal_invoice_chunks counts
+        # (auction.paypal_invoices_to_export), so every billed invoice lands in a chunk the UI
+        # offers -- see Item 21.
+        for invoice in self.auction.paypal_invoices_to_export:
+            count += 1
+            if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
+                reference = ""
+                itemName = "Auction total"
+                description = ""
+                shippingAmount = 0
+                discountAmount = 0
+                currencyCode = self.auction.created_by.userdata.currency
+                noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
+                termsAndConditions = ""
+                memoToSelf = invoice.auctiontos_user.memo
+                # Bill the rounded balance so the PayPal invoice matches the invoice total the
+                # buyer sees. Every invoice here already owes the club (rounded_net_after_payments
+                # < 0); a missing email is reported via no_email_count but still consumes its slot.
+                if invoice.auctiontos_user.email:
+                    name_parts = (invoice.auctiontos_user.name or "").split()
+                    if len(name_parts) >= 2:
+                        first_name = name_parts[0][:20]
+                        last_name = name_parts[-1][:20]
+                    else:
+                        first_name = ""
+                        last_name = name_parts[0][:20] if name_parts else ""
+                    writer.writerow(
+                        [
+                            invoice.auctiontos_user.email,
+                            first_name,
+                            last_name,
+                            invoice.pk,
+                            due_date,
+                            reference,
+                            itemName,
+                            description,
+                            abs(invoice.rounded_net_after_payments),
+                            shippingAmount,
+                            discountAmount,
+                            currencyCode,
+                            noteToCustomer,
+                            termsAndConditions,
+                            memoToSelf,
+                        ]
+                    )
+                else:
+                    no_email_count += 1
         self.auction.create_history(
             applies_to="USERS",
             action=f"Exported PayPal invoices CSV.  {no_email_count} users had no email address and were not included in the CSV.",
@@ -3395,7 +3415,7 @@ class PickupLocationForm:
     def get_success_url(self):
         data = self.request.GET.copy()
         next_url = data.get("next")
-        if next_url:
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
             return next_url
         if self.auction.is_online:
             return reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
@@ -3560,21 +3580,46 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
         elif not self.get_object().is_online and self.get_object().online_bidding != "disable" and settings.ENABLE_HELP:
             messages.info(
                 self.request,
-                f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug': self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
+                format_html(
+                    "This auction allows online bidding -- make sure to <a href='{}'>watch the tutorial in the help</a> to see how this works",
+                    reverse("auction_help", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
             )
         if (
             self.get_object().buy_now == "allow" or self.get_object().buy_now == "required"
         ) and "buy_now_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Buy now is enabled, but labels are not set to print a buy now price. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing buy now on labels here.</a>",
+                format_html(
+                    "Buy now is enabled, but labels are not set to print a buy now price. <a href='{}'>You should enable printing buy now on labels here.</a>",
+                    reverse("auction_label_config", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
             )
         if (
             self.get_object().reserve_price == "allow" or self.get_object().reserve_price == "required"
         ) and "min_bid_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
+                format_html(
+                    "Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{}'>You should enable printing minimum bids on labels here.</a>",
+                    reverse("auction_label_config", kwargs={"slug": self.get_object().slug}),
+                ),
+                extra_tags="safe",
+            )
+        if (
+            self.get_object().use_check_in_mode
+            and not self.get_object().is_online
+            and self.get_object().online_bidding != "disable"
+            and self.get_object().date_online_bidding_starts
+            and self.get_object().date_online_bidding_starts < self.get_object().date_start
+        ):
+            messages.info(
+                self.request,
+                "This auction uses check-in mode, so users can't bid until they've been checked in at the event.  "
+                "Online bidding is set to open before the auction starts, but no one will be able to bid online "
+                "until they've been checked in.",
             )
 
         # some checks to warn if an important time is set for midnight (00:00)
@@ -3711,6 +3756,43 @@ class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         return kwargs
 
 
+class AuctionLotMap(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Admin 2D map of located, unsold lots (works on desktop too).
+
+    Admin-only via AuctionViewMixin (``allow_non_admins`` defaults False → PermissionDenied for a
+    buyer). The SVG map + locate search are rendered client-side from the JSON data endpoint, which
+    the page polls; this view only frames it.
+    """
+
+    template_name = "auction_lot_map.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+
+class AuctionLotMapData(LoginRequiredMixin, AuctionViewMixin, View):
+    """Admin-only JSON feed for the lot map: positions (+ lot number/name) and the full unsold-lot
+    list for the locate search, polled every ~10 s."""
+
+    def get(self, request, *args, **kwargs):
+        from auctions.mobile.services import ar as ar_service
+
+        return JsonResponse(ar_service.positions_payload(self.auction, include_lot_details=True))
+
+
+class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
+    """Admin-only "clear all locations": wipe this auction's AR observations + positions (POST)."""
+
+    def post(self, request, *args, **kwargs):
+        from auctions.mobile.services import ar as ar_service
+
+        ar_service.clear_positions(self.auction)
+        messages.success(request, "Cleared all AR lot locations for this auction.")
+        return redirect(reverse("auction_lot_map", kwargs={"slug": self.auction.slug}))
+
+
 class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
@@ -3787,6 +3869,21 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
     def get_possible_filters(self):
         filters = []
+        # Membership status only makes sense when this auction is managed through a club that
+        # charges dues (a 0 fee means no membership system) AND uses the club-member split, since
+        # that is the only mode where is_club_member is kept in sync with paid-membership status.
+        if (
+            self.auction.is_club_managed
+            and self.auction.alternate_split_mode == "club_member"
+            and self.auction.club.membership_annual_fee
+        ):
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Membership:</small>", ""),
+                    ("<i class='bi bi-person-badge'></i> Paid club member", "club_member"),
+                    ("<i class='bi bi-person'></i> Unpaid", "unpaid"),
+                ]
+            )
         if self.auction.online_bidding != "disable":
             filters.extend(
                 [
@@ -3832,14 +3929,30 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
         context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
-        # When the filtered table has no results and a query was typed, show a "Create user" button
-        # pre-populated intelligently based on what the user typed.
+        # When the table has no rows, replace the bare column headers with a helpful message:
+        # a "Create user" button pre-populated from the search when a query was typed, or a
+        # first-run empty state explaining how users get added on a brand-new auction.
         query = (self.request.GET.get("query") or "").strip()
         filterset = context.get("filter")
-        filtered_empty = filterset is not None and query and not filterset.qs.exists()
-        if filtered_empty and self.can_add_edit_people:
-            context["no_results"] = self._build_no_results_html(query)
+        table_empty = filterset is not None and not filterset.qs.exists()
+        if table_empty and self.can_add_edit_people:
+            if query:
+                context["no_results"] = self._build_no_results_html(query)
+            else:
+                context["no_results"] = self._build_empty_auction_html()
         return context
+
+    def _build_empty_auction_html(self):
+        """Return a first-run empty state shown when the auction has no users yet."""
+        return (
+            "<div class='text-center text-muted p-4'>"
+            "<i class='bi bi-people fs-1 d-block mb-2'></i>"
+            "<p class='mb-1'>No users yet.</p>"
+            "<p class='mb-0'>Users are added automatically when someone joins, bids, or submits a lot. "
+            "You can also add one now with the <strong>Add user</strong> button above. "
+            "Each user's invoice appears here automatically once they buy or sell a lot.</p>"
+            "</div>"
+        )
 
     def _build_no_results_html(self, query):
         """Return an HTML snippet with a 'Create user' button pre-populated from the search query."""
@@ -3869,16 +3982,18 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
             create_url = reverse("clubmember_create", kwargs={"slug": auction.club.slug}) + qs
         else:
             create_url = f"/api/auctiontos/{auction.slug}/{param_str}"
-        return (
-            f'<div class="text-center py-3">'
-            f'<p class="text-muted mb-2">No users match <strong>{query}</strong>.</p>'
-            f'<button class="btn btn-info btn-sm" '
-            f'hx-get="{create_url}" '
-            f'hx-target="#modals-here" '
-            f'hx-trigger="click" '
-            f'_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-            f'<i class="bi bi-person-fill-add"></i> Create user</button>'
-            f"</div>"
+        return format_html(
+            '<div class="text-center py-3">'
+            '<p class="text-muted mb-2">No users match <strong>{}</strong>.</p>'
+            '<button class="btn btn-info btn-sm" '
+            'hx-get="{}" '
+            'hx-target="#modals-here" '
+            'hx-trigger="click" '
+            '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+            '<i class="bi bi-person-fill-add"></i> Create user</button>'
+            "</div>",
+            query,
+            create_url,
         )
 
     def get(self, *args, **kwargs):
@@ -4297,8 +4412,9 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             compare_slug = self.request.GET.get("compare")
             if compare_slug:
                 compare_auction = Auction.objects.filter(slug=compare_slug, is_deleted=False).first()
-                # Verify user has access to this auction
-                if compare_auction.permission_check(self.request.user):
+                # Verify user has access to this auction. .first() returns None for a bad/stale
+                # slug, so guard before permission_check to avoid a 500 on an invalid ?compare=.
+                if compare_auction and compare_auction.permission_check(self.request.user):
                     context["compare_auction"] = compare_auction
 
         # Check if stats need recalculation (older than 20 minutes or missing)
@@ -4399,7 +4515,20 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["auction"] = self.auction
         # Don't want notifications to show up on the projector
         # context['disable_websocket'] = True
+        # Prefill the lot field from the head of the in-person lot queue (if any), so scanning lots
+        # into the queue elsewhere flows straight into selling them here.
+        head_lot = queue_head_lot(self.auction)
+        context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
         return context
+
+    def pop_queue_and_set_next(self, lot, result):
+        """Drop the just-sold/ended lot from the in-person queue and report the new head lot number.
+
+        Sets result["next_queued_lot_number"] to the new top lot's display number, or None when the
+        queue is now empty. The set-winners JS uses this to auto-advance to the next lot."""
+        pop_lot_from_queue(self.auction, lot)
+        next_lot = queue_head_lot(self.auction)
+        result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
 
     def validate_lot(self, lot, action):
         """Returns (Lot or None, error or None)"""
@@ -4563,6 +4692,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             "success_message": None,
             "online_high_bidder_message": None,
             "auction_minutes_to_end": None,
+            "next_queued_lot_number": None,
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
@@ -4580,6 +4710,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
+            self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
@@ -4594,6 +4725,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
+            self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
         if (
             not price_error
@@ -4636,6 +4768,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     )
                 except Exception:
                     logger.exception("create_history failed for lot %s", lot.pk)
+                self.pop_queue_and_set_next(lot, result)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -4652,6 +4785,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 lot.save()
                 result["success_message"] = "This lot has been double checked"
                 result["last_sold_lot_number"] = lot.lot_number_display
+                self.pop_queue_and_set_next(lot, result)
             else:
                 # Mismatch between what's been saved in the db and the current request
                 result = {
@@ -4713,7 +4847,268 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return JsonResponse(result)
 
     def get(self, request, *args, **kwargs):
-        return self.http_method_not_allowed
+        return self.http_method_not_allowed(request, *args, **kwargs)
+
+
+def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
+    """Send a one-time "coming up soon / about to be sold" web push to a lot's watchers.
+
+    Deduped per lot via ``Lot.selling_push_notification_sent``: each lot notifies its watchers at
+    most once, whether the trigger is the lot being pulled up on the set-winners screen
+    (``position=None``) or the lot reaching the top of the in-person lot queue (``position`` given).
+    This also fixes the previous re-fire-on-every-view behavior of ViewLotSimple.
+
+    ``request_user`` (the admin viewing/projecting the lot) is excluded from the push so their own
+    screen doesn't light up. ``position`` is the lot's 1-indexed spot in the queue and only changes
+    the wording. Returns True when a fresh notification pass ran, False when it was skipped as a
+    dedupe. The transient websocket "about to be sold" chat message is handled by the caller, not
+    here, because it is intentionally not deduped."""
+    if not lot or lot.sold or not lot.auction:
+        return False
+    if lot.selling_push_notification_sent:
+        return False
+    lot.selling_push_notification_sent = True
+    lot.save(update_fields=["selling_push_notification_sent"])
+    if position and position > 1:
+        head = f"{lot.lot_name} is coming up soon"
+        body = (
+            f"Lot {lot.lot_number_display} is coming up soon -- {position} lots away. Don't miss out!  "
+            "You're getting this notification because you watched this lot."
+        )
+    else:
+        head = f"{lot.lot_name} is about to be sold"
+        body = (
+            f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
+            "You're getting this notification because you watched this lot."
+        )
+    watchers = Watch.objects.filter(lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True)
+    if request_user is not None:
+        # it would be awkward to have notifications pop up when you're projecting an image of the lot
+        watchers = watchers.exclude(user=request_user)
+    for watch in watchers:
+        # does the user actually have a subscription?
+        push_info = PushInformation.objects.filter(user=watch.user).first()
+        if not push_info:
+            continue
+        payload = {
+            "head": head,
+            "body": body,
+            "url": "https://" + lot.full_lot_link,
+            "tag": f"lot_sell_notification_{lot.pk}",
+        }
+        if lot.thumbnail:
+            payload["icon"] = lot.thumbnail.display_url
+        try:
+            send_user_notification(user=watch.user, payload=payload, ttl=10000)
+        except (requests.exceptions.RequestException, WebPushException):
+            # The push endpoint is invalid or unreachable; remove the stale subscription
+            # and record the failure in the auction history so admins can see it.
+            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
+            # HTTP 404 for expired tokens, so we must also handle that here.
+            push_info.delete()
+            AuctionHistory.objects.create(
+                auction=lot.auction,
+                user=None,
+                action=f"push notification error occurred for {watch.user.username}",
+                applies_to="USERS",
+            )
+    return True
+
+
+def process_queue_notifications(auction):
+    """Notify watchers of any not-yet-notified lot now in the top 10 of the queue.
+
+    Each queue entry is processed at most once (LotQueueEntry.notification_sent), and each lot
+    pushes at most once total (Lot.selling_push_notification_sent, shared with the set-winners
+    trigger). Call this after any queue mutation (add/remove/reorder/pop-on-sale)."""
+    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
+    for index, entry in enumerate(entries, start=1):
+        if index > 10:
+            break
+        if entry.notification_sent or entry.lot.sold:
+            continue
+        notify_watchers_lot_selling_soon(entry.lot, position=index)
+        entry.notification_sent = True
+        entry.save(update_fields=["notification_sent"])
+
+
+def queue_head_lot(auction):
+    """The lot at the top of the queue (sold next), or None if the queue is empty."""
+    entry = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order").first()
+    return entry.lot if entry else None
+
+
+def pop_lot_from_queue(auction, lot):
+    """Remove a lot's queue entry, wherever it sits, and re-run notifications for the new top.
+
+    Used when a lot is sold / ended on the set-winners page so it drops out of the queue."""
+    if lot is None:
+        return
+    deleted, _ = LotQueueEntry.objects.filter(auction=auction, lot=lot).delete()
+    if deleted:
+        process_queue_notifications(auction)
+
+
+class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
+    """Shared helpers for the in-person "Lot queue" tool.
+
+    The queue is an ordered list of lots about to be sold (LotQueueEntry). Admins build it by
+    scanning lot QR codes / typing lot numbers on the queue page; the set-lot-winners page pulls
+    the head of the queue automatically. This is an in-person-only feature."""
+
+    club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
+
+    def dispatch(self, request, *args, **kwargs):
+        # Let LoginRequiredMixin redirect anonymous users to login before we run any auction lookup.
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        # get_auction runs the admin permission check (raises PermissionDenied for non-admins).
+        self.get_auction(kwargs.get("slug", ""))
+        if self.auction and self.auction.is_online:
+            msg = "The lot queue is only available for in-person auctions"
+            raise Http404(msg)
+        return super().dispatch(request, *args, **kwargs)
+
+    def queue_entries(self):
+        return list(LotQueueEntry.objects.filter(auction=self.auction).select_related("lot").order_by("order"))
+
+    def resolve_lot_from_value(self, value):
+        """Turn a scanned value (a full/partial lot QR URL) or a typed lot number into a Lot.
+
+        Returns (Lot or None, error string or None)."""
+        value = (value or "").strip()
+        if not value:
+            return None, "Enter or scan a lot number"
+        # A lot QR code is https://{domain}/qr/{pk}/ -- a USB scanner types the whole URL.
+        qr_match = re.search(r"/qr/(\d+)", value)
+        if qr_match:
+            lot = self.auction.lots_qs.filter(pk=qr_match.group(1)).first()
+            if not lot:
+                return None, "That lot is not part of this auction"
+            return lot, None
+        # Otherwise treat it as a typed lot number, using this auction's numbering scheme.
+        if self.auction.use_seller_dash_lot_numbering:
+            result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=value)
+        else:
+            try:
+                number = int(value)
+            except (ValueError, TypeError):
+                return None, "Lot number must be a number"
+            result_lot_qs = self.auction.lots_qs.filter(lot_number_int=number)
+        if result_lot_qs.count() > 1:
+            return None, "More than one lot has this number -- scan the lot's QR code instead"
+        lot = result_lot_qs.first()
+        if not lot:
+            return None, "No lot found with that number"
+        return lot, None
+
+    def add_lot(self, lot):
+        """Add a lot to the end of the queue. Returns an error string, or None on success."""
+        if not lot:
+            return "No lot found"
+        if lot.sold:
+            return f"Lot {lot.lot_number_display} has already been sold"
+        if LotQueueEntry.objects.filter(auction=self.auction, lot=lot).exists():
+            return f"Lot {lot.lot_number_display} is already in the queue"
+        max_order = LotQueueEntry.objects.filter(auction=self.auction).aggregate(m=Max("order"))["m"] or 0
+        LotQueueEntry.objects.create(auction=self.auction, lot=lot, order=max_order + 1, added_by=self.request.user)
+        process_queue_notifications(self.auction)
+        return None
+
+    def apply_reorder(self, ordered_ids):
+        """Persist a new order given a list of entry ids (top first)."""
+        entries = {e.pk: e for e in LotQueueEntry.objects.filter(auction=self.auction)}
+        order = 1
+        for raw in ordered_ids:
+            try:
+                pk = int(raw)
+            except (ValueError, TypeError):
+                continue
+            entry = entries.pop(pk, None)
+            if entry:
+                if entry.order != order:
+                    entry.order = order
+                    entry.save(update_fields=["order"])
+                order += 1
+        # Any entries the client didn't mention keep going after, preserving their relative order.
+        for entry in sorted(entries.values(), key=lambda e: e.order):
+            entry.order = order
+            entry.save(update_fields=["order"])
+            order += 1
+        process_queue_notifications(self.auction)
+
+    def render_list(self, error=None):
+        context = {"auction": self.auction, "entries": self.queue_entries(), "error": error}
+        return render(self.request, "auctions/lot_queue_list.html", context)
+
+
+class LotQueueView(LotQueueMixin, TemplateView):
+    """The Lot queue page: scan/type lots to build an ordered queue, drag to reorder, remove.
+
+    GET renders the full page (or just the list partial with ?partial=list). POST handles the
+    htmx-style mutations add/remove/reorder (returning the refreshed list partial) and the
+    scanner add path (lot_pk present -> JSON, for the USB HID / camera pipeline)."""
+
+    template_name = "auctions/lot_queue.html"
+
+    def get(self, request, *args, **kwargs):
+        if request.GET.get("partial") == "list":
+            return self.render_list()
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["entries"] = self.queue_entries()
+        context["show_camera_scanner"] = True
+        # Threaded into the (club-only) ribbon barcode_scanner.html include so lot QR scans on a club
+        # auction build the queue; the no-club path wires the same URL up itself in the template.
+        context["barcode_lot_scan_url"] = self.request.path
+        return context
+
+    def post(self, request, *args, **kwargs):
+        # Scanner (USB HID / camera) path: adds by lot pk and expects a JSON reply.
+        if "lot_pk" in request.POST:
+            pk = (request.POST.get("lot_pk") or "").strip()
+            lot = self.auction.lots_qs.filter(pk=pk).first() if pk.isdigit() else None
+            if not lot:
+                return JsonResponse({"ok": False, "message": "That lot is not part of this auction"})
+            error = self.add_lot(lot)
+            if error:
+                return JsonResponse({"ok": False, "message": error})
+            return JsonResponse({"ok": True, "message": f"Added lot {lot.lot_number_display} to the queue"})
+        action = request.POST.get("action", "")
+        if action == "add":
+            lot, error = self.resolve_lot_from_value(request.POST.get("value", ""))
+            if lot and not error:
+                error = self.add_lot(lot)
+            return self.render_list(error=error)
+        if action == "remove":
+            LotQueueEntry.objects.filter(auction=self.auction, pk=request.POST.get("entry_id")).delete()
+            process_queue_notifications(self.auction)
+            return self.render_list()
+        if action == "reorder":
+            ordered_ids = request.POST.getlist("order[]") or request.POST.get("order", "").split(",")
+            self.apply_reorder(ordered_ids)
+            return self.render_list()
+        return self.render_list(error="Unknown action")
+
+
+class LotQueueKioskView(LotQueueMixin, TemplateView):
+    """Kiosk (projector) partial: the current head lot rendered big plus the next few queued lots.
+
+    Polled by the queue page via htmx so it updates as lots are sold on another device. Renders the
+    head lot with view_lot_simple.html WITHOUT ViewLotSimple's notification side effect."""
+
+    template_name = "auctions/lot_queue_kiosk.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        entries = self.queue_entries()
+        context["auction"] = self.auction
+        context["lot"] = entries[0].lot if entries else None
+        context["upcoming"] = [entry.lot for entry in entries[1:6]]
+        return context
 
 
 class CSVContactImportMixin:
@@ -6569,8 +6964,8 @@ class ViewLot(DetailView):
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
         if not self.request.user.is_authenticated:
-            context["user_specific_bidding_error"] = (
-                f"You have to <a href='/login/?next={lot.lot_link}'>sign in</a> to place bids."
+            context["user_specific_bidding_error"] = format_html(
+                "You have to <a href='/login/?next={}'>sign in</a> to place bids.", lot.lot_link
             )
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
@@ -6582,10 +6977,9 @@ class ViewLot(DetailView):
         context["user_tos"] = None
         context["user_tos_location"] = None
         if lot.auction and self.request.user.is_authenticated:
-            tos = AuctionTOS.objects.filter(
-                Q(user=self.request.user) | Q(email=self.request.user.email),
-                auction=lot.auction,
-            ).first()
+            # same resolver the bid gate uses (newest record wins), so the UI can't
+            # disagree with enforcement when duplicate TOS records exist
+            tos = lot.auction.tos_for_user(self.request.user)
             if tos:
                 context["user_tos"] = True
                 context["user_tos_location"] = tos.pickup_location
@@ -6597,8 +6991,11 @@ class ViewLot(DetailView):
                             "This auction requires admin approval before you can bid"
                         )
             else:
-                context["user_specific_bidding_error"] = (
-                    f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
+                context["user_specific_bidding_error"] = format_html(
+                    "This lot is part of <b>{}</b>. Please <a href='/auctions/{}/?next={}#join'>read the auction's rules and join the auction</a> to bid<br>",
+                    lot.auction,
+                    lot.auction.slug,
+                    lot.lot_link,
                 )
             if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
                 context["push_notifications_possible"] = True
@@ -6611,7 +7008,12 @@ class ViewLot(DetailView):
             if lot.auction.online_bidding != "disable":
                 messages.info(
                     self.request,
-                    f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{lot.pk}/'>read the auction's rules and join the auction</a> to bid",
+                    format_html(
+                        "Please <a href='/auctions/{}/?next=/lots/{}/'>read the auction's rules and join the auction</a> to bid",
+                        lot.auction.slug,
+                        lot.pk,
+                    ),
+                    extra_tags="safe",
                 )
         if self.request.user.is_authenticated:
             userData = self.request.user.userdata
@@ -6733,6 +7135,7 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
         if lot and lot.auction:
             self.auction = lot.auction
             if self.is_auction_admin and self.auction.message_users_when_lots_sell and not lot.sold:
+                # The websocket chat message is transient and keeps firing on every view.
                 result = {
                     "type": "chat_message",
                     "info": "CHAT",
@@ -6741,38 +7144,9 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                     "username": "System",
                 }
                 lot.send_websocket_message(result)
-                watchers = Watch.objects.filter(
-                    lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
-                ).exclude(
-                    # it would be awkward to have notifications pop up when you're projecting an image of the lot
-                    user=self.request.user
-                )
-                for watch in watchers:
-                    # does the user actually have a subscription?
-                    push_info = PushInformation.objects.filter(user=watch.user).first()
-                    if push_info:
-                        payload = {
-                            "head": lot.lot_name + " is about to be sold",
-                            "body": f"Lot {lot.lot_number_display}  Don't miss out, bid now!  You're getting this notification because you watched this lot.",
-                            "url": "https://" + lot.full_lot_link,
-                            "tag": f"lot_sell_notification_{lot.pk}",
-                        }
-                        if lot.thumbnail:
-                            payload["icon"] = lot.thumbnail.display_url
-                        try:
-                            send_user_notification(user=watch.user, payload=payload, ttl=10000)
-                        except (requests.exceptions.RequestException, WebPushException):
-                            # The push endpoint is invalid or unreachable; remove the stale subscription
-                            # and record the failure in the auction history so admins can see it.
-                            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
-                            # HTTP 404 for expired tokens, so we must also handle that here.
-                            push_info.delete()
-                            AuctionHistory.objects.create(
-                                auction=lot.auction,
-                                user=None,
-                                action=f"push notification error occurred for {watch.user.username}",
-                                applies_to="USERS",
-                            )
+                # Web push goes through the deduped helper so a lot that already notified from the
+                # queue does not notify again when it's pulled up to be sold (and vice versa).
+                notify_watchers_lot_selling_soon(lot, request_user=self.request.user)
         return context
 
 
@@ -6832,24 +7206,38 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.image_source = "RANDOM"
         uploaded_image = form.cleaned_data.get("image")
 
-        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG
-        try:
-            with Image.open(uploaded_image) as img:
-                if img.format != "JPEG":
-                    img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG")
-                    buffer.seek(0)
-                    image.image.save(
-                        uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
-                    )
-        except Exception as e:
-            logger.error("Error processing image: %s", e)
+        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG. The
+        # upload was already validated in the form, so this is best-effort: if it fails we
+        # just fall through and let the normal save path try the original file.
+        if isinstance(uploaded_image, UploadedFile):
+            try:
+                with Image.open(uploaded_image) as img:
+                    if img.format != "JPEG":
+                        img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
+                        buffer = BytesIO()
+                        img.save(buffer, format="JPEG")
+                        buffer.seek(0)
+                        image.image.save(
+                            uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
+                        )
+            except IMAGE_PROCESSING_EXCEPTIONS as e:
+                logger.info("Could not pre-convert uploaded image to JPEG: %s", e)
+
         try:
             image.save()
-        except Exception as e:
-            form.add_error("image", f"Image is not in a supported format or is corrupt.  Error: {e}")
+        except IMAGE_PROCESSING_EXCEPTIONS as e:
+            # The image itself is unusable (bad format, corrupt, decompression bomb...).
+            # Show the uploader a friendly, actionable error.
+            logger.info("Rejected lot image during save: %s", e)
+            form.add_error(
+                "image",
+                "We couldn't process that image -- it may be corrupt or in an unsupported format. "
+                "Please try a different photo.",
+            )
             return self.form_invalid(form)
+        # Anything else (permission denied writing to mediafiles, disk full, database
+        # errors...) is a server/site problem, not the user's file. Let it propagate so it
+        # becomes a 500 and the admins get emailed instead of blaming the uploader's photo.
         return super().form_valid(form)
 
 
@@ -6931,6 +7319,11 @@ class LotValidation(LoginRequiredMixin):
         There is quite a lot that needs to be done before the lot is saved
         """
         lot = form.save(commit=False)
+        if lot.auction and lot.auction.user_banned_by_admins(self.request.user):
+            # CreateUserBan sweeps the banned user's existing lots out of the auction;
+            # without this, they could simply resubmit them
+            form.add_error(None, "You've been banned from selling lots in this auction")
+            return self.form_invalid(form)
         lot.user = self.request.user
         lot.date_of_last_user_edit = timezone.now()
         if lot.buy_now_price:
@@ -6962,7 +7355,11 @@ class LotValidation(LoginRequiredMixin):
                 # remember that on form submit in CreateLotForm.clean(), we are validating that the user has an auctiontos
                 messages.error(
                     self.request,
-                    f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.",
+                    format_html(
+                        "You need to <a href='/auctions/{}'>confirm your pickup location for this auction</a> before people can bid on this lot.",
+                        lot.auction.slug,
+                    ),
+                    extra_tags="safe",
                 )
             else:
                 lot.auctiontos_seller = auctiontos
@@ -7006,6 +7403,8 @@ class LotValidation(LoginRequiredMixin):
                             )
                             if original_image.image:
                                 new_image.image = get_thumbnailer(original_image.image)
+                                # both rows share the same file, so they share the same Cloudflare image
+                                new_image.cloudflare_image_id = original_image.cloudflare_image_id
                             # if the original lot sold, this picture sure isn't of the actual item
                             if original_lot.winner and original_image.image_source == "ACTUAL":
                                 new_image.image_source = "REPRESENTATIVE"
@@ -7013,13 +7412,17 @@ class LotValidation(LoginRequiredMixin):
                         # we are only cloning images here, not watchers, views, or other related models
                 except Exception as e:
                     logger.exception(e)
-            msg = "Created lot! "
+            msg = mark_safe("Created lot! ")
             if not lot.image_count:
-                msg += f"You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image</a>  to this lot.  Or, "
-            msg += "<a href='/lots/new'>create another lot</a>"
+                msg += format_html(
+                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
+                    lot.lot_number,
+                )
+            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
             messages.success(
                 self.request,
                 msg,
+                extra_tags="safe",
             )
         # if image_url is set, add an image to the lot using this URL, then clear the field
         image_url = form.cleaned_data.get("image_url")
@@ -7153,7 +7556,12 @@ class LotCreateView(LotValidation, CreateView):
             ):
                 messages.info(
                     request,
-                    f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
+                    format_html(
+                        "Sick of adding lots one at a time?  <a href='{}'>Add lots of lots to {}</a>",
+                        reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": userData.last_auction_used.slug}),
+                        userData.last_auction_used,
+                    ),
+                    extra_tags="safe",
                 )
         data = self.request.GET.copy()
         auction_slug = data.get("auction", None)
@@ -7429,6 +7837,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                             "You're doing things the hard way - <a href='{}'>quick set lot winners</a> page lets you mark lots sold much more quickly.",
                             quick_set_url,
                         ),
+                        extra_tags="safe",
                     )
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
@@ -7612,13 +8021,21 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                 review_form = AuctionTOSMergeReviewForm(request.POST, instance=target, auction=self.auction)
                 if review_form.is_valid():
                     with transaction.atomic():
-                        target = review_form.save()
+                        # Merge (which deletes the source) BEFORE saving the reviewed fields onto the
+                        # target. The review form typically copies the source's email onto the target,
+                        # and saving the target with that email while the source still exists trips
+                        # AuctionTOS.save()'s exact-email auto-merge — which keeps the *older* record
+                        # (the source) and deletes the target out from under us, raising
+                        # "Unsaved model instance ... cannot be used in an ORM query" on the next line
+                        # (and merging in the wrong direction). Deleting the source first makes the
+                        # email unique so the auto-merge can't fire.
                         target.merge_duplicate(
                             self.auctiontos,
                             reason=f"merged by {request.user.username}",
                             user=request.user,
                             preserve_missing_fields=False,
                         )
+                        target = review_form.save()
                     messages.success(request, f"Merged {self.auctiontos.name} into {target.name}.")
                     return redirect(self._merge_success_url())
                 return self._render_merge_review(request, target, review_form)
@@ -7635,6 +8052,18 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
+            # Deleting an AuctionTOS cascades away its invoice, adjustments, and payments.
+            # Block that when an invoice exists; a merge (which moves that history to another
+            # user) is required instead. The form already enforces this, but guard here too
+            # since this is where the irreversible delete happens.
+            performing_merge = bool(form.cleaned_data.get("merge_with")) and not form.cleaned_data.get("delete_lots")
+            if not performing_merge and Invoice.objects.filter(auctiontos_user=self.auctiontos).exists():
+                messages.error(
+                    request,
+                    f"{self.auctiontos.name} has an invoice, so deleting them would erase their payment history. "
+                    "Merge them into another user instead.",
+                )
+                return self.form_invalid(form)
             if form.cleaned_data["delete_lots"]:
                 sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
                 won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
@@ -8430,6 +8859,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         form_kwargs = super().get_form_kwargs()
         form_kwargs["user"] = self.request.user
         form_kwargs["auction"] = self.auction
+        form_kwargs["next_url"] = self.request.GET.get("next")
         return form_kwargs
 
     def dispatch(self, request, *args, **kwargs):
@@ -8438,7 +8868,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if not locations:
                 messages.info(
                     self.request,
-                    "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>",
+                    mark_safe(
+                        "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>"
+                    ),
+                    extra_tags="safe",
                 )
         return super().dispatch(request, *args, **kwargs)
 
@@ -8469,7 +8902,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             context["ended"] = True
             messages.info(
                 self.request,
-                f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.auction.view_lot_link}'>view lots</a>.",
+                format_html(
+                    "This auction has ended.  You can't bid on anything, but you can still <a href='{}'>view lots</a>.",
+                    self.auction.view_lot_link,
+                ),
+                extra_tags="safe",
             )
         else:
             context["ended"] = False
@@ -8516,23 +8953,35 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if invalidPickups:
                 messages.info(
                     self.request,
-                    f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction",
+                    format_html(
+                        "<a href='{}'>Some pickup times</a> are set before the end date of the auction", invalidPickups
+                    ),
+                    extra_tags="safe",
                 )
             nonLogicalTimes = self.auction.has_non_logical_times
             if nonLogicalTimes:
                 messages.info(
                     self.request,
-                    f"<a href='{nonLogicalTimes}'>Auction start or end time</a> should be set to a logical time like 14:30 or 09:00",
+                    format_html(
+                        "<a href='{}'>Auction start or end time</a> should be set to a logical time like 14:30 or 09:00",
+                        nonLogicalTimes,
+                    ),
+                    extra_tags="safe",
                 )
             if self.auction.time_start_is_at_night and not self.auction.is_online:
                 messages.info(
                     self.request,
-                    f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.auction.slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
+                    format_html(
+                        "You know your auction is starting in the middle of the night, right? <a href='{}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
+                        reverse("edit_auction", kwargs={"slug": self.auction.slug}),
+                    ),
+                    extra_tags="safe",
                 )
 
         context["form"] = AuctionJoin(
             user=self.request.user,
             auction=self.auction,
+            next_url=self.request.GET.get("next"),
             initial={
                 "user": getattr(self.request.user, "id", None),
                 "auction": self.auction.pk,
@@ -8597,7 +9046,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 obj, created = AuctionTOS.objects.get_or_create(
                     user=self.request.user,
                     auction=auction,
-                    defaults={"pickup_location": form.cleaned_data["pickup_location"]},
+                    defaults={
+                        "pickup_location": form.cleaned_data["pickup_location"],
+                        # Seed the email on creation so the record never takes the None->email
+                        # transition that used to trip AuctionTOS.save()'s email-change guard and
+                        # clear this freshly-linked user. `or None` (not "") keeps the "no email"
+                        # admin filter working, which relies on email__isnull.
+                        "email": self.request.user.email or None,
+                    },
                 )
                 is_new_join = created
             obj.pickup_location = form.cleaned_data["pickup_location"]
@@ -8652,7 +9108,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     club_member.generate_bidder_number(save=True)
                 obj.clubmember = club_member
                 obj.bidder_number = club_member.bidder_number
-                obj.bidding_allowed = club_member.bidding_allowed
+                if auction.use_check_in_mode and not obj.checked_in:
+                    # Check-in mode: joining never grants bidding on its own. The member has to
+                    # check in at the event (which sets checked_in + bidding_allowed). Mirrors the
+                    # auto-add path in signals.propagate_clubmember_to_shadow_tos.
+                    obj.bidding_allowed = False
+                else:
+                    obj.bidding_allowed = club_member.bidding_allowed
                 obj.selling_allowed = club_member.selling_allowed
                 if club_member_is_new:
                     from .models import ClubHistory
@@ -8777,7 +9239,13 @@ class ToDefaultLandingPage(View):
                 if invoice:
                     messages.info(
                         request,
-                        f'{auction} has ended.  <a href="{reverse("invoice_by_pk", kwargs={"pk": invoice.pk})}">View your invoice</a> or <a href="{reverse("feedback")}">leave feedback</a> on lots you bought or sold',
+                        format_html(
+                            '{} has ended.  <a href="{}">View your invoice</a> or <a href="{}">leave feedback</a> on lots you bought or sold',
+                            auction,
+                            reverse("invoice_by_pk", kwargs={"pk": invoice.pk}),
+                            reverse("feedback"),
+                        ),
+                        extra_tags="safe",
                     )
                     return redirect(reverse("allLots"))
                 else:
@@ -8795,6 +9263,22 @@ class ToDefaultLandingPage(View):
 class MyAccount(LoginRequiredMixin, RedirectView):
     def get_redirect_url(self, *args, **kwargs):
         return reverse("userpage", kwargs={"slug": self.request.user.username})
+
+
+class MyLastAuctionLots(LoginRequiredMixin, RedirectView):
+    """GET /lots/my-last-auction/ — the app's "Lots in my last auction" home-screen shortcut.
+
+    Redirects to the lot list filtered to the user's last-used auction when there is one (and it
+    hasn't been deleted), otherwise to the plain lot list. Kept server-side so the app can deep-link
+    a stable URL without knowing the user's current auction.
+    """
+
+    def get_redirect_url(self, *args, **kwargs):
+        lots_url = reverse("allLots")
+        auction = self.request.user.userdata.last_auction_used
+        if auction and not auction.is_deleted:
+            return f"{lots_url}?auction={auction.slug}"
+        return lots_url
 
 
 class AllAuctions(LocationMixin, HTMxTableView):
@@ -9003,6 +9487,21 @@ class AllLots(LotListView, AuctionViewMixin):
             ignore=True,
             regardingAuction=self.auction,
         )
+        # LotFilter hides lots posted in the last 20 minutes from non-owners. When those are the
+        # only lots in the auction the list looks empty, so flag it and let the template explain the
+        # short wait instead of showing a bare "No lots found". Superusers and in-person auctions
+        # don't hide new lots (see LotFilter.qs), so there's nothing to explain there.
+        context["recently_added_lots_hidden"] = False
+        if self.auction and self.auction.is_online and not self.request.user.is_superuser:
+            recent_lots = Lot.objects.filter(
+                auction=self.auction,
+                is_deleted=False,
+                banned=False,
+                date_posted__gte=timezone.now() - timedelta(minutes=20),
+            )
+            if self.request.user.is_authenticated:
+                recent_lots = recent_lots.exclude(user=self.request.user)
+            context["recently_added_lots_hidden"] = recent_lots.exists()
         context["hide_google_login"] = True
         return context
 
@@ -9526,7 +10025,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         if context["labels_per_page"] == 0:
             messages.error(
                 self.request,
-                "Your lot label setting may be wrong. The label size is too large for the page size.  <a href='/printing'>Adjust your label settings</a>",
+                mark_safe(
+                    "Your lot label setting may be wrong. The label size is too large for the page size.  <a href='/printing'>Adjust your label settings</a>"
+                ),
+                extra_tags="safe",
             )
             context["labels_per_page"] = 1
 
@@ -9842,13 +10344,16 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             )
         except Exception:
             logger.exception("create_history failed for bulk invoice update on auction %s", self.auction.pk)
+        if self.invoice_count:
+            noun = "invoice" if self.invoice_count == 1 else "invoices"
+            messages.success(request, f"{self.invoice_count} {noun} marked {self.new_status_display}.")
         return close_modal_response("reload-page")
 
 
 class MarkInvoicesReady(InvoiceBulkUpdateStatus):
     old_invoice_status = "DRAFT"
     new_invoice_status = "UNPAID"
-    old_status_display = "draft"
+    old_status_display = "open"
     new_status_display = "ready"
 
     show_checkbox = True
@@ -10056,14 +10561,29 @@ class PayPalAPIMixin:
 
     def _get_access_token(self):
         client_id, secret = self._paypal_auth()
-        token_resp = requests.post(
-            f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
-            auth=(client_id, secret),
-            headers={"Accept": "application/json", "Accept-Language": "en_US"},
-            data={"grant_type": "client_credentials"},
-            timeout=10,
-        )
-        token_resp.raise_for_status()
+        # Log auth failures here rather than relying on callers: several of them
+        # (e.g. the order-creation view) catch RequestException and show the user a
+        # generic message, so an unlogged failure at this step is invisible.
+        try:
+            token_resp = requests.post(
+                f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
+                auth=(client_id, secret),
+                headers={"Accept": "application/json", "Accept-Language": "en_US"},
+                data={"grant_type": "client_credentials"},
+                timeout=10,
+            )
+            token_resp.raise_for_status()
+        except requests.RequestException as exc:
+            resp = getattr(exc, "response", None)
+            logger.error(
+                "PayPal auth token request failed: %s status=%s debug_id=%s resp_text=%s",
+                exc,
+                getattr(resp, "status_code", None),
+                resp.headers.get("Paypal-Debug-Id", "") if resp is not None else "",
+                resp.text[:500] if resp is not None else "",
+            )
+            msg = f"PayPal auth token request failed: {exc}"
+            raise PayPalRequestError(msg) from exc
         return token_resp.json()["access_token"]
 
     def _build_paypal_headers(self, merchant_id="", include_bn_code=True, token=None):
@@ -10124,6 +10644,20 @@ class PayPalAPIMixin:
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
             raise PayPalRequestError(msg)
+        except requests.RequestException as exc:
+            # No HTTP response at all (connection error / timeout). Callers catch
+            # RequestException and show a generic message, so without this branch a
+            # network failure to PayPal left no trace anywhere.
+            logger.error(
+                "PayPal API call failed (no response): %s %s error=%s req_params=%s req_json=%s",
+                method,
+                url,
+                exc,
+                params,
+                json,
+            )
+            msg = f"PayPal API call failed (no response): {method} {url} error={exc}"
+            raise PayPalRequestError(msg) from exc
 
     def post_to_paypal(self, endpoint, payload, include_bn_code=True):
         """POST JSON to a PayPal API endpoint and return parsed JSON."""
@@ -10142,15 +10676,29 @@ class PayPalAPIMixin:
         currency = invoice.currency
 
         items = []
+        # Build item_total / tax_total from the exact per-item values sent below rather than from
+        # invoice.total_bought / invoice.tax. PayPal validates that the item unit_amounts sum to
+        # item_total (and the item taxes sum to tax_total); a partially refunded lot has a
+        # refund-adjusted final_price that is lower than its winning_price, so using winning_price
+        # for the line item while item_total came from the (refund-adjusted) total made the sums
+        # disagree and PayPal rejected the order. Summing the quantized per-item values here keeps
+        # the breakdown internally consistent no matter how the DB rounds the aggregate totals.
+        item_total = Decimal("0.00")
+        tax_total = Decimal("0.00")
         for lot in invoice.bought_lots_queryset:
+            # final_price = winning_price reduced by partial_refund_percent (see Invoice.bought_lots_queryset).
+            unit_amount = Decimal(str(lot.final_price)).quantize(Decimal("0.01"))
+            item_tax = Decimal(str(lot.tax)).quantize(Decimal("0.01"))
+            item_total += unit_amount
+            tax_total += item_tax
             items.append(
                 {
                     "name": f"{lot.lot_number_display} - {lot.lot_name}",
                     "quantity": "1",
-                    "unit_amount": {"currency_code": currency, "value": f"{lot.winning_price:.2f}"},
+                    "unit_amount": {"currency_code": currency, "value": f"{unit_amount:.2f}"},
                     "category": "PHYSICAL_GOODS",
                     "url": lot.full_lot_link,
-                    "tax": {"currency_code": currency, "value": f"{lot.tax:.2f}"},
+                    "tax": {"currency_code": currency, "value": f"{item_tax:.2f}"},
                 }
             )
 
@@ -10158,9 +10706,8 @@ class PayPalAPIMixin:
         # breakdown below absorbs the rounding delta as an adjustment/discount line. Falls back to
         # the exact amount when invoice rounding is off (rounded_net_after_payments handles that).
         target_total = (Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)).quantize(Decimal("0.01"))
-        # Base components from items
-        item_total = Decimal(str(invoice.total_bought)).quantize(Decimal("0.01"))
-        tax_total = Decimal(str(invoice.tax)).quantize(Decimal("0.01"))
+        item_total = item_total.quantize(Decimal("0.01"))
+        tax_total = tax_total.quantize(Decimal("0.01"))
 
         # Adjustment needed to make breakdown sum to target_total
         # target_total = item_total + tax_total + handling/shipping/insurance - discount
@@ -10548,8 +11095,11 @@ class PayPalAPIMixin:
 
         refund_amt_signed = -abs(refund_amt)  # ensure negative
 
-        original_payment.amount_available_to_refund = original_payment.amount_available_to_refund - abs(refund_amt)
-        original_payment.save()
+        # PayPal redelivers webhooks until it gets a 2xx. Capture the prior refund amount for this
+        # refund id before update_or_create overwrites it, then move the refundable balance only by
+        # the delta so a duplicate delivery is a no-op and an amount change adjusts correctly.
+        existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
+        previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
         # Create a new InvoicePayment record for the refund.
         refund_payment, created = InvoicePayment.objects.update_or_create(
             external_id=refund_id,
@@ -10565,9 +11115,15 @@ class PayPalAPIMixin:
             },
         )
 
+        refund_delta = abs(refund_amt) - previous_refund_abs
+        if refund_delta:
+            original_payment.amount_available_to_refund -= refund_delta
+            original_payment.save()
+
         invoice.recalculate()
-        action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
-        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+        if created:
+            action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
+            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         return invoice, refund_payment
 
 
@@ -11306,7 +11862,10 @@ class MailchimpWebhookView(View):
 
     def _get_club(self, slug, secret):
         club = Club.objects.filter(slug=slug).first()
-        if not club or not club.mailchimp_webhook_secret or club.mailchimp_webhook_secret != secret:
+        if not club or not club.mailchimp_webhook_secret:
+            return None
+        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        if not secrets.compare_digest(club.mailchimp_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
 
@@ -11355,11 +11914,46 @@ class ClubMemberSelfServiceView(View):
 
     action = None  # "unsubscribe" | "resubscribe" | "nocomm"
 
-    def get(self, request, slug, uuid):
+    def _get_member(self, slug, uuid):
         from auctions.models import ClubMember
+
+        return get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+
+    def get(self, request, slug, uuid):
+        # Read-only. The write happens in post() so that email link-scanners and prefetchers
+        # (Outlook SafeLinks, etc.), which routinely GET links, can't silently flip a member's
+        # contact status. GET just renders a confirmation page with a button that POSTs.
+        member = self._get_member(slug, uuid)
+        prompts = {
+            "unsubscribe": (
+                "Unsubscribe",
+                f"Stop receiving marketing emails from {member.club.name}?",
+            ),
+            "resubscribe": (
+                "Resubscribe",
+                f"Start receiving emails from {member.club.name} again?",
+            ),
+            "nocomm": (
+                "Do not contact me",
+                f"Ask {member.club.name} to stop contacting you entirely?",
+            ),
+        }
+        confirm_label, confirm_prompt = prompts.get(self.action, prompts["nocomm"])
+        return render(
+            request,
+            "auctions/mailchimp_self_service.html",
+            {
+                "club": member.club,
+                "member": member,
+                "confirm_label": confirm_label,
+                "confirm_prompt": confirm_prompt,
+            },
+        )
+
+    def post(self, request, slug, uuid):
         from auctions.tasks import sync_club_member_to_brevo, sync_club_member_to_mailchimp
 
-        member = get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+        member = self._get_member(slug, uuid)
         if self.action == "unsubscribe":
             member.contact_status = "non_essential"
             member.save(update_fields=["contact_status"])
@@ -11641,7 +12235,10 @@ class BrevoWebhookView(View):
 
     def _get_club(self, slug, secret):
         club = Club.objects.filter(slug=slug).first()
-        if not club or not club.brevo_webhook_secret or club.brevo_webhook_secret != secret:
+        if not club or not club.brevo_webhook_secret:
+            return None
+        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        if not secrets.compare_digest(club.brevo_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
 
@@ -11841,9 +12438,27 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         )
         return label_prefs
 
+    def _show_print_method(self):
+        """The print-method dropdown only makes sense to someone who can use the app to print. Show
+        it in the app, or on web if the user has ever registered a device (so they can pre-configure)."""
+        return bool(self.request.is_mobile_app) or MobileDevice.objects.filter(user=self.request.user).exists()
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["show_print_method"] = self._show_print_method()
+        return kwargs
+
     def get_context_data(self, **kwargs):
+        from auctions.printing import label_prefs_warnings, warning_matrix
+
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "printing"
+        prefs = self.object
+        context["label_prefs"] = prefs
+        context["show_print_method"] = self._show_print_method()
+        context["warnings"] = label_prefs_warnings(prefs)
+        # A plain dict; the template embeds it safely with |json_script for the live-warning JS.
+        context["warning_map"] = warning_matrix()
         userData = self.request.user.userdata
         context["last_auction_used"] = userData.last_auction_used
         context["last_admin_auction"] = (
@@ -12481,6 +13096,55 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     },
                 ],
             },
+            # -- Mobile push notifications ---------------------------------------
+            {
+                "section": "Mobile push notifications",
+                "name": "Mobile push notifications (Firebase)",
+                "hide_title": True,
+                # The service-account key is what actually enables sending; without it every
+                # notification falls back to email. The two client files let the app register to
+                # receive — flagged in the help text below.
+                "configured": bool(getattr(settings, "FIREBASE_CREDENTIALS_JSON", "")),
+                "what_it_does": (
+                    "Sends push notifications to the mobile app (invoices, watched lots, chat, and more) "
+                    "instead of email for users who opt in. Without it those notifications simply fall back "
+                    "to email. Three pieces from one Firebase project:"
+                    "<ul class='mb-0'>"
+                    "<li><code>FIREBASE_CREDENTIALS_JSON</code> &mdash; the <strong>service-account</strong> key "
+                    "(a secret) the server uses to send. Inline JSON, or a path to the file.</li>"
+                    "<li><code>FIREBASE_ANDROID_CONFIG_FILE</code> &mdash; path to <code>google-services.json</code>, "
+                    "the Android app's <em>public</em> config, served to the app so it can register for push.</li>"
+                    "<li><code>FIREBASE_IOS_CONFIG_FILE</code> &mdash; path to <code>GoogleService-Info.plist</code>, "
+                    "the iOS app's <em>public</em> config.</li>"
+                    "</ul>"
+                    "The two client files hold only public values; keep the service-account key secret. The "
+                    "client files are re-read at startup, so restart after changing them."
+                ),
+                "where_to_get_it": (
+                    "In the Firebase console, create a project (or reuse one) and add an Android app and an iOS "
+                    "app to it. Download <code>google-services.json</code> (Android) and "
+                    "<code>GoogleService-Info.plist</code> (iOS) from each app's settings. For the server key, "
+                    "open <strong>Project settings &rarr; Service accounts</strong> and generate a new private key."
+                ),
+                "setup_steps": [
+                    "Create a Firebase project and add your Android and iOS apps to it.",
+                    "Download each app's config file and place them on the server (e.g. a mounted config directory).",
+                    "Generate a service-account private key under <strong>Project settings &rarr; Service accounts</strong>.",
+                    "Set the three variables below, then restart so the client config files are re-read.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'FIREBASE_CREDENTIALS_JSON="/config/firebase-service-account.json"\n'
+                            'FIREBASE_ANDROID_CONFIG_FILE="/config/google-services.json"\n'
+                            'FIREBASE_IOS_CONFIG_FILE="/config/GoogleService-Info.plist"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Firebase console", "url": "https://console.firebase.google.com/"},
+                ],
+            },
             # -- reCAPTCHA --------------------------------------------------------
             {
                 "section": "reCAPTCHA",
@@ -12957,7 +13621,8 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             # )
             return (
                 base_qs.filter(user__isnull=True)
-                .exclude(ip_address="", ip_address__isnull=True)
+                .exclude(ip_address="")
+                .exclude(ip_address__isnull=True)
                 .values("ip_address")
                 .distinct()
                 .count()
@@ -13076,22 +13741,29 @@ class UserMap(TemplateView):
         data = self.request.GET.copy()
         view = data.get("view")
         filter1 = data.get("filter")
+        try:
+            numeric_filter = int(filter1)
+        except (TypeError, ValueError):
+            numeric_filter = None
         # view_qs = PageView.objects.exclude(latitude=0)
-        qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
-            lots_sold=Count("lot"), lots_bought=Count("winner")
+        qs = (
+            User.objects.filter(userdata__isnull=False, is_active=True)
+            .exclude(userdata__latitude=0, userdata__longitude=0)
+            .select_related("userdata")
+            .annotate(lots_sold=Count("lot", distinct=True), lots_bought=Count("winner", distinct=True))
         )
         if view == "club" and filter1:
             # Users from a club
             qs = qs.filter(userdata__club__name=filter1)
-        elif view == "buyers_and_sellers" and filter1:
+        elif view == "buyers_and_sellers" and numeric_filter is not None:
             # Users who sold and bought
-            qs = qs.filter(lots_sold__gte=filter1, lots_bought__gte=filter1)
-        elif view == "volume" and filter1:
+            qs = qs.filter(lots_sold__gte=numeric_filter, lots_bought__gte=numeric_filter)
+        elif view == "volume" and numeric_filter is not None:
             # users by top volume_percentile
-            qs = qs.filter(userdata__volume_percentile__lte=filter1)
-        elif view == "recent" and filter1:
+            qs = qs.filter(userdata__volume_percentile__lte=numeric_filter)
+        elif view == "recent" and numeric_filter is not None:
             # view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
-            qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
+            qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=numeric_filter))
         context["users"] = qs
         # context["pageviews"] = view_qs
         return context
@@ -13460,12 +14132,15 @@ class AuctionFunnelChartData(AuctionChartView):
     """
 
     def get(self, *args, **kwargs):
-        all_views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
-        anonymous_views = all_views.values("session_id").annotate(session_count=Count("session_id")).count()
-        user_views = all_views.values("user").annotate(user_count=Count("user")).count()
-        total_views = anonymous_views + user_views
+        # See Auction.unique_views for why we can't just add distinct sessions + distinct users:
+        # that double-counts anyone who browsed anonymously and then logged in.
+        unique_views = self.auction.unique_views
+        total_views = unique_views["total"]
+        user_views = unique_views["logged_in"]
         total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
-        total_winners = User.objects.filter(winner__auction=self.auction).annotate(dcount=Count("id")).count()
+        # Count every sold, live lot's winner -- including admin-declared winners and winners with
+        # no user account, which the old winner__auction join silently dropped.
+        total_winners = self.auction.buyer_tos_qs.count()
         labels = [
             "Total unique views",
             "Views from users with accounts",
@@ -13505,11 +14180,12 @@ class AuctionLotBiddersChartData(AuctionChartView):
             if not lot.winning_price:
                 data[0] += 1
             else:
-                bids = len(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot))
-                if bids > 6:
-                    bids = 6
-                else:
-                    data[bids] += 1
+                # Count distinct bidders (the labels say "users"), not raw Bid rows. Clamp into the
+                # final "6 or more" bucket so lots with >6 bidders are counted rather than silently
+                # dropped. A sold lot with no recorded bids (buy-now / admin-declared winner) still
+                # had a buyer, so floor it at bucket 1 -- never "Not sold" (bucket 0).
+                bidders = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).values("user").distinct().count()
+                data[min(max(bidders, 1), 6)] += 1
         return JsonResponse(
             data={
                 "labels": labels,
@@ -13892,57 +14568,32 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
 
 
 class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
+    def _fallback_stats(self):
+        """Recompute the sell-price chart when cached_stats is missing.
+
+        Delegates to Auction.set_stat_lot_sell_prices so the fallback labels, providers and
+        data come from the same single source of truth -- previously get_labels() and get_data()
+        each rederived the bins with different math (num_bins = (max-1)//2 vs max//2, and
+        end_bin = start+num*width vs max-1), so the labels and bars disagreed about both the bar
+        count and the bin boundaries. Memoized so the three getters compute it once per request.
+        """
+        if not hasattr(self, "_fallback_stats_cache"):
+            self._fallback_stats_cache = self.auction.set_stat_lot_sell_prices()
+        return self._fallback_stats_cache
+
     def get_labels(self):
         # Check if we have cached stats
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             return self.auction.cached_stats["lot_sell_prices"]["labels"]
-
-        # Fallback: generate dynamic labels based on actual prices
-        sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-        if sold_lots.exists():
-            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
-            max_price = int((max_price + 9) // 10 * 10)
-
-            # Create bins matching the logic in set_stat_lot_sell_prices
-            # Use whole number bin boundaries
-            bin_width = 2  # Each bin covers $2
-            num_bins = min((max_price - 1) // bin_width, 30)
-            if num_bins < 10:
-                num_bins = 10
-                bin_width = max((max_price - 1) // num_bins, 1)
-
-            start_bin = 1
-            end_bin = start_bin + num_bins * bin_width
-
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
-            return labels
-        else:
-            # No sold lots, use default with whole number boundaries
-            start_bin = 1
-            bin_width = 2
-            num_bins = 19
-            end_bin = start_bin + num_bins * bin_width
-
-            labels = ["Not sold"]
-            for i in range(num_bins):
-                bin_start = start_bin + i * bin_width
-                bin_end = start_bin + (i + 1) * bin_width
-                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
-            return labels
+        # Fallback: recompute from the single source of truth
+        return self._fallback_stats()["labels"]
 
     def get_providers(self):
-        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             providers = self.auction.cached_stats["lot_sell_prices"]["providers"]
         else:
-            providers = ["Number of lots"]
+            providers = self._fallback_stats()["providers"]
 
         # Add comparison auction providers if available
         if (
@@ -13963,35 +14614,8 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             data = self.auction.cached_stats["lot_sell_prices"]["data"]
         else:
-            # Fallback: calculate dynamically
-            sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-            if sold_lots.exists():
-                max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
-                max_price = int((max_price + 9) // 10 * 10)
-                num_bins = min(max_price // 2, 30)
-                if num_bins < 10:
-                    num_bins = 10
-
-                histogram = bin_data(
-                    sold_lots,
-                    "winning_price",
-                    number_of_bins=num_bins,
-                    start_bin=1,
-                    end_bin=max_price - 1,
-                    add_column_for_high_overflow=True,
-                )
-                data = [[self.auction.total_unsold_lots] + histogram]
-            else:
-                # No sold lots, use default
-                histogram = bin_data(
-                    sold_lots,
-                    "winning_price",
-                    number_of_bins=19,
-                    start_bin=1,
-                    end_bin=39,
-                    add_column_for_high_overflow=True,
-                )
-                data = [[self.auction.total_unsold_lots] + histogram]
+            # Fallback: recompute from the single source of truth
+            data = self._fallback_stats()["data"]
 
         # Add comparison auction data if available
         if (
@@ -14162,9 +14786,12 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "images" in self.auction.cached_stats:
             data = self.auction.cached_stats["images"]["data"]
         else:
-            # Fallback to original calculation
-            lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
-                num_images=Count("lotimage")
+            # Fallback to original calculation -- exclude banned/soft-deleted lots to match
+            # set_stat_images and every other sold-lot money stat (see models.Auction.set_stat_images).
+            lots = (
+                self.auction.lots_qs.filter(winning_price__isnull=False)
+                .exclude(banned=True)
+                .annotate(num_images=Count("lotimage"))
             )
             lots_with_no_images = lots.filter(num_images=0)
             lots_with_one_image = lots.filter(num_images=1)
@@ -14735,7 +15362,21 @@ class AuctionBulkPrintingPDF(LotLabelView):
         if not self.selected_tos:
             self.queryset = self.auction.unprinted_labels_qs
         else:
-            self.selected_tos = ast.literal_eval(self.selected_tos)
+            # selected_tos is a client-supplied string like "[1, 2, 3]" (AuctionTOS pks). Parse it
+            # defensively: malformed input, a non-list literal, or non-integer elements must not 500.
+            try:
+                parsed = ast.literal_eval(self.selected_tos)
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                parsed = None
+            if not isinstance(parsed, (list, tuple, set)):
+                parsed = []
+            cleaned = []
+            for pk in parsed:
+                try:
+                    cleaned.append(int(pk))
+                except (TypeError, ValueError):
+                    continue
+            self.selected_tos = cleaned
             if self.print_only_unprinted:
                 self.queryset = self.auction.unprinted_labels_qs
             else:
@@ -15565,10 +16206,18 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 "receipt_number": receipt_number,
                             },
                         )
-                        # If payment already existed, make sure amount_available_to_refund is set
+                        # If the payment already existed, never restore refundability that refunds
+                        # have consumed. Square fires payment.updated for many lifecycle changes, so a
+                        # fully-refunded payment (amount_available_to_refund == 0) must not become
+                        # refundable again -- otherwise a second full refund could be issued.
+                        # amount_available_to_refund is initialized once, when the record is created
+                        # (in the get_or_create defaults above).
                         if not created:
-                            if payment_record.amount_available_to_refund == Decimal("0.00"):
-                                payment_record.amount_available_to_refund = amount_value
+                            # If the payment amount itself legitimately changed, move the refundable
+                            # balance by the delta so accounting stays correct without resetting it.
+                            if amount_value != payment_record.amount:
+                                payment_record.amount_available_to_refund += amount_value - payment_record.amount
+                                payment_record.amount = amount_value
                             # Update receipt_number if it wasn't set before
                             if receipt_number and not payment_record.receipt_number:
                                 payment_record.receipt_number = receipt_number
@@ -15641,10 +16290,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                 payment_record = InvoicePayment.objects.filter(external_id=payment_id).first()
                 if payment_record and refund_id:
                     refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
-                    payment_record.amount_available_to_refund -= refund_amount
-                    payment_record.save()
 
-                    refund_payment, _ = InvoicePayment.objects.update_or_create(
+                    # Square redelivers/re-fires events for the same refund. Capture the prior refund
+                    # amount for this refund id before update_or_create overwrites it, then move the
+                    # refundable balance only by the delta so a duplicate delivery is a no-op and an
+                    # amount change adjusts correctly.
+                    existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
+                    previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
+
+                    refund_payment, created = InvoicePayment.objects.update_or_create(
                         external_id=refund_id,
                         defaults={
                             "invoice": payment_record.invoice,
@@ -15654,9 +16308,16 @@ class SquareWebhookView(SquareAPIMixin, View):
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
+
+                    refund_delta = refund_amount - previous_refund_abs
+                    if refund_delta:
+                        payment_record.amount_available_to_refund -= refund_delta
+                        payment_record.save()
+
                     payment_record.invoice.recalculate()
-                    action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
-                    payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                    if created:
+                        action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                        payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
         elif event_type == "oauth.authorization.revoked":
@@ -16246,6 +16907,40 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             kwargs["can_manage_auctions"] = bool(member and member.permission_manage_auctions)
         return kwargs
 
+    def get_possible_filters(self):
+        """Clickable chips that inject ClubMemberFilter search tokens, modeled on the auction
+        users page. Each chip's key is normalized (underscores -> spaces) into a search token."""
+        filters = []
+        # Membership status only exists when the club charges dues (a 0 fee means no membership
+        # system, so hide the paid/unpaid chips).
+        if self.club.membership_annual_fee:
+            filters.extend(
+                [
+                    ("<small class='text-muted'>Membership:</small>", ""),
+                    ("<i class='bi bi-person-badge'></i> Paid club member", "current"),
+                    ("<i class='bi bi-person'></i> Unpaid", "expired"),
+                    ("<i class='bi bi-hourglass-split'></i> Expiring soon", "expiring"),
+                    ("<i class='bi bi-person-x'></i> Never paid", "never"),
+                ]
+            )
+        filters.append(("<small class='text-muted'>Source:</small>", ""))
+        filters.extend(
+            [
+                ("<i class='bi bi-globe'></i> Website signup", "joined"),
+                ("<i class='bi bi-pencil'></i> Manually added", "manual"),
+            ]
+        )
+        if self.club.discord_server_id:
+            filters.append(("<i class='bi bi-discord'></i> Discord", "discord"))
+        filters.append(("<small class='text-muted'>Other:</small>", ""))
+        filters.append(("<i class='bi bi-people-fill'></i> Possible duplicate", "duplicate"))
+        if self.club.mailchimp_connected:
+            filters.append(("<i class='bi bi-envelope-exclamation'></i> Not in Mailchimp", "nonmailchimp"))
+        if self.club.brevo_connected:
+            filters.append(("<i class='bi bi-envelope-exclamation'></i> Not in Brevo", "nonbrevo"))
+        filters.append(("<i class='bi bi-archive'></i> Deactivated", "deactivated"))
+        return filters
+
 
 class ClubMemberValidation(ClubViewMixin, APIPostView):
     """Real-time validation for the club member add/edit form.
@@ -16740,7 +17435,7 @@ class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
         current_role = member.discord_role
         subtitle_parts.append(current_role.role_name if current_role else "No current role")
         subtitle = " · ".join(subtitle_parts)
-        title = mark_safe(f"{member} <small class='text-muted'>{subtitle}</small>")
+        title = format_html("{} <small class='text-muted'>{}</small>", member, subtitle)
         return {
             "modal_title": title,
             "form": form,
@@ -17171,6 +17866,83 @@ class ClubBarcodePNGView(View):
         response = HttpResponse(png_data, content_type="image/png")
         # Barcodes are stable for a given value — let the CDN / browser cache them.
         response["Cache-Control"] = "public, max-age=86400"
+        return response
+
+
+BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "culture_points"}
+BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
+
+
+def _bap_embed_leaderboard(club, program):
+    """Top-10 leaderboard rows for a program: rank, display name, and points only.
+
+    Deliberately exposes no PII — never emails, member numbers, or database ids. When a
+    member has no name we fall back to a generic "Member N" label keyed off their rank.
+    """
+    field = BAP_EMBED_PROGRAM_FIELDS[program]
+    members = ClubMember.objects.filter(club=club, is_deleted=False, **{f"{field}__gt": 0}).order_by(
+        f"-{field}", "name"
+    )[:10]
+    rows = []
+    for i, member in enumerate(members):
+        name = (member.name or "").strip() or f"Member {i + 1}"
+        rows.append({"rank": i + 1, "name": name, "points": getattr(member, field)})
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class BapEmbedView(View):
+    """Public, embeddable top-10 BAP/HAP/CAP leaderboard for a club.
+
+    A single endpoint serves several representations via ?format= (json, iframelight,
+    iframedark, unstyledhtml) and picks the program with ?program= (bap, hap, cap).
+    Only the top-10 leaderboard is exposed, and only names + points — never emails,
+    member numbers, or other PII. Framing (xframe_options_exempt) and cross-origin
+    fetches (Access-Control-Allow-Origin) are allowed so third-party sites can embed it.
+    GET-only and public, so CSRF never applies.
+    """
+
+    def _json_response(self, club, program, label, rows):
+        response = JsonResponse({"club": club.name, "program": program, "program_label": label, "leaderboard": rows})
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_breeder_award_program:
+            raise Http404
+
+        program = (request.GET.get("program") or "bap").strip().lower()
+        if program not in BAP_EMBED_PROGRAM_FIELDS:
+            program = "bap"
+        # HAP/CAP only have their own standings when the club tracks them separately;
+        # otherwise those points roll into BAP and a dedicated board would be misleading.
+        if (program == "hap" and not club.separate_hap) or (program == "cap" and not club.separate_cap):
+            raise Http404
+
+        rows = _bap_embed_leaderboard(club, program)
+        label = BAP_EMBED_PROGRAM_LABELS[program]
+        fmt = (request.GET.get("format") or "json").strip().lower()
+
+        if fmt in ("iframelight", "iframedark", "iframdark"):
+            embed_mode = "dark" if fmt in ("iframedark", "iframdark") else "light"
+        elif fmt == "unstyledhtml":
+            embed_mode = "unstyled"
+        else:
+            # json or anything unrecognized falls back to JSON — a typo never leaks an unexpected page.
+            return self._json_response(club, program, label, rows)
+
+        html = render_to_string(
+            "auctions/bap_embed.html",
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "program_label": label,
+                "leaderboard": rows,
+            },
+        )
+        response = HttpResponse(html)
+        response["Access-Control-Allow-Origin"] = "*"
         return response
 
 
@@ -18126,7 +18898,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         club_icon_url = ""
         if self.club.icon:
             try:
-                club_icon_url = self.club.icon.url
+                club_icon_url = self.club.icon_display_url or ""
             except (ValueError, AttributeError):
                 club_icon_url = ""
 
@@ -18326,6 +19098,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
+        context["bap_embed_path"] = reverse("bap_embed", kwargs={"slug": self.club.slug})
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -18919,10 +19692,8 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             )
             .values("pk", "name", "email", "address", "lat", "lng", "is_expired")
         )
-        import json as _json
-
         context["club"] = self.club
-        context["members_json"] = mark_safe(_json.dumps(list(qs)))
+        context["members_json"] = list(qs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         return context
 

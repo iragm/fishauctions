@@ -162,6 +162,12 @@ function initMap() {
                         <div class="col-12 col-md-auto">
                             <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
                         </div>
+                        {% comment %} AR lot scanning is app-only (native camera); deep-link into it. Visible to every user. {% endcomment %}
+                        {% if request.is_mobile_app %}
+                        <div class="col-12 col-md-auto">
+                            <a href="fishauctions://ar/{{ auction.slug }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-badge-ar"></i> AR Lots</a>
+                        </div>
+                        {% endif %}
                         <div class="col-12 col-md-auto">
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
                             <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
@@ -357,7 +363,7 @@ function initMap() {
                             {% if location.users_must_coordinate_pickup %}
                                 <p>You must schedule your pickup time in advance.</p>
                             {% else %}
-                                <p><strong>{{ location.pickup_time }}</strong></p>
+                                <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
                             {% endif %}
                             <div class="btn-group flex-wrap" role="group">
                                 {%if location.has_coordinates %}
@@ -431,7 +437,7 @@ function initMap() {
                                 {% if location.users_must_coordinate_pickup %}
                                     <p>You must schedule your pickup time in advance.</p>
                                 {% else %}
-                                    <p><strong>{{ location.pickup_time }}</strong></p>
+                                    <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
                                 {% endif %}
 
                                 <div class="btn-group mb-3 flex-wrap" role="group">

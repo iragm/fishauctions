@@ -1,6 +1,7 @@
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
+from django.urls import reverse
 from post_office import mail
 
 from auctions.models import Auction, Lot, UserData, Watch
@@ -11,7 +12,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         current_site = Site.objects.get_current()
-        notificationEmails = []
+        # Keyed by user pk so each watcher is notified once, and so opted-in app users can get a push
+        # instead of the email (notify_user, below). Value is the User for the routing decision.
+        notify_targets = {}
         auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False, is_online=True)
         for auction in auctions:
             if auction.ending_soon:
@@ -23,9 +26,7 @@ class Command(BaseCommand):
                     for watch in watched:
                         self.stdout.write(f" | +-- {watch}")
                         user = User.objects.get(pk=watch.user.pk)
-                        email = user.email
-                        if email not in notificationEmails:
-                            notificationEmails.append(email)
+                        notify_targets[user.pk] = user
                 auction.watch_warning_email_sent = True
                 auction.save()
             # else:
@@ -41,19 +42,27 @@ class Command(BaseCommand):
                 for watch in watched:
                     self.stdout.write(f"+-- {watch}")
                     user = User.objects.get(pk=watch.user.pk)
-                    email = user.email
-                    if email not in notificationEmails:
-                        notificationEmails.append(email)
+                    notify_targets[user.pk] = user
                 lot.watch_warning_email_sent = True
                 lot.save()
-        # Collected all emails, time to send message
-        for email in notificationEmails:
-            mail.send(
-                email,
-                template="watched_items_ending",
-                context={"domain": current_site.domain},
+        # Collected all watchers; push for opted-in app users, otherwise email exactly as before.
+        from auctions.notifications import notify_user
+
+        watched_url = f"https://{current_site.domain}{reverse('watched')}"
+        for user in notify_targets.values():
+            notify_user(
+                user,
+                category="watched",
+                title="Watched lots ending soon",
+                body="Lots you're watching are ending soon — tap to place a bid.",
+                url=watched_url,
+                send_email=lambda user=user: mail.send(
+                    user.email,
+                    template="watched_items_ending",
+                    context={"domain": current_site.domain},
+                ),
             )
-            self.stdout.write(f"Emailed {email} about their watched items")
+            self.stdout.write(f"Notified {user.email} about their watched items")
 
         # email people whose usernames are an email address
         userdata = UserData.objects.filter(

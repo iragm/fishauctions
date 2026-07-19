@@ -44,11 +44,13 @@ def check_chat_permissions(lot, user):
 
 def check_all_permissions(lot, user):
     """Returns false if everything is OK, or a string error message"""
-    if lot.user and UserBan.objects.filter(banned_user=user.pk, user=lot.user.pk).first():
+    # admin-added lots often have no lot.user; fall back to the seller's linked account
+    seller_pk = lot.user_id or (lot.auctiontos_seller.user_id if lot.auctiontos_seller_id else None)
+    if seller_pk and UserBan.objects.filter(banned_user=user.pk, user=seller_pk).first():
         return "This user has banned you from bidding on their lots"
     if lot.banned:
         return "This lot has been removed"
-    if lot.auction and UserBan.objects.filter(banned_user=user.pk, user=lot.auction.created_by.pk).first():
+    if lot.auction and lot.auction.user_banned_by_admins(user):
         return "You don't have permission to bid in this auction"
     return False
 

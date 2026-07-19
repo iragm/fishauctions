@@ -14,6 +14,13 @@ from auctions.models import (
     Lot,
 )
 
+_TOS_PUSH_TITLES = {
+    "online_auction_welcome": "You're in — {auction}",
+    "in_person_auction_welcome": "You're in — {auction}",
+    "auction_print_reminder": "Print your labels for {auction}",
+    "reprint_reminder": "Reprint your labels for {auction}",
+}
+
 
 def send_tos_notification(template, tos):
     current_site = Site.objects.get_current()
@@ -30,7 +37,21 @@ def send_tos_notification(template, tos):
     if not email_routing_enabled():
         send_kwargs["headers"] = {"Reply-to": tos.auction.created_by.email}
         ctx["reply_to_email"] = tos.auction.created_by.email
-    mail.send(tos.user.email, **send_kwargs)
+
+    # Push for opted-in app users, otherwise email exactly as before.
+    from auctions.notifications import notify_user
+
+    title = _TOS_PUSH_TITLES.get(template, str(tos.auction)).format(auction=tos.auction)
+    auction_url = f"https://{current_site.domain}{tos.auction.get_absolute_url()}"
+    notify_user(
+        tos.user,
+        category="auction_confirm",
+        title=title,
+        body=f"Tap for details about {tos.auction}.",
+        url=auction_url,
+        send_email=lambda: mail.send(tos.user.email, **send_kwargs),
+        auction_pk=tos.auction.pk,
+    )
 
 
 class Command(BaseCommand):

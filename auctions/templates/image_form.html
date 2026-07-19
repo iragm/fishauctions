@@ -7,6 +7,48 @@
 $('#auction-form').submit(function(event){
     $(this).find(':input[type=submit]').prop('disabled', true);
 });
+// Allow pasting an image from the clipboard anywhere on the page
+document.addEventListener('paste', function(e) {
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+    let imageItem = null;
+    for (const item of clipboard.items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            imageItem = item;
+            break;
+        }
+    }
+    if (!imageItem) return;
+    // If the clipboard also contains text and the user is pasting into a text
+    // field, assume they want the text, not the image
+    const target = e.target;
+    const isTextEntry = target && (target.tagName === 'TEXTAREA' ||
+        (target.tagName === 'INPUT' && !['file', 'checkbox', 'radio', 'submit', 'button'].includes(target.type)));
+    if (isTextEntry && clipboard.getData('text')) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    const named = new File([file], 'pasted-image-' + Date.now() + '.' + ext, {type: file.type});
+    const input = document.getElementById('id_image');
+    const dt = new DataTransfer();
+    dt.items.add(named);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', {bubbles: true}));
+});
+// Show a preview whenever an image is selected (pasted or picked from disk)
+document.getElementById('id_image').addEventListener('change', function() {
+    const preview = document.getElementById('pasted-image-preview');
+    if (!preview) return;
+    const img = preview.querySelector('img');
+    if (this.files && this.files[0]) {
+        if (img.src) URL.revokeObjectURL(img.src);
+        img.src = URL.createObjectURL(this.files[0]);
+        preview.classList.remove('d-none');
+    } else {
+        preview.classList.add('d-none');
+    }
+});
 </script>
 {% endblock %}
 {% block title %}{{ title }}{% endblock %}

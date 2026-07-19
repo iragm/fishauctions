@@ -22,6 +22,146 @@ $(document).ready(function() {
     show_hide_advanced();
 });
 var form_id = '#printing-prefs';
+
+// ---- Print method: live mismatch warnings + Bluetooth connect card -------------------------
+(function () {
+    var methodEl = document.getElementById('id_print_method');
+    var presetEl = document.getElementById('id_preset');
+    if (!methodEl) { return; }  // dropdown hidden for pure-web users with no device
+
+    var warningMap = {};
+    var mapEl = document.getElementById('print-warning-map');
+    if (mapEl) { try { warningMap = JSON.parse(mapEl.textContent); } catch (e) { warningMap = {}; } }
+
+    function renderWarnings() {
+        var container = document.getElementById('print-method-warnings');
+        if (!container) { return; }
+        var key = methodEl.value + '|' + presetEl.value;
+        var warnings = warningMap[key] || [];
+        container.innerHTML = '';
+        warnings.forEach(function (text) {
+            var div = document.createElement('div');
+            div.className = 'alert alert-warning alert-dismissible fade show';
+            div.setAttribute('role', 'alert');
+            div.textContent = text;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn-close';
+            btn.setAttribute('data-bs-dismiss', 'alert');
+            btn.setAttribute('aria-label', 'Close');
+            div.appendChild(btn);
+            container.appendChild(div);
+        });
+    }
+
+    function toggleBtCard() {
+        var card = document.getElementById('bluetooth-printer-card');
+        if (!card) { return; }
+        if (methodEl.value === 'bluetooth') {
+            card.style.display = '';
+            refreshBtState();
+        } else {
+            card.style.display = 'none';
+        }
+    }
+
+    methodEl.addEventListener('change', function () { renderWarnings(); toggleBtCard(); });
+    presetEl.addEventListener('change', renderWarnings);
+
+    // ---- Bluetooth bridge (app implements the handlers; page JS lives here) -----------------
+    function callBridge(handler) {
+        try {
+            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                return window.flutter_inappwebview.callHandler(handler);
+            }
+        } catch (e) { /* fall through */ }
+        return Promise.resolve({ supported: false });
+    }
+
+    function renderBtState(state) {
+        var stateEl = document.getElementById('bt-printer-state');
+        var actionsEl = document.getElementById('bt-printer-actions');
+        var sizeEl = document.getElementById('bt-printer-size');
+        if (!stateEl || !actionsEl) { return; }
+        state = state || {};
+        actionsEl.innerHTML = '';
+        sizeEl.innerHTML = '';
+
+        if (state.supported === false) {
+            stateEl.className = 'text-muted';
+            stateEl.textContent = 'Bluetooth printing works in the FishAuctions app — install it and come back to this page.';
+            return;
+        }
+        if (state.connected) {
+            var bits = [state.name || 'Connected printer'];
+            if (state.profile) { bits.push('driver: ' + state.profile); }
+            stateEl.className = '';
+            stateEl.textContent = bits.join(' · ');
+            var unpair = document.createElement('button');
+            unpair.type = 'button';
+            unpair.className = 'btn btn-sm btn-outline-danger';
+            unpair.textContent = 'Unpair';
+            unpair.addEventListener('click', function () {
+                stateEl.textContent = 'Disconnecting…';
+                callBridge('printerUnpair').then(renderBtState);
+            });
+            actionsEl.appendChild(unpair);
+            offerReportedSize(state.labelSize, sizeEl);
+        } else {
+            stateEl.className = 'text-muted';
+            stateEl.textContent = 'No printer connected';
+            var connect = document.createElement('button');
+            connect.type = 'button';
+            connect.className = 'btn btn-sm btn-primary';
+            connect.textContent = 'Connect a printer';
+            connect.addEventListener('click', function () {
+                connect.disabled = true;
+                callBridge('printerConnect').then(function (s) { connect.disabled = false; renderBtState(s); });
+            });
+            actionsEl.appendChild(connect);
+        }
+    }
+
+    // When the printer reports its loaded label size and it differs from saved prefs, offer one-tap
+    // adoption: set preset=custom + converted dims on the existing form and submit (so the PDF matches).
+    function offerReportedSize(labelSize, sizeEl) {
+        if (!labelSize || !sizeEl) { return; }
+        var unitEl = document.getElementById('id_unit');
+        var widthEl = document.getElementById('id_label_width');
+        var heightEl = document.getElementById('id_label_height');
+        if (!unitEl || !widthEl || !heightEl) { return; }
+        var mmPerUnit = unitEl.value === 'cm' ? 10.0 : 25.4;
+        var w = (labelSize.width_mm / mmPerUnit);
+        var h = (labelSize.height_mm / mmPerUnit);
+        var label = document.createElement('span');
+        label.className = 'me-2';
+        label.textContent = 'Printer reports ' + labelSize.width_mm + ' × ' + labelSize.height_mm + ' mm labels —';
+        var useBtn = document.createElement('button');
+        useBtn.type = 'button';
+        useBtn.className = 'btn btn-sm btn-outline-primary';
+        useBtn.textContent = 'Use this size';
+        useBtn.addEventListener('click', function () {
+            presetEl.value = 'custom';
+            show_hide_advanced();
+            widthEl.value = w.toFixed(2);
+            heightEl.value = h.toFixed(2);
+            document.getElementById('printing-prefs').submit();
+        });
+        sizeEl.appendChild(label);
+        sizeEl.appendChild(useBtn);
+    }
+
+    var _btLoaded = false;
+    function refreshBtState() {
+        if (_btLoaded) { return; }
+        _btLoaded = true;
+        callBridge('printerGetState').then(renderBtState);
+    }
+
+    renderWarnings();
+    toggleBtCard();
+})();
+
 {% include 'leave_page_warning.js' %}
 </script>
 {% endblock %}

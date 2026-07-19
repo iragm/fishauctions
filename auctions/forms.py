@@ -9,13 +9,14 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 from bootstrap_datepicker_plus.widgets import (
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
-from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import UploadedFile
 from django.db.models import Q
 from django.forms import (
     HiddenInput,
@@ -25,6 +26,8 @@ from django.utils import timezone
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
+from easy_thumbnails.exceptions import EasyThumbnailsError
+from PIL import Image, ImageFile, UnidentifiedImageError
 
 from .helper_functions import get_currency_symbol
 from .models import (
@@ -112,6 +115,64 @@ def validate_image_url(url):
         )
         raise forms.ValidationError(msg)
     return url
+
+
+# Exceptions that mean "the image the user gave us is unusable" (bad/unknown format,
+# truncated/corrupt data, or an oversized decompression bomb) rather than "something is
+# wrong with the server". These are safe to show to the uploader as a fixable problem.
+#
+# Note that ``UnidentifiedImageError`` is a subclass of ``OSError`` but bare ``OSError`` is
+# deliberately NOT listed here: Pillow/easy_thumbnails raise plain ``OSError`` (e.g.
+# ``PermissionError`` / ``[Errno 13]``, out-of-disk-space) when *writing* the resized file,
+# and those are server problems that must surface as 500s so the admins get emailed rather
+# than being blamed on the user's photo.
+IMAGE_PROCESSING_EXCEPTIONS = (
+    UnidentifiedImageError,
+    Image.DecompressionBombError,
+    EasyThumbnailsError,  # includes InvalidImageFormatError
+    SyntaxError,
+    EOFError,
+)
+
+
+def validate_uploaded_image(uploaded_image):
+    """Confirm `uploaded_image` is a real image that Pillow can fully decode.
+
+    This mirrors how easy_thumbnails opens the source when generating the thumbnail on
+    save (a full ``load()`` with ``LOAD_TRUNCATED_IMAGES`` enabled) so we reject exactly
+    the files that would otherwise blow up during thumbnailing -- but we do it here, up
+    front, where we can show the uploader a friendly, actionable message instead of a 500.
+
+    Raises ``forms.ValidationError`` for anything that isn't a usable image. The file's
+    read position is reset to the start so the subsequent model save can re-read it.
+    """
+    try:
+        uploaded_image.seek(0)
+    except (AttributeError, OSError):
+        pass
+    previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
+    try:
+        # Match easy_thumbnails' tolerance so we don't reject images it would happily
+        # process (and vice-versa).
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        with Image.open(uploaded_image) as img:
+            img.load()
+    except (*IMAGE_PROCESSING_EXCEPTIONS, ValueError, OSError) as e:
+        # We are only *reading* the uploaded file here, so an OSError means the image
+        # data itself is bad -- not a disk/permission problem (those happen on write).
+        logger.info("Rejected uploaded image: %s", e)
+        msg = (
+            "We couldn't read that image -- it may be corrupt or in a format we don't support. "
+            "Please try a different photo (JPEG, PNG, GIF, or WEBP)."
+        )
+        raise forms.ValidationError(msg) from e
+    finally:
+        ImageFile.LOAD_TRUNCATED_IMAGES = previous_truncated_setting
+        try:
+            uploaded_image.seek(0)
+        except (AttributeError, OSError):
+            pass
+    return uploaded_image
 
 
 def clean_summernote(html, max_length=16383):
@@ -457,7 +518,9 @@ class InvoiceAdjustmentFormSetHelper(FormHelper):
         self.layout = Layout(
             Div(
                 Div("adjustment_type", css_class="col-md-4"),
-                Div(PrependedAppendedText("amount", "$", ".00"), css_class="col-md-4"),
+                # Whole dollars only (amount is an integer field), so no ".00" suffix that
+                # would imply cents can be entered.
+                Div(PrependedText("amount", "$"), css_class="col-md-4"),
                 Div("notes", css_class="col-md-4"),
                 css_class="row",
             )
@@ -478,6 +541,8 @@ class InvoiceAdjustmentForm(forms.ModelForm):
         if not self.is_bound and not self.instance.pk:
             self.initial["amount"] = ""
         self.fields["notes"].widget.attrs = {"placeholder": "ex: membership fee"}
+        self.fields["adjustment_type"].help_text = "Charge extra adds to the invoice; Discount subtracts from it."
+        self.fields["amount"].help_text = "Whole dollars only"
 
         return result
 
@@ -747,12 +812,29 @@ class DeleteAuctionTOS(forms.Form):
                 "delete_lots"
             ].help_text = "Uncheck if this is a duplicate user.  Lot numbers will not be changed."
             self.fields["merge_with"].label = "To keep these lots, select a user to assign them to"
+        # An invoice records payment/adjustment history that a plain delete would
+        # cascade away. Deleting is blocked in that case; a merge (which moves the
+        # invoice, adjustments, and payments onto another user) is the only way out.
+        self.invoice_exists = Invoice.objects.filter(auctiontos_user=self.auctiontos).exists()
+        if self.invoice_exists:
+            self.fields["delete_lots"].widget = HiddenInput()
+            self.fields["delete_lots"].initial = False
+            self.fields["merge_with"].label = (
+                "This user has an invoice, so their payment history can't be deleted. "
+                "Select another user to merge them into — their lots, adjustments, and payments move to that user."
+            )
 
     def clean(self):
         cleaned_data = super().clean()
         delete_lots = cleaned_data.get("delete_lots")
+        merge_with = cleaned_data.get("merge_with")
+        if self.invoice_exists and (delete_lots or not merge_with):
+            # Force the merge path; the destructive branches would erase the invoice.
+            self.add_error(
+                "merge_with",
+                "This user has an invoice. Select another user to merge them into so their payment history is preserved.",
+            )
         if not delete_lots:
-            merge_with = cleaned_data.get("merge_with")
             if not merge_with:
                 if self.lots_exist:
                     self.add_error("merge_with", "Select a new user to preserve this user's data")
@@ -1560,7 +1642,7 @@ class LotRefundForm(forms.ModelForm):
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required=True)
 
-    def __init__(self, user, auction, *args, **kwargs):
+    def __init__(self, user, auction, next_url=None, *args, **kwargs):
         self.user = user
         self.auction = auction
         super().__init__(*args, **kwargs)
@@ -1570,6 +1652,12 @@ class AuctionJoin(forms.ModelForm):
         self.helper.form_id = "rule-form"
         self.helper.form_tag = True
         self.helper.form_action = reverse("auction_main", kwargs={"slug": auction.slug})
+        if next_url:
+            # Carry ?next= through the POST so get_success_url() (which reads request.GET["next"])
+            # can return the user to where they came from (e.g. the lot page they joined from).
+            from urllib.parse import quote
+
+            self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",
@@ -1775,6 +1863,9 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields[
+            "image"
+        ].help_text = "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -1782,6 +1873,12 @@ class CreateImageForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "image",
+            HTML(
+                '<div id="pasted-image-preview" class="d-none mb-3">'
+                '<img src="" alt="Preview of selected image" class="img-thumbnail" style="max-height: 200px;">'
+                '<div class="text-muted small">Click Save to upload this image</div>'
+                "</div>"
+            ),
             "url",
             Div(
                 Div(
@@ -1803,6 +1900,21 @@ class CreateImageForm(forms.ModelForm):
         if not url:
             return url
         return validate_image_url(url)
+
+    def clean_image(self):
+        """Reject corrupt/unsupported uploads with a friendly message before they hit save.
+
+        Django's ImageField only runs Pillow's ``verify()`` (a header check), which passes
+        truncated or otherwise broken files that then explode during thumbnail generation.
+        Here we fully decode a freshly uploaded file so image problems become a nice inline
+        field error rather than a server error blamed on the user's photo.
+        """
+        image = self.cleaned_data.get("image")
+        # Only validate a newly uploaded file; leave an unchanged, already-stored image
+        # (on the edit view) alone.
+        if isinstance(image, UploadedFile):
+            validate_uploaded_image(image)
+        return image
 
     def clean(self):
         cleaned_data = super().clean()
@@ -1883,7 +1995,7 @@ class CreateAuctionForm(forms.ModelForm):
                 "online",
                 "Create online auction",
                 css_id="auction-online",
-                css_class="submit-button create-auction bg-success text-black",
+                css_class="submit-button create-auction bg-success text-dark",
             ),
             Div(
                 HTML(
@@ -1894,7 +2006,7 @@ class CreateAuctionForm(forms.ModelForm):
                 "offline",
                 value="Create in-person auction",
                 css_id="auction-offline",
-                css_class="submit-button bg-success text-black",
+                css_class="submit-button bg-success text-dark",
             ),
             Div(
                 HTML(
@@ -2116,7 +2228,6 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
-            # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
             self.fields["date_online_bidding_starts"].widget = forms.HiddenInput()
@@ -2151,6 +2262,16 @@ class AuctionEditForm(forms.ModelForm):
             currency = "USD"
         currency_symbol = get_currency_symbol(currency)
 
+        def slot(field_name, visible_element):
+            """Place a field in its grid column when visible, but render just the
+            bare hidden input (no empty column) when its widget has been switched
+            to HiddenInput above. This keeps the value in the POST without leaving
+            a blank cell in the row. See auction_edit_form.html for the JS-toggled
+            fields, which collapse their own column via toggleCol()."""
+            if isinstance(self.fields[field_name].widget, forms.HiddenInput):
+                return field_name
+            return visible_element
+
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -2173,19 +2294,25 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                     label="Bidding opens",
                 ),
-                Div(
+                slot(
                     "date_end",
-                    css_class="col-md-3",
+                    Div(
+                        "date_end",
+                        css_class="col-md-3",
+                    ),
                 ),
                 css_class="row",
             ),
             HTML("<h4>Lot fees</h4>"),
             Div(
-                PrependedAppendedText(
+                slot(
                     "unsold_lot_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
+                    PrependedAppendedText(
+                        "unsold_lot_fee",
+                        currency_symbol,
+                        ".00",
+                        wrapper_class="col-lg-3",
+                    ),
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee",
@@ -2226,12 +2353,14 @@ class AuctionEditForm(forms.ModelForm):
                 css_class="row",
             ),
             Div(
-                # PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
-                PrependedAppendedText(
+                slot(
                     "pre_register_lot_discount_percent",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
+                    PrependedAppendedText(
+                        "pre_register_lot_discount_percent",
+                        "",
+                        "%",
+                        wrapper_class="col-lg-3",
+                    ),
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee_for_club_members",
@@ -2255,17 +2384,26 @@ class AuctionEditForm(forms.ModelForm):
             ),
             HTML("<h4>Lot permissions</h4>"),
             Div(
-                Div(
+                slot(
                     "online_bidding",
-                    css_class="col-md-3",
+                    Div(
+                        "online_bidding",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "date_online_bidding_starts",
-                    css_class="col-md-3",
+                    Div(
+                        "date_online_bidding_starts",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "date_online_bidding_ends",
-                    css_class="col-md-3",
+                    Div(
+                        "date_online_bidding_ends",
+                        css_class="col-md-3",
+                    ),
                 ),
                 Div(
                     "allow_deleting_bids",
@@ -2290,9 +2428,12 @@ class AuctionEditForm(forms.ModelForm):
                     "only_approved_bidders",
                     css_class="col-md-4",
                 ),
-                Div(
+                slot(
                     "copy_users_when_copying_this_auction",
-                    css_class="col-md-4",
+                    Div(
+                        "copy_users_when_copying_this_auction",
+                        css_class="col-md-4",
+                    ),
                 ),
                 Div(
                     "use_seller_dash_lot_numbering",
@@ -2302,9 +2443,12 @@ class AuctionEditForm(forms.ModelForm):
             ),
             HTML("<h4>Club</h4>"),
             Div(
-                Div(
+                slot(
                     "club",
-                    css_class="col-md-6",
+                    Div(
+                        "club",
+                        css_class="col-md-6",
+                    ),
                 ),
                 Div(
                     "manage_users_through_club",
@@ -2328,17 +2472,26 @@ class AuctionEditForm(forms.ModelForm):
                     "email_users_when_invoices_ready",
                     css_class="col-md-3",
                 ),
-                Div(
+                slot(
                     "add_membership_fee_to_invoices_for_expired_members",
-                    css_class="col-md-3",
+                    Div(
+                        "add_membership_fee_to_invoices_for_expired_members",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "enable_online_payments",
-                    css_class="col-md-3",
+                    Div(
+                        "enable_online_payments",
+                        css_class="col-md-3",
+                    ),
                 ),
-                Div(
+                slot(
                     "enable_square_payments",
-                    css_class="col-md-3",
+                    Div(
+                        "enable_square_payments",
+                        css_class="col-md-3",
+                    ),
                 ),
                 Div(
                     "invoice_payment_instructions",
@@ -2364,9 +2517,12 @@ class AuctionEditForm(forms.ModelForm):
                     "auto_add_images",
                     css_class="col-md-3",
                 ),
-                Div(
+                slot(
                     "message_users_when_lots_sell",
-                    css_class="col-md-3",
+                    Div(
+                        "message_users_when_lots_sell",
+                        css_class="col-md-3",
+                    ),
                 ),
                 # Div('set_lot_winners_url', css_class='col-md-3',),
                 PrependedAppendedText(
@@ -3393,14 +3549,31 @@ class UserLabelPrefsForm(forms.ModelForm):
         model = UserLabelPrefs
         exclude = ("user",)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, show_print_method=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "printing-prefs"
         self.helper.form_class = "form"
         self.helper.form_tag = True
+        # The print-method dropdown is the primary choice on the page, but "System printer" /
+        # "Bluetooth" only mean anything in the app, so it's hidden for pure-web users who have no
+        # device (see UserLabelPrefsView). When hidden, drop the field so the form leaves it as-is.
+        print_method_layout = []
+        if show_print_method:
+            print_method_layout = [
+                Div(
+                    Div("print_method", css_class="col-sm-7"),
+                    css_class="row",
+                ),
+                # Warnings alert + (in-app) Bluetooth connect card + the live-warning JS map. Kept in
+                # a template so the UX/copy iterates server-side without an app release.
+                HTML('{% include "printing_extras.html" %}'),
+            ]
+        else:
+            del self.fields["print_method"]
         self.helper.layout = Layout(
+            *print_method_layout,
             Div(
                 Div(
                     "preset",
@@ -3500,6 +3673,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_me_about_new_lots_ship_to_location",
             "email_me_when_people_comment_on_my_lots",
             "email_me_about_new_chat_replies",
+            "push_notifications_instead_of_email",
             "email_me_about_new_in_person_auctions",
             "email_me_about_new_in_person_auctions_distance",
             "send_reminder_emails_about_joining_auctions",
@@ -3536,6 +3710,15 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.fields[
             "email_me_about_new_chat_replies"
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
+        # Push notifications need a signed-in app install with a live FCM token. Always show the
+        # toggle so users know it exists, but disable it (with an explanatory note) when there's no
+        # device to push to — disabling keeps the stored value unchanged on save.
+        if not (self.instance and self.instance.pk and self.instance.has_push_device):
+            self.fields["push_notifications_instead_of_email"].disabled = True
+            self.fields["push_notifications_instead_of_email"].help_text = (
+                "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
+                "notifications in the app instead of emails, for everything except account emails."
+            )
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
         self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
@@ -3605,6 +3788,13 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML("<h4>Notifications</h4><br>"),
+            Div(
+                Div(
+                    "push_notifications_instead_of_email",
+                    css_class="col-md-12",
+                ),
+                css_class="row",
+            ),
             Div(
                 Div(
                     "email_me_when_people_comment_on_my_lots",

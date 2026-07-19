@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Lot queue for {{ auction }}{% endblock %}
+
+{% block content %}
+<span class="hide-fullscreen">
+{% include 'auction_ribbon.html' %}
+</span>
+
+<div class="container hide-fullscreen">
+  <div class="alert alert-info" role="alert">
+    <h5 class="mb-2"><i class="bi bi-list-ol"></i> Lot queue</h5>
+    <p class="mb-1">Build the order lots will be sold in. Add lots any of these ways:</p>
+    <ul class="mb-1">
+      <li>Scan a lot's QR code with a USB barcode scanner &mdash; it works anywhere on this page.</li>
+      <li>On a phone, tap <strong>Scan with camera</strong> and point it at the QR code.</li>
+      <li>Type a lot number below and press <strong>Add</strong>.</li>
+    </ul>
+    <p class="mb-0">Drag the <i class="bi bi-grip-vertical"></i> handle to reorder, or the <i class="bi bi-x-lg"></i> to remove. The <strong>Set lot winners</strong> page sells the top lot next automatically. Tap <strong>Projector / kiosk mode</strong> to put the current lot up on a screen for the room.</p>
+  </div>
+
+  <form id="queue-add-form" class="mb-2"
+        hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
+        hx-target="#queue-list" hx-swap="innerHTML">
+    <input type="hidden" name="action" value="add">
+    <div class="input-group">
+      <input type="text" class="form-control" id="queue-add-input" name="value"
+             placeholder="Lot number" autocomplete="off" autofocus>
+      <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg"></i> Add</button>
+    </div>
+  </form>
+
+  <div class="mb-2">
+    <button type="button" id="queue-camera-btn" class="btn btn-secondary btn-sm"><i class="bi bi-camera"></i> Scan with camera</button>
+    <button type="button" id="fullscreen-btn" class="btn btn-secondary btn-sm d-none d-sm-inline-block ms-1"><i class="bi bi-fullscreen"></i> Projector / kiosk mode</button>
+  </div>
+
+  <div id="queue-camera-wrapper" class="mb-2 d-none">
+    <div class="rounded border overflow-hidden w-100" style="max-width:480px;aspect-ratio: 3 / 1;">
+      <video id="queue-scanner-video" playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+    </div>
+    <div id="queue-scan-status" class="alert alert-info mt-2 mb-0 py-2">Point the camera at a lot's QR code.</div>
+  </div>
+
+  <div id="queue-list" class="mt-3">
+    {% include 'auctions/lot_queue_list.html' %}
+  </div>
+</div>
+{% endblock %}
+
+{% block undiv_content %}
+{# Kiosk / projector view: hidden until fullscreen, then polled so it tracks lots as they sell. #}
+<div id="kiosk" class="d-none">
+  <div id="kiosk-content"
+       hx-get="{% url 'auction_lot_queue_kiosk' slug=auction.slug %}"
+       hx-trigger="load, every 5s" hx-swap="innerHTML">
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{# Reuse the shared barcode pipeline. On a club auction the ribbon already configured and loaded it
+   (with lotScanUrl threaded through barcode_lot_scan_url); the guards below make this a no-op there.
+   On a no-club auction the ribbon renders nothing, so we wire it up here. #}
+<script>
+  window.AUCTION_BARCODE_CONFIG = window.AUCTION_BARCODE_CONFIG || {
+    lotScanUrl: "{{ request.path|escapejs }}",
+    csrfToken: "{{ csrf_token }}",
+    prefixKey: "F9",
+  };
+</script>
+<script src="{% static 'js/barcode_scanner.js' %}"></script>
+<script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
+{% if show_camera_scanner %}<script src="{% static 'js/camera_scanner.js' %}"></script>{% endif %}
+<script>
+  var QUEUE_URL = "{% url 'auction_lot_queue' slug=auction.slug %}";
+  var CSRF_TOKEN = "{{ csrf_token }}";
+
+  function initQueueSortable() {
+    var el = document.getElementById('queue-sortable');
+    if (!el || typeof Sortable === 'undefined') {
+      return;
+    }
+    Sortable.create(el, {
+      handle: '.queue-drag-handle',
+      animation: 150,
+      onEnd: persistQueueOrder,
+    });
+  }
+
+  function persistQueueOrder() {
+    var el = document.getElementById('queue-sortable');
+    if (!el) {
+      return;
+    }
+    var body = new URLSearchParams();
+    body.append('action', 'reorder');
+    el.querySelectorAll('[data-entry-id]').forEach(function (li) {
+      body.append('order[]', li.getAttribute('data-entry-id'));
+    });
+    fetch(QUEUE_URL, { method: 'POST', headers: { 'X-CSRFToken': CSRF_TOKEN }, body: body })
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var container = document.getElementById('queue-list');
+        container.innerHTML = html;
+        if (window.htmx) { htmx.process(container); }
+        initQueueSortable();
+      })
+      .catch(function () { /* leave the DOM as dragged if the network hiccups */ });
+  }
+
+  $(document).ready(function () {
+    initQueueSortable();
+
+    // Re-init drag-and-drop after every htmx swap of the list (add / remove).
+    var listEl = document.getElementById('queue-list');
+    listEl.addEventListener('htmx:afterSwap', function () {
+      initQueueSortable();
+    });
+
+    // A USB HID or camera scan adds via JSON, then fires this event so we pull the fresh list.
+    document.addEventListener('auction-lot-queued', function () {
+      if (window.htmx) {
+        htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
+      }
+    });
+
+    // Clear + refocus the manual add box after a successful add so scanning/typing flows quickly.
+    document.getElementById('queue-add-form').addEventListener('htmx:afterRequest', function (evt) {
+      if (evt.detail && evt.detail.successful) {
+        var input = document.getElementById('queue-add-input');
+        input.value = '';
+        input.focus();
+      }
+    });
+
+    // Camera scanning (phones + laptop webcams). Toggles the shared camera controller, whose
+    // decoded values are routed through the barcode pipeline (lot QR -> queue add).
+    var queueScanner = null;
+    $('#queue-camera-btn').on('click', async function () {
+      var wrapper = document.getElementById('queue-camera-wrapper');
+      var btn = this;
+      if (queueScanner && queueScanner.isScanning()) {
+        await queueScanner.stop();
+        wrapper.classList.add('d-none');
+        btn.innerHTML = '<i class="bi bi-camera"></i> Scan with camera';
+        return;
+      }
+      if (typeof window.createCameraScanner !== 'function') {
+        window.jQuery.toast({ title: 'Camera scanning is not available on this device.', type: 'danger', delay: 8000 });
+        return;
+      }
+      wrapper.classList.remove('d-none');
+      queueScanner = window.createCameraScanner({
+        video: document.getElementById('queue-scanner-video'),
+        onCode: function (value) { return window.auctionBarcodeScanner.handleCode(value); },
+        onStatus: function (message, level) {
+          var box = document.getElementById('queue-scan-status');
+          if (box) {
+            box.className = 'alert alert-' + (level || 'info') + ' mt-2 mb-0 py-2';
+            box.textContent = message;
+          }
+        },
+      });
+      queueScanner.resetDuplicate();
+      btn.innerHTML = '<i class="bi bi-camera-video-off"></i> Stop camera';
+      try {
+        await queueScanner.start();
+      } catch (e) {
+        // status message already set by the scanner
+      }
+    });
+
+    // Fullscreen / kiosk mode: hide the admin chrome, show the projector view.
+    $('#fullscreen-btn').on('click', function () {
+      var elem = document.documentElement;
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        (elem.requestFullscreen ? elem.requestFullscreen() : elem.webkitRequestFullscreen()).catch(function (err) {
+          console.error('Error attempting to enable full-screen mode: ' + err.message);
+        });
+      } else {
+        (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen()).catch(function (err) {
+          console.error('Error attempting to exit full-screen mode: ' + err.message);
+        });
+      }
+    });
+
+    $(document).on('fullscreenchange webkitfullscreenchange', function () {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        $('.hide-fullscreen').hide();
+        $('#kiosk').removeClass('d-none');
+      } else {
+        $('.hide-fullscreen').show();
+        $('#kiosk').addClass('d-none');
+      }
+    });
+  });
+</script>
+{% endblock %}

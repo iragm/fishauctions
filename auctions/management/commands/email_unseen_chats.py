@@ -1,8 +1,13 @@
+import logging
+
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.db.models import Q
+from django.urls import reverse
 from post_office import mail
+
+logger = logging.getLogger(__name__)
 
 
 # import csv
@@ -16,17 +21,33 @@ class Command(BaseCommand):
             | Q(userdata__email_me_about_new_chat_replies=True)
         )
         for user in users:
-            if (user.userdata.email_me_when_people_comment_on_my_lots and user.userdata.my_lot_subscriptions_count) or (
-                user.userdata.email_me_about_new_chat_replies and user.userdata.other_lot_subscriptions_count
-            ):
-                mail.send(
-                    user.email,
-                    template="unread_chat_messages",
-                    context={
-                        "name": user.first_name,
-                        "domain": current_site.domain,
-                        "data": user.userdata,
-                        "unsubscribe": user.userdata.unsubscribe_link,
-                    },
-                )
-                user.userdata.mark_all_subscriptions_notified
+            try:
+                if (
+                    user.userdata.email_me_when_people_comment_on_my_lots and user.userdata.my_lot_subscriptions_count
+                ) or (user.userdata.email_me_about_new_chat_replies and user.userdata.other_lot_subscriptions_count):
+                    # collapse_key folds repeated chat pushes so a phone that was off shows one
+                    # notification, not a backlog. Non-push users are emailed exactly as before.
+                    from auctions.notifications import notify_user
+
+                    notify_user(
+                        user,
+                        category="chat",
+                        title="New replies on your lots",
+                        body="You have unread comments on lots you're watching.",
+                        url=f"https://{current_site.domain}{reverse('watched')}",
+                        send_email=lambda user=user: mail.send(
+                            user.email,
+                            template="unread_chat_messages",
+                            context={
+                                "name": user.first_name,
+                                "domain": current_site.domain,
+                                "data": user.userdata,
+                                "unsubscribe": user.userdata.unsubscribe_link,
+                            },
+                        ),
+                        collapse_key="chat",
+                    )
+                    user.userdata.mark_all_subscriptions_notified()
+            except Exception:
+                logger.exception("email_unseen_chats failed for user %s", user.pk)
+                continue

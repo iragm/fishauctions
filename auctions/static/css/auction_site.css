@@ -74,3 +74,185 @@ a.ad:hover {
   }
 
 }
+
+/* ==========================================================================
+   Site theme overrides (see /style_reference.md before editing)
+   Darkly 5.3.3 is a compiled theme: component classes carry literal colors in
+   their own CSS vars, so overriding :root alone is not enough. Each affected
+   component is re-declared below.
+   ========================================================================== */
+
+/* --- Darker danger / warning palette ------------------------------------- */
+/* Danger base #a93226 (darker red, same hue as #e74c3c).
+   Warning base #b9770e (darker amber, same hue as #f39c12). */
+:root {
+    --bs-danger: #a93226;
+    --bs-danger-rgb: 169, 50, 38;
+    --bs-warning: #b9770e;
+    --bs-warning-rgb: 185, 119, 14;
+}
+
+/* --bs-danger-rgb / --bs-warning-rgb drive .bg-* and .text-* utilities.
+   On the dark body, red/amber text needs a lighter shade than the solid-fill
+   color to stay legible, so text utilities are decoupled to a lighter tint. */
+.text-danger {
+    color: #e2756a !important;
+}
+
+.text-warning {
+    color: #d99f3f !important;
+}
+
+/* Solid danger fills keep white text (contrast ~6.6:1 on #a93226). */
+.btn-danger {
+    --bs-btn-color: #fff;
+    --bs-btn-bg: #a93226;
+    --bs-btn-border-color: #a93226;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #902b20;
+    --bs-btn-hover-border-color: #87281e;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #87281e;
+    --bs-btn-active-border-color: #7f261d;
+    --bs-btn-disabled-color: #fff;
+    --bs-btn-disabled-bg: #a93226;
+    --bs-btn-disabled-border-color: #a93226;
+}
+
+/* Solid warning fills use dark text (contrast ~5.7:1 on #b9770e, vs 3.7:1 for
+   white) — see message-type standard: warning always pairs with dark text. */
+.btn-warning {
+    --bs-btn-color: #000;
+    --bs-btn-bg: #b9770e;
+    --bs-btn-border-color: #b9770e;
+    --bs-btn-hover-color: #000;
+    --bs-btn-hover-bg: #9d650c;
+    --bs-btn-hover-border-color: #945f0b;
+    --bs-btn-active-color: #000;
+    --bs-btn-active-bg: #945f0b;
+    --bs-btn-active-border-color: #8b590b;
+    --bs-btn-disabled-color: #000;
+    --bs-btn-disabled-bg: #b9770e;
+    --bs-btn-disabled-border-color: #b9770e;
+}
+
+/* Success fill is unchanged (#00bc8c) but needs dark text, not the theme's
+   white (white on #00bc8c is only ~2.5:1). */
+.btn-success {
+    --bs-btn-color: #000;
+    --bs-btn-hover-color: #000;
+    --bs-btn-active-color: #000;
+    --bs-btn-disabled-color: #000;
+}
+
+/* Text-on-fill utility classes (badges, .text-bg-*). */
+.text-bg-danger {
+    background-color: #a93226 !important;
+    color: #fff !important;
+}
+
+.text-bg-warning {
+    background-color: #b9770e !important;
+    color: #000 !important;
+}
+
+.text-bg-success {
+    color: #000 !important;
+}
+
+/* Legacy pattern: `.badge.bg-*` / `.btn.bg-*` set a fill but not text color, so
+   they inherit the light body color. Scoped to leaf components only (never a
+   blunt `.bg-success{color}` that would cascade into nested content). */
+.badge.bg-success,
+.badge.bg-warning,
+.btn.bg-success,
+.btn.bg-warning {
+    color: #000;
+}
+
+/* Subtle dark alerts, retuned to the darker palette. */
+.alert-danger {
+    --bs-alert-color: #f1a49b;
+    --bs-alert-bg: #2b100c;
+    --bs-alert-border-color: #7f261d;
+    --bs-alert-link-color: #f5b8b1;
+}
+
+.alert-warning {
+    --bs-alert-color: #f3c58a;
+    --bs-alert-bg: #2e1f06;
+    --bs-alert-border-color: #8b590b;
+    --bs-alert-link-color: #f7d3a3;
+}
+
+/* --- Outline buttons legible on the dark background ----------------------- */
+/* Darkly outline buttons use the fill color as their resting text color, which
+   is unreadable for the dark grays (and, after darkening, for danger/warning).
+   Give each a light resting text color; hover/active keep the filled look. */
+.btn-outline-secondary {
+    --bs-btn-color: #dee2e6;
+    --bs-btn-border-color: #6c757d;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #6c757d;
+    --bs-btn-hover-border-color: #6c757d;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #6c757d;
+    --bs-btn-active-border-color: #6c757d;
+    --bs-btn-disabled-color: #adb5bd;
+    --bs-btn-disabled-border-color: #6c757d;
+}
+
+.btn-outline-dark {
+    --bs-btn-color: #dee2e6;
+    --bs-btn-border-color: #adb5bd;
+    --bs-btn-hover-color: #000;
+    --bs-btn-hover-bg: #dee2e6;
+    --bs-btn-hover-border-color: #dee2e6;
+    --bs-btn-active-color: #000;
+    --bs-btn-active-bg: #dee2e6;
+    --bs-btn-active-border-color: #dee2e6;
+    --bs-btn-disabled-color: #adb5bd;
+    --bs-btn-disabled-border-color: #adb5bd;
+}
+
+.btn-outline-danger {
+    --bs-btn-color: #ec8b80;
+    --bs-btn-border-color: #a93226;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #a93226;
+    --bs-btn-hover-border-color: #a93226;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #a93226;
+    --bs-btn-active-border-color: #a93226;
+    --bs-btn-disabled-color: #ec8b80;
+    --bs-btn-disabled-border-color: #a93226;
+}
+
+.btn-outline-warning {
+    --bs-btn-color: #d9a441;
+    --bs-btn-border-color: #b9770e;
+    --bs-btn-hover-color: #000;
+    --bs-btn-hover-bg: #b9770e;
+    --bs-btn-hover-border-color: #b9770e;
+    --bs-btn-active-color: #000;
+    --bs-btn-active-bg: #b9770e;
+    --bs-btn-active-border-color: #b9770e;
+    --bs-btn-disabled-color: #d9a441;
+    --bs-btn-disabled-border-color: #b9770e;
+}
+
+/* --- Pagination: neutral grays instead of Darkly's success green --------- */
+/* Fixes the htmx table next/previous/page controls site-wide. */
+.pagination {
+    --bs-pagination-color: #fff;
+    --bs-pagination-bg: #444;
+    --bs-pagination-hover-color: #fff;
+    --bs-pagination-hover-bg: #5a5a5a;
+    --bs-pagination-focus-color: #fff;
+    --bs-pagination-focus-bg: #5a5a5a;
+    --bs-pagination-active-color: #fff;
+    --bs-pagination-active-bg: #6c757d;
+    --bs-pagination-active-border-color: #6c757d;
+    --bs-pagination-disabled-color: #888;
+    --bs-pagination-disabled-bg: #2b2b2b;
+}

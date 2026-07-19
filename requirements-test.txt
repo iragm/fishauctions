@@ -4,14 +4,37 @@
 #
 #    pip-compile ./requirements-test.in
 #
+asgiref==3.11.1
+    # via daphne
 attrs==26.1.0
     # via
     #   outcome
+    #   service-identity
     #   trio
+    #   twisted
+autobahn==26.6.2
+    # via daphne
+automat==25.4.16
+    # via twisted
+cbor2==6.1.3
+    # via autobahn
 certifi==2026.6.17
     # via selenium
+cffi==2.1.0
+    # via
+    #   autobahn
+    #   cryptography
 cfgv==3.5.0
     # via pre-commit
+constantly==23.10.4
+    # via twisted
+cryptography==49.0.0
+    # via
+    #   autobahn
+    #   pyopenssl
+    #   service-identity
+daphne==4.2.2
+    # via -r requirements-test.in
 distlib==0.4.3
     # via virtualenv
 filelock==3.29.4
@@ -20,22 +43,39 @@ filelock==3.29.4
     #   virtualenv
 h11==0.16.0
     # via wsproto
+hyperlink==21.0.0
+    # via
+    #   autobahn
+    #   twisted
 identify==2.6.19
     # via pre-commit
 idna==3.18
-    # via trio
+    # via
+    #   hyperlink
+    #   trio
+    #   twisted
+incremental==24.11.0
+    # via twisted
+msgpack==1.2.1
+    # via autobahn
 nodeenv==1.10.0
     # via pre-commit
 outcome==1.3.0.post0
     # via
     #   trio
     #   trio-websocket
+packaging==26.2
+    # via incremental
 platformdirs==4.10.0
     # via
     #   python-discovery
     #   virtualenv
 pre-commit==4.6.0
     # via -r requirements-test.in
+pycparser==3.0
+    # via cffi
+pyopenssl==26.3.0
+    # via twisted
 pysocks==1.7.1
     # via urllib3
 python-discovery==1.4.2
@@ -46,6 +86,8 @@ ruff==0.15.20
     # via -r requirements-test.in
 selenium==4.45.0
     # via -r requirements-test.in
+service-identity==26.1.0
+    # via twisted
 sniffio==1.3.1
     # via trio
 sortedcontainers==2.4.0
@@ -56,8 +98,17 @@ trio==0.33.0
     #   trio-websocket
 trio-websocket==0.12.2
     # via selenium
+twisted[tls]==26.4.0
+    # via daphne
+txaio==26.6.1
+    # via autobahn
 typing-extensions==4.15.0
-    # via selenium
+    # via
+    #   pyopenssl
+    #   selenium
+    #   twisted
+ujson==5.13.0
+    # via autobahn
 urllib3[socks]==2.7.0
     # via selenium
 virtualenv==21.5.1
@@ -66,3 +117,5 @@ websocket-client==1.9.0
     # via selenium
 wsproto==1.3.2
     # via trio-websocket
+zope-interface==8.5
+    # via twisted

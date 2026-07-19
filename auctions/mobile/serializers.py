@@ -1,7 +1,9 @@
 from django.urls import reverse
 from rest_framework import serializers
 
-from auctions.models import MobileDevice
+from auctions.mobile.services.ar import MAX_DETECTIONS_PER_FRAME, MAX_FRAMES_PER_BATCH
+from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
+from auctions.models import MobileDevice, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -74,6 +76,8 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
     """Serialiser for MobileDevice registration / update."""
 
     device_uuid = serializers.UUIDField()
+    # FCM registration token. Optional so an app build without push still registers cleanly.
+    fcm_token = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = MobileDevice
@@ -83,6 +87,7 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
             "device_name",
             "platform",
             "app_version",
+            "fcm_token",
             "created_at",
             "last_seen",
         ]
@@ -94,6 +99,45 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
             msg = f"platform must be one of: {', '.join(sorted(allowed))}"
             raise serializers.ValidationError(msg)
         return value
+
+
+class MobileDeviceUnregisterSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/devices/unregister/."""
+
+    device_uuid = serializers.UUIDField()
+
+
+# ---------------------------------------------------------------------------
+# Label printing
+# ---------------------------------------------------------------------------
+
+
+class MobileLabelPrefsSerializer(serializers.ModelSerializer):
+    """The user's UserLabelPrefs plus the computed mismatch warnings.
+
+    Used by GET/PATCH /api/mobile/labels/prefs/. ``warnings`` is read-only and comes from the same
+    ``auctions.printing.label_prefs_warnings`` the web /printing/ page uses, so app and web agree.
+    """
+
+    warnings = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserLabelPrefs
+        fields = [
+            "print_method",
+            "preset",
+            "unit",
+            "label_width",
+            "label_height",
+            "empty_labels",
+            "print_border",
+            "warnings",
+        ]
+
+    def get_warnings(self, obj):
+        from auctions.printing import label_prefs_warnings
+
+        return label_prefs_warnings(obj)
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +219,61 @@ class CommandPaletteLogSerializer(serializers.Serializer):
     result_type = serializers.CharField(required=False, allow_blank=True, default="")
     result_url = serializers.CharField(required=False, allow_blank=True, default="")
     result_object_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+# ---------------------------------------------------------------------------
+# AR lot scanning
+# ---------------------------------------------------------------------------
+
+
+class ArDetectionSerializer(serializers.Serializer):
+    """One QR sighting inside a camera frame. Angle bounds are checked in the service (a junk
+    detection is dropped, not a 400), so only structure is validated here."""
+
+    lot = serializers.IntegerField()
+    bearing_deg = serializers.FloatField()
+    depression_deg = serializers.FloatField()
+    quality = serializers.FloatField(required=False, default=1.0)
+
+
+class ArFrameSerializer(serializers.Serializer):
+    """All detections seen in a single camera frame (they share a pose, so they constrain lots
+    relative to each other)."""
+
+    frame_id = serializers.CharField(max_length=32)
+    captured_at = serializers.DateTimeField()
+    detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
+
+
+class ArObservationBatchSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/ar/observations/."""
+
+    auction = serializers.CharField()
+    session_id = serializers.UUIDField()
+    # Device-reported horizontal camera FOV the bearings were computed against. Present ⇒ the batch's
+    # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
+    fov_hdeg = serializers.FloatField(required=False, allow_null=True)
+    frames = ArFrameSerializer(many=True, max_length=MAX_FRAMES_PER_BATCH)
+
+
+# ---------------------------------------------------------------------------
+# Offline mode (in-person sale)
+# ---------------------------------------------------------------------------
+
+
+class OfflineSyncSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/offline/sync/.
+
+    ``ops`` is deliberately validated loosely — as a list of free-form dicts — not with a per-type
+    serializer. The contract is per-op and never all-or-nothing: a malformed or conflicting op must
+    still let the rest of the batch apply, so structure/semantics are checked op-by-op in
+    ``auctions.mobile.services.offline`` (which returns a per-op status), not rejected here. Only the
+    batch envelope is enforced: an auction slug and at most ``MAX_OPS_PER_SYNC`` ops (the app chunks).
+    """
+
+    auction = serializers.CharField()
+    ops = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=True,
+        max_length=MAX_OPS_PER_SYNC,
+    )

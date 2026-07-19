@@ -12,11 +12,13 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 import datetime
 import os
+import sys
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fishauctions._env import env_has_real_value, parse_bool_env, require_secure_prod_secrets
+from fishauctions.firebase_config import load_firebase_client_config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
@@ -74,6 +76,49 @@ CSRF_TRUSTED_ORIGINS = [
     "https://" + os.environ.get("ALLOWED_HOST_3", ""),
 ]
 
+
+# Log files go to /home/logs, which docker-compose bind-mounts from the host's
+# ./logs directory -- so they survive container recreation (i.e. every deploy) and
+# can be grepped on the host without docker exec. (Django previously wrote to
+# /home/app/logs, a container-internal path: invisible from the host and wiped on
+# every redeploy.) If the mount is unwritable -- a host chown mistake -- fall back
+# to a writable dir with a loud stderr warning INSTEAD of letting the file handlers
+# raise at logging-setup time: that would crash-loop web AND both celery services
+# over log-file ownership, a far worse failure than losing file logs.
+def _first_writable_dir(candidates):
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(candidate, os.W_OK):
+            return candidate
+    return None
+
+
+_preferred_log_dir = Path("/home/logs")
+LOG_DIR = _first_writable_dir([_preferred_log_dir, Path("/home/app/logs"), BASE_DIR / "logs"])
+if LOG_DIR is None:
+    # Nothing writable at all: keep the preferred path so the handler's own
+    # startup error names the directory the operator should fix.
+    LOG_DIR = _preferred_log_dir
+elif LOG_DIR != _preferred_log_dir:
+    sys.stderr.write(
+        f"WARNING: {_preferred_log_dir} is not writable; log files will go to {LOG_DIR} instead.\n"
+        f"On the host, from the project root, run: sudo chown -R <PUID>:<PGID> ./logs (or rerun ./update.sh)\n"
+    )
+
+# web, celery worker, and celery beat share the /home/logs mount, so each service
+# writes its own files (root.log vs root-celery.log vs root-beat.log, set via
+# LOG_SERVICE_NAME in docker-compose.yaml): RotatingFileHandler is not
+# multiprocess-safe, and concurrent writers race on the rollover rename,
+# clobbering each other's backups. Within the web service several gunicorn
+# workers still share one file -- a pre-existing tradeoff that stays size-bounded
+# (each process enforces maxBytes on its own handle); worst case is an
+# occasionally garbled line, not unbounded growth.
+_log_service = os.environ.get("LOG_SERVICE_NAME", "")
+_log_suffix = f"-{_log_service}" if _log_service else ""
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -95,7 +140,7 @@ LOGGING = {
         "django_file": {
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/app/logs/django.log",
+            "filename": str(LOG_DIR / f"django{_log_suffix}.log"),
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",
@@ -103,7 +148,7 @@ LOGGING = {
         "root_file": {
             "level": os.getenv("LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/app/logs/root.log",
+            "filename": str(LOG_DIR / f"root{_log_suffix}.log"),
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",
@@ -273,6 +318,7 @@ TEMPLATES = [
                 "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
                 "auctions.context_processors.user_clubs",
+                "auctions.context_processors.label_print_method",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },
@@ -411,6 +457,17 @@ _site_domain_raw = os.environ.get("SITE_DOMAIN", "127.0.0.1").strip()
 _parsed_site_domain = urlsplit(_site_domain_raw if "://" in _site_domain_raw else f"//{_site_domain_raw}")
 EMAIL_ROUTING_DOMAIN = (_parsed_site_domain.hostname or _site_domain_raw).strip().lower()
 SES_ROUTE_EMAILS_ENABLED = POST_OFFICE_EMAIL_BACKEND == "django_ses.SESBackend" and bool(EMAIL_ROUTING_DOMAIN)
+# Firebase Cloud Messaging (mobile push). A path to (or the inline JSON of) a service-account key.
+# Absent ⇒ push is disabled globally and every notification falls back to email — the same
+# graceful-degradation pattern as SES_ROUTE_EMAILS_ENABLED. See auctions.notifications.push_configured.
+FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
+# Public Firebase *client* config for the mobile app, parsed from the config files that ship with the
+# mobile build (google-services.json for Android, GoogleService-Info.plist for iOS). Public values
+# only — never the service-account key above. Absent/unparseable files ⇒ that platform is omitted
+# from /api/mobile/config/. Served by auctions.mobile.views.MobileConfigView.
+FIREBASE_ANDROID_CONFIG_FILE = os.environ.get("FIREBASE_ANDROID_CONFIG_FILE", "").strip()
+FIREBASE_IOS_CONFIG_FILE = os.environ.get("FIREBASE_IOS_CONFIG_FILE", "").strip()
+FIREBASE_CLIENT_CONFIG = load_firebase_client_config(FIREBASE_ANDROID_CONFIG_FILE, FIREBASE_IOS_CONFIG_FILE)
 INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
@@ -481,6 +538,20 @@ THUMBNAIL_ALIASES = {
     },
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
+
+# Cloudflare Images (https://developers.cloudflare.com/images/)
+# When all three of account id, API token and account hash are set, images that have
+# been migrated (see the migrate_to_cloudflare_images management command) are served
+# from Cloudflare instead of local files, using named variants that mirror
+# THUMBNAIL_ALIASES above (see auctions/cloudflare_images.py).  Documented in .env.example.
+CLOUDFLARE_IMAGES_ACCOUNT_ID = os.environ.get("CLOUDFLARE_IMAGES_ACCOUNT_ID", "")
+CLOUDFLARE_IMAGES_API_TOKEN = os.environ.get("CLOUDFLARE_IMAGES_API_TOKEN", "")
+CLOUDFLARE_IMAGES_ACCOUNT_HASH = os.environ.get("CLOUDFLARE_IMAGES_ACCOUNT_HASH", "")
+# Optional: serve from your own (Cloudflare-proxied) domain instead of imagedelivery.net
+CLOUDFLARE_IMAGES_DOMAIN = os.environ.get("CLOUDFLARE_IMAGES_DOMAIN", "")
+CLOUDFLARE_IMAGES_ENABLED = bool(
+    CLOUDFLARE_IMAGES_ACCOUNT_ID and CLOUDFLARE_IMAGES_API_TOKEN and CLOUDFLARE_IMAGES_ACCOUNT_HASH
+)
 
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
@@ -910,6 +981,9 @@ REST_FRAMEWORK = {
         # Search-as-you-type: each query fires a search + a log call on a ~300ms debounce, so a fast
         # typer briefly peaks ~6 req/sec. 120/min tolerates that burst while capping sustained abuse.
         "mobile_search": "120/min",
+        # AR scanning: an active session ships a metadata fetch or an observation batch every few
+        # seconds. mobile_api's 1000/hour would starve it, so it gets its own generous scope.
+        "mobile_ar": "240/min",
     },
 }
 
