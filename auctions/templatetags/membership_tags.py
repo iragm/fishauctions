@@ -91,7 +91,7 @@ def google_wallet_save_url(member):
                 "defaultValue": {"language": "en-US", "value": club.name},
             },
             "header": {
-                "defaultValue": {"language": "en-US", "value": "Membership"},
+                "defaultValue": {"language": "en-US", "value": member.wallet_header_text},
             },
             "subheader": {
                 "defaultValue": {"language": "en-US", "value": member_name},

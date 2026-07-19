@@ -124,6 +124,13 @@ def _class_body(club) -> dict:
     # Note: per Google Wallet REST docs, `logo` and `hexBackgroundColor` are NOT
     # fields on GenericClass — they live on GenericObject. Setting them here is
     # silently ignored. See _object_visuals() and update_generic_object_for_member().
+    #
+    # cardTemplateOverride REPLACES the default card layout: only rows listed here
+    # show on the card front (everything in textModulesData still shows on the
+    # details screen). The membership_status row is what makes "Valid through ..."
+    # visible on the card; Google omits the row on objects without that module
+    # (clubs that don't run memberships). Class changes only reach Google when
+    # re-pushed — run `manage.py sync_google_wallet_classes` after editing.
     return {
         "id": _class_id_for_club(club),
         "classTemplateInfo": {
@@ -133,7 +140,14 @@ def _class_body(club) -> dict:
                         "oneItem": {
                             "item": {"firstValue": {"fields": [{"fieldPath": "object.textModulesData['member_id']"}]}}
                         }
-                    }
+                    },
+                    {
+                        "oneItem": {
+                            "item": {
+                                "firstValue": {"fields": [{"fieldPath": "object.textModulesData['membership_status']"}]}
+                            }
+                        }
+                    },
                 ]
             }
         },
@@ -210,6 +224,11 @@ def update_generic_object_for_member(member) -> bool:
     body = {
         "cardTitle": {
             "defaultValue": {"language": "en-US", "value": member.club.name},
+        },
+        # Keep the pass-type line live: "Active Paid Membership" / "Unpaid
+        # Membership" for dues-charging clubs, static "Membership" otherwise.
+        "header": {
+            "defaultValue": {"language": "en-US", "value": member.wallet_header_text},
         },
         "subheader": {
             "defaultValue": {"language": "en-US", "value": member_name},

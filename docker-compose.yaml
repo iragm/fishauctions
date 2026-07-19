@@ -217,6 +217,10 @@ services:
       # the root conf file is set for dev, but for production use:
       # NGINX_CONF='./nginx.prod.conf'
       # NGINX_CONF_LOCATION='/config/nginx/site-confs/default.conf'
+      # nginx.prod.conf is gitignored and rendered by update.sh. If compose runs
+      # before it exists, Docker creates the mount source as a DIRECTORY and swag
+      # silently serves its default config -- always deploy via ./update.sh
+      # (render_nginx_domain both renders and self-heals the directory case).
       - ${NGINX_CONF-./nginx.dev.conf}:${NGINX_CONF_LOCATION-/etc/nginx/nginx.conf}
       - ./swag:/config
       - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro

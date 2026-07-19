@@ -61,23 +61,68 @@ def is_configured() -> bool:
     )
 
 
+def _read_cert_file(path):
+    """Read a cert file, converting the two operator-error cases into clear messages:
+    a missing file and an unreadable one (host-copied files land root-owned in the
+    bind-mounted repo root — see check_apple_wallet)."""
+    try:
+        with path.open("rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        msg = f"Apple Wallet file {path} does not exist. Paths are relative to the repo root ({settings.BASE_DIR})."
+        raise ValueError(msg) from None
+    except PermissionError:
+        msg = (
+            f"Apple Wallet file {path} is not readable by the app user. "
+            f"Fix on the host from the project root: sudo chown {os.getuid()}:{os.getgid()} {path.name}"
+        )
+        raise ValueError(msg) from None
+
+
+def _load_wwdr_cert(data: bytes):
+    """Parse the WWDR intermediate from PEM or DER.
+
+    Apple distributes WWDR certs as DER (.cer); operators often convert to PEM.
+    Accept both so the download can be dropped in place unmodified.
+    """
+    try:
+        return x509.load_pem_x509_certificate(data)
+    except ValueError:
+        return x509.load_der_x509_certificate(data)
+
+
 @lru_cache(maxsize=1)
 def _load_signing_certs():
     """Load and cache the Pass Type ID cert/key plus the WWDR intermediate.
 
     Cached for the life of the process. If the operator rotates certs they need
     to bounce the worker (true of every dep we cache in-memory).
+
+    Raises ValueError with an operator-actionable message when a file is
+    missing/unreadable, the .p12 is incomplete, or the WWDR intermediate is not
+    the one that issued the Pass Type ID cert — iPhones silently refuse to add a
+    pass whose embedded chain doesn't verify, and validators report it as
+    "WWDR certificate missing", so fail loudly at signing time instead.
     """
     cert_path = settings.BASE_DIR / settings.APPLE_WALLET_CERT_FILE
     wwdr_path = settings.BASE_DIR / settings.APPLE_WALLET_WWDR_FILE
     password = (settings.APPLE_WALLET_CERT_PASSWORD or "").encode() or None
-    with cert_path.open("rb") as f:
-        private_key, signer_cert, _additional = pkcs12.load_key_and_certificates(f.read(), password)
+    private_key, signer_cert, _additional = pkcs12.load_key_and_certificates(_read_cert_file(cert_path), password)
     if private_key is None or signer_cert is None:
         msg = "Apple Wallet .p12 did not contain both a private key and a certificate."
         raise ValueError(msg)
-    with wwdr_path.open("rb") as f:
-        wwdr_cert = x509.load_pem_x509_certificate(f.read())
+    wwdr_cert = _load_wwdr_cert(_read_cert_file(wwdr_path))
+    try:
+        signer_cert.verify_directly_issued_by(wwdr_cert)
+    except Exception as exc:
+        msg = (
+            f"The WWDR certificate in {wwdr_path.name} (subject: {wwdr_cert.subject.rfc4514_string()}) "
+            f"did not issue the Pass Type ID certificate in {cert_path.name} "
+            f"(issuer: {signer_cert.issuer.rfc4514_string()}). Download the matching WWDR intermediate "
+            f"(usually G4: https://www.apple.com/certificateauthority/AppleWWDRCAG4.cer) — "
+            f"a mismatched chain makes iPhones refuse the pass ('WWDR certificate missing'). ({exc})"
+        )
+        raise ValueError(msg) from exc
     return private_key, signer_cert, wwdr_cert
 
 
