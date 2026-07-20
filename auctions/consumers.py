@@ -368,6 +368,11 @@ class AuctionConsumer(WebsocketConsumer):
         """When auction stats have been recalculated"""
         self.send(text_data=json.dumps({"type": "stats_updated"}))
 
+    def queue_updated(self, event):
+        """When the in-person lot queue changed (add/remove/reorder/lot sold): the Lot queue and
+        projector/kiosk screens re-fetch so the current lot tracks winners set on another device."""
+        self.send(text_data=json.dumps({"type": "queue_updated"}))
+
     def disconnect(self, close_code):
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(f"auctions_{self.pk}", self.channel_name)

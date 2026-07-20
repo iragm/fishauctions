@@ -994,6 +994,9 @@ REST_FRAMEWORK = {
         # AR scanning: an active session ships a metadata fetch or an observation batch every few
         # seconds. mobile_api's 1000/hour would starve it, so it gets its own generous scope.
         "mobile_ar": "240/min",
+        # Proximity check-in: the app pings its position at mount, on resume, and every 10 min. A few
+        # per 10 min plus resumes → 30/hour is comfortable while capping abuse.
+        "mobile_checkin": "30/hour",
     },
 }
 

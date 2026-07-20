@@ -191,6 +191,7 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
         captured_at = frame["captured_at"]
         if captured_at > now:
             captured_at = now  # client clock ahead of us
+        frame_yaw = frame.get("yaw_deg")  # every detection row of a frame stores the frame's yaw
         for det in frame["detections"]:
             lot_pk = det["lot"]
             if lot_pk not in valid_pks:
@@ -216,6 +217,7 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
                     depression_deg=depression,
                     quality=quality,
                     fov_calibrated=fov_calibrated,
+                    yaw_deg=frame_yaw,
                 )
             )
 
@@ -252,7 +254,7 @@ def positions_payload(auction, *, include_lot_details=False):
         has_pos = pos is not None
         if has_pos:
             unsold_with_position += 1
-            row = {"lot": lot.pk, "x": pos.x, "y": pos.y, "confidence": pos.confidence}
+            row = {"lot": lot.pk, "x": pos.x, "y": pos.y, "confidence": pos.confidence, "component": pos.component}
             if include_lot_details:
                 row["lot_number"] = str(lot.lot_number_display)
                 row["name"] = lot.lot_name

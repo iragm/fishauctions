@@ -394,6 +394,16 @@ urlpatterns = [
         name="auction_lot_queue_kiosk",
     ),
     path(
+        "auctions/<slug:slug>/volunteers/",
+        views.AuctionVolunteers.as_view(),
+        name="auction_volunteers",
+    ),
+    path(
+        "auctions/<slug:slug>/volunteers/<int:job_pk>/",
+        views.VolunteerJobAccept.as_view(),
+        name="auction_volunteer_job",
+    ),
+    path(
         "auctions/<slug:slug>/checkout",
         views.QuickCheckout.as_view(),
         name="auction_quick_checkout",

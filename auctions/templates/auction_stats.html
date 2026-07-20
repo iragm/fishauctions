@@ -740,6 +740,15 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
         <td>{{ compare_auction.number_of_lots_with_scanned_qr }}</td>
         {% endif %}
       </tr>
+      {% if not auction.is_online %}
+      <tr>
+        <td>Lots added to the selling queue</td>
+        <td>{{ auction.number_of_lots_added_to_queue }}</td>
+        {% if compare_auction %}
+        <td>{% if not compare_auction.is_online %}{{ compare_auction.number_of_lots_added_to_queue }}{% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
       {% if not auction.is_online and auction.lots_sold_per_minute %}
       <tr>
         <td>Average lots sold per minute</td>

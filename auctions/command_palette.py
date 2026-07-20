@@ -371,6 +371,48 @@ def _t_label_setup(user):
     ]
 
 
+def _t_auction_printing(user):
+    """Admin bulk label printing hub for the user's most recent admin auction (the /print/ page)."""
+    auction = _last_auction_admin(user)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("auction_printing", kwargs={"slug": auction.slug}),
+            "title": f"Print labels (whole auction) — {auction.title}",
+            "description": "Print or reprint lot labels for everyone in your auction",
+            "icon": "bi-printer",
+        }
+    ]
+
+
+def _t_print_unprinted_labels(user):
+    """Print just the not-yet-printed labels for the user's own lots in their most recent auction."""
+    auction = _last_auction_active(user)
+    if not auction:
+        return []
+    return [
+        {
+            "url": reverse("print_my_unprinted_labels", kwargs={"slug": auction.slug}),
+            "title": f"Print unprinted labels — {auction.title}",
+            "description": "Print only the labels you haven't printed yet",
+            "icon": "bi-printer",
+        }
+    ]
+
+
+def _t_club_barcode_labels(user):
+    """Print membership-card / bidder-paddle barcode labels for the user's club."""
+    return _clubs_items(
+        user,
+        "club_barcode_labels",
+        "Print barcodes",
+        "bi-upc-scan",
+        "permission_view",
+        "Print membership cards, bidder paddles and barcode stickers",
+    )
+
+
 def _t_bap(user):
     auction = _last_auction_active(user)
     if not auction or not auction.club:
@@ -615,6 +657,9 @@ DYNAMIC_TARGETS = {
     "last_auction:custom_fields": _t_auction_custom_fields,
     "last_auction:print_labels": _t_print_labels,
     "last_auction:label_setup": _t_label_setup,
+    "last_auction:auction_printing": _t_auction_printing,
+    "last_auction:print_unprinted": _t_print_unprinted_labels,
+    "clubs:barcode_labels": _t_club_barcode_labels,
     "last_auction:bap": _t_bap,
     "last_auction:invoice": _t_invoice,
     "last_auction:help": _t_auction_help,

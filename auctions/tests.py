@@ -3026,6 +3026,10 @@ class LotQueueViewTestCase(StandardTestCase):
         response = self.client.get(self.get_url())
         assert response.status_code == 200
         self.assertContains(response, "Lot queue")
+        # Multi-line {# #} comments leak into the page (Django only parses single-line {# #}); the
+        # queue template uses {% comment %} instead, so these explanatory notes must not render.
+        self.assertNotContains(response, "Reuse the shared barcode pipeline")
+        self.assertNotContains(response, "Kiosk / projector view")
 
     # --- adding --------------------------------------------------------------
     def test_add_by_qr_value(self):
@@ -3176,27 +3180,28 @@ class LotQueueViewTestCase(StandardTestCase):
 
     def test_notification_only_for_top_ten(self):
         self._login_admin()
-        # Fill positions 1-10 with already-processed unwatched entries.
+        # Fill positions 1-10 with unwatched lots already flagged as notified so they don't push.
         for i in range(10):
             filler = self._make_in_person_lot(f"filler {i}")
-            LotQueueEntry.objects.create(
-                auction=self.in_person_auction, lot=filler, order=i + 1, notification_sent=True
-            )
+            filler.coming_up_push_sent = True
+            filler.selling_push_notification_sent = True
+            filler.save()
+            LotQueueEntry.objects.create(auction=self.in_person_auction, lot=filler, order=i + 1)
         watched = self._make_in_person_lot("watched")
         self._watch_with_push(watched, self.user_with_no_lots)
         # Adding it at position 11 must NOT notify yet.
         with patch("auctions.views.send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"lot_pk": watched.pk})
         assert mock_notify.call_count == 0
-        watched_entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=watched)
-        assert watched_entry.notification_sent is False
+        watched.refresh_from_db()
+        assert watched.coming_up_push_sent is False
         # Remove the head so the watched lot moves into position 10 -> it now notifies once.
         head = LotQueueEntry.objects.filter(auction=self.in_person_auction).order_by("order").first()
         with patch("auctions.views.send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"action": "remove", "entry_id": head.pk})
         assert mock_notify.call_count == 1
-        watched_entry.refresh_from_db()
-        assert watched_entry.notification_sent is True
+        watched.refresh_from_db()
+        assert watched.coming_up_push_sent is True
 
     def test_notification_deduped_across_queue_then_view(self):
         """A lot that notified from the queue does not notify again when pulled up in ViewLotSimple."""
@@ -3227,9 +3232,68 @@ class LotQueueViewTestCase(StandardTestCase):
         with patch("auctions.views.send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
         assert mock_notify.call_count == 0
-        # The queue entry is still marked processed so it is never revisited.
+        # The lot is flagged as already sold-soon so it is never re-notified.
+        self.in_person_lot.refresh_from_db()
+        assert self.in_person_lot.selling_push_notification_sent is True
+
+    def test_coming_up_then_about_to_be_sold_overwrites(self):
+        """A lot ≤10 away gets a "coming up soon" push; reaching the head fires "about to be sold"
+        with the SAME notification tag, so the device overwrites the earlier one."""
+        self._login_admin()
+        watched = self._make_in_person_lot("watched")
+        self._watch_with_push(watched, self.user_with_no_lots)
+        # Put a filler at the head so `watched` lands at position 2 (coming up, not head yet).
+        filler = self._make_in_person_lot("filler")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": filler.pk})
+            self.client.post(self.get_url(), data={"lot_pk": watched.pk})
+        # Exactly one push so far -- the "coming up soon" for the watcher.
+        coming_up_calls = [c for c in mock_notify.call_args_list if c.kwargs["user"] == self.user_with_no_lots]
+        assert len(coming_up_calls) == 1
+        assert "coming up soon" in coming_up_calls[0].kwargs["payload"]["body"]
+        coming_up_tag = coming_up_calls[0].kwargs["payload"]["tag"]
+        watched.refresh_from_db()
+        assert watched.coming_up_push_sent is True
+        assert watched.selling_push_notification_sent is False
+        # Remove the filler -> watched becomes the head -> "about to be sold" fires and overwrites.
+        head_entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=filler)
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"action": "remove", "entry_id": head_entry.pk})
+        sold_calls = [c for c in mock_notify.call_args_list if c.kwargs["user"] == self.user_with_no_lots]
+        assert len(sold_calls) == 1
+        assert "about to be sold" in sold_calls[0].kwargs["payload"]["head"]
+        # Same tag -> the OS replaces the earlier notification rather than stacking a second one.
+        assert sold_calls[0].kwargs["payload"]["tag"] == coming_up_tag
+        watched.refresh_from_db()
+        assert watched.selling_push_notification_sent is True
+
+    # --- added_to_queue stat -------------------------------------------------
+    def test_adding_lot_sets_sticky_added_to_queue(self):
+        self._login_admin()
+        assert self.in_person_lot.added_to_queue is False
+        self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        self.in_person_lot.refresh_from_db()
+        assert self.in_person_lot.added_to_queue is True
+        assert self.in_person_auction.number_of_lots_added_to_queue == 1
+        # Removing the entry (or selling the lot) leaves the sticky flag/stat intact.
         entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=self.in_person_lot)
-        assert entry.notification_sent is True
+        self.client.post(self.get_url(), data={"action": "remove", "entry_id": entry.pk})
+        self.in_person_lot.refresh_from_db()
+        assert self.in_person_lot.added_to_queue is True
+        assert self.in_person_auction.number_of_lots_added_to_queue == 1
+
+    # --- websocket real-time refresh -----------------------------------------
+    def test_queue_mutation_broadcasts_websocket(self):
+        """Every queue mutation pokes the admin auction group so open kiosk screens re-fetch."""
+        self._login_admin()
+        fake_layer = MagicMock()
+        with patch("auctions.views.channels.layers.get_channel_layer", return_value=fake_layer):
+            with patch("auctions.views.async_to_sync", side_effect=lambda f: f):
+                self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
+        assert any(
+            call.args[0] == f"auctions_{self.in_person_auction.pk}" and call.args[1].get("type") == "queue_updated"
+            for call in fake_layer.group_send.call_args_list
+        )
 
 
 class AlternativeSplitLabelTests(StandardTestCase):
@@ -26296,6 +26360,21 @@ class CommandPaletteTests(StandardTestCase):
         titles = self._all_item_titles(resp)
         self.assertTrue(any("Set auction location" in t for t in titles))
 
+    def test_print_search_surfaces_more_label_pages(self):
+        # Task 4: "print" and "labels" should surface the auction /print/ hub's label pages, not
+        # just the user's own label print.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        for query in ("print", "labels"):
+            titles = self._all_item_titles(self.client.get(reverse("command_palette"), {"q": query}))
+            self.assertTrue(
+                any("Print labels (whole auction)" in t for t in titles), f"bulk-print page missing for q={query!r}"
+            )
+            self.assertTrue(
+                any("Print unprinted labels" in t for t in titles), f"unprinted-print page missing for q={query!r}"
+            )
+
     def test_search_returns_auctions_and_lots(self):
         self._login(self.user)
         resp = self.client.get(reverse("command_palette"), {"q": "online"})
@@ -29860,6 +29939,86 @@ class WalletHeaderTextTests(TestCase):
 
     def test_club_without_memberships_stays_static(self):
         self.assertEqual(self._member(membership_system="none", paid=False).wallet_header_text, "Membership")
+
+
+class WalletStatusTextTests(TestCase):
+    """wallet_status_text prints the expiration date on the card instead of letting
+    the wallet apps expire the pass programmatically (which auto-archives it)."""
+
+    def _member(self, membership_system="january_first", paid=True, expiration=None, last_paid=None):
+        from decimal import Decimal
+
+        from .models import Club, ClubMember
+
+        club = Club.objects.create(
+            name=f"Status club {membership_system} {paid} {expiration} {last_paid}",
+            membership_system=membership_system,
+            membership_annual_fee=Decimal(25),
+        )
+        if expiration is None and last_paid is None:
+            expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+        return ClubMember.objects.create(
+            club=club, name="M", membership_expiration_date=expiration, membership_last_paid=last_paid
+        )
+
+    def test_current_member_shows_valid_through(self):
+        expiration = timezone.now().date() + datetime.timedelta(days=30)
+        member = self._member(expiration=expiration)
+        self.assertEqual(member.wallet_status_text, f"Valid through {expiration.strftime('%-d %b %Y')}")
+
+    def test_lapsed_member_shows_printed_expiration_date(self):
+        """A lapsed membership prints its (past) expiration date, not just 'Unpaid/expired'."""
+        expiration = timezone.now().date() - datetime.timedelta(days=5)
+        member = self._member(expiration=expiration)
+        self.assertEqual(member.wallet_status_text, f"Expired {expiration.strftime('%-d %b %Y')}")
+
+    def test_never_paid_member_has_no_date(self):
+        from decimal import Decimal
+
+        from .models import Club, ClubMember
+
+        club = Club.objects.create(
+            name="Status club never paid", membership_system="rolling", membership_annual_fee=Decimal(25)
+        )
+        member = ClubMember.objects.create(club=club, name="M")
+        self.assertEqual(member.wallet_status_text, "Unpaid/expired")
+
+    def test_club_without_memberships_has_no_status(self):
+        self.assertIsNone(self._member(membership_system="none").wallet_status_text)
+
+    def test_google_object_patch_omits_valid_time_interval(self):
+        """No validTimeInterval in the PATCH body — that field auto-archives lapsed passes."""
+        from .google_wallet import update_generic_object_for_member
+
+        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        resp = MagicMock(status_code=200)
+        with override_settings(
+            GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+        ):
+            with patch("auctions.google_wallet.get_access_token", return_value="t"):
+                with patch("auctions.google_wallet.requests.patch", return_value=resp) as patch_mock:
+                    self.assertTrue(update_generic_object_for_member(member))
+        self.assertNotIn("validTimeInterval", patch_mock.call_args.kwargs["json"])
+
+    @override_settings(
+        APPLE_WALLET_CERT_FILE="x",
+        APPLE_WALLET_WWDR_FILE="y",
+        APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example",
+        APPLE_WALLET_TEAM_IDENTIFIER="TEAMID",
+        APPLE_WALLET_ORGANIZATION_NAME="",
+    )
+    def test_apple_pass_json_omits_expiration_date(self):
+        """No expirationDate in pass.json — that field greys out/archives lapsed passes."""
+        from .apple_wallet import _build_pass_json
+
+        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        with patch("auctions.apple_wallet.ensure_apple_pass_auth_token", return_value="tok"):
+            pass_json = _build_pass_json(member)
+        self.assertNotIn("expirationDate", pass_json)
+        statuses = [f["value"] for f in pass_json["generic"]["auxiliaryFields"] if f["key"] == "status"]
+        self.assertTrue(statuses and statuses[0].startswith("Expired "))
 
 
 @override_settings(

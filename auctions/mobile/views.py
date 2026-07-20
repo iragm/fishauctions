@@ -310,6 +310,9 @@ from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 from .permissions import IsMobileAuthenticated
 from .serializers import (
     ArObservationBatchSerializer,
+    CheckinJoinSerializer,
+    CheckinPingSerializer,
+    CheckinSetLocationSerializer,
     CommandPaletteLogSerializer,
     MobileClubSerializer,
     MobileDeviceSerializer,
@@ -323,6 +326,7 @@ from .serializers import (
     OfflineSyncSerializer,
 )
 from .services import ar as ar_service
+from .services import checkin as checkin_service
 from .services.auth import MobileAuthService
 from .services.devices import DeviceService
 from .services.labels import LabelService
@@ -1067,6 +1071,91 @@ class MobileArPositionsView(APIView):
         if auction is None:
             return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(ar_service.positions_payload(auction))
+
+
+# ---------------------------------------------------------------------------
+# Proximity check-in & welcome
+# ---------------------------------------------------------------------------
+
+
+class MobileCheckinPingView(APIView):
+    """POST /api/mobile/checkin/ping/ — the phone reports its position; the server decides everything.
+
+    Returns display-ready ``actions`` (join offer / check-in confirmation / admin location offer).
+    Never 404s for "nothing nearby" (that would trip the app's endpoint-missing degradation) — an
+    empty ``{"actions": []}`` means no nudge right now.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_checkin"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = CheckinPingSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        actions = checkin_service.evaluate_ping(
+            request.user,
+            serializer.validated_data["latitude"],
+            serializer.validated_data["longitude"],
+        )
+        return Response({"actions": actions})
+
+
+class MobileCheckinJoinView(APIView):
+    """POST /api/mobile/checkin/join/ — join the auction from the welcome prompt (no scrolling rules).
+
+    Idempotent; auto-checks-in on check-in-mode auctions. No distance re-check (the offer already
+    required it and phones drift), but the auction must still be inside the welcome window.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_checkin"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = CheckinJoinSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        auction = Auction.objects.filter(slug=serializer.validated_data["auction"], is_deleted=False).first()
+        if auction is None or auction.is_online:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not auction.in_welcome_window():
+            return Response(
+                {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        _tos, checked_in = checkin_service.join_auction(request.user, auction)
+        return Response({"joined": True, "checked_in": checked_in, "rules_url": auction.get_absolute_url()})
+
+
+class MobileCheckinSetLocationView(APIView):
+    """POST /api/mobile/checkin/set-location/ — an admin pins the auction's location from their phone."""
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_checkin"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = CheckinSetLocationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        auction = Auction.objects.filter(slug=serializer.validated_data["auction"], is_deleted=False).first()
+        if auction is None or auction.is_online:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not auction.permission_check(request.user):
+            return Response({"detail": "You are not an admin of this auction."}, status=status.HTTP_403_FORBIDDEN)
+        set_ok = checkin_service.set_auction_location(
+            auction,
+            request.user,
+            serializer.validated_data["latitude"],
+            serializer.validated_data["longitude"],
+        )
+        if not set_ok:
+            return Response(
+                {"detail": "This auction has no single pickup location to pin."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"set": True})
 
 
 # ---------------------------------------------------------------------------
