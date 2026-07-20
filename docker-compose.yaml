@@ -259,6 +259,12 @@ services:
       - URL=${SITE_DOMAIN}
       - VALIDATION=http
       - EMAIL=${ADMIN_EMAIL}
+      # ACME CA swag requests certs from. Empty = swag's default (Let's Encrypt).
+      # Prod runs zerossl since the 2026-07-20 incident: swag's init revoked every
+      # LE cert for the domain and new LE issuance was rate-limited for a week
+      # ("new certificates per exact set of identifiers"). Value lives in .env
+      # (untracked) so update.sh's `git restore .` can't strip it on deploy.
+      - CERTPROVIDER=${CERTPROVIDER-}
 
   selenium:
     container_name: selenium
