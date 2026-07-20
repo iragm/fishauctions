@@ -11254,6 +11254,12 @@ class LotObservation(models.Model):
     # start — same sign as the solver's θ). Null ⇒ the device gave no gyro data ("unknown", never
     # "didn't turn"). Every detection row of a frame stores that frame's yaw. Heading odometry.
     yaw_deg = models.FloatField(null=True, blank=True)
+    # Phone GPS fix at capture (WGS84 degrees), or null when the device had no fix. Every detection
+    # row of a frame stores that frame's fix. GPS is far too coarse to place individual lots, but it
+    # anchors the *base location of each disconnected island* so separately-scanned areas render
+    # roughly where they physically are instead of at arbitrary offsets (see ar_mapping).
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
 
     class Meta:
         indexes = [

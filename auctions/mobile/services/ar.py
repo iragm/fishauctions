@@ -201,6 +201,9 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
         if captured_at > now:
             captured_at = now  # client clock ahead of us
         frame_yaw = frame.get("yaw_deg")  # every detection row of a frame stores the frame's yaw
+        # …and the frame's GPS fix (serializer already nulled a bad/half/(0,0) fix).
+        frame_lat = frame.get("latitude")
+        frame_lon = frame.get("longitude")
         for det in frame["detections"]:
             lot_pk = det["lot"]
             if lot_pk not in valid_pks:
@@ -227,6 +230,8 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
                     quality=quality,
                     fov_calibrated=fov_calibrated,
                     yaw_deg=frame_yaw,
+                    latitude=frame_lat,
+                    longitude=frame_lon,
                 )
             )
 

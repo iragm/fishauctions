@@ -24,7 +24,14 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions.ar_mapping import ISLAND_GAP_M, Observation, solve_positions, update_positions_for_auction
+from auctions.ar_mapping import (
+    ISLAND_GAP_M,
+    M_PER_DEG_LAT,
+    M_PER_DEG_LON,
+    Observation,
+    solve_positions,
+    update_positions_for_auction,
+)
 from auctions.mobile.services import ar as ar_service
 from auctions.models import Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
 from auctions.tests import StandardTestCase
@@ -34,9 +41,10 @@ def _bearer(user):
     return {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(user).access_token}"}
 
 
-def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0, quality=1.0, fov=True):
+def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0, quality=1.0, fov=True, gps=None):
     """Exact synthetic sightings of ``lots`` (id -> (x, y)) from camera poses ``cams``
-    ((x, y, theta_rad)). ``h`` is the phone height above the label plane."""
+    ((x, y, theta_rad)). ``h`` is the phone height above the label plane. ``gps`` is an optional
+    ``(lat, lon)`` fix stamped on every frame of the session (for island-anchoring tests)."""
     now = now or timezone.now()
     captured = now - timedelta(hours=age_hours)
     obs = []
@@ -56,6 +64,8 @@ def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0
                     depression_deg=math.degrees(math.atan(h / r)),
                     quality=quality,
                     fov_calibrated=fov,
+                    latitude=gps[0] if gps else None,
+                    longitude=gps[1] if gps else None,
                 )
             )
     return obs
@@ -299,6 +309,61 @@ class ArComponentTests(TestCase):
         )
         sol = solve_positions(obs, {}, now=self.now)
         self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
+
+    def test_gps_anchors_disconnected_islands_by_location(self):
+        # Two disjoint scans ~100 m apart north-south. Without GPS they'd be marched ~20 m apart in x;
+        # with GPS their bases reflect the real separation (distance and direction).
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        lat0, lon0 = 40.0, -75.0
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0)
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
+        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
+        d = cb - ca
+        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
+        self.assertGreater(abs(d[1]), abs(d[0]) * 3)  # separation is mostly north (y), not east (x)
+
+    def test_gps_east_west_separation(self):
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        lat0, lon0 = 40.0, -75.0
+        dlon = 100.0 / (M_PER_DEG_LON * math.cos(math.radians(lat0)))  # 100 m east
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0 + dlon)
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
+        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
+        d = cb - ca
+        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
+        self.assertGreater(abs(d[0]), abs(d[1]) * 3)  # separation is mostly east (x)
+
+    def test_gps_island_sits_past_prior_map(self):
+        # A prior-anchored island fixes the map frame; a disconnected GPS island lands past it, never
+        # on top of it (GPS never disturbs the established map).
+        priors = {10: (0.0, 0.0), 11: (2.0, 0.0)}
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}  # 2 prior lots → prior island
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}  # cold GPS island
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(40.0, -75.0)
+        )
+        sol = solve_positions(obs, priors, now=self.now)
+        self.assertGreater(min(sol[k].x for k in b), max(sol[k].x for k in a))
+
+    def test_no_gps_keeps_marched_layout(self):
+        # Without GPS the disconnected islands still march side by side (unchanged behaviour).
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ax = [sol[k].x for k in a]
+        bx = [sol[k].x for k in b]
+        self.assertTrue(max(ax) < min(bx) or max(bx) < min(ax))
 
 
 class ArApiBaseTestCase(StandardTestCase):
@@ -648,6 +713,59 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         payload["frames"][0]["yaw_deg"] = 1080.0  # three left turns; cumulative + unwrapped, valid
         self._post(self.user, payload)
         self.assertEqual(LotObservation.objects.get(auction=self.auction).yaw_deg, 1080.0)
+
+    # --- GPS (island anchoring) ----------------------------------------------
+    def test_gps_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 40.12
+        payload["frames"][0]["longitude"] = -75.34
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        rows = LotObservation.objects.filter(auction=self.auction)
+        self.assertEqual({(r.latitude, r.longitude) for r in rows}, {(40.12, -75.34)})
+
+    def test_gps_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no lat/lon keys at all
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_zero_zero_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 0.0  # classic "no fix" sentinel
+        payload["frames"][0]["longitude"] = 0.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_out_of_range_dropped_not_400(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 200.0  # out of range
+        payload["frames"][0]["longitude"] = -75.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_half_supplied_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 40.0  # longitude missing → drop the whole fix
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):

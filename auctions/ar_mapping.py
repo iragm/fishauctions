@@ -31,6 +31,15 @@ Formulation (see the backend spec): one camera pose ``(x, y, θ)`` per distinct
   with ≥2 lots that already have stored positions is rigidly tied to the existing map frame; a
   component with fewer gets a cold-start gauge at an offset origin so islands never render
   overlapping. One scanning walk between two areas links their components into one.
+* **GPS island anchoring**: bearings/gyro fix each island's *internal* layout and orientation, but
+  say nothing about where one disconnected island sits relative to another — cold-start islands are
+  otherwise marched along +x in an arbitrary order. When observations carry a phone GPS fix, each
+  cold-start island's base is instead placed at its GPS centroid, converted to a local east/north
+  (ENU) metre frame (east→+x, north→+y) relative to the solve's mean fix. GPS gives position but no
+  heading, so this only *translates* islands (relative arrangement becomes roughly geographic,
+  north-up); within-island orientation stays bearing-derived. The GPS group is shifted to sit past
+  any prior-anchored island, so the established map never moves. Islands with no GPS fall back to the
+  marched layout. See :func:`_gps_cold_bases`.
 * **Gauge**: lots that already have a position get a weak prior pulling toward it (map doesn't
   rotate/flip between solves). A cold-start component pins its first landmark at its offset origin
   and its second on the +x axis.
@@ -74,15 +83,19 @@ GAUGE_WEIGHT = 1.0e3  # strong cold-start anchor (origin / +x axis)
 OUTLIER_FACTOR = 3.0  # drop observations with residual > factor × median, then re-solve
 DEFAULT_INIT_RANGE_M = 2.0  # init-only guess when depression gives no range
 ISLAND_GAP_M = 20.0  # gap between cold-start islands' bounding boxes so they never render overlapping
+M_PER_DEG_LAT = 110540.0  # metres per degree latitude (WGS84 mean); good enough for a hall-scale ENU
+M_PER_DEG_LON = 111320.0  # metres per degree longitude at the equator; scaled by cos(lat) in use
 
 # Normalised observation the solver consumes (DB-agnostic, so the solver is unit-testable).
 # ``yaw_deg`` is the phone's cumulative gyro heading at capture (ccw-positive about gravity, zero at
 # session start, same sign as θ); None ⇒ the device gave no gyro data ("unknown", never "no turn").
+# ``latitude``/``longitude`` are the phone's GPS fix at capture (WGS84 deg) or None ⇒ no fix; used
+# only to anchor disconnected islands' base locations (see ``_gps_cold_bases``).
 Observation = namedtuple(
     "Observation",
     ["lot_id", "session_id", "frame_id", "captured_at", "bearing_deg", "depression_deg", "quality", "fov_calibrated"]
-    + ["yaw_deg"],
-    defaults=(None,),
+    + ["yaw_deg", "latitude", "longitude"],
+    defaults=(None, None, None),
 )
 
 # One solved landmark. ``component`` is the solve-local island index (0-based, stable by lowest lot).
@@ -143,17 +156,20 @@ def _prepare(observations, now):
         depr_rad[k] = math.radians(obs.depression_deg)
         has_range[k] = obs.depression_deg > DEPRESSION_MIN_DEG
 
-    # captured_at, session and yaw per frame (for motion/heading chaining).
+    # captured_at, session, yaw and GPS per frame (for motion/heading chaining + island anchoring).
     frame_time = {}
     frame_session = {}
     frame_yaw = {}
+    frame_gps = {}
     for obs, _ in live:
         key = (str(obs.session_id), obs.frame_id)
         frame_time[key] = obs.captured_at
         frame_session[key] = str(obs.session_id)
-        # All detections of one frame share the frame's yaw; keep the first non-None seen.
+        # All detections of one frame share the frame's yaw/GPS; keep the first non-None seen.
         if frame_yaw.get(key) is None:
             frame_yaw[key] = obs.yaw_deg
+        if frame_gps.get(key) is None and obs.latitude is not None and obs.longitude is not None:
+            frame_gps[key] = (obs.latitude, obs.longitude)
 
     return {
         "live": live,
@@ -174,6 +190,7 @@ def _prepare(observations, now):
         "frame_time": frame_time,
         "frame_session": frame_session,
         "frame_yaw": frame_yaw,
+        "frame_gps": frame_gps,
     }
 
 
@@ -362,13 +379,56 @@ def _initial_guess(data, priors, components):
     return np.concatenate([cams.ravel(), lms.ravel(), heights]), gauges
 
 
+def _gps_cold_bases(data, components, running_x):
+    """World positions (ENU metres) to anchor each cold-start island whose frames carry a GPS fix.
+
+    Returns ``({component_index: np.array([east, north])}, running_x)``. Cold islands with no GPS
+    frame are omitted (the caller marches them along +x as before). The whole GPS group is translated
+    as one rigid block so it sits just past any prior-anchored island (its min-x → the incoming
+    ``running_x``) and is vertically centred (mean north → 0) — a pure translation that preserves the
+    islands' relative geography while never disturbing the established map. GPS gives no heading, so
+    only the base translation is anchored; within-island orientation stays bearing-derived. The
+    returned ``running_x`` is advanced past the group so non-GPS cold islands march after it.
+    """
+    frame_gps = data["frame_gps"]
+    if not frame_gps:
+        return {}, running_x
+
+    # ENU reference = mean of every fix in the solve (self-contained; the map is relative anyway).
+    lats = [ll[0] for ll in frame_gps.values()]
+    lons = [ll[1] for ll in frame_gps.values()]
+    lat0, lon0 = sum(lats) / len(lats), sum(lons) / len(lons)
+    cos_lat0 = math.cos(math.radians(lat0))
+
+    def enu(lat, lon):
+        return np.array([(lon - lon0) * M_PER_DEG_LON * cos_lat0, (lat - lat0) * M_PER_DEG_LAT])
+
+    frame_keys = data["frame_keys"]
+    raw = {}
+    for cidx, comp in enumerate(components):
+        if comp["mode"] != "cold":
+            continue
+        pts = [enu(*frame_gps[frame_keys[ci]]) for ci in comp["frames"] if frame_keys[ci] in frame_gps]
+        if pts:
+            raw[cidx] = np.mean(pts, axis=0)
+    if not raw:
+        return {}, running_x
+
+    centroids = np.array(list(raw.values()))
+    shift = np.array([running_x - float(centroids[:, 0].min()), -float(centroids[:, 1].mean())])
+    bases = {cidx: (c + shift) for cidx, c in raw.items()}
+    running_x = running_x + float(centroids[:, 0].max() - centroids[:, 0].min()) + ISLAND_GAP_M
+    return bases, running_x
+
+
 def _layout_components(data, components, priors, lms, cams):
-    """Classify each component and lay out cold-start ones at non-overlapping offset origins.
+    """Classify each component and lay out cold-start ones at non-overlapping origins.
 
     Mutates ``lms``/``cams`` in place for cold-start components (canonicalises rotation to put the
-    first anchor at the origin and the second on +x, then shifts the island beyond the running
-    bounding box). Returns ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components
-    rigidly tied to stored positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
+    first anchor at the origin and the second on +x, then shifts the island to its base — its GPS
+    centroid when the island's frames carry a fix, else beyond the running bounding box). Returns
+    ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components rigidly tied to stored
+    positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
     """
     lot_ids = data["lot_ids"]
     prior_ids = set(priors)
@@ -383,18 +443,23 @@ def _layout_components(data, components, priors, lms, cams):
             placed_max_x = mx if placed_max_x is None else max(placed_max_x, mx)
 
     running_x = (placed_max_x + ISLAND_GAP_M) if placed_max_x is not None else 0.0
+    # GPS-anchored bases for the cold islands that carry a fix (arranged as a group past the priors).
+    gps_bases, running_x = _gps_cold_bases(data, components, running_x)
 
     gauges = []
-    for comp in components:
+    for cidx, comp in enumerate(components):
         lms_in = comp["lms"]
         if comp["mode"] == "prior":
             gauges.append(("prior", [(j, float(px), float(py)) for j, (px, py) in comp["prior_in"]]))
             continue
+        gps_base = gps_bases.get(cidx)
         if len(lms_in) == 1:
             j1 = lms_in[0]
-            lms[j1] = np.array([running_x, 0.0])
-            gauges.append(("cold", j1, running_x, 0.0, None))
-            running_x += ISLAND_GAP_M
+            base = gps_base if gps_base is not None else np.array([running_x, 0.0])
+            lms[j1] = np.array([float(base[0]), float(base[1])])
+            gauges.append(("cold", j1, float(base[0]), float(base[1]), None))
+            if gps_base is None:
+                running_x += ISLAND_GAP_M
             continue
         # Two anchors: the two lowest lot-ids in the component (lms_in is sorted by landmark index,
         # which is lot-id order). Canonicalise: j1 → origin, j2 → +x axis.
@@ -406,15 +471,20 @@ def _layout_components(data, components, priors, lms, cams):
         pts = np.array([(lms[j] - p1) @ R.T for j in lms_in])
         min_x = float(pts[:, 0].min())
         max_x = float(pts[:, 0].max())
-        origin_x = running_x - min_x
+        if gps_base is not None:
+            # Land the island's landmark centroid on its GPS centroid (2D translate, no marching).
+            base = np.asarray(gps_base, dtype=float) - pts.mean(0)
+        else:
+            base = np.array([running_x - min_x, 0.0])
         for local_i, j in enumerate(lms_in):
-            lms[j] = np.array([pts[local_i, 0] + origin_x, pts[local_i, 1]])
+            lms[j] = np.array([pts[local_i, 0] + base[0], pts[local_i, 1] + base[1]])
         for ci in comp["frames"]:
-            cp = (np.array(cams[ci, :2]) - p1) @ R.T + np.array([origin_x, 0.0])
+            cp = (np.array(cams[ci, :2]) - p1) @ R.T + base
             cams[ci, 0], cams[ci, 1] = cp[0], cp[1]
             cams[ci, 2] = cams[ci, 2] - ang
-        gauges.append(("cold", j1, float(lms[j1, 0]), 0.0, j2))
-        running_x = origin_x + max_x + ISLAND_GAP_M
+        gauges.append(("cold", j1, float(lms[j1, 0]), float(lms[j1, 1]), j2))
+        if gps_base is None:
+            running_x = base[0] + max_x + ISLAND_GAP_M
     return gauges
 
 
@@ -747,6 +817,8 @@ def update_positions_for_auction(auction):
         "quality",
         "fov_calibrated",
         "yaw_deg",
+        "latitude",
+        "longitude",
     )
     observations = [
         Observation(
@@ -759,6 +831,8 @@ def update_positions_for_auction(auction):
             quality=r["quality"],
             fov_calibrated=r["fov_calibrated"],
             yaw_deg=r["yaw_deg"],
+            latitude=r["latitude"],
+            longitude=r["longitude"],
         )
         for r in rows
     ]

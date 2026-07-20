@@ -246,6 +246,11 @@ class ArFrameSerializer(serializers.Serializer):
     # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
     # solver uses it as heading odometry between frames.
     yaw_deg = serializers.FloatField(required=False, allow_null=True)
+    # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. Used only
+    # to anchor disconnected islands' base locations, so a coarse fix is fine — but the app should omit
+    # them (or send null) when it has no location permission or no fix, rather than sending (0, 0).
+    latitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
 
     def validate_yaw_deg(self, value):
@@ -254,6 +259,24 @@ class ArFrameSerializer(serializers.Serializer):
         if value is not None and abs(value) > 36000:
             return None
         return value
+
+    def validate(self, attrs):
+        # GPS is all-or-nothing and must be in range; an out-of-range or half-supplied fix is dropped
+        # (treated as "no fix") rather than 400-ing the batch, and (0, 0) is the classic "no fix"
+        # sentinel so we discard it too.
+        lat = attrs.get("latitude")
+        lon = attrs.get("longitude")
+        bad = (
+            lat is None
+            or lon is None
+            or not (-90.0 <= lat <= 90.0)
+            or not (-180.0 <= lon <= 180.0)
+            or (lat == 0.0 and lon == 0.0)
+        )
+        if bad:
+            attrs["latitude"] = None
+            attrs["longitude"] = None
+        return attrs
 
 
 class MobileWatchSerializer(serializers.Serializer):
