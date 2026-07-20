@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Help with {{ job.description }}{% endblock %}
+{% block content %}
+  <div class="container mt-4" style="max-width:560px;">
+    <h4><i class="bi bi-people"></i> {{ auction.title }} needs help</h4>
+    <div class="card mt-3">
+      <div class="card-body">
+        <h5 class="card-title">{{ job.description }}</h5>
+        <p class="card-text">
+          {% if job.bounty %}
+            <span class="badge bg-success text-dark fs-6">{{ auction.currency_symbol }}{{ job.bounty|floatformat:2 }} bounty</span>
+          {% else %}
+            <span class="badge bg-secondary fs-6">Volunteer</span>
+          {% endif %}
+        </p>
+        {% if job.canceled %}
+          <div class="alert alert-secondary mb-0">This job was canceled.</div>
+        {% elif job.is_full %}
+          <div class="alert alert-info mb-0">This job already has enough people.</div>
+        {% elif not has_tos %}
+          <div class="alert alert-warning text-dark">
+            You need to join this auction before you can sign up to help.
+          </div>
+          <a href="{{ rules_url }}" class="btn btn-primary">Join the auction</a>
+        {% elif already_signed_up %}
+          <div class="alert alert-success text-dark mb-0">You're signed up for this one. Thank you!</div>
+        {% else %}
+          <p class="text-muted">{{ job.spots_remaining }} spot{{ job.spots_remaining|pluralize }} left. Jobs are first come, first serve.</p>
+          <form method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-success text-dark"><i class="bi bi-hand-thumbs-up"></i> Sign up</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endblock %}

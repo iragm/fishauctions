@@ -52,6 +52,7 @@ from .models import (
     UserBan,
     UserData,
     UserLabelPrefs,
+    VolunteerJob,
     sanitize_summernote_html,
 )
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
@@ -4938,3 +4939,36 @@ class ClubMemberMergeReviewForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         add_bootstrap_classes(self)
+
+
+class VolunteerJobForm(forms.ModelForm):
+    """Admin form to ask for help with a job (Part 7). Bounty blank = volunteer."""
+
+    class Meta:
+        model = VolunteerJob
+        fields = ["description", "bounty", "people_needed"]
+        labels = {
+            "description": "Job",
+            "bounty": "Bounty",
+            "people_needed": "How many people do you need?",
+        }
+        help_texts = {
+            "bounty": "Leave blank for volunteer. Add an invoice adjustment to pay people for signing up for this job",
+            "people_needed": "Jobs are first come, first serve",
+        }
+        widgets = {
+            "description": forms.TextInput(attrs={"placeholder": "What do you need help with?"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["people_needed"].initial = 1
+        self.fields["bounty"].required = False
+        add_bootstrap_classes(self)
+
+    def clean_people_needed(self):
+        value = self.cleaned_data["people_needed"]
+        if value < 1:
+            msg = "You need at least one person"
+            raise forms.ValidationError(msg)
+        return value

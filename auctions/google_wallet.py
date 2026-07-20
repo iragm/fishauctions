@@ -192,14 +192,6 @@ def member_text_modules(member) -> list:
     return modules
 
 
-def member_valid_time_interval(member) -> dict | None:
-    """validTimeInterval end for a member, based on the effective expiration date, or None."""
-    expiration = member.effective_expiration_date
-    if not expiration:
-        return None
-    return {"end": {"date": f"{expiration.isoformat()}T23:59:59"}}
-
-
 def _object_id_for_member(member) -> str:
     return f"{settings.GOOGLE_WALLET_ISSUER_ID}.member_{member.pk}"
 
@@ -241,9 +233,10 @@ def update_generic_object_for_member(member) -> bool:
         },
         **_object_visuals(member.club, expired=member.wallet_status_is_expired),
     }
-    valid_time_interval = member_valid_time_interval(member)
-    if valid_time_interval:
-        body["validTimeInterval"] = valid_time_interval
+    # Deliberately no validTimeInterval: a past end date makes Google Wallet
+    # auto-archive the pass off the user's device. A lapsed membership instead
+    # keeps an active pass tinted red with an "Expired <date>" status line
+    # (see wallet_status_text) — we never programmatically expire the card.
     resp = requests.patch(
         f"{WALLET_API_BASE}/genericObject/{object_id}",
         json=body,

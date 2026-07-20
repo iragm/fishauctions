@@ -255,16 +255,16 @@ def _build_pass_json(member) -> dict:
             }
         ],
     }
-    # Membership status line: "Unpaid/expired" or "Valid through 1 Jan 2025".
+    # Membership status line: "Expired 1 Jan 2025" / "Valid through 1 Jan 2025".
     # None only when the club doesn't run memberships, leaving the pass unchanged.
     status_text = member.wallet_status_text
     if status_text:
         pass_json["generic"]["auxiliaryFields"].append({"key": "status", "label": "Status", "value": status_text})
-    expiration = member.effective_expiration_date
-    if expiration:
-        # Apple wants ISO 8601 with timezone offset; treat the date as end-of-day UTC.
-        # Apple greys out an expired pass automatically once this date passes.
-        pass_json["expirationDate"] = f"{expiration.isoformat()}T23:59:59Z"
+    # Deliberately no expirationDate: Apple greys out and archives an expired pass
+    # once that date passes, removing it from the user's device. A lapsed membership
+    # instead keeps a live pass tinted red with an "Expired <date>" status line — we
+    # never programmatically expire the card. Genuine revocation (barcodes turned
+    # off, member deactivated) still voids the pass below.
     if not club.show_member_barcode or member.is_deleted:
         pass_json["voided"] = True
     return pass_json

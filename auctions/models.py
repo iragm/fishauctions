@@ -1571,14 +1571,20 @@ class ClubMember(ContactRecord):
 
         None when the club doesn't run memberships — in that case passes omit the
         status entirely and behave exactly as before. Otherwise returns
-        "Unpaid/expired" when dues are lapsed or never paid, or
-        "Valid through 1 Jan 2025" using the effective expiration date.
+        "Expired 1 Jan 2025" (or "Unpaid/expired" when no date is known) once dues
+        are lapsed, or "Valid through 1 Jan 2025" while current. We print the
+        expiration date as text rather than letting the wallet apps expire the
+        pass programmatically — that auto-archives the card off the user's device,
+        which we never want (see google_wallet / apple_wallet: no validTimeInterval,
+        no expirationDate).
         """
         if self.club.membership_system == "none":
             return None
-        if not self.is_paid_member:
-            return "Unpaid/expired"
         expiration = self.effective_expiration_date
+        if not self.is_paid_member:
+            if expiration:
+                return f"Expired {expiration.strftime('%-d %b %Y')}"
+            return "Unpaid/expired"
         if expiration:
             return f"Valid through {expiration.strftime('%-d %b %Y')}"
         return "Valid"
@@ -2453,6 +2459,8 @@ class Auction(models.Model):
     only_approved_bidders.help_text = "Require admin approval before users can bid.  This only applies to new users: Users that you manually add and users who have a paid invoice in a past auctions will be allowed to bid."
     require_phone_number = models.BooleanField(default=False)
     require_phone_number.help_text = "Require users to have entered a phone number before they can join this auction"
+    exact_location_set = models.BooleanField(default=False)
+    exact_location_set.help_text = "The location was pinned from a phone at the venue (or confirmed exact)."
     email_users_when_invoices_ready = models.BooleanField(default=True)
     invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
     invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
@@ -3082,6 +3090,21 @@ class Auction(models.Model):
         """True when this auction adds club members as they are checked in at an event."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
 
+    def in_welcome_window(self, now=None):
+        """True during the proximity "welcome to the auction" window: from 3 h before the start
+        until the auction has pretty much wrapped up.
+
+        The tail uses date_end (the online-bidding / dynamic end) when set, else a date_start + 12 h
+        fallback for a plain in-person event — the intent is just to stop welcoming people once the
+        auction is over."""
+        now = now or timezone.now()
+        if not self.date_start:
+            return False
+        if now < self.date_start - datetime.timedelta(hours=3):
+            return False
+        end = self.date_end or (self.date_start + datetime.timedelta(hours=12))
+        return now <= end
+
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
         if self.created_by == user:
@@ -3666,6 +3689,12 @@ class Auction(models.Model):
             .distinct()
             .count()
         )
+
+    @property
+    def number_of_lots_added_to_queue(self):
+        # How much the in-person "Lot queue" tool was used: count lots that were ever queued.
+        # Sticky Lot.added_to_queue, so it survives the queue entry being popped when the lot sells.
+        return self.lots_qs.filter(added_to_queue=True).count()
 
     @property
     def labels_qs(self):
@@ -4613,17 +4642,23 @@ class Auction(models.Model):
         """
         all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
         logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
-        # Sessions that ever appear on a logged-in row belong to a counted user; drop them so the
-        # same person isn't also counted as an anonymous session (robust even if a future code
-        # path stores both user and session_id on one row).
-        sessions_with_a_user = all_views.filter(user__isnull=False, session_id__isnull=False).values("session_id")
-        anonymous = (
-            all_views.filter(user__isnull=True, session_id__isnull=False)
-            .exclude(session_id__in=sessions_with_a_user)
-            .values("session_id")
+        # Count anonymous sessions that never also appear on a logged-in row. Expressing this as
+        # ``.exclude(session_id__in=<subquery over all_views>)`` makes MariaDB plan a
+        # ``NOT IN (SELECT ...)`` anti-join that repeatedly full-scans auctions_pageview -- on a
+        # large auction that ran for hours and pinned DB CPU. Instead pull the two distinct
+        # session-id sets and diff them in Python: each side is a single ``DISTINCT`` scan, and the
+        # sets are bounded by the number of distinct sessions (not the number of pageview rows).
+        user_sessions = set(
+            all_views.filter(user__isnull=False, session_id__isnull=False)
+            .values_list("session_id", flat=True)
             .distinct()
-            .count()
         )
+        anonymous_sessions = set(
+            all_views.filter(user__isnull=True, session_id__isnull=False)
+            .values_list("session_id", flat=True)
+            .distinct()
+        )
+        anonymous = len(anonymous_sessions - user_sessions)
         return {"total": logged_in + anonymous, "logged_in": logged_in, "anonymous": anonymous}
 
     def get_stat_misc(self):
@@ -5966,10 +6001,23 @@ class Lot(models.Model):
     donation = models.BooleanField(default=False)
     donation.help_text = "All proceeds from this lot will go to the club"
     watch_warning_email_sent = models.BooleanField(default=False)
+    coming_up_push_sent = models.BooleanField(default=False)
+    coming_up_push_sent.help_text = (
+        "Set once this lot's watchers got the 'coming up soon -- N lots away' push while it sat in the "
+        "top 10 of the in-person queue. Deduped so that push fires at most once per lot; the later "
+        "'about to be sold' push (selling_push_notification_sent) overwrites it on the device."
+    )
     selling_push_notification_sent = models.BooleanField(default=False)
     selling_push_notification_sent.help_text = (
-        "Set once this lot has notified its watchers that it's being sold or is coming up in the queue, "
-        "so watchers only ever get one 'coming up' push per lot."
+        "Set once this lot's watchers got the final 'about to be sold' push (it reached the head of "
+        "the queue or was pulled up on the set-winners screen). Deduped so that push fires at most "
+        "once per lot; shares a notification tag with the 'coming up soon' push so it overwrites it."
+    )
+    added_to_queue = models.BooleanField(default=False)
+    added_to_queue.help_text = (
+        "Set once this lot has ever been added to the in-person selling queue. Sticky (never unset "
+        "when the queue entry is removed or the lot sells) so the auction stats can report how much "
+        "the queue was used."
     )
     # seller and buyer invoice are no longer needed and can safely be removed in a future migration
     seller_invoice = models.ForeignKey(
@@ -11197,6 +11245,10 @@ class LotObservation(models.Model):
     depression_deg = models.FloatField()  # ray angle below horizontal (gravity-referenced), +down
     quality = models.FloatField(default=1.0)  # 0..1, detection sharpness
     fov_calibrated = models.BooleanField(default=False)  # bearings from device-reported FOV?
+    # Phone's cumulative gyro heading at capture (deg, ccw-positive about gravity, zero at session
+    # start — same sign as the solver's θ). Null ⇒ the device gave no gyro data ("unknown", never
+    # "didn't turn"). Every detection row of a frame stores that frame's yaw. Heading odometry.
+    yaw_deg = models.FloatField(null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -11222,10 +11274,82 @@ class LotPosition(models.Model):
     y = models.FloatField()
     confidence = models.FloatField(default=0)  # 0..1
     observation_count = models.IntegerField(default=0)
+    # Persistent island id: lots in the same connected component share it. Disconnected islands get
+    # distinct ids (and non-overlapping coordinates); when a scanning walk links two islands they
+    # merge and every row is rewritten with the surviving (smaller) id. The app treats positions in a
+    # different component than a target as unmapped (no cross-island fixes / ghost anchors).
+    component = models.IntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"pos lot={self.lot_id} ({self.x:.2f}, {self.y:.2f})"
+
+
+class CheckinNudge(models.Model):
+    """One-shot bookkeeping: which proximity nudge was already issued to whom.
+
+    Ensures a user who dismisses the sheet isn't re-nudged on every ping;
+    unique per (user, auction, kind)."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+    kind = models.CharField(max_length=20)  # join_offer | checked_in | set_location_offer
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "auction", "kind"], name="one_nudge_per_kind")]
+
+    def __str__(self):
+        return f"nudge {self.kind} user={self.user_id} auction={self.auction_id}"
+
+
+class VolunteerJob(models.Model):
+    """A job an auction admin needs help with — announced to app users who can volunteer to do it.
+
+    A bounty (optional) is applied as an invoice discount to whoever signs up. Signups are
+    first-come, first-serve up to people_needed."""
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="volunteer_jobs")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    description = models.CharField(max_length=200)  # "Job" on the form
+    bounty = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    people_needed = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    canceled = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"volunteer job: {self.description}"
+
+    @property
+    def signups_count(self):
+        return self.signups.count()
+
+    @property
+    def is_full(self):
+        return self.signups_count >= self.people_needed
+
+    @property
+    def spots_remaining(self):
+        return max(0, self.people_needed - self.signups_count)
+
+
+class VolunteerSignup(models.Model):
+    """One person signing up for a VolunteerJob. Hangs off AuctionTOS (not User) because the bounty is
+    an invoice adjustment and invoices key off the in-auction identity."""
+
+    job = models.ForeignKey(VolunteerJob, on_delete=models.CASCADE, related_name="signups")
+    auctiontos = models.ForeignKey(AuctionTOS, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    invoice_adjustment = models.ForeignKey("InvoiceAdjustment", null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["job", "auctiontos"], name="one_signup_per_job")]
+
+    def __str__(self):
+        return f"{self.auctiontos} signed up for {self.job}"
 
 
 class LotQueueEntry(models.Model):
@@ -11234,18 +11358,14 @@ class LotQueueEntry(models.Model):
     Admins build this on the "Lot queue" page by scanning lot QR codes or typing lot numbers.
     The set-lot-winners page pulls the head of the queue automatically, and a kiosk view projects
     the current lot for the room. Watchers of a lot get a "coming up soon" push once it reaches the
-    top of the queue (see notification_sent below and Lot.selling_push_notification_sent)."""
+    top 10 of the queue, then an "about to be sold" push when it reaches the head; both dedupe on the
+    per-lot flags Lot.coming_up_push_sent / Lot.selling_push_notification_sent."""
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
     lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="queue_entry")
     order = models.PositiveIntegerField()
     added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     createdon = models.DateTimeField(auto_now_add=True)
-    notification_sent = models.BooleanField(default=False)
-    notification_sent.help_text = (
-        "Set once this entry has been processed for a 'coming up soon' push while in the top of the "
-        "queue, so each queue entry is only ever considered once regardless of dedupe on the lot."
-    )
 
     class Meta:
         ordering = ["auction", "order"]

@@ -175,6 +175,7 @@ from .forms import (
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
+    VolunteerJobForm,
     validate_image_url,
 )
 from .helper_functions import bin_data, get_currency_symbol
@@ -222,6 +223,8 @@ from .models import (
     UserIgnoreCategory,
     UserInterestCategory,
     UserLabelPrefs,
+    VolunteerJob,
+    VolunteerSignup,
     Watch,
     add_price_info,
     distance_to,
@@ -4851,31 +4854,40 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
-    """Send a one-time "coming up soon / about to be sold" web push to a lot's watchers.
+    """Send a "coming up soon" or "about to be sold" web push to a lot's watchers.
 
-    Deduped per lot via ``Lot.selling_push_notification_sent``: each lot notifies its watchers at
-    most once, whether the trigger is the lot being pulled up on the set-winners screen
-    (``position=None``) or the lot reaching the top of the in-person lot queue (``position`` given).
-    This also fixes the previous re-fire-on-every-view behavior of ViewLotSimple.
+    Two phases, each deduped once per lot, sharing one notification tag so the second overwrites the
+    first on the device rather than stacking a duplicate alert:
 
-    ``request_user`` (the admin viewing/projecting the lot) is excluded from the push so their own
-    screen doesn't light up. ``position`` is the lot's 1-indexed spot in the queue and only changes
-    the wording. Returns True when a fresh notification pass ran, False when it was skipped as a
-    dedupe. The transient websocket "about to be sold" chat message is handled by the caller, not
-    here, because it is intentionally not deduped."""
+    - **Coming up soon** (``position`` given and > 1): fired while the lot sits at position 2-10 of
+      the in-person queue. Deduped via ``Lot.coming_up_push_sent``.
+    - **About to be sold** (``position`` is 1 or None): fired when the lot reaches the head of the
+      queue, or is pulled up on the set-winners screen (``position=None``). Deduped via
+      ``Lot.selling_push_notification_sent``. This fires even after the coming-up push and, sharing
+      the tag, overwrites it -- so a watcher who saw "coming up soon" now sees "about to be sold".
+
+    ``request_user`` (the admin viewing/projecting the lot) is excluded so their own screen doesn't
+    light up. Returns True when a push pass actually ran, False when skipped as a dedupe. The
+    transient websocket "about to be sold" chat message is handled by the caller, not here."""
     if not lot or lot.sold or not lot.auction:
         return False
-    if lot.selling_push_notification_sent:
-        return False
-    lot.selling_push_notification_sent = True
-    lot.save(update_fields=["selling_push_notification_sent"])
-    if position and position > 1:
+    coming_up = position is not None and position > 1
+    if coming_up:
+        # Don't downgrade to "coming up" once the stronger "about to be sold" push already went out.
+        if lot.coming_up_push_sent or lot.selling_push_notification_sent:
+            return False
+        lot.coming_up_push_sent = True
+        lot.save(update_fields=["coming_up_push_sent"])
         head = f"{lot.lot_name} is coming up soon"
         body = (
             f"Lot {lot.lot_number_display} is coming up soon -- {position} lots away. Don't miss out!  "
             "You're getting this notification because you watched this lot."
         )
     else:
+        if lot.selling_push_notification_sent:
+            return False
+        lot.selling_push_notification_sent = True
+        lot.save(update_fields=["selling_push_notification_sent"])
         head = f"{lot.lot_name} is about to be sold"
         body = (
             f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
@@ -4915,21 +4927,38 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     return True
 
 
-def process_queue_notifications(auction):
-    """Notify watchers of any not-yet-notified lot now in the top 10 of the queue.
+def broadcast_queue_update(auction):
+    """Poke the admin auction websocket group so any open Lot queue / kiosk screen re-fetches.
 
-    Each queue entry is processed at most once (LotQueueEntry.notification_sent), and each lot
-    pushes at most once total (Lot.selling_push_notification_sent, shared with the set-winners
-    trigger). Call this after any queue mutation (add/remove/reorder/pop-on-sale)."""
+    Fires after every queue mutation (add/remove/reorder/pop-on-sale), so the projector/kiosk
+    view advances to the next lot in real time as winners are set on another device -- no waiting
+    on the slow htmx poll fallback. Best-effort: a channel-layer hiccup must not fail the mutation."""
+    try:
+        channel_layer = channels.layers.get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"auctions_{auction.pk}",
+            {"type": "queue_updated"},
+        )
+    except Exception:
+        logger.exception("Failed to send queue_updated websocket for auction %s", auction.pk)
+
+
+def process_queue_notifications(auction):
+    """Notify watchers of any lot now in the top 10 of the queue, and poke any open queue/kiosk
+    screens to refresh over the websocket.
+
+    Each lot at position 2-10 gets one "coming up soon" push; the head lot (position 1) gets the
+    "about to be sold" push, which overwrites the coming-up one. Both dedupe on the per-lot flags
+    (Lot.coming_up_push_sent / Lot.selling_push_notification_sent), so re-running this after every
+    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies."""
     entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
     for index, entry in enumerate(entries, start=1):
         if index > 10:
             break
-        if entry.notification_sent or entry.lot.sold:
+        if entry.lot.sold:
             continue
         notify_watchers_lot_selling_soon(entry.lot, position=index)
-        entry.notification_sent = True
-        entry.save(update_fields=["notification_sent"])
+    broadcast_queue_update(auction)
 
 
 def queue_head_lot(auction):
@@ -5012,6 +5041,11 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
             return f"Lot {lot.lot_number_display} is already in the queue"
         max_order = LotQueueEntry.objects.filter(auction=self.auction).aggregate(m=Max("order"))["m"] or 0
         LotQueueEntry.objects.create(auction=self.auction, lot=lot, order=max_order + 1, added_by=self.request.user)
+        # Sticky flag for the "how much was the queue used" auction stat: never unset, even after the
+        # entry is removed or the lot sells.
+        if not lot.added_to_queue:
+            lot.added_to_queue = True
+            lot.save(update_fields=["added_to_queue"])
         process_queue_notifications(self.auction)
         return None
 
@@ -5097,8 +5131,9 @@ class LotQueueView(LotQueueMixin, TemplateView):
 class LotQueueKioskView(LotQueueMixin, TemplateView):
     """Kiosk (projector) partial: the current head lot rendered big plus the next few queued lots.
 
-    Polled by the queue page via htmx so it updates as lots are sold on another device. Renders the
-    head lot with view_lot_simple.html WITHOUT ViewLotSimple's notification side effect."""
+    Re-fetched by the queue page over the admin auction websocket (queue_updated) as lots are sold
+    on another device, with a slow htmx poll as a fallback. Renders the head lot with
+    view_lot_simple.html WITHOUT ViewLotSimple's notification side effect."""
 
     template_name = "auctions/lot_queue_kiosk.html"
 
@@ -5109,6 +5144,211 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
         context["lot"] = entries[0].lot if entries else None
         context["upcoming"] = [entry.lot for entry in entries[1:6]]
         return context
+
+
+# ── Volunteers (Part 7): recruit help for a job ────────────────────────────────────────────────
+
+
+def volunteer_eligible_tos(auction):
+    """AuctionTOS rows we can ask for help: real users holding a registered mobile device who are
+    checked in (in check-in-mode auctions) or simply joined (otherwise)."""
+    qs = AuctionTOS.objects.filter(auction=auction, user__isnull=False)
+    if auction.use_check_in_mode:
+        qs = qs.filter(checked_in__isnull=False)
+    return qs.filter(user__mobile_devices__isnull=False).distinct()
+
+
+def volunteer_helper_count(auction):
+    """How many app users can be notified right now (the tooltip count)."""
+    return volunteer_eligible_tos(auction).count()
+
+
+def _volunteer_job_url(job):
+    from django.contrib.sites.models import Site
+
+    domain = Site.objects.get_current().domain
+    path = reverse("auction_volunteer_job", kwargs={"slug": job.auction.slug, "job_pk": job.pk})
+    return f"https://{domain}{path}"
+
+
+def _volunteer_notification_text(job):
+    body = job.description
+    if job.bounty:
+        body += f" (${job.bounty:.0f} bounty)"
+    return f"{job.auction.title} needs help", body
+
+
+def notify_volunteers_of_job(job):
+    """Fan out a job announcement to every eligible helper through the Part 2 push choke point.
+
+    While FCM is inert this degrades to the existing email fallback, exactly like every other
+    notification. Uses a per-job collapse tag so the later 'filled' retract can target it."""
+    from post_office import mail
+
+    from auctions.notifications import CATEGORY_AUCTION_ADMIN, notify_user
+
+    title, body = _volunteer_notification_text(job)
+    url = _volunteer_job_url(job)
+    collapse_key = f"volunteer_job_{job.pk}"
+    seen = set()
+    for tos in volunteer_eligible_tos(job.auction).select_related("user"):
+        user = tos.user
+        if user.pk in seen:
+            continue
+        seen.add(user.pk)
+
+        def _send_email(u=user):
+            if not u.email:
+                return
+            try:
+                mail.send(u.email, subject=title, message=f"{body}\n\nTap to help: {url}")
+            except Exception:
+                logger.exception("Failed to email volunteer request to %s", u.pk)
+
+        notify_user(
+            user,
+            category=CATEGORY_AUCTION_ADMIN,
+            title=title,
+            body=body,
+            url=url,
+            send_email=_send_email,
+            auction_pk=job.auction.pk,
+            collapse_key=collapse_key,
+        )
+
+
+def withdraw_volunteer_notification(job):
+    """Retract a job's announcement once it fills or is canceled (per-job collapse tag).
+
+    The app-side data-only handler that cancels the displayed notification is future FCM work (see
+    PUSH.md); until then the accept page is the source of truth — a stale tap is told the job is full.
+    First-come-first-serve is enforced at signup time, never by the notification, so this is
+    best-effort by design."""
+    logger.info("Volunteer job %s filled/canceled; retracting its announcement (tag volunteer_job_%s)", job.pk, job.pk)
+
+
+class AuctionVolunteers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Admin ribbon page: ask app users for help with a job, and review past jobs. In-person only."""
+
+    template_name = "auctions/auction_volunteers.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        _ = self.can_add_edit_people  # enforces admin (raises PermissionDenied otherwise)
+        if self.auction.is_online:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["form"] = kwargs.get("form") or VolunteerJobForm()
+        context["jobs"] = self.auction.volunteer_jobs.all()
+        context["helper_count"] = volunteer_helper_count(self.auction)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        redirect_url = reverse("auction_volunteers", kwargs={"slug": self.auction.slug})
+        if request.POST.get("action") == "cancel":
+            job = get_object_or_404(VolunteerJob, pk=request.POST.get("job_pk"), auction=self.auction)
+            if not job.canceled:
+                job.canceled = True
+                job.save(update_fields=["canceled"])
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Canceled volunteer job: {job.description}", user=request.user
+                )
+                withdraw_volunteer_notification(job)
+            return redirect(redirect_url)
+        form = VolunteerJobForm(request.POST)
+        if form.is_valid():
+            job = form.save(commit=False)
+            job.auction = self.auction
+            job.created_by = request.user
+            job.save()
+            bounty_txt = f" (bounty ${job.bounty:.0f})" if job.bounty else ""
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Asked for {job.people_needed} people: {job.description}{bounty_txt}",
+                user=request.user,
+            )
+            notify_volunteers_of_job(job)
+            messages.success(request, "Your request for help has been sent.")
+            return redirect(redirect_url)
+        return self.render_to_response(self.get_context_data(form=form))
+
+
+class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """The accept page a job notification opens: any joined user can sign up while spots remain."""
+
+    template_name = "auctions/volunteer_job_accept.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.get("slug", ""))
+        self.job = get_object_or_404(VolunteerJob, pk=kwargs.get("job_pk"), auction=self.auction)
+        return super().dispatch(request, *args, **kwargs)
+
+    def _tos(self):
+        return AuctionTOS.objects.filter(auction=self.auction, user=self.request.user).first()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        tos = self._tos()
+        context["auction"] = self.auction
+        context["job"] = self.job
+        context["has_tos"] = tos is not None
+        context["already_signed_up"] = bool(
+            tos and VolunteerSignup.objects.filter(job=self.job, auctiontos=tos).exists()
+        )
+        context["rules_url"] = self.auction.get_absolute_url()
+        return context
+
+    def post(self, request, *args, **kwargs):
+        redirect_url = reverse("auction_volunteer_job", kwargs={"slug": self.auction.slug, "job_pk": self.job.pk})
+        tos = self._tos()
+        if tos is None:
+            messages.info(request, "Join the auction first, then you can sign up to help.")
+            return redirect(redirect_url)
+        if self.job.canceled:
+            messages.info(request, "This job was canceled.")
+            return redirect(redirect_url)
+        filled = False
+        with transaction.atomic():
+            # Lock the job row so two people racing for the last spot can't both win.
+            job = VolunteerJob.objects.select_for_update().get(pk=self.job.pk)
+            if VolunteerSignup.objects.filter(job=job, auctiontos=tos).exists():
+                messages.info(request, "You're already signed up for this one.")
+                return redirect(redirect_url)
+            if job.is_full:
+                messages.info(request, "This job already has enough people.")
+                return redirect(redirect_url)
+            adjustment = None
+            if job.bounty:
+                invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+                adjustment = InvoiceAdjustment.objects.create(
+                    invoice=invoice,
+                    user=request.user,
+                    adjustment_type="DISCOUNT",
+                    amount=int(round(job.bounty)),
+                    notes=f"Volunteer: {job.description}"[:150],
+                )
+            VolunteerSignup.objects.create(job=job, auctiontos=tos, invoice_adjustment=adjustment)
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"{tos.name or request.user.username} signed up for {job.description}",
+                user=request.user,
+            )
+            filled = job.is_full
+        if filled:
+            self.auction.create_history(
+                applies_to="USERS", action=f"Volunteer job filled: {self.job.description}", user=None
+            )
+            withdraw_volunteer_notification(self.job)
+        messages.success(request, "You're signed up!")
+        return redirect(redirect_url)
 
 
 class CSVContactImportMixin:
@@ -8591,6 +8831,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "only_whole_dollar_bids",
                 "club",
                 "manage_users_through_club",
+                "exact_location_set",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -14132,11 +14373,14 @@ class AuctionFunnelChartData(AuctionChartView):
     """
 
     def get(self, *args, **kwargs):
-        # See Auction.unique_views for why we can't just add distinct sessions + distinct users:
-        # that double-counts anyone who browsed anonymously and then logged in.
-        unique_views = self.auction.unique_views
-        total_views = unique_views["total"]
-        user_views = unique_views["logged_in"]
+        # Serve only the values cached by recalculate_stats (the update_auction_stats celery task).
+        # Never compute unique_views synchronously here: even the optimized version scans
+        # auctions_pageview, and this endpoint is hit on every chart load. The stats page schedules a
+        # recalculation when opened and refreshes over WebSocket when it finishes (see AuctionStats),
+        # so an auction with no cached stats yet shows 0 briefly rather than blocking the DB.
+        misc = self.auction.get_stat_misc()
+        total_views = misc.get("total_unique_views", 0)
+        user_views = misc.get("logged_in_unique_views", 0)
         total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
         # Count every sold, live lot's winner -- including admin-declared winners and winners with
         # no user account, which the old winner__auction join silently dropped.

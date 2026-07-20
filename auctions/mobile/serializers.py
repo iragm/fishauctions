@@ -242,7 +242,18 @@ class ArFrameSerializer(serializers.Serializer):
 
     frame_id = serializers.CharField(max_length=32)
     captured_at = serializers.DateTimeField()
+    # Phone's integrated gyro heading at capture (deg, ccw-positive about gravity, zero at session
+    # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
+    # solver uses it as heading odometry between frames.
+    yaw_deg = serializers.FloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
+
+    def validate_yaw_deg(self, value):
+        # Junk guard: a runaway integrator can report absurd values; drop them (treat as "unknown")
+        # rather than 400 the whole batch.
+        if value is not None and abs(value) > 36000:
+            return None
+        return value
 
 
 class ArObservationBatchSerializer(serializers.Serializer):
@@ -254,6 +265,32 @@ class ArObservationBatchSerializer(serializers.Serializer):
     # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
     fov_hdeg = serializers.FloatField(required=False, allow_null=True)
     frames = ArFrameSerializer(many=True, max_length=MAX_FRAMES_PER_BATCH)
+
+
+# ---------------------------------------------------------------------------
+# Proximity check-in & welcome
+# ---------------------------------------------------------------------------
+
+
+class CheckinPingSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/checkin/ping/ — the phone's current position."""
+
+    latitude = serializers.FloatField(min_value=-90, max_value=90)
+    longitude = serializers.FloatField(min_value=-180, max_value=180)
+
+
+class CheckinJoinSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/checkin/join/."""
+
+    auction = serializers.CharField()
+
+
+class CheckinSetLocationSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/checkin/set-location/."""
+
+    auction = serializers.CharField()
+    latitude = serializers.FloatField(min_value=-90, max_value=90)
+    longitude = serializers.FloatField(min_value=-180, max_value=180)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,9 @@ from .views import (
     MobileArLotsView,
     MobileArObservationsView,
     MobileArPositionsView,
+    MobileCheckinJoinView,
+    MobileCheckinPingView,
+    MobileCheckinSetLocationView,
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
@@ -60,6 +63,10 @@ urlpatterns = [
     path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
     path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
     path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
+    # Proximity check-in & welcome
+    path("checkin/ping/", MobileCheckinPingView.as_view(), name="mobile-checkin-ping"),
+    path("checkin/join/", MobileCheckinJoinView.as_view(), name="mobile-checkin-join"),
+    path("checkin/set-location/", MobileCheckinSetLocationView.as_view(), name="mobile-checkin-set-location"),
     # Offline mode (in-person sale)
     path("offline/snapshot/", MobileOfflineSnapshotView.as_view(), name="mobile-offline-snapshot"),
     path("offline/sync/", MobileOfflineSyncView.as_view(), name="mobile-offline-sync"),

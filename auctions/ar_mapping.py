@@ -2,8 +2,9 @@
 
 The mobile app is a dumb sensor: for each camera frame it turns QR sightings into
 ``(bearing, depression)`` angle measurements (size-independent, so nothing depends on the printed
-QR size) and POSTs them. All fusion lives here. This module solves the rolling observation buffer
-from scratch each pass into a relative 2D map of lot positions.
+QR size) and reports the phone's integrated gyro heading (``yaw_deg``), then POSTs them. All fusion
+lives here. This module solves the rolling observation buffer from scratch each pass into a relative
+2D map of lot positions.
 
 Formulation (see the backend spec): one camera pose ``(x, y, θ)`` per distinct
 ``(session_id, frame_id)``, one landmark ``(x, y)`` per observed lot, and one phone-height nuisance
@@ -15,14 +16,24 @@ Formulation (see the backend spec): one camera pose ``(x, y, θ)`` per distinct
 * **Depression pseudo-range** (weak, fixes scale): for ``depression_deg > 8°`` the label-plane model
   gives ``r̃ = h / tan(depression)``; residual ``(‖L − C‖ − r̃) / (0.5·r̃)``. Level views carry no
   range information and are skipped.
+* **Heading odometry** (fixes cross-table direction): between consecutive frames of one session that
+  both carry gyro yaw, ``wrap((θ_b − θ_a) − radians(yaw_b − yaw_a)) / σ_gyro(Δt)`` ties the poses'
+  rotations to the measured turn. Because yaw is cumulative from session start, this survives a long
+  walk between tables — so a user scanning one label per frame while walking A → B produces a
+  session-rigid frame and the A-to-B direction becomes *measured* rather than an arbitrary guess.
 * **Weights**: every observation residual is scaled by ``w = quality · exp(−age_hours/3)``.
   Observations older than 24 h or with ``w < 0.05`` are dropped — the "recent scans win" knob (a
   moved lot's stale sightings fade on a ~3 h half-life).
-* **Frame chaining**: consecutive frames of one session within 10 s get a weak motion prior (a soft
-  residual on camera displacement beyond ~3 m) so single-detection sweep frames still chain.
+* **Frame chaining**: consecutive frames of one session within ~60 s get a weak motion prior (a soft
+  residual on camera displacement beyond a pace-scaled cap) so single-detection sweep frames chain.
+* **Components (islands)**: a union-find over the factor graph (frames + landmarks, edges from
+  observations and session chain links) splits each solve into connected components. A component
+  with ≥2 lots that already have stored positions is rigidly tied to the existing map frame; a
+  component with fewer gets a cold-start gauge at an offset origin so islands never render
+  overlapping. One scanning walk between two areas links their components into one.
 * **Gauge**: lots that already have a position get a weak prior pulling toward it (map doesn't
-  rotate/flip between solves). Cold start pins the first landmark at the origin and the second to the
-  +x axis.
+  rotate/flip between solves). A cold-start component pins its first landmark at its offset origin
+  and its second on the +x axis.
 * **Robustness**: ``least_squares(loss="soft_l1")`` with a sparse Jacobian; after convergence drop
   observations whose residual exceeds 3× the median and re-solve once.
 
@@ -50,23 +61,32 @@ SIGMA_BEARING_UNCAL = 0.02  # rad, assumed-FOV bearings
 RANGE_SIGMA_FRAC = 0.5  # pseudo-range σ as a fraction of the range itself
 HEIGHT_PRIOR_M = 0.65  # phone height above the label plane (standing ≈1.4 m, table labels ≈0.75 m)
 HEIGHT_SIGMA_M = 0.30
-MOTION_WINDOW_S = 10.0  # consecutive-frame chaining window
-MOTION_MAX_M = 3.0  # only displacement beyond this is penalised
+MOTION_WINDOW_S = 60.0  # consecutive-frame chaining window (widened from 10 s: yaw carries heading)
+MOTION_CAP_BASE_M = 3.0  # base displacement cap before a motion pair is penalised
+MOTION_CAP_PER_S = 1.5  # cap grows with walking pace: cap = max(base, per_s · Δt_seconds)
 MOTION_WEIGHT = 0.5
+HEADING_MAX_PAIR_S = 600.0  # heading-odometry pairs cap (~10 min): beyond that gyro drift is too big
+SIGMA_GYRO_BASE = 0.01  # rad, σ_gyro(Δt) = base + per_s · Δt (drift grows with the gap)
+SIGMA_GYRO_PER_S = 0.001
 PRIOR_WEIGHT = 0.1  # weak pull of a landmark toward its previous LotPosition
 CAMERA_REG_WEIGHT = 0.01  # tiny tether of each camera to its init pose (regularises null directions)
 GAUGE_WEIGHT = 1.0e3  # strong cold-start anchor (origin / +x axis)
 OUTLIER_FACTOR = 3.0  # drop observations with residual > factor × median, then re-solve
 DEFAULT_INIT_RANGE_M = 2.0  # init-only guess when depression gives no range
+ISLAND_GAP_M = 20.0  # gap between cold-start islands' bounding boxes so they never render overlapping
 
 # Normalised observation the solver consumes (DB-agnostic, so the solver is unit-testable).
+# ``yaw_deg`` is the phone's cumulative gyro heading at capture (ccw-positive about gravity, zero at
+# session start, same sign as θ); None ⇒ the device gave no gyro data ("unknown", never "no turn").
 Observation = namedtuple(
     "Observation",
-    ["lot_id", "session_id", "frame_id", "captured_at", "bearing_deg", "depression_deg", "quality", "fov_calibrated"],
+    ["lot_id", "session_id", "frame_id", "captured_at", "bearing_deg", "depression_deg", "quality", "fov_calibrated"]
+    + ["yaw_deg"],
+    defaults=(None,),
 )
 
-# One solved landmark.
-Solved = namedtuple("Solved", ["x", "y", "confidence", "observation_count"])
+# One solved landmark. ``component`` is the solve-local island index (0-based, stable by lowest lot).
+Solved = namedtuple("Solved", ["x", "y", "confidence", "observation_count", "component"])
 
 
 def _wrap(angle):
@@ -123,13 +143,17 @@ def _prepare(observations, now):
         depr_rad[k] = math.radians(obs.depression_deg)
         has_range[k] = obs.depression_deg > DEPRESSION_MIN_DEG
 
-    # captured_at per frame (for motion-prior chaining) and the frame's session.
+    # captured_at, session and yaw per frame (for motion/heading chaining).
     frame_time = {}
     frame_session = {}
+    frame_yaw = {}
     for obs, _ in live:
         key = (str(obs.session_id), obs.frame_id)
         frame_time[key] = obs.captured_at
         frame_session[key] = str(obs.session_id)
+        # All detections of one frame share the frame's yaw; keep the first non-None seen.
+        if frame_yaw.get(key) is None:
+            frame_yaw[key] = obs.yaw_deg
 
     return {
         "live": live,
@@ -149,7 +173,83 @@ def _prepare(observations, now):
         "has_range": has_range,
         "frame_time": frame_time,
         "frame_session": frame_session,
+        "frame_yaw": frame_yaw,
     }
+
+
+def _session_chains(data):
+    """Consecutive-frame links within each session, in time order.
+
+    Returns ``(motion_pairs, heading_pairs)`` where each ``motion_pairs`` entry is
+    ``(cam_a, cam_b, cap_m)`` (soft displacement cap, pace-scaled) and each ``heading_pairs`` entry
+    is ``(cam_a, cam_b, dyaw_rad, sigma_rad)`` (only when both frames carry gyro yaw).
+    """
+    motion_pairs = []
+    heading_pairs = []
+    for sid in data["session_ids"]:
+        keys = sorted(
+            (k for k in data["frame_keys"] if data["frame_session"][k] == sid),
+            key=lambda k: data["frame_time"][k],
+        )
+        for a, b in zip(keys, keys[1:]):
+            dt = abs((data["frame_time"][b] - data["frame_time"][a]).total_seconds())
+            ia, ib = data["cam_index"][a], data["cam_index"][b]
+            if dt <= MOTION_WINDOW_S:
+                cap = max(MOTION_CAP_BASE_M, MOTION_CAP_PER_S * dt)
+                motion_pairs.append((ia, ib, cap))
+            ya, yb = data["frame_yaw"][a], data["frame_yaw"][b]
+            if ya is not None and yb is not None and dt <= HEADING_MAX_PAIR_S:
+                heading_pairs.append((ia, ib, math.radians(yb - ya), SIGMA_GYRO_BASE + SIGMA_GYRO_PER_S * dt))
+    return motion_pairs, heading_pairs
+
+
+def _components(data, motion_pairs, heading_pairs):
+    """Union-find over the factor graph → connected components ("islands").
+
+    Nodes are frames (``0..ncam-1``) and landmarks (``ncam..ncam+nlm-1``); edges are observations
+    (frame↔lot) plus session chain links (frame↔frame motion/heading pairs). Returns a list of
+    component dicts (``{"lms": [...], "frames": [...]}``, ordered by their lowest lot id) and an
+    ``lm_component`` array mapping each landmark index to its component id.
+    """
+    ncam = len(data["frame_keys"])
+    nlm = len(data["lot_ids"])
+    lot_ids = data["lot_ids"]
+    parent = list(range(ncam + nlm))
+
+    def find(x):
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    for k in range(len(data["live"])):
+        union(int(data["cam_idx"][k]), ncam + int(data["lm_idx"][k]))
+    for a, b, *_ in motion_pairs:
+        union(int(a), int(b))
+    for a, b, *_ in heading_pairs:
+        union(int(a), int(b))
+
+    comp_lms = defaultdict(list)
+    for j in range(nlm):
+        comp_lms[find(ncam + j)].append(j)
+    ordered_roots = sorted(comp_lms, key=lambda r: min(lot_ids[j] for j in comp_lms[r]))
+
+    lm_component = np.full(nlm, -1, dtype=np.intp)
+    components = []
+    for cid, root in enumerate(ordered_roots):
+        lms_in = sorted(comp_lms[root])
+        for j in lms_in:
+            lm_component[j] = cid
+        frames_in = [ci for ci in range(ncam) if find(ci) == root]
+        components.append({"lms": lms_in, "frames": frames_in})
+    return components, lm_component
 
 
 def _rigid_align(local, world):
@@ -173,11 +273,22 @@ def _range_guess(data, k):
     return DEFAULT_INIT_RANGE_M
 
 
-def _initial_guess(data, priors):
-    """Bootstrap init by incremental rigid resection: place the first frame's landmarks from their
-    range+bearing, then for each later frame recover its pose by aligning its local ray points to the
-    landmarks already placed, and drop any new landmarks it sees into the world. A good start keeps
-    the local optimiser out of the reflection/rotation minima a bearing-only problem is riddled with.
+def _rot(theta):
+    c, s = math.cos(theta), math.sin(theta)
+    return np.array([[c, -s], [s, c]])
+
+
+def _initial_guess(data, priors, components):
+    """Bootstrap init by incremental rigid resection, then lay out islands so they don't overlap.
+
+    Place the first frame's landmarks from their range+bearing; for each later frame recover its pose
+    by aligning its local ray points to the landmarks already placed (or, when only one/zero are
+    shared, seed its heading from gyro yaw relative to the session anchor instead of the old
+    assume-no-rotation guess), and drop new landmarks into the world. Then translate/rotate each
+    cold-start component (one with <2 stored-prior lots) to its own offset origin so disconnected
+    islands render side by side rather than piled at the origin.
+
+    Returns ``(x0, gauges)`` where ``gauges`` is the per-component gauge spec the residual consumes.
     """
     frame_keys = data["frame_keys"]
     lot_ids = data["lot_ids"]
@@ -201,8 +312,15 @@ def _initial_guess(data, priors):
         by_frame[data["cam_idx"][k]].append(k)
     frame_order = sorted(range(ncam), key=lambda ci: data["frame_time"][frame_keys[ci]])
 
+    # Session heading anchor: seed θ from θ_anchor + Δyaw when a frame carries gyro yaw.
+    anchor_theta = {}  # session_id -> θ at the anchor frame
+    anchor_yaw = {}  # session_id -> yaw_deg at the anchor frame
+    last_pos = {}  # session_id -> (x, y) of the previous frame (spatial continuity along a walk)
     last_theta = 0.0
     for ci in frame_order:
+        key = frame_keys[ci]
+        sid = data["frame_session"][key]
+        fyaw = data["frame_yaw"][key]
         dets = by_frame[ci]
         # Local ray points in the camera frame (camera looks along +x of its own frame).
         local = {
@@ -213,65 +331,122 @@ def _initial_guess(data, priors):
 
         if len(shared) >= 2:
             theta, tx, ty = _rigid_align([local[k] for k, _ in shared], [lms[j] for _, j in shared])
-        elif len(shared) == 1:
-            k, j = shared[0]
-            theta = last_theta
-            rot = np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
-            tx, ty = lms[j] - rot @ local[k]
         else:
-            theta, tx, ty = (last_theta, 0.0, 0.0)  # disconnected/first frame → anchor at origin
+            if fyaw is not None and sid in anchor_yaw:
+                theta = anchor_theta[sid] + math.radians(fyaw - anchor_yaw[sid])
+            else:
+                theta = last_theta
+            if len(shared) == 1:
+                k, j = shared[0]
+                tx, ty = lms[j] - _rot(theta) @ local[k]
+            else:
+                # No shared landmark: thread the walk from the previous same-session frame's position
+                # (spatial continuity) instead of jumping to the origin — that origin jump is what let
+                # a single-detection sweep across tables collapse the two islands together.
+                tx, ty = last_pos.get(sid, (0.0, 0.0))
         cams[ci] = (tx, ty, theta)
         last_theta = theta
+        last_pos[sid] = (tx, ty)
+        if fyaw is not None and sid not in anchor_yaw:
+            anchor_theta[sid], anchor_yaw[sid] = theta, fyaw
 
-        rot = np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
+        rot = _rot(theta)
         for k in dets:
             j = data["lm_idx"][k]
             if not placed[j]:
                 lms[j] = np.array([tx, ty]) + rot @ local[k]
                 placed[j] = True
 
+    gauges = _layout_components(data, components, priors, lms, cams)
     heights = np.full(nsess, HEIGHT_PRIOR_M)
-    return np.concatenate([cams.ravel(), lms.ravel(), heights])
+    return np.concatenate([cams.ravel(), lms.ravel(), heights]), gauges
 
 
-def _residual_context(data, priors, mask):
-    """Precompute the fixed pieces of the residual/sparsity (motion pairs, gauge mode)."""
+def _layout_components(data, components, priors, lms, cams):
+    """Classify each component and lay out cold-start ones at non-overlapping offset origins.
+
+    Mutates ``lms``/``cams`` in place for cold-start components (canonicalises rotation to put the
+    first anchor at the origin and the second on +x, then shifts the island beyond the running
+    bounding box). Returns ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components
+    rigidly tied to stored positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
+    """
+    lot_ids = data["lot_ids"]
+    prior_ids = set(priors)
+
+    placed_max_x = None
+    for comp in components:
+        prior_in = [(j, priors[lot_ids[j]]) for j in comp["lms"] if lot_ids[j] in prior_ids]
+        comp["prior_in"] = prior_in
+        comp["mode"] = "prior" if len(prior_in) >= 2 else "cold"
+        if comp["mode"] == "prior":
+            mx = max(px for _, (px, _py) in prior_in)
+            placed_max_x = mx if placed_max_x is None else max(placed_max_x, mx)
+
+    running_x = (placed_max_x + ISLAND_GAP_M) if placed_max_x is not None else 0.0
+
+    gauges = []
+    for comp in components:
+        lms_in = comp["lms"]
+        if comp["mode"] == "prior":
+            gauges.append(("prior", [(j, float(px), float(py)) for j, (px, py) in comp["prior_in"]]))
+            continue
+        if len(lms_in) == 1:
+            j1 = lms_in[0]
+            lms[j1] = np.array([running_x, 0.0])
+            gauges.append(("cold", j1, running_x, 0.0, None))
+            running_x += ISLAND_GAP_M
+            continue
+        # Two anchors: the two lowest lot-ids in the component (lms_in is sorted by landmark index,
+        # which is lot-id order). Canonicalise: j1 → origin, j2 → +x axis.
+        j1, j2 = lms_in[0], lms_in[1]
+        p1 = lms[j1].copy()
+        v = lms[j2] - p1
+        ang = math.atan2(v[1], v[0])
+        R = _rot(-ang)
+        pts = np.array([(lms[j] - p1) @ R.T for j in lms_in])
+        min_x = float(pts[:, 0].min())
+        max_x = float(pts[:, 0].max())
+        origin_x = running_x - min_x
+        for local_i, j in enumerate(lms_in):
+            lms[j] = np.array([pts[local_i, 0] + origin_x, pts[local_i, 1]])
+        for ci in comp["frames"]:
+            cp = (np.array(cams[ci, :2]) - p1) @ R.T + np.array([origin_x, 0.0])
+            cams[ci, 0], cams[ci, 1] = cp[0], cp[1]
+            cams[ci, 2] = cams[ci, 2] - ang
+        gauges.append(("cold", j1, float(lms[j1, 0]), 0.0, j2))
+        running_x = origin_x + max_x + ISLAND_GAP_M
+    return gauges
+
+
+def _gauge_count(gauges):
+    total = 0
+    for g in gauges:
+        if g[0] == "prior":
+            total += 2 * len(g[1])
+        else:  # cold: pin anchor1 (x, y) [+ anchor2 y when present]
+            total += 3 if g[4] is not None else 2
+    return total
+
+
+def _residual_context(data, motion_pairs, heading_pairs, gauges, mask):
+    """Precompute the fixed pieces of the residual/sparsity (offsets, chain pairs, gauges)."""
     ncam = len(data["frame_keys"])
     nlm = len(data["lot_ids"])
-    cam_off = 0
-    lm_off = 3 * ncam
-    h_off = lm_off + 2 * nlm
-
-    # Consecutive-frame motion pairs within one session and the time window.
-    motion_pairs = []
-    for sid in data["session_ids"]:
-        keys = sorted(
-            (k for k in data["frame_keys"] if data["frame_session"][k] == sid),
-            key=lambda k: data["frame_time"][k],
-        )
-        for a, b in zip(keys, keys[1:]):
-            dt = abs((data["frame_time"][b] - data["frame_time"][a]).total_seconds())
-            if dt <= MOTION_WINDOW_S:
-                motion_pairs.append((data["cam_index"][a], data["cam_index"][b]))
-
-    prior_lots = [(data["lm_index"][lid], priors[lid]) for lid in data["lot_ids"] if lid in priors]
-    cold_start = not prior_lots
-
     return {
-        "cam_off": cam_off,
-        "lm_off": lm_off,
-        "h_off": h_off,
+        "cam_off": 0,
+        "lm_off": 3 * ncam,
+        "h_off": 3 * ncam + 2 * nlm,
         "ncam": ncam,
         "nlm": nlm,
         "motion_pairs": motion_pairs,
-        "prior_lots": prior_lots,
-        "cold_start": cold_start,
+        "heading_pairs": heading_pairs,
+        "gauges": gauges,
         "mask": mask,
     }
 
 
 def _build_residual_fn(data, ctx, x0):
-    """Return (residual_fn, n_residuals, sparsity) for the current active-observation mask."""
+    """Return (residual_fn, seg, active, r0, sparsity) for the current active-observation mask."""
     mask = ctx["mask"]
     active = np.nonzero(mask)[0]
     lm_off, h_off = ctx["lm_off"], ctx["h_off"]
@@ -289,11 +464,11 @@ def _build_residual_fn(data, ctx, x0):
     n_obs = len(active)
     n_range = len(range_pos)
     motion_pairs = ctx["motion_pairs"]
-    prior_lots = ctx["prior_lots"]
-    cold_start = ctx["cold_start"]
+    heading_pairs = ctx["heading_pairs"]
+    gauges = ctx["gauges"]
 
     # Residual layout: [bearing(n_obs)] [range(n_range)] [height(nsess)]
-    #                  [motion(len)] [camreg(3*ncam)] [gauge...]
+    #                  [motion(len)] [heading(len)] [camreg(3*ncam)] [gauge(...)]
     nsess = len(data["session_ids"])
     seg = {}
     cursor = 0
@@ -307,11 +482,9 @@ def _build_residual_fn(data, ctx, x0):
     add("range", n_range)
     add("height", nsess)
     add("motion", len(motion_pairs))
+    add("heading", len(heading_pairs))
     add("camreg", 3 * ncam)
-    if cold_start:
-        add("gauge", 3 if nlm >= 2 else 2)
-    else:
-        add("prior", 2 * len(prior_lots))
+    add("gauge", _gauge_count(gauges))
     n_res = cursor
 
     cam_init = x0[: 3 * ncam].reshape(ncam, 3).copy()
@@ -341,49 +514,41 @@ def _build_residual_fn(data, ctx, x0):
         h0, h1 = seg["height"]
         out[h0:h1] = (heights - HEIGHT_PRIOR_M) / HEIGHT_SIGMA_M
 
-        m0, m1 = seg["motion"]
-        for idx, (a, b) in enumerate(motion_pairs):
+        m0, _m1 = seg["motion"]
+        for idx, (a, b, cap) in enumerate(motion_pairs):
             d = math.hypot(cams[b, 0] - cams[a, 0], cams[b, 1] - cams[a, 1])
-            out[m0 + idx] = MOTION_WEIGHT * max(0.0, d - MOTION_MAX_M)
+            out[m0 + idx] = MOTION_WEIGHT * max(0.0, d - cap)
+
+        hd0, _hd1 = seg["heading"]
+        for idx, (a, b, dyaw, sigma) in enumerate(heading_pairs):
+            out[hd0 + idx] = _wrap((cams[b, 2] - cams[a, 2]) - dyaw) / sigma
 
         cr0, cr1 = seg["camreg"]
         out[cr0:cr1] = CAMERA_REG_WEIGHT * (cams.ravel() - cam_init.ravel())
 
-        if cold_start:
-            g0, _ = seg["gauge"]
-            out[g0] = GAUGE_WEIGHT * lms[0, 0]
-            out[g0 + 1] = GAUGE_WEIGHT * lms[0, 1]
-            if nlm >= 2:
-                out[g0 + 2] = GAUGE_WEIGHT * lms[1, 1]  # second landmark pinned to the +x axis
-        else:
-            p0, _ = seg["prior"]
-            for idx, (j, (px, py)) in enumerate(prior_lots):
-                out[p0 + 2 * idx] = PRIOR_WEIGHT * (lms[j, 0] - px)
-                out[p0 + 2 * idx + 1] = PRIOR_WEIGHT * (lms[j, 1] - py)
+        g0, _g1 = seg["gauge"]
+        cur = g0
+        for g in gauges:
+            if g[0] == "prior":
+                for j, px, py in g[1]:
+                    out[cur] = PRIOR_WEIGHT * (lms[j, 0] - px)
+                    out[cur + 1] = PRIOR_WEIGHT * (lms[j, 1] - py)
+                    cur += 2
+            else:
+                _, j1, ox, oy, j2 = g
+                out[cur] = GAUGE_WEIGHT * (lms[j1, 0] - ox)
+                out[cur + 1] = GAUGE_WEIGHT * (lms[j1, 1] - oy)
+                cur += 2
+                if j2 is not None:
+                    out[cur] = GAUGE_WEIGHT * (lms[j2, 1] - oy)  # second anchor on the +x axis (y = oy)
+                    cur += 1
         return out
 
-    sparsity = _build_sparsity(
-        seg,
-        n_res,
-        ncam,
-        nlm,
-        lm_off,
-        h_off,
-        nsess,
-        cam_idx,
-        lm_idx,
-        h_idx,
-        range_pos,
-        motion_pairs,
-        prior_lots,
-        cold_start,
-    )
+    sparsity = _build_sparsity(seg, n_res, ncam, nlm, lm_off, h_off, nsess, cam_idx, lm_idx, h_idx, range_pos, ctx)
     return residual, seg, active, residual(x0), sparsity
 
 
-def _build_sparsity(
-    seg, n_res, ncam, nlm, lm_off, h_off, nsess, cam_idx, lm_idx, h_idx, range_pos, motion_pairs, prior_lots, cold_start
-):
+def _build_sparsity(seg, n_res, ncam, nlm, lm_off, h_off, nsess, cam_idx, lm_idx, h_idx, range_pos, ctx):
     n_vars = 3 * ncam + 2 * nlm + nsess
     S = lil_matrix((n_res, n_vars), dtype=np.int8)
 
@@ -410,25 +575,35 @@ def _build_sparsity(
         S[h0 + s, h_off + s] = 1
 
     m0, _ = seg["motion"]
-    for idx, (a, b) in enumerate(motion_pairs):
+    for idx, (a, b, _cap) in enumerate(ctx["motion_pairs"]):
         for col in [3 * a, 3 * a + 1, 3 * b, 3 * b + 1]:
             S[m0 + idx, col] = 1
+
+    hd0, _ = seg["heading"]
+    for idx, (a, b, _dyaw, _sigma) in enumerate(ctx["heading_pairs"]):
+        S[hd0 + idx, 3 * a + 2] = 1
+        S[hd0 + idx, 3 * b + 2] = 1
 
     cr0, _ = seg["camreg"]
     for i in range(3 * ncam):
         S[cr0 + i, i] = 1
 
-    if cold_start:
-        g0, _ = seg["gauge"]
-        S[g0, lm_off] = 1
-        S[g0 + 1, lm_off + 1] = 1
-        if nlm >= 2:
-            S[g0 + 2, lm_off + 3] = 1
-    else:
-        p0, _ = seg["prior"]
-        for idx, (j, _pos) in enumerate(prior_lots):
-            S[p0 + 2 * idx, lm_off + 2 * j] = 1
-            S[p0 + 2 * idx + 1, lm_off + 2 * j + 1] = 1
+    g0, _ = seg["gauge"]
+    cur = g0
+    for g in ctx["gauges"]:
+        if g[0] == "prior":
+            for j, _px, _py in g[1]:
+                S[cur, lm_off + 2 * j] = 1
+                S[cur + 1, lm_off + 2 * j + 1] = 1
+                cur += 2
+        else:
+            _, j1, _ox, _oy, j2 = g
+            S[cur, lm_off + 2 * j1] = 1
+            S[cur + 1, lm_off + 2 * j1 + 1] = 1
+            cur += 2
+            if j2 is not None:
+                S[cur, lm_off + 2 * j2 + 1] = 1
+                cur += 1
 
     return S.tocsr()
 
@@ -465,7 +640,8 @@ def _per_observation_norm(residual_vec, seg, active, data):
 
 
 def solve_positions(observations, priors=None, *, now=None):
-    """Solve the observation buffer into ``{lot_id: Solved(x, y, confidence, observation_count)}``.
+    """Solve the observation buffer into ``{lot_id: Solved(x, y, confidence, observation_count,
+    component)}``.
 
     Pure/DB-agnostic so the geometry is unit-testable. ``observations`` is an iterable of
     :class:`Observation`; ``priors`` maps lot_id → (x, y) previous positions.
@@ -481,10 +657,13 @@ def solve_positions(observations, priors=None, *, now=None):
     if data is None:
         return {}
 
-    x0 = _initial_guess(data, priors)
+    motion_pairs, heading_pairs = _session_chains(data)
+    components, lm_component = _components(data, motion_pairs, heading_pairs)
+    x0, gauges = _initial_guess(data, priors, components)
+
     n_obs_total = len(data["live"])
     mask = np.ones(n_obs_total, dtype=bool)
-    ctx = _residual_context(data, priors, mask)
+    ctx = _residual_context(data, motion_pairs, heading_pairs, gauges, mask)
 
     result, seg, active = _solve_once(data, ctx, x0)
 
@@ -499,14 +678,14 @@ def solve_positions(observations, priors=None, *, now=None):
                 new_mask[active[~keep_local]] = False
                 if new_mask.sum() >= 2:
                     mask = new_mask
-                    ctx = _residual_context(data, priors, mask)
+                    ctx = _residual_context(data, motion_pairs, heading_pairs, gauges, mask)
                     result, seg, active = _solve_once(data, ctx, result.x)
                     norms = _per_observation_norm(result.fun, seg, active, data)
 
-    return _collect(data, ctx, result, seg, active, norms)
+    return _collect(data, ctx, result, seg, active, norms, lm_component)
 
 
-def _collect(data, ctx, result, seg, active, norms):
+def _collect(data, ctx, result, seg, active, norms, lm_component):
     """Read landmark positions out of the solution and score confidence per lot."""
     nlm, lm_off = ctx["nlm"], ctx["lm_off"]
     lms = result.x[lm_off : lm_off + 2 * nlm].reshape(nlm, 2)
@@ -524,7 +703,7 @@ def _collect(data, ctx, result, seg, active, norms):
         j = data["lm_index"][lot_id]
         n = counts.get(j, 0)
         if n == 0:
-            continue  # every observation for this lot was rejected → no position (caller deletes it)
+            continue  # every observation for this lot was rejected → no position (caller keeps the stale one)
         mean_res = res_sum[j] / n
         confidence = min(1.0, n / 5.0) * math.exp(-mean_res)
         out[lot_id] = Solved(
@@ -532,6 +711,7 @@ def _collect(data, ctx, result, seg, active, norms):
             y=float(lms[j, 1]),
             confidence=float(max(0.0, min(1.0, confidence))),
             observation_count=int(n),
+            component=int(lm_component[j]),
         )
     return out
 
@@ -540,21 +720,33 @@ def _collect(data, ctx, result, seg, active, norms):
 
 
 def update_positions_for_auction(auction):
-    """Re-solve one auction from its live observation buffer and rewrite its LotPosition rows.
+    """Re-solve one auction from its live observation buffer and upsert its LotPosition rows.
 
-    Loads the last-24 h observations, solves, upserts a LotPosition per solved lot, and deletes
-    positions whose lot no longer has any surviving observation. Returns the number of solved lots.
+    Loads the last-24 h observations, solves, upserts a LotPosition (with a persistent island
+    ``component`` id) per solved lot, and — crucially — *keeps* stale positions whose lot had no
+    surviving observation this pass (they remain the best guess and serve as merge anchors for later
+    sessions). Positions are removed only for lots that are now sold or removed; the admin
+    "clear all locations" button and lot deletion handle the rest. Returns the number of solved lots.
     """
     from datetime import timedelta
 
+    from django.db.models import Q
     from django.utils import timezone
 
-    from auctions.models import LotObservation, LotPosition
+    from auctions.models import Lot, LotObservation, LotPosition
 
     now = timezone.now()
     cutoff = now - timedelta(hours=WINDOW_HOURS)
     rows = LotObservation.objects.filter(auction=auction, captured_at__gte=cutoff).values(
-        "lot_id", "session_id", "frame_id", "captured_at", "bearing_deg", "depression_deg", "quality", "fov_calibrated"
+        "lot_id",
+        "session_id",
+        "frame_id",
+        "captured_at",
+        "bearing_deg",
+        "depression_deg",
+        "quality",
+        "fov_calibrated",
+        "yaw_deg",
     )
     observations = [
         Observation(
@@ -566,14 +758,39 @@ def update_positions_for_auction(auction):
             depression_deg=r["depression_deg"],
             quality=r["quality"],
             fov_calibrated=r["fov_calibrated"],
+            yaw_deg=r["yaw_deg"],
         )
         for r in rows
     ]
 
-    priors = {p.lot_id: (p.x, p.y) for p in LotPosition.objects.filter(auction=auction)}
+    existing = list(LotPosition.objects.filter(auction=auction))
+    priors = {p.lot_id: (p.x, p.y) for p in existing}
+    prior_component = {p.lot_id: p.component for p in existing}
     solved = solve_positions(observations, priors, now=now)
 
-    solved_lot_ids = set(solved)
+    # Map each solve-local component to a persistent island id: a component with stored lots inherits
+    # the smallest of their ids (that's how two islands merge into one when a walk links them); a
+    # brand-new island takes the next free id.
+    local_members = defaultdict(list)
+    for lot_id, s in solved.items():
+        local_members[s.component].append(lot_id)
+    existing_ids = set(prior_component.values())
+    next_fresh = (max(existing_ids) + 1) if existing_ids else 0
+    persistent_id = {}
+    for cidx, lot_ids_in in local_members.items():
+        stored = {prior_component[lid] for lid in lot_ids_in if lid in prior_component}
+        if stored:
+            survivor = min(stored)
+            persistent_id[cidx] = survivor
+            absorbed = stored - {survivor}
+            if absorbed:
+                # A scanning walk joined previously-separate islands: rewrite every row (including the
+                # stale ones we keep) of the absorbed islands onto the surviving (smaller) id.
+                LotPosition.objects.filter(auction=auction, component__in=absorbed).update(component=survivor)
+        else:
+            persistent_id[cidx] = next_fresh
+            next_fresh += 1
+
     for lot_id, s in solved.items():
         LotPosition.objects.update_or_create(
             lot_id=lot_id,
@@ -583,8 +800,13 @@ def update_positions_for_auction(auction):
                 "y": s.y,
                 "confidence": s.confidence,
                 "observation_count": s.observation_count,
+                "component": persistent_id[s.component],
             },
         )
-    # Drop positions whose lot no longer has any surviving observation.
-    LotPosition.objects.filter(auction=auction).exclude(lot_id__in=solved_lot_ids).delete()
+
+    # Only sold/removed lots lose their position; a merely-unscanned lot keeps its stale one.
+    sold_or_removed = Q(winning_price__isnull=False) | Q(banned=True) | Q(deactivated=True) | Q(is_deleted=True)
+    gone_lot_ids = set(Lot.objects.filter(auction=auction).filter(sold_or_removed).values_list("pk", flat=True))
+    if gone_lot_ids:
+        LotPosition.objects.filter(auction=auction, lot_id__in=gone_lot_ids).delete()
     return len(solved)

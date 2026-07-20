@@ -380,8 +380,46 @@ fi
 # the whole graph fixes both: every app container restarts with fresh code, and nginx
 # (which depends_on web) comes up AFTER web and re-resolves its current IP. This is why
 # past deploys needed a manual `docker compose restart` -- that bounced nginx too.
-if ! docker compose up -d --force-recreate; then
-    echo "Update failed during 'docker compose up'. Some services may not have restarted;"
-    echo "check 'docker compose ps' and the container logs, then re-run ./update.sh."
-    exit 1
+# --wait makes compose block until every service is running (healthy, where a
+# healthcheck exists) and FAIL otherwise, instead of returning success while part
+# of the graph never started. That partial-graph case is real: after a
+# force-recreate, mariadb can spend minutes on crash recovery/upgrade checks; the
+# dependency wait on its healthcheck times out, compose abandons web/nginx, and
+# the deploy "succeeds" with the site down -- historically fixed by hand with a
+# follow-up `docker compose up -d`. That exact follow-up is automated below as a
+# single retry: by then the slow dependency is usually healthy, so the retry just
+# starts the abandoned services.
+if ! docker compose up -d --force-recreate --wait --wait-timeout 600; then
+    echo "'docker compose up' did not reach a healthy state. Current status:"
+    docker compose ps --all
+    echo "Retrying once with a plain 'docker compose up -d' to start anything the"
+    echo "recreate abandoned (e.g. services skipped because a dependency was slow"
+    echo "to report healthy)..."
+    if ! docker compose up -d --wait --wait-timeout 300; then
+        echo "Update failed during 'docker compose up'. Some services may not have restarted;"
+        echo "check 'docker compose ps' and the container logs, then re-run ./update.sh."
+        exit 1
+    fi
+fi
+
+# Final proof, not vibes: hit the site through nginx from the host. Any response
+# below 500 counts (the https redirect and login pages are fine) -- the goal is
+# catching "deploy finished but the site is down" while the operator is still at
+# the keyboard, not hours later.
+if command -v curl >/dev/null; then
+    site_port="$(get_env_value "HTTP_PORT")"
+    site_port="${site_port:-80}"
+    site_code="$(curl -s -o /dev/null -m 15 -w '%{http_code}' "http://127.0.0.1:${site_port}/")" || site_code="000"
+    case "$site_code" in
+        2*|3*|4*)
+            echo "Deploy complete: site answering on port ${site_port} (HTTP ${site_code})."
+            ;;
+        *)
+            echo "Deploy INCOMPLETE: containers are up but http://127.0.0.1:${site_port}/ returned"
+            echo "'${site_code}'. Check 'docker compose ps', 'docker logs nginx', 'docker logs django'."
+            exit 1
+            ;;
+    esac
+else
+    echo "Deploy complete (curl not installed; site check skipped)."
 fi

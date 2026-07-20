@@ -66,7 +66,6 @@ def google_wallet_save_url(member):
         _object_visuals,
         is_configured,
         member_text_modules,
-        member_valid_time_interval,
     )
 
     if not is_configured():
@@ -104,9 +103,9 @@ def google_wallet_save_url(member):
             },
             **_object_visuals(club, expired=member.wallet_status_is_expired),
         }
-        valid_time_interval = member_valid_time_interval(member)
-        if valid_time_interval:
-            generic_object["validTimeInterval"] = valid_time_interval
+        # No validTimeInterval: a past end date makes Google Wallet auto-archive the
+        # pass. Lapsed memberships stay active with a red tint + "Expired <date>"
+        # status line instead of being programmatically expired.
         payload = {
             "iss": service_account_email,
             "aud": "google",

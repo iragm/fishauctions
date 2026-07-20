@@ -104,6 +104,7 @@
           <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
           {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_lot_queue' slug=auction.slug %}"><i class="bi bi-list-ol"></i> Lot queue</a>{% endif %}
+          {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_volunteers' slug=auction.slug %}"><i class="bi bi-people"></i> Recruit volunteers</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if auction.use_check_in_mode and can_manage_check_in %}

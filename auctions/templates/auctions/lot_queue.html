@@ -49,19 +49,26 @@
 {% endblock %}
 
 {% block undiv_content %}
-{# Kiosk / projector view: hidden until fullscreen, then polled so it tracks lots as they sell. #}
+{% comment %}
+Kiosk / projector view: hidden until fullscreen. Refreshed in real time over the admin auction
+websocket (queue_updated) as winners are set on another device; the slow htmx poll is a fallback
+for a dropped socket. (Multi-line comments must use {% comment %} -- a multi-line {# #} is not
+parsed as a comment and leaks into the page.)
+{% endcomment %}
 <div id="kiosk" class="d-none">
   <div id="kiosk-content"
        hx-get="{% url 'auction_lot_queue_kiosk' slug=auction.slug %}"
-       hx-trigger="load, every 5s" hx-swap="innerHTML">
+       hx-trigger="load, queue-updated from:body, every 30s" hx-swap="innerHTML">
   </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
-{# Reuse the shared barcode pipeline. On a club auction the ribbon already configured and loaded it
-   (with lotScanUrl threaded through barcode_lot_scan_url); the guards below make this a no-op there.
-   On a no-club auction the ribbon renders nothing, so we wire it up here. #}
+{% comment %}
+Reuse the shared barcode pipeline. On a club auction the ribbon already configured and loaded it
+(with lotScanUrl threaded through barcode_lot_scan_url); the guards below make this a no-op there.
+On a no-club auction the ribbon renders nothing, so we wire it up here.
+{% endcomment %}
 <script>
   window.AUCTION_BARCODE_CONFIG = window.AUCTION_BARCODE_CONFIG || {
     lotScanUrl: "{{ request.path|escapejs }}",
@@ -194,6 +201,26 @@
         $('#kiosk').addClass('d-none');
       }
     });
+
+    // Real-time queue updates over the admin auction websocket: when a winner is set (or the queue
+    // is edited) on another device, the server broadcasts queue_updated and we re-fetch both the
+    // editable list and the kiosk view immediately, instead of waiting for the 30s poll fallback.
+    try {
+      var wsProtocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+      var queueSocket = new WebSocket(wsProtocol + window.location.host + '/ws/auctions/{{ auction.pk }}/');
+      queueSocket.onmessage = function (e) {
+        var data = JSON.parse(e.data);
+        if (data.type === 'queue_updated') {
+          if (window.htmx) {
+            htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
+            // Fire the htmx trigger the kiosk listens for (hx-trigger="queue-updated from:body").
+            document.body.dispatchEvent(new Event('queue-updated'));
+          }
+        }
+      };
+    } catch (err) {
+      // Websocket unavailable -- the htmx poll fallback keeps the kiosk fresh.
+    }
   });
 </script>
 {% endblock %}

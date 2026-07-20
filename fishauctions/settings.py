@@ -407,6 +407,12 @@ DATABASES = {
             "charset": "utf8mb4",
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
         },
+        # Must stay 0 under ASGI. Each HTTP request runs in its own asgiref
+        # ThreadSensitiveContext -- a per-request worker thread that is torn down at
+        # request end (see fishauctions/asgi.py) -- so a connection is never reused
+        # across requests regardless of this value. A positive CONN_MAX_AGE therefore
+        # buys no performance here and leaks the per-request connection (left open by
+        # request_finished, then orphaned when its thread is destroyed).
         "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
         "CONN_HEALTH_CHECKS": True,
         "TEST": {
@@ -994,6 +1000,9 @@ REST_FRAMEWORK = {
         # AR scanning: an active session ships a metadata fetch or an observation batch every few
         # seconds. mobile_api's 1000/hour would starve it, so it gets its own generous scope.
         "mobile_ar": "240/min",
+        # Proximity check-in: the app pings its position at mount, on resume, and every 10 min. A few
+        # per 10 min plus resumes → 30/hour is comfortable while capping abuse.
+        "mobile_checkin": "30/hour",
     },
 }
 

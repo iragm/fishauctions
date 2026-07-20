@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Recruit volunteers for {{ auction }}{% endblock %}
+{% block content %}
+  {% include "auction_ribbon.html" %}
+  <div class="container mt-3">
+    <h4><i class="bi bi-people"></i> Recruit volunteers</h4>
+    <p class="text-muted mb-3">
+      Use this page to get help from users in your auction. This will send a notification to people
+      with the mobile app who can volunteer to help with the job you specify.
+      <span tabindex="0" data-bs-toggle="tooltip"
+            title="{{ helper_count }} {% if helper_count == 1 %}person{% else %}people{% endif %} can be notified right now">
+        <i class="bi bi-info-circle"></i> {{ helper_count }} reachable
+      </span>
+    </p>
+
+    <form method="post" class="mb-4" style="max-width:520px;">
+      {% csrf_token %}
+      <div class="mb-2">
+        <label for="{{ form.description.id_for_label }}" class="form-label">{{ form.description.label }}</label>
+        {{ form.description }}
+        {% for error in form.description.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="mb-2">
+        <label for="{{ form.bounty.id_for_label }}" class="form-label">{{ form.bounty.label }}</label>
+        {{ form.bounty }}
+        <div class="form-text">{{ form.bounty.help_text }}</div>
+        {% for error in form.bounty.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="mb-3">
+        <label for="{{ form.people_needed.id_for_label }}" class="form-label">{{ form.people_needed.label }}</label>
+        {{ form.people_needed }}
+        <div class="form-text">{{ form.people_needed.help_text }}</div>
+        {% for error in form.people_needed.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <button type="submit" class="btn btn-primary"><i class="bi bi-megaphone"></i> Ask for help</button>
+    </form>
+
+    <h5>Jobs in this auction</h5>
+    {% if jobs %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Signed up</th>
+              <th>Bounty</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in jobs %}
+              <tr {% if job.canceled %}class="text-muted"{% endif %}>
+                <td>
+                  <a href="{% url 'auction_volunteer_job' slug=auction.slug job_pk=job.pk %}">{{ job.description }}</a>
+                  {% if job.canceled %}<span class="badge bg-secondary">canceled</span>
+                  {% elif job.is_full %}<span class="badge bg-success text-dark">full</span>{% endif %}
+                </td>
+                <td>{{ job.signups_count }} / {{ job.people_needed }}</td>
+                <td>{% if job.bounty %}{{ auction.currency_symbol }}{{ job.bounty|floatformat:2 }}{% else %}Volunteer{% endif %}</td>
+                <td>{{ job.created_at|date:"M j, g:i a" }}</td>
+                <td>
+                  {% if not job.canceled and not job.is_full %}
+                    <form method="post" class="d-inline" onsubmit="return confirm('Cancel this job?');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="cancel">
+                      <input type="hidden" name="job_pk" value="{{ job.pk }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-secondary">No jobs yet. Ask for help above.</div>
+    {% endif %}
+  </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+    if (window.bootstrap && bootstrap.Tooltip) { new bootstrap.Tooltip(el); }
+  });
+</script>
+{% endblock %}

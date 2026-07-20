@@ -10,6 +10,7 @@
 
 import json
 import math
+import random
 import uuid
 from datetime import timedelta
 from itertools import combinations
@@ -23,7 +24,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions.ar_mapping import Observation, solve_positions
+from auctions.ar_mapping import ISLAND_GAP_M, Observation, solve_positions, update_positions_for_auction
 from auctions.mobile.services import ar as ar_service
 from auctions.models import Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
 from auctions.tests import StandardTestCase
@@ -155,6 +156,149 @@ class ArSolverTests(TestCase):
     def test_stale_observations_excluded(self):
         obs = _gen_observations(SQUARE, CAMS, uuid.uuid4(), now=self.now, age_hours=48.0)  # > 24h window
         self.assertEqual(solve_positions(obs, {}, now=self.now), {})
+
+
+# Two clusters ~6 m apart in +x; a single session walks A -> B seeing one lot per frame.
+CLUSTER_A = {10: (0.0, 0.0), 11: (1.0, 0.0), 12: (0.5, 0.8)}
+CLUSTER_B = {20: (6.0, 0.0), 21: (7.0, 0.0), 22: (6.5, 0.8)}
+_ALL_CLUSTER_LOTS = {**CLUSTER_A, **CLUSTER_B}
+
+
+def _face(cam, lot):
+    return math.atan2(lot[1] - cam[1], lot[0] - cam[0])
+
+
+def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=None, h=0.65):
+    """One-detection-per-frame walk across CLUSTER_A then CLUSTER_B: each lot is seen from two camera
+    stations (a baseline), and the camera turns to face each label, so the reported cumulative yaw
+    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app."""
+    now = now or timezone.now()
+    stations = [
+        ((0.0, -2.0), [10, 11, 12]),
+        ((1.0, -2.0), [10, 11, 12]),
+        ((5.5, -2.0), [20, 21, 22]),
+        ((6.5, -2.0), [20, 21, 22]),
+    ]
+    frames = [(cam, lid) for cam, lids in stations for lid in lids]
+    theta0 = _face(frames[0][0], _ALL_CLUSTER_LOTS[frames[0][1]])
+    obs = []
+    drift = 0.0
+    dt_s = 4.0
+    n = len(frames)
+    for i, (cam, lid) in enumerate(frames):
+        theta = _face(cam, _ALL_CLUSTER_LOTS[lid])
+        drift += random.uniform(-1, 1) * drift_deg_per_min * (dt_s / 60.0)
+        yaw = (math.degrees(theta - theta0) + drift) if with_yaw else None
+        lx, ly = _ALL_CLUSTER_LOTS[lid]
+        r = math.hypot(lx - cam[0], ly - cam[1])
+        obs.append(
+            Observation(
+                lot_id=lid,
+                session_id=str(session),
+                frame_id=f"{str(session)[:6]}f{i:03d}",
+                captured_at=now - timedelta(seconds=(n - 1 - i) * dt_s),
+                bearing_deg=0.0,
+                depression_deg=math.degrees(math.atan(h / r)),
+                quality=1.0,
+                fov_calibrated=True,
+                yaw_deg=yaw,
+            )
+        )
+    return obs
+
+
+def _ab_direction_error_deg(sol):
+    """Angle error of the recovered A->B direction after removing the free global rotation.
+
+    Best-fit-rotate the estimate onto truth (whole map, no per-cluster freedom), then compare the
+    A-centroid -> B-centroid bearing. With a session-rigid frame (yaw) the two islands share one
+    rotation so this is small; without yaw each island floats and it is large."""
+    ids = sorted(_ALL_CLUSTER_LOTS)
+    true = np.array([_ALL_CLUSTER_LOTS[k] for k in ids], float)
+    est = np.array([(sol[k].x, sol[k].y) for k in ids], float)
+    t0 = true - true.mean(0)
+    e0 = est - est.mean(0)
+    U, _s, Vt = np.linalg.svd(e0.T @ t0)
+    if np.linalg.det(U @ Vt) < 0:
+        U[:, -1] *= -1  # forbid reflection
+    est_aligned = e0 @ (U @ Vt)
+    a_idx = [ids.index(k) for k in CLUSTER_A]
+    b_idx = [ids.index(k) for k in CLUSTER_B]
+    v_est = est_aligned[b_idx].mean(0) - est_aligned[a_idx].mean(0)
+    v_true = t0[b_idx].mean(0) - t0[a_idx].mean(0)
+    diff = math.atan2(v_est[1], v_est[0]) - math.atan2(v_true[1], v_true[0])
+    return abs(math.degrees((diff + math.pi) % (2 * math.pi) - math.pi))
+
+
+class ArHeadingOdometryTests(TestCase):
+    """Gyro yaw as heading odometry: a one-label-per-frame walk between two tables now recovers the
+    relative direction between them — the exact case that is unconstrained without yaw."""
+
+    def setUp(self):
+        self.now = timezone.now()
+        random.seed(1234)
+
+    def test_walk_recovers_cross_table_direction_with_yaw(self):
+        sol = solve_positions(_walk_observations(uuid.uuid4(), now=self.now), {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
+        self.assertLess(_ab_direction_error_deg(sol), 6.0)
+
+    def test_without_yaw_direction_is_unconstrained(self):
+        """Pin the value of the feature: the same scan, minus yaw, does NOT recover the direction."""
+        sol = solve_positions(_walk_observations(uuid.uuid4(), with_yaw=False, now=self.now), {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
+        self.assertGreater(_ab_direction_error_deg(sol), 15.0)
+
+    def test_yaw_drift_still_converges(self):
+        sol = solve_positions(_walk_observations(uuid.uuid4(), drift_deg_per_min=2.0, now=self.now), {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
+        self.assertLess(_ab_direction_error_deg(sol), 8.0)
+
+    def test_yawless_session_no_regression(self):
+        """Old-app data (no yaw) still solves the well-conditioned co-visible scene as before."""
+        obs = _gen_observations(SQUARE, CAMS, uuid.uuid4(), now=self.now)  # yaw_deg defaults to None
+        sol = solve_positions(obs, {}, now=self.now)
+        self.assertEqual(set(sol), set(SQUARE))
+        est = [(sol[k].x, sol[k].y) for k in sorted(SQUARE)]
+        rmse, _scale = _similarity_rmse([SQUARE[k] for k in sorted(SQUARE)], est)
+        self.assertLess(rmse, 0.2)
+
+
+class ArComponentTests(TestCase):
+    """Disconnected scans become distinct islands (non-overlapping); a linking walk merges them."""
+
+    def setUp(self):
+        self.now = timezone.now()
+
+    def test_two_disjoint_sessions_form_distinct_nonoverlapping_islands(self):
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        comp_a = {sol[k].component for k in a}
+        comp_b = {sol[k].component for k in b}
+        self.assertEqual(len(comp_a), 1)
+        self.assertEqual(len(comp_b), 1)
+        self.assertNotEqual(comp_a, comp_b)
+        ax = [sol[k].x for k in a]
+        bx = [sol[k].x for k in b]
+        # Bounding boxes are disjoint in x (islands laid out side by side, never interleaved).
+        self.assertTrue(max(ax) < min(bx) or max(bx) < min(ax))
+        self.assertGreater(abs(min(bx) - max(ax)) if max(ax) < min(bx) else abs(min(ax) - max(bx)), ISLAND_GAP_M - 5)
+
+    def test_linking_walk_merges_islands_into_one(self):
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        link = {10: (0.0, 0.0), 20: (2.0, 0.0)}  # one lot from each cluster, co-visible in one session
+        obs = (
+            _gen_observations(a, CAMS, uuid.uuid4(), now=self.now)
+            + _gen_observations(b, CAMS, uuid.uuid4(), now=self.now)
+            + _gen_observations(link, CAMS, uuid.uuid4(), now=self.now)
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
 
 
 class ArApiBaseTestCase(StandardTestCase):
@@ -357,6 +501,48 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         resp = self._post(self.user, self._batch(det))
         self.assertEqual(resp.status_code, 400)
 
+    # --- yaw_deg (gyro heading) ----------------------------------------------
+    def test_yaw_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["yaw_deg"] = -93.46
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        # Every detection row of the frame stores the frame's yaw.
+        yaws = list(LotObservation.objects.filter(auction=self.auction).values_list("yaw_deg", flat=True))
+        self.assertEqual(yaws, [-93.46, -93.46])
+
+    def test_yaw_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no yaw_deg key at all
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).yaw_deg)
+
+    def test_yaw_null_tolerated(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["yaw_deg"] = None
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).yaw_deg)
+
+    def test_yaw_junk_clamped_to_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["yaw_deg"] = 99999.0  # abs() > 36000 -> dropped as "unknown"
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).yaw_deg)
+
+    def test_large_but_valid_yaw_kept(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["yaw_deg"] = 1080.0  # three left turns; cumulative + unwrapped, valid
+        self._post(self.user, payload)
+        self.assertEqual(LotObservation.objects.get(auction=self.auction).yaw_deg, 1080.0)
+
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):
     def _get(self, user, auction=None):
@@ -422,6 +608,94 @@ class ArUpdatePositionsCommandTests(ArApiBaseTestCase):
         call_command("update_ar_positions")
         self.assertEqual(LotPosition.objects.filter(auction=self.auction).count(), 3)
         self.assertFalse(LotObservation.objects.filter(frame_id="old").exists())  # pruned
+
+
+class ArPersistenceTests(ArApiBaseTestCase):
+    """The map must not dissolve overnight: stale positions are kept (they still serve as merge
+    anchors), only sold/removed lots are dropped, and persistent island ids survive + merge."""
+
+    def _extra_lots(self):
+        return [
+            Lot.objects.create(
+                lot_name=f"extra {i}", auction=self.auction, auctiontos_seller=self.online_tos, quantity=1
+            )
+            for i in range(3)
+        ]
+
+    def _store(self, observations):
+        LotObservation.objects.bulk_create(
+            [
+                LotObservation(
+                    auction=self.auction,
+                    lot_id=o.lot_id,
+                    session_id=o.session_id,
+                    frame_id=o.frame_id,
+                    captured_at=o.captured_at,
+                    bearing_deg=o.bearing_deg,
+                    depression_deg=o.depression_deg,
+                    quality=o.quality,
+                    fov_calibrated=o.fov_calibrated,
+                    yaw_deg=o.yaw_deg,
+                )
+                for o in observations
+            ]
+        )
+
+    def test_positions_survive_observation_expiry(self):
+        lots = {self.lot_a.pk: (0.0, 0.0), self.lot_b.pk: (2.0, 0.0), self.lot_c.pk: (2.0, 2.0)}
+        self._store(_gen_observations(lots, CAMS, uuid.uuid4(), now=timezone.now()))
+        self.assertEqual(update_positions_for_auction(self.auction), 3)
+        self.assertEqual(LotPosition.objects.filter(auction=self.auction).count(), 3)
+        # All observations expire and get pruned; the next solve sees nothing new but KEEPS positions.
+        LotObservation.objects.filter(auction=self.auction).delete()
+        update_positions_for_auction(self.auction)
+        self.assertEqual(LotPosition.objects.filter(auction=self.auction).count(), 3)
+
+    def test_sold_and_removed_lots_lose_positions(self):
+        for lot in (self.lot_a, self.lot_b, self.lot_c):
+            LotPosition.objects.create(lot=lot, auction=self.auction, x=1, y=1, confidence=0.5)
+        self.lot_b.winning_price = 5
+        self.lot_b.auctiontos_winner = self.tosB
+        self.lot_b.save()
+        self.lot_c.banned = True
+        self.lot_c.save()
+        update_positions_for_auction(self.auction)  # no live observations
+        remaining = set(LotPosition.objects.filter(auction=self.auction).values_list("lot_id", flat=True))
+        self.assertEqual(remaining, {self.lot_a.pk})  # sold + removed dropped, unscanned lot_a kept
+
+    def test_moved_lot_relocates_after_fresh_scans(self):
+        lots = {self.lot_a.pk: (0.0, 0.0), self.lot_b.pk: (2.0, 0.0), self.lot_c.pk: (2.0, 2.0)}
+        self._store(_gen_observations(lots, CAMS, uuid.uuid4(), now=timezone.now()))
+        update_positions_for_auction(self.auction)
+        before = LotPosition.objects.get(lot=self.lot_c)
+        # lot_c physically relocated; fresh scans of the new layout arrive.
+        moved = dict(lots)
+        moved[self.lot_c.pk] = (4.0, 0.0)
+        self._store(_gen_observations(moved, CAMS, uuid.uuid4(), now=timezone.now()))
+        update_positions_for_auction(self.auction)
+        after = LotPosition.objects.get(lot=self.lot_c)
+        self.assertTrue(before.x != after.x or before.y != after.y)  # it did move
+
+    def test_component_ids_persist_and_merge(self):
+        d, e, f = self._extra_lots()
+        cams = [(1, -2, math.radians(80)), (3, 1, math.radians(175)), (1, 3, math.radians(265))]
+        cluster_a = {self.lot_a.pk: (0.0, 0.0), self.lot_b.pk: (2.0, 0.0), self.lot_c.pk: (1.0, 1.5)}
+        cluster_b = {d.pk: (0.0, 0.0), e.pk: (2.0, 0.0), f.pk: (1.0, 1.5)}
+        self._store(_gen_observations(cluster_a, cams, uuid.uuid4(), now=timezone.now()))
+        self._store(_gen_observations(cluster_b, cams, uuid.uuid4(), now=timezone.now()))
+        update_positions_for_auction(self.auction)
+        comp_a = {LotPosition.objects.get(lot_id=pk).component for pk in cluster_a}
+        comp_b = {LotPosition.objects.get(lot_id=pk).component for pk in cluster_b}
+        self.assertEqual(len(comp_a), 1)
+        self.assertEqual(len(comp_b), 1)
+        self.assertNotEqual(comp_a, comp_b)
+        # A later linking walk sees one lot from each cluster together -> islands merge to one id.
+        link = {self.lot_a.pk: (0.0, 0.0), d.pk: (2.0, 0.0)}
+        self._store(_gen_observations(link, cams, uuid.uuid4(), now=timezone.now()))
+        update_positions_for_auction(self.auction)
+        merged = {LotPosition.objects.get(lot_id=pk).component for pk in list(cluster_a) + list(cluster_b)}
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged, {min(comp_a | comp_b)})  # smaller id survives
 
 
 class ArWebMapTests(ArApiBaseTestCase):
