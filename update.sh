@@ -231,6 +231,27 @@ render_nginx_domain() {
     sed "s@__SITE_DOMAIN__@${escaped_site_domain}@g" "$template" > "$output"
 }
 
+backup_certs() {
+    # Snapshot the cert store before any deploy touches containers. swag responds
+    # to certain conditions (cert param changes, its start-time chain checks) by
+    # REVOKING and deleting the live cert, and the CA rate-limits reissues -- in
+    # the 2026-07-20 outage that meant no new cert for a week. Archives are a few
+    # KB; keep them all. Failure is a warning, not fatal: the param guard below is
+    # the real protection, this is the recovery path if something slips past it.
+    local backup_dir="$HOME/cert-backups"
+    local members=()
+    [ -d ./swag/etc/letsencrypt ] && members+=(swag/etc/letsencrypt)
+    [ -f ./swag/.donoteditthisfile.conf ] && members+=(swag/.donoteditthisfile.conf)
+    if [ "${#members[@]}" -gt 0 ]; then
+        mkdir -p "$backup_dir"
+        if tar czf "$backup_dir/letsencrypt-$(date +%Y%m%d-%H%M%S).tgz" "${members[@]}" 2>/dev/null; then
+            echo "Cert store backed up to $backup_dir"
+        else
+            echo "WARNING: could not back up ./swag/etc/letsencrypt (run with sudo to fix). Continuing."
+        fi
+    fi
+}
+
 # Preflight: a custom NGINX_IMAGE (prod uses lscr.io/linuxserver/swag) without
 # NGINX_TAG resolves to swag:<default tag>, which only exists for the stock dev
 # nginx image -- the deploy would then die at `docker compose pull`, AFTER git has
@@ -243,6 +264,46 @@ if [ -f "$ENV_FILE" ]; then
         echo "Set NGINX_TAG in .env to the release this host currently runs; find it with:"
         echo "  docker inspect nginx --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}'"
         echo "then add e.g. NGINX_TAG='2.11.0' to .env and re-run. Nothing was changed."
+        exit 1
+    fi
+fi
+
+# Preflight: swag REVOKES and deletes the live certificate whenever any cert
+# parameter it receives differs from the previous run (recorded in
+# swag/.donoteditthisfile.conf), then requests a fresh one -- and the CA
+# rate-limits reissues, so an accidental change can take HTTPS down for days
+# (the 2026-07-20 outage). Compare what this deploy will send against what swag
+# recorded, and refuse to continue on any drift. The file only exists where swag
+# has run (prod), so dev installs skip this. Sourcing is safe: it contains one
+# line of ORIG*="..." assignments, written by swag itself.
+if [ -f "$ENV_FILE" ] && [ -f ./swag/.donoteditthisfile.conf ]; then
+    # shellcheck source=/dev/null
+    . ./swag/.donoteditthisfile.conf
+    cert_param_drift=""
+    check_cert_param() {
+        local label="$1" sending="$2" recorded="$3"
+        if [ "$sending" != "$recorded" ]; then
+            cert_param_drift="${cert_param_drift}  ${label}: swag recorded '${recorded}', this deploy would send '${sending}'"$'\n'
+        fi
+    }
+    # Expected values mirror the nginx service env in docker-compose.yaml: URL and
+    # EMAIL interpolate from .env, VALIDATION is hardcoded http, CERTPROVIDER
+    # passes through, and the rest are never set (swag records SUBDOMAINS and
+    # EXTRA_DOMAINS as empty when unset). Update this list if compose changes.
+    check_cert_param "URL (SITE_DOMAIN in .env)" "$(get_env_value "SITE_DOMAIN")" "${ORIGURL-}"
+    check_cert_param "EMAIL (ADMIN_EMAIL in .env)" "$(get_env_value "ADMIN_EMAIL")" "${ORIGEMAIL-}"
+    check_cert_param "CERTPROVIDER (in .env)" "$(get_env_value "CERTPROVIDER")" "${ORIGCERTPROVIDER-}"
+    check_cert_param "VALIDATION" "http" "${ORIGVALIDATION-}"
+    check_cert_param "SUBDOMAINS" "" "${ORIGSUBDOMAINS-}"
+    check_cert_param "EXTRA_DOMAINS" "" "${ORIGEXTRA_DOMAINS-}"
+    if [ -n "$cert_param_drift" ] && [ "${ALLOW_CERT_PARAM_CHANGE-}" != "1" ]; then
+        echo "Update failed: this deploy would change swag's certificate parameters:"
+        printf '%s' "$cert_param_drift"
+        echo "swag responds to ANY such change by revoking and deleting the live certificate"
+        echo "before requesting a new one, and CA rate limits can then leave the site without"
+        echo "HTTPS for days. If the change is intentional, re-run with:"
+        echo "  ALLOW_CERT_PARAM_CHANGE=1 ./update.sh"
+        echo "Nothing was changed."
         exit 1
     fi
 fi
@@ -288,6 +349,7 @@ ensure_db_credentials
 ensure_permissions
 set_env_value "SETUP_COMPLETE" "\"1\""
 render_nginx_domain
+backup_certs
 
 # Refresh base images so security patches actually arrive. `up --build` alone
 # never re-pulls tags that already exist locally, so pinned images (mariadb,
