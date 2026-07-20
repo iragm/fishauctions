@@ -418,6 +418,101 @@ class ArLotsEndpointTests(ArApiBaseTestCase):
         self.assertTrue(rows[self.lot_a.pk]["has_position"])
         self.assertFalse(rows[self.lot_b.pk]["has_position"])
 
+    def test_image_url_full_size_when_image_present(self):
+        # The preview card renders the picture fit-to-width, so it needs the full display image, not
+        # just the 250x150 thumbnail. A lot with no image reports image_url: None.
+        from auctions.models import LotImage
+
+        LotImage.objects.create(
+            lot_number=self.lot_a, url="https://example.com/apisto.jpg", image_source="RANDOM", is_primary=True
+        )
+        rows = {row["pk"]: row for row in self._get(self.user, [self.lot_a.pk, self.lot_b.pk]).json()["lots"]}
+        self.assertEqual(rows[self.lot_a.pk]["image_url"], "https://example.com/apisto.jpg")
+        self.assertIsNone(rows[self.lot_b.pk]["image_url"])
+
+
+class MobileLotWatchEndpointTests(ArApiBaseTestCase):
+    """POST /api/mobile/lots/<pk>/watch/ — watch/unwatch from the AR preview card (JWT auth)."""
+
+    def _post(self, user, lot, watch):
+        return self.client.post(
+            reverse("mobile-lot-watch", kwargs={"pk": lot.pk}),
+            data=json.dumps({"watch": watch}),
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def test_requires_jwt(self):
+        resp = self.client.post(
+            reverse("mobile-lot-watch", kwargs={"pk": self.lot_a.pk}),
+            data=json.dumps({"watch": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_watch_then_unwatch(self):
+        resp = self._post(self.user, self.lot_a, True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"watched": True})
+        self.assertTrue(Watch.objects.filter(user=self.user, lot_number=self.lot_a).exists())
+        resp = self._post(self.user, self.lot_a, False)
+        self.assertEqual(resp.json(), {"watched": False})
+        self.assertFalse(Watch.objects.filter(user=self.user, lot_number=self.lot_a).exists())
+
+    def test_watch_is_idempotent(self):
+        self._post(self.user, self.lot_a, True)
+        self._post(self.user, self.lot_a, True)  # a retry must not create a duplicate row
+        self.assertEqual(Watch.objects.filter(user=self.user, lot_number=self.lot_a).count(), 1)
+
+    def test_unwatch_when_not_watching_is_noop(self):
+        resp = self._post(self.user, self.lot_a, False)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"watched": False})
+
+    def test_missing_lot_404(self):
+        resp = self.client.post(
+            reverse("mobile-lot-watch", kwargs={"pk": 99999999}),
+            data=json.dumps({"watch": True}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_missing_watch_field_400(self):
+        resp = self.client.post(
+            reverse("mobile-lot-watch", kwargs={"pk": self.lot_a.pk}),
+            data=json.dumps({}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
+class LotPageBackToArBannerTests(ArApiBaseTestCase):
+    """The web lot page shows a sticky "Back to AR" bar only when opened from AR mode inside the app
+    (``?src=ar`` + FishAuctionsApp UA)."""
+
+    APP_UA = "FishAuctionsApp/1.0 (iOS)"
+
+    def _url(self, lot):
+        return reverse("lot_by_pk", kwargs={"pk": lot.pk})
+
+    def test_banner_shown_in_app_from_ar(self):
+        self.client.force_login(self.user)
+        html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
+        self.assertIn("Back to AR", html)
+        self.assertIn(f"fishauctions://ar/{self.auction.slug}?locate={self.lot_a.pk}", html)
+
+    def test_banner_absent_on_web(self):
+        self.client.force_login(self.user)
+        html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT="Mozilla/5.0").content.decode()
+        self.assertNotIn("Back to AR", html)
+
+    def test_banner_absent_in_app_without_src(self):
+        self.client.force_login(self.user)
+        html = self.client.get(self._url(self.lot_a), HTTP_USER_AGENT=self.APP_UA).content.decode()
+        self.assertNotIn("Back to AR", html)
+
 
 class ArObservationsEndpointTests(ArApiBaseTestCase):
     def _post(self, user, payload):
@@ -453,6 +548,17 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(LotObservation.objects.filter(auction=self.auction).count(), 1)
         self.assertTrue(cache.get(ar_service.ar_dirty_key(self.auction.pk)))
         self.assertIn(self.auction.pk, cache.get(ar_service.AR_DIRTY_REGISTRY_KEY))
+
+    def test_non_rfc_variant_session_id_accepted(self):
+        # Regression: MariaDB's native `uuid` type rejects any UUID whose variant nibble (17th hex
+        # digit) is 0-7 with OperationalError 1292, which silently 500'd ~half of the app's randomly
+        # generated session ids. session_id is now a plain varchar, so any opaque token is stored as-is.
+        bad_session = "f61b0b5b-78a5-cced-758a-38fc30f3c5a8"  # variant nibble '7' — was rejected
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        resp = self._post(self.user, self._batch(det, session=bad_session))
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json(), {"accepted": 1})
+        self.assertEqual(LotObservation.objects.get(auction=self.auction).session_id, bad_session)
 
     def test_future_captured_at_clamped(self):
         future = timezone.now() + timedelta(hours=5)
@@ -558,6 +664,20 @@ class ArPositionsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(data["positions"], [])
         self.assertIsNone(data["updated_at"])
         self.assertEqual(data["unsold_with_position"], 0)
+        self.assertEqual(data["island_count"], 0)
+
+    def test_island_count_counts_distinct_components(self):
+        # Two lots in component 1, one in component 2 → two islands. Sold/removed lots are excluded
+        # from positions, so they never inflate the count.
+        LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=1, y=1, confidence=0.6, component=1)
+        LotPosition.objects.create(lot=self.lot_b, auction=self.auction, x=2, y=2, confidence=0.6, component=1)
+        LotPosition.objects.create(lot=self.lot_c, auction=self.auction, x=9, y=9, confidence=0.6, component=2)
+        self.assertEqual(self._get(self.user).json()["island_count"], 2)
+
+    def test_island_count_single_component(self):
+        LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=1, y=1, confidence=0.6, component=4)
+        LotPosition.objects.create(lot=self.lot_b, auction=self.auction, x=2, y=2, confidence=0.6, component=4)
+        self.assertEqual(self._get(self.user).json()["island_count"], 1)
 
     def test_sold_and_removed_excluded(self):
         LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=1, y=1, confidence=0.6)

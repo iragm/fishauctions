@@ -13,6 +13,7 @@
 
   <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
     <span id="ar-coverage" class="badge bg-primary">Loading…</span>
+    <span id="ar-islands" class="badge bg-secondary" style="display:none;"></span>
     <div class="flex-grow-1"></div>
     <form method="post" action="{% url 'auction_lot_map_clear' slug=auction.slug %}"
           onsubmit="return confirm('Clear ALL AR lot locations for this auction? Every scan will need to be redone.');">
@@ -46,6 +47,7 @@
   const svg = document.getElementById('ar-map');
   const content = document.getElementById('ar-map-content');
   const coverage = document.getElementById('ar-coverage');
+  const islands = document.getElementById('ar-islands');
   const datalist = document.getElementById('ar-lot-list');
   const locateInput = document.getElementById('ar-locate-input');
   const locateMsg = document.getElementById('ar-locate-msg');
@@ -61,6 +63,16 @@
     lots = data.lots || [];
     const pct = data.unsold_total ? Math.round(100 * data.unsold_with_position / data.unsold_total) : 0;
     coverage.textContent = `${data.unsold_with_position} of ${data.unsold_total} unsold lots located (${pct}%)`;
+    // Island count: separate scanning walks that never linked up appear as disconnected groups. More
+    // than one means the map is still fragmented; hide the badge entirely when there's nothing to show.
+    const n = data.island_count || 0;
+    if (n > 1) {
+      islands.textContent = `${n} islands`;
+      islands.title = "Separate groups of lots that haven't been linked together yet — keep scanning between them to merge.";
+      islands.style.display = '';
+    } else {
+      islands.style.display = 'none';
+    }
     datalist.innerHTML = lots.map(l => `<option value="${escapeHtml(l.lot_number)} — ${escapeHtml(l.name)}">`).join('');
 
     content.innerHTML = '';

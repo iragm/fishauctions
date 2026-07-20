@@ -11237,7 +11237,12 @@ class LotObservation(models.Model):
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_observations")
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="ar_observations")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
-    session_id = models.UUIDField()  # one per AR screen mount
+    # One per AR screen mount. An opaque client-generated token we only ever group/equality-match on
+    # (never parse), so it is a CharField, NOT a UUIDField: on MariaDB >= 10.7 Django runs UUIDField
+    # in native mode, and MariaDB's native `uuid` type rejects any UUID whose variant nibble (17th hex
+    # digit) is 0-7 with OperationalError 1292 — which silently killed ~half of the app's randomly
+    # generated session ids. A varchar accepts whatever the app sends.
+    session_id = models.CharField(max_length=36)
     frame_id = models.CharField(max_length=32)  # unique per camera frame within a session
     captured_at = models.DateTimeField()  # client clock, clamped to <= now on ingest
     created_at = models.DateTimeField(auto_now_add=True)
