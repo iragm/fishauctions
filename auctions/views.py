@@ -14373,11 +14373,14 @@ class AuctionFunnelChartData(AuctionChartView):
     """
 
     def get(self, *args, **kwargs):
-        # See Auction.unique_views for why we can't just add distinct sessions + distinct users:
-        # that double-counts anyone who browsed anonymously and then logged in.
-        unique_views = self.auction.unique_views
-        total_views = unique_views["total"]
-        user_views = unique_views["logged_in"]
+        # Serve only the values cached by recalculate_stats (the update_auction_stats celery task).
+        # Never compute unique_views synchronously here: even the optimized version scans
+        # auctions_pageview, and this endpoint is hit on every chart load. The stats page schedules a
+        # recalculation when opened and refreshes over WebSocket when it finishes (see AuctionStats),
+        # so an auction with no cached stats yet shows 0 briefly rather than blocking the DB.
+        misc = self.auction.get_stat_misc()
+        total_views = misc.get("total_unique_views", 0)
+        user_views = misc.get("logged_in_unique_views", 0)
         total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
         # Count every sold, live lot's winner -- including admin-declared winners and winners with
         # no user account, which the old winner__auction join silently dropped.

@@ -131,28 +131,28 @@ services:
     # MARIADB_VERSION in .env to that series -- MariaDB can't downgrade a data dir.
     image: mariadb:${MARIADB_VERSION-11.4}
     restart: always
-    # These were symptom-patches for connection exhaustion / "server has gone away"
-    # from an era of pooled/persistent connections. Django now sets CONN_MAX_AGE=0
-    # (a fresh connection per request, closed at the end -- see settings.py) plus
-    # CONN_HEALTH_CHECKS=True, so the app itself guarantees connection freshness and
-    # never holds idle connections. That makes the old extremes actively harmful:
-    # max_connections=10000 hides connection leaks (and reserves huge per-thread
-    # memory), and the 315M (~10 year) timeouts let any leaked/stuck connection live
-    # forever. But peak concurrency is NOT just the process count: each of the 8
-    # async gunicorn workers runs sync ORM code in a per-worker threadpool, and with
-    # CONN_MAX_AGE=0 every in-flight request holds its own connection -- so an
-    # auction-end spike can legitimately hold a few hundred connections at once
-    # (plus celery, beat, and ops sessions).
+    # Connection limits and timeouts. Peak concurrency is NOT just the process count:
+    # each of the 8 async gunicorn workers runs sync ORM code in a per-worker threadpool,
+    # and with CONN_MAX_AGE=0 every in-flight request holds its own connection -- so an
+    # auction-end spike can legitimately hold a few hundred connections at once (plus
+    # celery, beat, and ops sessions). 512 covers that peak while staying BOUNDED, which
+    # is what makes it a leak detector: a real leak shows up as Max_used_connections
+    # climbing toward the cap long before it hurts. (The old max_connections=10000 just
+    # hid leaks and reserved huge per-thread memory.)
     command:
-      - "--max_connections=512"       # covers async-worker fan-out at peak while still surfacing leaks
+      - "--max_connections=512"       # bounded: covers peak fan-out AND surfaces leaks (watch Max_used_connections)
       - "--max_allowed_packet=16M"
-      # wait_timeout must outlive the longest gap BETWEEN queries inside one celery
-      # task: celery's Django fixup only closes connections at task boundaries, and
-      # CONN_HEALTH_CHECKS only runs at request start -- so a task that opens a
-      # connection, spends >wait_timeout on non-DB work (image conversion, PDF
-      # generation), then queries again gets "MySQL server has gone away". An hour
-      # still reaps genuine leaks; 600s would cut those long tasks off mid-run.
-      - "--wait_timeout=3600"
+      # wait_timeout: how long an IDLE connection is kept before the server reaps it.
+      # The app never leaves a connection idle by accident -- HTTP is fresh-per-request,
+      # Channels runs close_old_connections around every consumer dispatch, and celery's
+      # Django fixup does the same at task boundaries -- so nothing legitimately idles for
+      # long and there is no unbounded-leak path (max_connections above is the backstop).
+      # A short timeout (we tried 3600s) reaps live-but-idle connections in edge/long-task
+      # cases and surfaces as user-visible "server has gone away" 500s across many paths.
+      # 30 days = never reap a live connection, while still finite so a true zombie
+      # eventually clears (unlike the old ~10-year / 315M value, which was effectively
+      # infinite and hid stuck connections forever).
+      - "--wait_timeout=2592000"      # 30 days
       - "--interactive_timeout=3600"  # keep interactive/CLI sessions alive an hour for ops
       - "--open_files_limit=100000"   # legitimate: many tables x connections
       - "--net_read_timeout=120"      # finite (was 315M) so a stalled client frees its connection

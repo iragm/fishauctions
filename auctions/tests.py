@@ -30182,3 +30182,29 @@ class AppleWalletCertValidationTests(TestCase):
             with self._settings(tmp_path, p12_path, wwdr_path):
                 call_command("check_apple_wallet", stdout=out)
         self.assertIn("did not issue", out.getvalue())
+
+
+class UniqueViewsCountTest(StandardTestCase):
+    """Auction.unique_views counts distinct logged-in users plus anonymous sessions that never
+    also appear on a logged-in row. The rewrite computes the anonymous set difference in Python
+    instead of a NOT IN (subquery) anti-join (which made MariaDB full-scan auctions_pageview for
+    hours); this pins the counting semantics so that optimization can't drift them."""
+
+    def test_unique_views_dedupes_anonymous_login_transition(self):
+        auction = self.online_auction
+        # Anonymous session viewing the auction rules page, recorded twice -- distinct collapses it.
+        PageView.objects.create(auction=auction, user=None, session_id="s1")
+        PageView.objects.create(auction=auction, user=None, session_id="s1")
+        # Anonymous session viewing a lot page (reaches the auction via lot_number__auction).
+        PageView.objects.create(lot_number=self.lot, user=None, session_id="s2")
+        # Logged-in view (stores the user, NULL session).
+        PageView.objects.create(lot_number=self.lot, user=self.userB, session_id=None)
+        # "Browsed anonymously then logged in": the same session_id appears both anonymously and on
+        # a logged-in row, so it must NOT also be counted as an anonymous session.
+        PageView.objects.create(auction=auction, user=None, session_id="s3")
+        PageView.objects.create(auction=auction, user=self.user, session_id="s3")
+        # Noise: a different auction's view must not leak in.
+        PageView.objects.create(auction=self.in_person_auction, user=None, session_id="other")
+
+        # logged_in = distinct users {userB, user}; anonymous = {s1, s2, s3} - {s3} = {s1, s2}.
+        self.assertEqual(auction.unique_views, {"total": 4, "logged_in": 2, "anonymous": 2})

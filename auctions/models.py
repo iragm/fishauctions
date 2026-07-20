@@ -4642,17 +4642,23 @@ class Auction(models.Model):
         """
         all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
         logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
-        # Sessions that ever appear on a logged-in row belong to a counted user; drop them so the
-        # same person isn't also counted as an anonymous session (robust even if a future code
-        # path stores both user and session_id on one row).
-        sessions_with_a_user = all_views.filter(user__isnull=False, session_id__isnull=False).values("session_id")
-        anonymous = (
-            all_views.filter(user__isnull=True, session_id__isnull=False)
-            .exclude(session_id__in=sessions_with_a_user)
-            .values("session_id")
+        # Count anonymous sessions that never also appear on a logged-in row. Expressing this as
+        # ``.exclude(session_id__in=<subquery over all_views>)`` makes MariaDB plan a
+        # ``NOT IN (SELECT ...)`` anti-join that repeatedly full-scans auctions_pageview -- on a
+        # large auction that ran for hours and pinned DB CPU. Instead pull the two distinct
+        # session-id sets and diff them in Python: each side is a single ``DISTINCT`` scan, and the
+        # sets are bounded by the number of distinct sessions (not the number of pageview rows).
+        user_sessions = set(
+            all_views.filter(user__isnull=False, session_id__isnull=False)
+            .values_list("session_id", flat=True)
             .distinct()
-            .count()
         )
+        anonymous_sessions = set(
+            all_views.filter(user__isnull=True, session_id__isnull=False)
+            .values_list("session_id", flat=True)
+            .distinct()
+        )
+        anonymous = len(anonymous_sessions - user_sessions)
         return {"total": logged_in + anonymous, "logged_in": logged_in, "anonymous": anonymous}
 
     def get_stat_misc(self):
