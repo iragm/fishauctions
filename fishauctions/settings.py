@@ -294,10 +294,6 @@ INSTALLED_APPS = [
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
-    # First so stale/dead DB connections are recycled before anything (sessions,
-    # auth) issues a query. Runs in the sync ORM context, which the signal-driven
-    # close_old_connections does not under ASGI -- see the class docstring.
-    "auctions.middleware.RecycleStaleDBConnections",
     "django.middleware.security.SecurityMiddleware",
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
@@ -399,7 +395,9 @@ WEBPUSH_SETTINGS = {
 # Use MariaDB for both dev and testing
 DATABASES = {
     "default": {
-        "ENGINE": os.environ.get("DATABASE_ENGINE", "django.db.backends.mysql"),
+        "ENGINE": os.environ.get(
+            "DATABASE_ENGINE", "django.db.backends.mysql"
+        ),  # mysql_server_has_gone_away does not appear to resolve this issue
         "NAME": os.environ.get("DATABASE_NAME", "auctions"),
         "USER": os.environ.get("DATABASE_USER", "mysqluser"),
         "PASSWORD": os.environ.get("DATABASE_PASSWORD", "unsecure"),
@@ -409,12 +407,13 @@ DATABASES = {
             "charset": "utf8mb4",
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
         },
-        # Persistent connections for performance. Dead/stale ones (e.g. after MariaDB's
-        # wait_timeout) are health-checked and recycled per request by
-        # auctions.middleware.RecycleStaleDBConnections, which -- unlike the signal-driven
-        # close_old_connections -- runs in the sync ORM context under ASGI. Tunable via
-        # .env (CONN_MAX_AGE) without a code change; keep it below MariaDB wait_timeout.
-        "CONN_MAX_AGE": int(os.environ.get("CONN_MAX_AGE", "300")),
+        # Must stay 0 under ASGI. Each HTTP request runs in its own asgiref
+        # ThreadSensitiveContext -- a per-request worker thread that is torn down at
+        # request end (see fishauctions/asgi.py) -- so a connection is never reused
+        # across requests regardless of this value. A positive CONN_MAX_AGE therefore
+        # buys no performance here and leaks the per-request connection (left open by
+        # request_finished, then orphaned when its thread is destroyed).
+        "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
         "CONN_HEALTH_CHECKS": True,
         "TEST": {
             "CHARSET": "utf8mb4",
