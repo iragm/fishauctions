@@ -256,11 +256,20 @@ class ArFrameSerializer(serializers.Serializer):
         return value
 
 
+class MobileWatchSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/lots/<pk>/watch/ — set (not toggle) the caller's watch state."""
+
+    watch = serializers.BooleanField()
+
+
 class ArObservationBatchSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/ar/observations/."""
 
     auction = serializers.CharField()
-    session_id = serializers.UUIDField()
+    # Opaque client-generated grouping token — see LotObservation.session_id. Accept it as a plain
+    # string (not a UUIDField): the app doesn't guarantee RFC-4122 variant bits, and the DB column is
+    # a varchar, so validating/normalizing it as a UUID here would only reintroduce breakage.
+    session_id = serializers.CharField(max_length=36)
     # Device-reported horizontal camera FOV the bearings were computed against. Present ⇒ the batch's
     # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
     fov_hdeg = serializers.FloatField(required=False, allow_null=True)

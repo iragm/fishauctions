@@ -16,6 +16,7 @@ from .views import (
     MobileLabelPrefsView,
     MobileLoginView,
     MobileLotLabelView,
+    MobileLotWatchView,
     MobileMyClubsView,
     MobileOfflineSnapshotView,
     MobileOfflineSyncView,
@@ -53,6 +54,8 @@ urlpatterns = [
     # Labels
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
+    # Lots
+    path("lots/<int:pk>/watch/", MobileLotWatchView.as_view(), name="mobile-lot-watch"),
     # Payments
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),
     path("payments/confirm/", MobilePaymentConfirmView.as_view(), name="mobile-payment-confirm"),

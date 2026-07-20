@@ -179,6 +179,18 @@ function deactivate_lot() {
 
 </script> {% endblock %}
 {% block undiv_content %}
+{% comment %} Opened from the app's AR mode (?src=ar): a sticky "Back to AR" bar so the user can
+return to scanning — and re-beacon this very lot — instead of relying on the WebView back button.
+App-only; the deep link is handled natively. {% endcomment %}
+{% if request.is_mobile_app and request.GET.src == 'ar' and lot.auction %}
+<a href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}"
+   class="d-flex align-items-center gap-2 bg-primary bg-gradient text-white text-decoration-none px-3 py-2 shadow-sm"
+   style="position: sticky; top: 0; z-index: 1080;">
+  <i class="bi bi-arrow-left-circle-fill fs-5"></i>
+  <span class="fw-semibold">Back to AR</span>
+  <span class="ms-auto small text-white-50">Lot {{ lot.lot_number_display }}</span>
+</a>
+{% endif %}
 <div class="container-fluid">
     <div class="row">
         <div class="col-md-offset-1 col-xl-8">

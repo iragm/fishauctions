@@ -109,6 +109,14 @@ def _thumbnail_url(lot, request):
     return request.build_absolute_uri(url) if url else None
 
 
+def _image_url(lot, request):
+    """Full-size (not the 250x150 thumbnail) primary image URL, for the AR preview card that renders
+    the picture fit-to-width. None when the lot has no image."""
+    thumb = lot.thumbnail
+    url = thumb.display_url if thumb else None
+    return request.build_absolute_uri(url) if url else None
+
+
 def build_lot_metadata(auction, pks, user, request):
     """Overlay + card metadata for the scanned ``pks`` (already capped to 50) in ``auction``.
 
@@ -156,6 +164,7 @@ def build_lot_metadata(auction, pks, user, request):
                 "lot_number": str(lot.lot_number_display),
                 "name": lot.lot_name,
                 "thumbnail_url": _thumbnail_url(lot, request),
+                "image_url": _image_url(lot, request),
                 "watched": pk in watched,
                 "recommended": pk in recommended,
                 "sold": lot.sold,
@@ -269,11 +278,17 @@ def positions_payload(auction, *, include_lot_details=False):
                 }
             )
 
+    # Islands = distinct connected components among the located lots shown on the map. Disconnected
+    # scanning walks that never linked up form separate islands; the count tells admins/attendees how
+    # fragmented the map still is (one island ⇒ a single coherent layout).
+    island_count = len({row["component"] for row in positions})
+
     payload = {
         "updated_at": updated_at.isoformat() if updated_at else None,
         "positions": positions,
         "unsold_total": len(unsold),
         "unsold_with_position": unsold_with_position,
+        "island_count": island_count,
     }
     if include_lot_details:
         payload["lots"] = unsold_list

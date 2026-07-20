@@ -174,6 +174,20 @@ GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
 
     Response 200:  binary image body with ``Content-Type: image/png``.
 
+Lots
+----
+POST /api/mobile/lots/<pk>/watch/
+    Set the caller's watch state on a lot (e.g. from the AR preview card, without opening the full
+    lot page). Idempotent — it sets, not toggles.
+
+    Request::
+
+        { "watch": true }
+
+    Response 200::
+
+        { "watched": true }
+
 Payments
 --------
 The Flutter app uses Square's Mobile Payments SDK (Tap to Pay): it charges the card on-device
@@ -304,7 +318,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs
+from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs, Watch
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
@@ -323,6 +337,7 @@ from .serializers import (
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
     MobileUserSerializer,
+    MobileWatchSerializer,
     OfflineSyncSerializer,
 )
 from .services import ar as ar_service
@@ -1071,6 +1086,44 @@ class MobileArPositionsView(APIView):
         if auction is None:
             return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(ar_service.positions_payload(auction))
+
+
+class MobileLotWatchView(APIView):
+    """POST /api/mobile/lots/<pk>/watch/ — set the caller's watch state on a lot.
+
+    Lets the app watch/unwatch a lot straight from the AR preview card (or anywhere) without opening
+    the full web lot page. Mirrors the web ``WatchOrUnwatch`` (JWT auth here instead of session/CSRF)
+    and is idempotent: it *sets* the state to the boolean ``watch`` rather than toggling, so a retry
+    is harmless. Returns the resulting state so the client can update its star without a re-fetch.
+
+    Request::
+
+        { "watch": true }
+
+    Response 200::
+
+        { "watched": true }
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request, pk):
+        serializer = MobileWatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
+        if lot is None:
+            return Response({"detail": "Lot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        watch = serializer.validated_data["watch"]
+        if watch:
+            Watch.objects.get_or_create(lot_number=lot, user=request.user)
+        else:
+            Watch.objects.filter(lot_number=lot, user=request.user).delete()
+        return Response({"watched": watch})
 
 
 # ---------------------------------------------------------------------------
