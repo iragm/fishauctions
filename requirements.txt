@@ -4,7 +4,7 @@
 #
 #    pip-compile ./requirements.in
 #
-aiohappyeyeballs==2.6.2
+aiohappyeyeballs==2.7.1
     # via aiohttp
 aiohttp==3.14.1
     # via pywebpush
@@ -14,11 +14,11 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.14.1
+anyio==4.14.2
     # via
     #   httpx
     #   watchfiles
-asgiref==3.11.1
+asgiref==3.12.1
     # via
     #   -r requirements.in
     #   channels
@@ -38,9 +38,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.36
+boto3==1.43.51
     # via django-ses
-botocore==1.43.36
+botocore==1.43.51
     # via
     #   boto3
     #   s3transfer
@@ -59,7 +59,7 @@ certifi==2026.6.17
     #   httpx
     #   mailchimp-marketing
     #   requests
-cffi==2.0.0
+cffi==2.1.0
     # via
     #   -r requirements.in
     #   cryptography
@@ -73,7 +73,7 @@ channels-redis==4.3.0
     # via -r requirements.in
 chardet==7.4.3
     # via -r requirements.in
-charset-normalizer==3.4.7
+charset-normalizer==3.4.9
     # via
     #   reportlab
     #   requests
@@ -109,7 +109,7 @@ cssselect2==0.9.0
     # via weasyprint
 defusedxml==0.7.1
     # via -r requirements.in
-django==5.2.15
+django==5.2.16
     # via
     #   -r requirements.in
     #   channels
@@ -161,9 +161,9 @@ django-encrypted-model-fields==0.6.5
     # via -r requirements.in
 django-extensions==4.1
     # via -r requirements.in
-django-filter==25.2
+django-filter==26.1
     # via -r requirements.in
-django-htmx==1.27.0
+django-htmx==1.28.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
@@ -203,13 +203,13 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core[grpc]==2.31.0
+google-api-core[grpc]==2.32.0
     # via
     #   firebase-admin
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.55.1
+google-auth==2.56.0
     # via
     #   -r requirements.in
     #   google-api-core
@@ -222,7 +222,7 @@ google-cloud-core==2.6.0
     #   google-cloud-storage
 google-cloud-firestore==2.28.0
     # via firebase-admin
-google-cloud-storage==3.12.1
+google-cloud-storage==3.13.0
     # via firebase-admin
 google-crc32c==1.8.0
     # via
@@ -322,7 +322,7 @@ packaging==26.2
     #   kombu
 piexif==1.1.3
     # via heif-image-plugin
-pillow==12.2.0
+pillow==12.3.0
     # via
     #   -r requirements.in
     #   easy-thumbnails
@@ -347,7 +347,7 @@ protobuf==7.35.1
     #   proto-plus
 py-vapid==1.9.4
     # via pywebpush
-pyasn1==0.6.3
+pyasn1==0.6.4
     # via
     #   -r requirements.in
     #   pyasn1-modules
@@ -425,7 +425,7 @@ requests==2.34.2
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via -r requirements.in
-s3transfer==0.19.0
+s3transfer==0.19.1
     # via boto3
 scipy==1.17.1
     # via -r requirements.in
@@ -440,14 +440,14 @@ six==1.17.0
     #   -r requirements.in
     #   mailchimp-marketing
     #   python-dateutil
-soupsieve==2.8.4
+soupsieve==2.9
     # via beautifulsoup4
 sqlparse==0.5.5
     # via
     #   -r requirements.in
     #   django
     #   django-debug-toolbar
-squareup==44.1.0.20260520
+squareup==45.0.1.20260715
     # via -r requirements.in
 tinycss2==1.5.1
     # via
@@ -455,7 +455,7 @@ tinycss2==1.5.1
     #   weasyprint
 tinyhtml5==2.1.0
     # via weasyprint
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal
@@ -472,11 +472,11 @@ typing-inspection==0.4.2
     # via
     #   pydantic
     #   pydantic-settings
-tzdata==2026.2
+tzdata==2026.3
     # via
     #   django-celery-beat
     #   kombu
-tzlocal==5.4.3
+tzlocal==5.4.4
     # via celery
 ua-parser==1.0.2
     # via
@@ -494,7 +494,7 @@ urllib3==2.7.0
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.49.0
+uvicorn[standard]==0.51.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -505,7 +505,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.2.0
     # via uvicorn
-wcwidth==0.8.1
+wcwidth==0.8.2
     # via prompt-toolkit
 weasyprint==69.0
     # via django-weasyprint
@@ -516,9 +516,9 @@ webencodings==0.5.1
     #   cssselect2
     #   tinycss2
     #   tinyhtml5
-websockets==16.0
+websockets==16.1.1
     # via uvicorn
-yarl==1.24.2
+yarl==1.24.5
     # via aiohttp
 zopfli==0.4.3
     # via fonttools
