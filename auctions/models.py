@@ -11267,6 +11267,14 @@ class LotObservation(models.Model):
     # roughly where they physically are instead of at arbitrary offsets (see ar_mapping).
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
+    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
+    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = the camera's
+    # forward direction at yaw 0 (session start), +y = 90° ccw from +x (the camera's left). Null ⇒ no
+    # tracking ("unknown", never "didn't move"). Every detection row of a frame stores that frame's
+    # displacement. The solver uses consecutive frames' difference as translation odometry between
+    # frames (a measured walk, superseding the pace-cap guess); see ar_mapping.
+    odo_x_m = models.FloatField(null=True, blank=True)
+    odo_y_m = models.FloatField(null=True, blank=True)
 
     class Meta:
         indexes = [

@@ -29,8 +29,14 @@ from auctions.ar_mapping import (
     M_PER_DEG_LAT,
     M_PER_DEG_LON,
     Observation,
+    _build_residual_fn,
     _compass_targets,
+    _components,
     _declination_deg,
+    _initial_guess,
+    _prepare,
+    _residual_context,
+    _session_chains,
     solve_positions,
     update_positions_for_auction,
 )
@@ -199,10 +205,18 @@ def _face(cam, lot):
     return math.atan2(lot[1] - cam[1], lot[0] - cam[0])
 
 
-def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=None, h=0.65):
+def _walk_observations(
+    session, *, with_yaw=True, with_odo=False, drift_deg_per_min=0.0, odo_noise_m=0.0, now=None, h=0.65
+):
     """One-detection-per-frame walk across CLUSTER_A then CLUSTER_B: each lot is seen from two camera
     stations (a baseline), and the camera turns to face each label, so the reported cumulative yaw
-    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app."""
+    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app.
+
+    ``with_odo`` additionally stamps each frame with the ground-truth cumulative dead-reckoning
+    displacement in the session odo frame: ``p_f = R(−φ_s)·(C_f − C_0)`` with ``φ_s = θ_0 −
+    radians(yaw_0)`` derived from the FIRST frame's true θ and reported yaw (so odo and yaw share one
+    frame, any drift included). Optional ``odo_noise_m`` adds isotropic gaussian jitter. Odo is
+    meaningless without yaw, so ``with_odo`` implies yaw is also sent."""
     now = now or timezone.now()
     stations = [
         ((0.0, -2.0), [10, 11, 12]),
@@ -212,14 +226,25 @@ def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=Non
     ]
     frames = [(cam, lid) for cam, lids in stations for lid in lids]
     theta0 = _face(frames[0][0], _ALL_CLUSTER_LOTS[frames[0][1]])
+    c0 = frames[0][0]
     obs = []
     drift = 0.0
+    phi_s = theta0
     dt_s = 4.0
     n = len(frames)
     for i, (cam, lid) in enumerate(frames):
         theta = _face(cam, _ALL_CLUSTER_LOTS[lid])
         drift += random.uniform(-1, 1) * drift_deg_per_min * (dt_s / 60.0)
         yaw = (math.degrees(theta - theta0) + drift) if with_yaw else None
+        if i == 0:
+            phi_s = theta0 - math.radians(yaw if yaw is not None else 0.0)
+        odo_x = odo_y = None
+        if with_odo:
+            # Rotate the world displacement (C_f − C_0) into the session odo frame by R(−φ_s).
+            rx, ry = cam[0] - c0[0], cam[1] - c0[1]
+            cs, sn = math.cos(-phi_s), math.sin(-phi_s)
+            odo_x = cs * rx - sn * ry + (random.gauss(0, odo_noise_m) if odo_noise_m else 0.0)
+            odo_y = sn * rx + cs * ry + (random.gauss(0, odo_noise_m) if odo_noise_m else 0.0)
         lx, ly = _ALL_CLUSTER_LOTS[lid]
         r = math.hypot(lx - cam[0], ly - cam[1])
         obs.append(
@@ -233,9 +258,19 @@ def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=Non
                 quality=1.0,
                 fov_calibrated=True,
                 yaw_deg=yaw,
+                odo_x_m=odo_x,
+                odo_y_m=odo_y,
             )
         )
     return obs
+
+
+def _ab_distance(sol):
+    """Recovered metric distance between the CLUSTER_A and CLUSTER_B centroids (no alignment — odo
+    makes the map absolute-scale, so we compare the raw distance to the true 6.0 m separation)."""
+    ca = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_A]).mean(0)
+    cb = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_B]).mean(0)
+    return float(np.hypot(*(cb - ca)))
 
 
 def _ab_direction_error_deg(sol):
@@ -293,6 +328,112 @@ class ArHeadingOdometryTests(TestCase):
         est = [(sol[k].x, sol[k].y) for k in sorted(SQUARE)]
         rmse, _scale = _similarity_rmse([SQUARE[k] for k in sorted(SQUARE)], est)
         self.assertLess(rmse, 0.2)
+
+
+class ArOdometryTests(TestCase):
+    """Translation dead-reckoning (``odo_x_m``/``odo_y_m``): a measured walk displacement between
+    consecutive frames. Yaw fixes the *direction* between two tables; odo additionally fixes the
+    metric *distance* — the thing that was only pace-cap-bounded before."""
+
+    def setUp(self):
+        self.now = timezone.now()
+        random.seed(4321)
+
+    def _one_pair_data(self, *, yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0)):
+        """Two same-session frames of one lot, both carrying yaw + odo (frame b's odo = frame a's +
+        dodo). Returns the prepared solver data dict."""
+        session = "odo-geom"
+        obs = [
+            Observation(
+                lot_id=1,
+                session_id=session,
+                frame_id="a",
+                captured_at=self.now - timedelta(seconds=4),
+                bearing_deg=0.0,
+                depression_deg=20.0,
+                quality=1.0,
+                fov_calibrated=True,
+                yaw_deg=yaw_a,
+                odo_x_m=0.0,
+                odo_y_m=0.0,
+            ),
+            Observation(
+                lot_id=1,
+                session_id=session,
+                frame_id="b",
+                captured_at=self.now,
+                bearing_deg=0.0,
+                depression_deg=20.0,
+                quality=1.0,
+                fov_calibrated=True,
+                yaw_deg=yaw_b,
+                odo_x_m=dodo[0],
+                odo_y_m=dodo[1],
+            ),
+        ]
+        return session, _prepare(obs, self.now)
+
+    def test_session_chains_builds_odo_pair_and_supersedes_motion(self):
+        _session, data = self._one_pair_data(yaw_a=90.0, yaw_b=90.0, dodo=(2.0, 0.0))
+        motion, _heading, odo = _session_chains(data)
+        self.assertEqual(len(odo), 1)
+        _ia, _ib, dpx, dpy, yaw_a_rad, sigma = odo[0]
+        self.assertAlmostEqual(dpx, 2.0)
+        self.assertAlmostEqual(dpy, 0.0)
+        self.assertAlmostEqual(yaw_a_rad, math.radians(90.0))  # yaw of frame a, in radians
+        self.assertAlmostEqual(sigma, 0.3 + 0.05 * 2.0 + 0.01 * 4.0)  # base + per_m·‖Δp‖ + per_s·Δt
+        # A pair that got a measured odo displacement must NOT also get a pace-cap motion pair.
+        self.assertEqual(len(motion), 0)
+
+    def test_no_odo_pair_without_yaw(self):
+        # Odo needs yaw (it recovers the odo frame's world rotation); drop yaw and there is no odo pair.
+        _session, data = self._one_pair_data(yaw_a=None, yaw_b=None, dodo=(2.0, 0.0))
+        _motion, _heading, odo = _session_chains(data)
+        self.assertEqual(len(odo), 0)
+
+    def test_odometry_residual_zero_at_ground_truth(self):
+        # φ = θ_a − yaw_a. With θ_a = π/2, yaw_a = 0 and Δodo = (2, 0), the predicted world displacement
+        # is R(π/2)·(2, 0) = (0, 2); place frame b there and the odometry residual vanishes.
+        session, data = self._one_pair_data(yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0))
+        motion, heading, odo = _session_chains(data)
+        components, _lm_component = _components(data, motion, heading, odo)
+        compass_target = _compass_targets(data, self.now)
+        compass_frames = sorted(compass_target.items())
+        x0, gauges = _initial_guess(data, {}, components, compass_target)
+        mask = np.ones(len(data["live"]), dtype=bool)
+        ctx = _residual_context(data, motion, heading, odo, compass_frames, gauges, mask)
+        residual, seg, _active, _r0, _sparsity = _build_residual_fn(data, ctx, x0)
+
+        ia = data["cam_index"][(session, "a")]
+        ib = data["cam_index"][(session, "b")]
+        params = x0.copy()
+        params[3 * ia : 3 * ia + 3] = [0.0, 0.0, math.pi / 2]  # frame a at origin, facing +y
+        params[3 * ib : 3 * ib + 3] = [0.0, 2.0, math.pi / 2]  # frame b at the odo-predicted (0, 2)
+        r = residual(params)
+        od0, od1 = seg["odometry"]
+        self.assertEqual(od1 - od0, 2)  # one pair → two rows (ex, ey)
+        self.assertLess(abs(r[od0]), 1e-9)
+        self.assertLess(abs(r[od0 + 1]), 1e-9)
+
+    def test_walk_recovers_cross_table_distance_with_odo(self):
+        # The headline: a one-label-per-frame walk between two tables 6 m apart (lots never co-visible).
+        # Yaw alone gives the direction; odo makes the distance metric.
+        sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=True, now=self.now), {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
+        self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=0.9)  # within ~15 % of the true 6.0 m
+        self.assertLess(_ab_direction_error_deg(sol), 8.0)  # odo does not spoil the yaw-fixed direction
+
+    def test_walk_with_odo_noise_still_close(self):
+        sol = solve_positions(
+            _walk_observations(uuid.uuid4(), with_odo=True, odo_noise_m=0.1, now=self.now), {}, now=self.now
+        )
+        self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=1.2)
+
+    def test_without_odo_distance_is_not_metric(self):
+        # Same scan, yaw only (no odo): the direction is fixed but the inter-table distance is only
+        # cap-bounded, so it collapses well short of the true 6 m — the gap odo closes.
+        sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=False, now=self.now), {}, now=self.now)
+        self.assertLess(_ab_distance(sol), 4.0)
 
 
 class ArComponentTests(TestCase):
@@ -935,6 +1076,80 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         payload["frames"][0]["heading_deg"] = -90.0  # a valid bearing; normalized to [0, 360)
         self._post(self.user, payload)
         self.assertEqual(LotObservation.objects.get(auction=self.auction).heading_deg, 270.0)
+
+    # --- odo_x_m/odo_y_m (translation dead-reckoning) -------------------------
+    def test_odo_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 3.5
+        payload["frames"][0]["odo_y_m"] = -1.25
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        rows = LotObservation.objects.filter(auction=self.auction)
+        self.assertEqual({(r.odo_x_m, r.odo_y_m) for r in rows}, {(3.5, -1.25)})
+
+    def test_odo_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no odo keys at all
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_zero_zero_preserved(self):
+        # The deliberate difference from GPS: (0, 0) is the session origin, a VALID reading — keep it.
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 0.0
+        payload["frames"][0]["odo_y_m"] = 0.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertEqual(obs.odo_x_m, 0.0)
+        self.assertEqual(obs.odo_y_m, 0.0)
+
+    def test_odo_half_supplied_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 2.0  # odo_y_m missing → drop the whole pair
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_junk_out_of_range_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 99999.0  # > 10 km of walking is junk → drop BOTH as "unknown"
+        payload["frames"][0]["odo_y_m"] = 1.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_non_finite_dropped_by_validate(self):
+        # A bare NaN/Infinity literal in the JSON *body* is rejected upstream by DRF's strict JSON
+        # parser (400) before our code runs, so it can't be expressed via a posted payload. We instead
+        # assert the server-side isfinite guard directly at the serializer: a non-finite odo value that
+        # does reach validate() (e.g. inf produced numerically) nulls BOTH, never raising.
+        from auctions.mobile.serializers import ArFrameSerializer
+
+        ser = ArFrameSerializer(
+            data={
+                "frame_id": "f001",
+                "captured_at": timezone.now().isoformat(),
+                "odo_x_m": float("inf"),
+                "odo_y_m": 1.0,
+                "detections": [],
+            }
+        )
+        self.assertTrue(ser.is_valid(), ser.errors)
+        self.assertIsNone(ser.validated_data["odo_x_m"])
+        self.assertIsNone(ser.validated_data["odo_y_m"])
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):

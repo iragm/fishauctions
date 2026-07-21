@@ -258,6 +258,14 @@ class ArFrameSerializer(serializers.Serializer):
     # them (or send null) when it has no location permission or no fix, rather than sending (0, 0).
     latitude = serializers.FloatField(required=False, allow_null=True)
     longitude = serializers.FloatField(required=False, allow_null=True)
+    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
+    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = camera
+    # forward at yaw 0, +y = 90° ccw from +x (camera's left). Send both or neither; absent/null ⇒ no
+    # tracking ("unknown", never "didn't move"). Unlike GPS, (0, 0) is a VALID value — the session's
+    # origin, which the first frame legitimately reports. The solver uses consecutive frames'
+    # difference as measured translation odometry.
+    odo_x_m = serializers.FloatField(required=False, allow_null=True)
+    odo_y_m = serializers.FloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
 
     def validate_yaw_deg(self, value):
@@ -293,6 +301,21 @@ class ArFrameSerializer(serializers.Serializer):
         if bad:
             attrs["latitude"] = None
             attrs["longitude"] = None
+
+        # Odometry is all-or-nothing too, but — unlike GPS — (0, 0) is legitimate (the session origin),
+        # so it is never treated as a "no data" sentinel. A half-supplied pair, any non-finite value
+        # (json parsers accept NaN/Infinity literals) or an implausible magnitude (>10 km of walking is
+        # junk) drops BOTH to null ("unknown"), never 400.
+        ox = attrs.get("odo_x_m")
+        oy = attrs.get("odo_y_m")
+        odo_bad = (
+            (ox is None) != (oy is None)
+            or (ox is not None and (not math.isfinite(ox) or not math.isfinite(oy)))
+            or (ox is not None and (abs(ox) > 10000.0 or abs(oy) > 10000.0))
+        )
+        if odo_bad:
+            attrs["odo_x_m"] = None
+            attrs["odo_y_m"] = None
         return attrs
 
 

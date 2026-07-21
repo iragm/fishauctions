@@ -203,9 +203,13 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
         frame_yaw = frame.get("yaw_deg")  # every detection row of a frame stores the frame's yaw
         # …the frame's absolute compass heading (serializer already dropped/normalized junk)…
         frame_heading = frame.get("heading_deg")
-        # …and the frame's GPS fix (serializer already nulled a bad/half/(0,0) fix).
+        # …the frame's GPS fix (serializer already nulled a bad/half/(0,0) fix)…
         frame_lat = frame.get("latitude")
         frame_lon = frame.get("longitude")
+        # …and the frame's cumulative dead-reckoning displacement (serializer already dropped a
+        # half/junk pair; (0, 0) is a valid origin here, not a sentinel).
+        frame_odo_x = frame.get("odo_x_m")
+        frame_odo_y = frame.get("odo_y_m")
         for det in frame["detections"]:
             lot_pk = det["lot"]
             if lot_pk not in valid_pks:
@@ -235,6 +239,8 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
                     heading_deg=frame_heading,
                     latitude=frame_lat,
                     longitude=frame_lon,
+                    odo_x_m=frame_odo_x,
+                    odo_y_m=frame_odo_y,
                 )
             )
 
