@@ -29,6 +29,8 @@ from auctions.ar_mapping import (
     M_PER_DEG_LAT,
     M_PER_DEG_LON,
     Observation,
+    _compass_targets,
+    _declination_deg,
     solve_positions,
     update_positions_for_auction,
 )
@@ -41,15 +43,33 @@ def _bearer(user):
     return {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(user).access_token}"}
 
 
-def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0, quality=1.0, fov=True, gps=None):
+def _gen_observations(
+    lots,
+    cams,
+    session_id,
+    *,
+    h=0.65,
+    now=None,
+    age_hours=0.0,
+    quality=1.0,
+    fov=True,
+    gps=None,
+    heading=False,
+    declination=0.0,
+):
     """Exact synthetic sightings of ``lots`` (id -> (x, y)) from camera poses ``cams``
     ((x, y, theta_rad)). ``h`` is the phone height above the label plane. ``gps`` is an optional
-    ``(lat, lon)`` fix stamped on every frame of the session (for island-anchoring tests)."""
+    ``(lat, lon)`` fix stamped on every frame of the session (for island-anchoring tests). When
+    ``heading`` is truthy each frame is stamped with the ground-truth *magnetic* compass heading that
+    matches its camera θ — the inverse of the solver's conversion, ``H = (90 − deg(θ) − declination)
+    % 360`` — so a compass-fed solve should recover the scene's absolute ENU orientation. Default off,
+    so every existing call is byte-for-byte unchanged."""
     now = now or timezone.now()
     captured = now - timedelta(hours=age_hours)
     obs = []
     for ci, (cx, cy, theta) in enumerate(cams):
         frame_id = f"{str(session_id)[:6]}f{ci:03d}"
+        frame_heading = ((90.0 - math.degrees(theta) - declination) % 360.0) if heading else None
         for lot_id, (lx, ly) in lots.items():
             world_bearing = math.atan2(ly - cy, lx - cx)
             bearing_ccw = world_bearing - theta
@@ -66,6 +86,7 @@ def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0
                     fov_calibrated=fov,
                     latitude=gps[0] if gps else None,
                     longitude=gps[1] if gps else None,
+                    heading_deg=frame_heading,
                 )
             )
     return obs
@@ -364,6 +385,112 @@ class ArComponentTests(TestCase):
         ax = [sol[k].x for k in a]
         bx = [sol[k].x for k in b]
         self.assertTrue(max(ax) < min(bx) or max(bx) < min(ax))
+
+
+def _wrap_deg(x):
+    """Wrap degrees to (−180, 180]."""
+    return (x + 180.0) % 360.0 - 180.0
+
+
+def _rot_pts(pts, ang):
+    c, s = math.cos(ang), math.sin(ang)
+    return {k: (c * x - s * y, s * x + c * y) for k, (x, y) in pts.items()}
+
+
+def _rot_cams(cams, ang):
+    c, s = math.cos(ang), math.sin(ang)
+    return [(c * x - s * y, s * x + c * y, th + ang) for (x, y, th) in cams]
+
+
+class ArCompassHeadingTests(TestCase):
+    """Absolute compass heading as a soft island-orientation prior. GPS anchors *where* an island
+    sits; the compass anchors *which way it faces* — the one thing bearings + GPS cannot fix on a
+    disconnected island. Magnetic→true is corrected via WMM declination (patched here for
+    determinism)."""
+
+    def setUp(self):
+        self.now = timezone.now()
+
+    def _targets(self, headings, *, gps=None):
+        """Run the frame-heading → camera-θ conversion (:func:`_compass_targets`) on a minimal data
+        stub: one frame per heading, cam indices 0..n-1."""
+        keys = [("s", f"f{i}") for i in range(len(headings))]
+        data = {
+            "frame_heading": dict(zip(keys, headings)),
+            "frame_gps": dict.fromkeys(keys, gps) if gps else {},
+            "cam_index": {k: i for i, k in enumerate(keys)},
+        }
+        return _compass_targets(data, self.now)
+
+    def test_heading_to_theta_conversion(self):
+        # ENU world (east=+x, north=+y): a compass heading H points along (sin H, cos H), whose
+        # ccw-from-+x angle is 90°−H. No GPS ⇒ declination 0.
+        targets = self._targets([0.0, 90.0])
+        self.assertAlmostEqual(targets[0], math.pi / 2)  # north ⇒ θ = +π/2
+        self.assertAlmostEqual(targets[1], 0.0)  # east ⇒ θ = 0
+
+    def test_declination_applied_before_conversion(self):
+        # With +10° east declination, a magnetic heading of 80° is true 90° (east) ⇒ θ = 0.
+        with patch("auctions.ar_mapping._declination_deg", return_value=10.0):
+            targets = self._targets([80.0], gps=(40.0, -75.0))
+        self.assertAlmostEqual(targets[0], 0.0)
+
+    def test_disconnected_islands_recover_absolute_orientation(self):
+        # Two disjoint sessions (no shared lots) ~100 m apart. Island A's internal axis runs due east
+        # in ENU; island B's identical scene is rotated 90° so its axis runs due north. GPS alone
+        # leaves each island's rotation free; the compass pins it. Declination patched to 0.
+        lat0, lon0 = 40.0, -75.0
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
+        b_base = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (2.0, 2.0), 23: (0.0, 2.0)}
+        ang = math.radians(90)
+        b = _rot_pts(b_base, ang)
+        with patch("auctions.ar_mapping._declination_deg", return_value=0.0):
+            obs = _gen_observations(
+                a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0), heading=True
+            ) + _gen_observations(
+                b,
+                _rot_cams(CAMS, ang),
+                uuid.uuid4(),
+                now=self.now,
+                gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0),
+                heading=True,
+            )
+            sol = solve_positions(obs, {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(a) | set(b))
+        # Two separate islands.
+        self.assertNotEqual({sol[k].component for k in a}, {sol[k].component for k in b})
+        # A's 10→11 axis is due east (0°); B's 20→21 axis is due north (+90°) — absolutely, no
+        # per-island rotation freedom removed.
+        dir_a = math.degrees(math.atan2(sol[11].y - sol[10].y, sol[11].x - sol[10].x))
+        dir_b = math.degrees(math.atan2(sol[21].y - sol[20].y, sol[21].x - sol[20].x))
+        self.assertLess(abs(_wrap_deg(dir_a - 0.0)), 5.0, f"island A axis off ({dir_a:.1f}°)")
+        self.assertLess(abs(_wrap_deg(dir_b - 90.0)), 5.0, f"island B axis off ({dir_b:.1f}°)")
+
+    def test_declination_rotates_recovered_island(self):
+        # Same scene, declination 0 vs +10°. θ_target = wrap(π/2 − rad(H + D)) = θ_true − rad(D), so a
+        # +10° declination rotates the recovered island −10°.
+        lat0, lon0 = 40.0, -75.0
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
+
+        def solve_with_decl(decl):
+            with patch("auctions.ar_mapping._declination_deg", return_value=decl):
+                obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0), heading=True)
+                return solve_positions(obs, {}, now=self.now)
+
+        sol0 = solve_with_decl(0.0)
+        sol10 = solve_with_decl(10.0)
+        dir0 = math.degrees(math.atan2(sol0[11].y - sol0[10].y, sol0[11].x - sol0[10].x))
+        dir10 = math.degrees(math.atan2(sol10[11].y - sol10[10].y, sol10[11].x - sol10[10].x))
+        self.assertAlmostEqual(_wrap_deg(dir10 - dir0), -10.0, delta=3.0)
+
+    def test_declination_smoke_pittsburgh_and_garbage(self):
+        # Real WMM2025 lookup: Pittsburgh sits at roughly −9° (west) declination in 2026.
+        when = self.now.replace(year=2026, month=7, day=1)
+        d = _declination_deg(40.44, -79.99, when)
+        self.assertGreater(d, -13.0)
+        self.assertLess(d, -5.0)
+        # Garbage coordinates must never raise a solve to death — they yield 0.0 (no correction).
+        self.assertEqual(_declination_deg(999.0, -79.99, when), 0.0)
 
 
 class ArApiBaseTestCase(StandardTestCase):
@@ -766,6 +893,48 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         obs = LotObservation.objects.get(auction=self.auction)
         self.assertIsNone(obs.latitude)
         self.assertIsNone(obs.longitude)
+
+    # --- heading_deg (absolute compass heading) ------------------------------
+    def test_heading_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = 137.5
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        # Every detection row of the frame stores the frame's heading.
+        headings = list(LotObservation.objects.filter(auction=self.auction).values_list("heading_deg", flat=True))
+        self.assertEqual(headings, [137.5, 137.5])
+
+    def test_heading_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no heading_deg key at all
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_null_tolerated(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = None
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_junk_dropped_to_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = 9999.0  # outside [-360, 360] → dropped as "unknown"
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_negative_normalized_to_range(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = -90.0  # a valid bearing; normalized to [0, 360)
+        self._post(self.user, payload)
+        self.assertEqual(LotObservation.objects.get(auction=self.auction).heading_deg, 270.0)
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):

@@ -11254,6 +11254,13 @@ class LotObservation(models.Model):
     # start — same sign as the solver's θ). Null ⇒ the device gave no gyro data ("unknown", never
     # "didn't turn"). Every detection row of a frame stores that frame's yaw. Heading odometry.
     yaw_deg = models.FloatField(null=True, blank=True)
+    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
+    # tilt-compensated, for the camera's forward axis. Null ⇒ the device gave no compass reading
+    # ("unknown", never "didn't point north"). Every detection row of a frame stores that frame's
+    # heading. Unlike the *relative* gyro yaw above, this is an *absolute* bearing: the solver uses it
+    # as a soft prior that fixes each disconnected island's absolute orientation (magnetic→true is
+    # corrected server-side via WMM declination); see ar_mapping.
+    heading_deg = models.FloatField(null=True, blank=True)
     # Phone GPS fix at capture (WGS84 degrees), or null when the device had no fix. Every detection
     # row of a frame stores that frame's fix. GPS is far too coarse to place individual lots, but it
     # anchors the *base location of each disconnected island* so separately-scanned areas render

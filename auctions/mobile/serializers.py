@@ -1,3 +1,5 @@
+import math
+
 from django.urls import reverse
 from rest_framework import serializers
 
@@ -246,6 +248,11 @@ class ArFrameSerializer(serializers.Serializer):
     # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
     # solver uses it as heading odometry between frames.
     yaw_deg = serializers.FloatField(required=False, allow_null=True)
+    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
+    # tilt-compensated, for the camera's forward axis. Absent/null ⇒ no compass reading ("unknown").
+    # The server corrects magnetic→true (WMM declination) and uses it to fix each island's absolute
+    # orientation. Unlike yaw_deg (relative gyro odometry), this is an absolute bearing.
+    heading_deg = serializers.FloatField(required=False, allow_null=True)
     # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. Used only
     # to anchor disconnected islands' base locations, so a coarse fix is fine — but the app should omit
     # them (or send null) when it has no location permission or no fix, rather than sending (0, 0).
@@ -259,6 +266,16 @@ class ArFrameSerializer(serializers.Serializer):
         if value is not None and abs(value) > 36000:
             return None
         return value
+
+    def validate_heading_deg(self, value):
+        # Same "junk is dropped, never 400" philosophy as yaw: null passes through, and any
+        # non-finite (json accepts NaN/Infinity literals) or wildly out-of-range value is discarded
+        # as "unknown". A survivor is normalized to [0, 360) since it is an absolute compass bearing.
+        if value is None:
+            return None
+        if not math.isfinite(value) or not (-360.0 <= value <= 360.0):
+            return None
+        return value % 360.0
 
     def validate(self, attrs):
         # GPS is all-or-nothing and must be in range; an out-of-range or half-supplied fix is dropped

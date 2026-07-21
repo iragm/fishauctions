@@ -40,6 +40,21 @@ Formulation (see the backend spec): one camera pose ``(x, y, θ)`` per distinct
   north-up); within-island orientation stays bearing-derived. The GPS group is shifted to sit past
   any prior-anchored island, so the established map never moves. Islands with no GPS fall back to the
   marched layout. See :func:`_gps_cold_bases`.
+* **Compass heading**: GPS fixes each island's *position* but never its *orientation* — two areas
+  scanned separately still float in absolute rotation. When a frame carries an absolute compass
+  ``heading_deg`` (degrees CW from magnetic north for the camera's forward axis) it becomes a soft
+  prior on that camera's world θ: ``θ_target = wrap(π/2 − radians(H + D))``, where ``D`` is the
+  magnetic→true declination (WMM, +east) evaluated once per pass at the solve's mean GPS fix. The
+  world frame is ENU (east=+x, north=+y), so a heading ``H`` points along ``(sin H, cos H)`` whose
+  ccw-from-+x angle is ``90° − H``; adding declination first rotates the magnetic bearing into true.
+  Each heading frame adds a ``σ≈20°`` residual pulling its pose toward ``θ_target`` — soft on
+  purpose, because indoor magnetic interference is real and a hard constraint would fight good
+  bearings. A cold island that carries any heading is rotated to its compass orientation at init and
+  then pins only its first anchor (the ``+x`` second-anchor gauge is dropped — at GAUGE_WEIGHT it
+  would crush the soft prior); an established (prior) map keeps its frame, but its heading frames
+  softly converge it toward north-referenced orientation. With no GPS fix ``D = 0`` and all headings
+  simply share one consistent magnetic-north frame, which still fixes islands' *relative* orientation
+  (the actual goal). See :func:`_compass_targets`.
 * **Gauge**: lots that already have a position get a weak prior pulling toward it (map doesn't
   rotate/flip between solves). A cold-start component pins its first landmark at its offset origin
   and its second on the +x axis.
@@ -50,6 +65,7 @@ Absolute scale comes only from the soft height prior (0.65 ± 0.3 m), so positio
 fine for a relative admin map and an "about N m" readout, and the layout itself is bearing-accurate.
 """
 
+import functools
 import logging
 import math
 from collections import defaultdict, namedtuple
@@ -77,6 +93,7 @@ MOTION_WEIGHT = 0.5
 HEADING_MAX_PAIR_S = 600.0  # heading-odometry pairs cap (~10 min): beyond that gyro drift is too big
 SIGMA_GYRO_BASE = 0.01  # rad, σ_gyro(Δt) = base + per_s · Δt (drift grows with the gap)
 SIGMA_GYRO_PER_S = 0.001
+SIGMA_COMPASS = 0.35  # rad (~20°) — soft prior; indoor magnetic interference is real
 PRIOR_WEIGHT = 0.1  # weak pull of a landmark toward its previous LotPosition
 CAMERA_REG_WEIGHT = 0.01  # tiny tether of each camera to its init pose (regularises null directions)
 GAUGE_WEIGHT = 1.0e3  # strong cold-start anchor (origin / +x axis)
@@ -91,11 +108,15 @@ M_PER_DEG_LON = 111320.0  # metres per degree longitude at the equator; scaled b
 # session start, same sign as θ); None ⇒ the device gave no gyro data ("unknown", never "no turn").
 # ``latitude``/``longitude`` are the phone's GPS fix at capture (WGS84 deg) or None ⇒ no fix; used
 # only to anchor disconnected islands' base locations (see ``_gps_cold_bases``).
+# ``heading_deg`` is the phone's *absolute* compass heading (deg CW from magnetic north, camera
+# forward axis) or None ⇒ no compass reading; used to softly fix each island's absolute orientation
+# (see ``_compass_targets``). It MUST stay the last field so existing positional constructions keep
+# working; defaults cover yaw/lat/lon/heading so old call sites need not pass them.
 Observation = namedtuple(
     "Observation",
     ["lot_id", "session_id", "frame_id", "captured_at", "bearing_deg", "depression_deg", "quality", "fov_calibrated"]
-    + ["yaw_deg", "latitude", "longitude"],
-    defaults=(None, None, None),
+    + ["yaw_deg", "latitude", "longitude", "heading_deg"],
+    defaults=(None, None, None, None),
 )
 
 # One solved landmark. ``component`` is the solve-local island index (0-based, stable by lowest lot).
@@ -105,6 +126,82 @@ Solved = namedtuple("Solved", ["x", "y", "confidence", "observation_count", "com
 def _wrap(angle):
     """Wrap radians to (−π, π]."""
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+@functools.lru_cache(maxsize=256)
+def _declination_cached(lat, lon, decimal_year):
+    """WMM magnetic declination (degrees, +east) at rounded ``(lat, lon, decimal_year)``.
+
+    Cached because a solve calls it once per pass but successive passes of the same hall repeat the
+    same rounded key, and constructing/evaluating the geomagnetic model is not free. Any failure —
+    ``pygeomag`` missing, a date outside the model's 5-year life span, an internal model error, or
+    coordinates that aren't a real place — yields 0.0 (no correction) with a warning, so a solve can
+    never die on the geomagnetic model. Out-of-range coordinates are rejected explicitly: pygeomag
+    happily returns a nonsense declination for e.g. lat=999 instead of raising, so we must guard.
+    """
+    try:
+        if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+            return 0.0
+        from pygeomag import GeoMag
+
+        # Pin WMM2025 (epoch 2025, valid 2025–2030) explicitly rather than trusting the package
+        # default: a future pygeomag could ship a newer default whose life span excludes our dates.
+        geo = GeoMag(coefficients_file="wmm/WMM_2025.COF")
+        return float(geo.calculate(glat=lat, glon=lon, alt=0, time=decimal_year).d)
+    except Exception:
+        logger.warning("declination lookup failed at (%s, %s, %s); using 0.0", lat, lon, decimal_year, exc_info=True)
+        return 0.0
+
+
+def _declination_deg(lat, lon, when):
+    """Magnetic declination (degrees, +east) at ``(lat, lon)`` for datetime ``when``.
+
+    Declination is the angle from true north to magnetic north; the app reports ``heading_deg`` from
+    *magnetic* north, so ``true_bearing = magnetic + declination``. Rounds its inputs (lat/lon to 0.1°
+    ≈ 11 km, the decimal year to 0.01 yr) so the lru cache is effective — declination varies far more
+    slowly than that resolution. Returns 0.0 on any failure (see ``_declination_cached``).
+    """
+    try:
+        # Fractional year is plenty accurate for declination (secular change ≈ 0.1°/yr); 366 as the
+        # denominator every year is a negligible sub-day error.
+        decimal_year = when.year + (when.timetuple().tm_yday - 1) / 366.0
+        return _declination_cached(round(lat, 1), round(lon, 1), round(decimal_year, 2))
+    except Exception:
+        logger.warning("declination decimal-year computation failed for %s; using 0.0", when, exc_info=True)
+        return 0.0
+
+
+def _compass_targets(data, now):
+    """Target world orientation ``θ`` (rad, ccw from +x/east) each compass-carrying frame wants.
+
+    The app's ``heading_deg`` H is degrees CW from *magnetic* north for the camera forward axis. In
+    the solver's ENU world (east=+x, north=+y) that forward vector is ``(sin H, cos H)`` whose
+    ccw-from-+x angle is ``90° − H``; correcting magnetic→true adds the declination D first, giving
+    ``θ_target = wrap(π/2 − radians(H + D))``. D is evaluated once, at the solve's mean GPS fix (the
+    same reference :func:`_gps_cold_bases` uses); with no GPS fix in the whole solve D = 0, which
+    merely leaves every heading in one shared magnetic-north frame — still enough to fix islands'
+    *relative* orientation. Returns ``{cam_index: θ_target}``; empty when no frame has a heading.
+    """
+    frame_heading = data["frame_heading"]
+    if not any(h is not None for h in frame_heading.values()):
+        return {}
+
+    frame_gps = data["frame_gps"]
+    if frame_gps:
+        lats = [ll[0] for ll in frame_gps.values()]
+        lons = [ll[1] for ll in frame_gps.values()]
+        lat0, lon0 = sum(lats) / len(lats), sum(lons) / len(lons)
+        decl = _declination_deg(lat0, lon0, now)
+    else:
+        decl = 0.0
+
+    cam_index = data["cam_index"]
+    targets = {}
+    for key, heading in frame_heading.items():
+        if heading is None:
+            continue
+        targets[cam_index[key]] = float(_wrap(math.pi / 2 - math.radians(heading + decl)))
+    return targets
 
 
 def _prepare(observations, now):
@@ -156,18 +253,22 @@ def _prepare(observations, now):
         depr_rad[k] = math.radians(obs.depression_deg)
         has_range[k] = obs.depression_deg > DEPRESSION_MIN_DEG
 
-    # captured_at, session, yaw and GPS per frame (for motion/heading chaining + island anchoring).
+    # captured_at, session, yaw, compass heading and GPS per frame (for motion/heading chaining,
+    # absolute-orientation priors and island anchoring).
     frame_time = {}
     frame_session = {}
     frame_yaw = {}
+    frame_heading = {}
     frame_gps = {}
     for obs, _ in live:
         key = (str(obs.session_id), obs.frame_id)
         frame_time[key] = obs.captured_at
         frame_session[key] = str(obs.session_id)
-        # All detections of one frame share the frame's yaw/GPS; keep the first non-None seen.
+        # All detections of one frame share the frame's yaw/heading/GPS; keep the first non-None seen.
         if frame_yaw.get(key) is None:
             frame_yaw[key] = obs.yaw_deg
+        if frame_heading.get(key) is None:
+            frame_heading[key] = obs.heading_deg
         if frame_gps.get(key) is None and obs.latitude is not None and obs.longitude is not None:
             frame_gps[key] = (obs.latitude, obs.longitude)
 
@@ -190,6 +291,7 @@ def _prepare(observations, now):
         "frame_time": frame_time,
         "frame_session": frame_session,
         "frame_yaw": frame_yaw,
+        "frame_heading": frame_heading,
         "frame_gps": frame_gps,
     }
 
@@ -295,7 +397,7 @@ def _rot(theta):
     return np.array([[c, -s], [s, c]])
 
 
-def _initial_guess(data, priors, components):
+def _initial_guess(data, priors, components, compass_target):
     """Bootstrap init by incremental rigid resection, then lay out islands so they don't overlap.
 
     Place the first frame's landmarks from their range+bearing; for each later frame recover its pose
@@ -374,7 +476,7 @@ def _initial_guess(data, priors, components):
                 lms[j] = np.array([tx, ty]) + rot @ local[k]
                 placed[j] = True
 
-    gauges = _layout_components(data, components, priors, lms, cams)
+    gauges = _layout_components(data, components, priors, lms, cams, compass_target)
     heights = np.full(nsess, HEIGHT_PRIOR_M)
     return np.concatenate([cams.ravel(), lms.ravel(), heights]), gauges
 
@@ -421,7 +523,7 @@ def _gps_cold_bases(data, components, running_x):
     return bases, running_x
 
 
-def _layout_components(data, components, priors, lms, cams):
+def _layout_components(data, components, priors, lms, cams, compass_target):
     """Classify each component and lay out cold-start ones at non-overlapping origins.
 
     Mutates ``lms``/``cams`` in place for cold-start components (canonicalises rotation to put the
@@ -429,6 +531,12 @@ def _layout_components(data, components, priors, lms, cams):
     centroid when the island's frames carry a fix, else beyond the running bounding box). Returns
     ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components rigidly tied to stored
     positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
+
+    ``compass_target`` maps ``cam_index → θ_target`` (see :func:`_compass_targets`). A cold island
+    with ≥2 anchors whose frames carry any heading is additionally rotated (rigidly, about its first
+    anchor) to the circular-mean orientation its compass frames want, and its gauge drops the second
+    anchor (``j2_or_None = None``) so the soft compass residuals — not the strong ``+x`` gauge — own
+    the island's absolute rotation. Islands with no heading frame are laid out exactly as before.
     """
     lot_ids = data["lot_ids"]
     prior_ids = set(priors)
@@ -462,13 +570,37 @@ def _layout_components(data, components, priors, lms, cams):
                 running_x += ISLAND_GAP_M
             continue
         # Two anchors: the two lowest lot-ids in the component (lms_in is sorted by landmark index,
-        # which is lot-id order). Canonicalise: j1 → origin, j2 → +x axis.
+        # which is lot-id order). Canonicalise: j1 → origin, j2 → +x axis. Landmark coords and camera
+        # poses are held in this j1-relative canonical frame (un-translated to base yet) so the
+        # optional compass rotation below is a single rigid twist about that origin.
         j1, j2 = lms_in[0], lms_in[1]
         p1 = lms[j1].copy()
         v = lms[j2] - p1
         ang = math.atan2(v[1], v[0])
         R = _rot(-ang)
         pts = np.array([(lms[j] - p1) @ R.T for j in lms_in])
+        frames = comp["frames"]
+        cam_local = {ci: ((np.array(cams[ci, :2]) - p1) @ R.T, cams[ci, 2] - ang) for ci in frames}
+
+        # Compass init: if any of this island's frames carry an absolute heading, rotate the whole
+        # (bearing-rigid) island so its cameras face where the compass says. δf is each heading frame's
+        # gap between its target θ and its current canonical θ; their circular mean is the single rigid
+        # twist that best satisfies every heading at once. We then pin ONLY the first anchor and let
+        # the soft compass residuals own the rotation — keeping the +x second-anchor gauge would pit a
+        # GAUGE_WEIGHT (1e3) constraint against a σ≈20° prior and crush it.
+        heading_frames = [ci for ci in frames if ci in compass_target]
+        if heading_frames:
+            ssum = sum(math.sin(_wrap(compass_target[ci] - cam_local[ci][1])) for ci in heading_frames)
+            csum = sum(math.cos(_wrap(compass_target[ci] - cam_local[ci][1])) for ci in heading_frames)
+            delta = math.atan2(ssum, csum)
+            Rd = _rot(delta)
+            pts = pts @ Rd.T  # rotate landmarks about the j1 origin (which stays fixed at (0, 0))
+            cam_local = {ci: (Rd @ xy, _wrap(th + delta)) for ci, (xy, th) in cam_local.items()}
+            j2_gauge = None
+        else:
+            j2_gauge = j2
+
+        # Extents/centroid are recomputed after any rotation so the base placement uses the final shape.
         min_x = float(pts[:, 0].min())
         max_x = float(pts[:, 0].max())
         if gps_base is not None:
@@ -478,11 +610,11 @@ def _layout_components(data, components, priors, lms, cams):
             base = np.array([running_x - min_x, 0.0])
         for local_i, j in enumerate(lms_in):
             lms[j] = np.array([pts[local_i, 0] + base[0], pts[local_i, 1] + base[1]])
-        for ci in comp["frames"]:
-            cp = (np.array(cams[ci, :2]) - p1) @ R.T + base
-            cams[ci, 0], cams[ci, 1] = cp[0], cp[1]
-            cams[ci, 2] = cams[ci, 2] - ang
-        gauges.append(("cold", j1, float(lms[j1, 0]), float(lms[j1, 1]), j2))
+        for ci in frames:
+            xy, th = cam_local[ci]
+            cams[ci, 0], cams[ci, 1] = xy[0] + base[0], xy[1] + base[1]
+            cams[ci, 2] = th
+        gauges.append(("cold", j1, float(lms[j1, 0]), float(lms[j1, 1]), j2_gauge))
         if gps_base is None:
             running_x = base[0] + max_x + ISLAND_GAP_M
     return gauges
@@ -498,7 +630,7 @@ def _gauge_count(gauges):
     return total
 
 
-def _residual_context(data, motion_pairs, heading_pairs, gauges, mask):
+def _residual_context(data, motion_pairs, heading_pairs, compass_frames, gauges, mask):
     """Precompute the fixed pieces of the residual/sparsity (offsets, chain pairs, gauges)."""
     ncam = len(data["frame_keys"])
     nlm = len(data["lot_ids"])
@@ -510,6 +642,7 @@ def _residual_context(data, motion_pairs, heading_pairs, gauges, mask):
         "nlm": nlm,
         "motion_pairs": motion_pairs,
         "heading_pairs": heading_pairs,
+        "compass_frames": compass_frames,
         "gauges": gauges,
         "mask": mask,
     }
@@ -535,10 +668,11 @@ def _build_residual_fn(data, ctx, x0):
     n_range = len(range_pos)
     motion_pairs = ctx["motion_pairs"]
     heading_pairs = ctx["heading_pairs"]
+    compass_frames = ctx["compass_frames"]
     gauges = ctx["gauges"]
 
     # Residual layout: [bearing(n_obs)] [range(n_range)] [height(nsess)]
-    #                  [motion(len)] [heading(len)] [camreg(3*ncam)] [gauge(...)]
+    #                  [motion(len)] [heading(len)] [compass(len)] [camreg(3*ncam)] [gauge(...)]
     nsess = len(data["session_ids"])
     seg = {}
     cursor = 0
@@ -553,6 +687,7 @@ def _build_residual_fn(data, ctx, x0):
     add("height", nsess)
     add("motion", len(motion_pairs))
     add("heading", len(heading_pairs))
+    add("compass", len(compass_frames))
     add("camreg", 3 * ncam)
     add("gauge", _gauge_count(gauges))
     n_res = cursor
@@ -592,6 +727,11 @@ def _build_residual_fn(data, ctx, x0):
         hd0, _hd1 = seg["heading"]
         for idx, (a, b, dyaw, sigma) in enumerate(heading_pairs):
             out[hd0 + idx] = _wrap((cams[b, 2] - cams[a, 2]) - dyaw) / sigma
+
+        # Absolute-orientation prior: pull each compass frame's world θ toward what the heading says.
+        cm0, _cm1 = seg["compass"]
+        for idx, (ci, theta_target) in enumerate(compass_frames):
+            out[cm0 + idx] = _wrap(cams[ci, 2] - theta_target) / SIGMA_COMPASS
 
         cr0, cr1 = seg["camreg"]
         out[cr0:cr1] = CAMERA_REG_WEIGHT * (cams.ravel() - cam_init.ravel())
@@ -653,6 +793,10 @@ def _build_sparsity(seg, n_res, ncam, nlm, lm_off, h_off, nsess, cam_idx, lm_idx
     for idx, (a, b, _dyaw, _sigma) in enumerate(ctx["heading_pairs"]):
         S[hd0 + idx, 3 * a + 2] = 1
         S[hd0 + idx, 3 * b + 2] = 1
+
+    cm0, _ = seg["compass"]
+    for idx, (ci, _theta_target) in enumerate(ctx["compass_frames"]):
+        S[cm0 + idx, 3 * ci + 2] = 1  # each compass residual touches only its frame's θ
 
     cr0, _ = seg["camreg"]
     for i in range(3 * ncam):
@@ -729,11 +873,15 @@ def solve_positions(observations, priors=None, *, now=None):
 
     motion_pairs, heading_pairs = _session_chains(data)
     components, lm_component = _components(data, motion_pairs, heading_pairs)
-    x0, gauges = _initial_guess(data, priors, components)
+    # Absolute-orientation targets from any compass headings (once per pass); the init uses them to
+    # pre-rotate cold islands and the residual to hold every heading frame softly toward north.
+    compass_target = _compass_targets(data, now)
+    compass_frames = sorted(compass_target.items())
+    x0, gauges = _initial_guess(data, priors, components, compass_target)
 
     n_obs_total = len(data["live"])
     mask = np.ones(n_obs_total, dtype=bool)
-    ctx = _residual_context(data, motion_pairs, heading_pairs, gauges, mask)
+    ctx = _residual_context(data, motion_pairs, heading_pairs, compass_frames, gauges, mask)
 
     result, seg, active = _solve_once(data, ctx, x0)
 
@@ -748,7 +896,7 @@ def solve_positions(observations, priors=None, *, now=None):
                 new_mask[active[~keep_local]] = False
                 if new_mask.sum() >= 2:
                     mask = new_mask
-                    ctx = _residual_context(data, motion_pairs, heading_pairs, gauges, mask)
+                    ctx = _residual_context(data, motion_pairs, heading_pairs, compass_frames, gauges, mask)
                     result, seg, active = _solve_once(data, ctx, result.x)
                     norms = _per_observation_norm(result.fun, seg, active, data)
 
@@ -817,6 +965,7 @@ def update_positions_for_auction(auction):
         "quality",
         "fov_calibrated",
         "yaw_deg",
+        "heading_deg",
         "latitude",
         "longitude",
     )
@@ -831,6 +980,7 @@ def update_positions_for_auction(auction):
             quality=r["quality"],
             fov_calibrated=r["fov_calibrated"],
             yaw_deg=r["yaw_deg"],
+            heading_deg=r["heading_deg"],
             latitude=r["latitude"],
             longitude=r["longitude"],
         )
