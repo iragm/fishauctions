@@ -1,3 +1,5 @@
+import math
+
 from django.urls import reverse
 from rest_framework import serializers
 
@@ -246,6 +248,24 @@ class ArFrameSerializer(serializers.Serializer):
     # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
     # solver uses it as heading odometry between frames.
     yaw_deg = serializers.FloatField(required=False, allow_null=True)
+    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
+    # tilt-compensated, for the camera's forward axis. Absent/null ⇒ no compass reading ("unknown").
+    # The server corrects magnetic→true (WMM declination) and uses it to fix each island's absolute
+    # orientation. Unlike yaw_deg (relative gyro odometry), this is an absolute bearing.
+    heading_deg = serializers.FloatField(required=False, allow_null=True)
+    # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. Used only
+    # to anchor disconnected islands' base locations, so a coarse fix is fine — but the app should omit
+    # them (or send null) when it has no location permission or no fix, rather than sending (0, 0).
+    latitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)
+    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
+    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = camera
+    # forward at yaw 0, +y = 90° ccw from +x (camera's left). Send both or neither; absent/null ⇒ no
+    # tracking ("unknown", never "didn't move"). Unlike GPS, (0, 0) is a VALID value — the session's
+    # origin, which the first frame legitimately reports. The solver uses consecutive frames'
+    # difference as measured translation odometry.
+    odo_x_m = serializers.FloatField(required=False, allow_null=True)
+    odo_y_m = serializers.FloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
 
     def validate_yaw_deg(self, value):
@@ -254,6 +274,49 @@ class ArFrameSerializer(serializers.Serializer):
         if value is not None and abs(value) > 36000:
             return None
         return value
+
+    def validate_heading_deg(self, value):
+        # Same "junk is dropped, never 400" philosophy as yaw: null passes through, and any
+        # non-finite (json accepts NaN/Infinity literals) or wildly out-of-range value is discarded
+        # as "unknown". A survivor is normalized to [0, 360) since it is an absolute compass bearing.
+        if value is None:
+            return None
+        if not math.isfinite(value) or not (-360.0 <= value <= 360.0):
+            return None
+        return value % 360.0
+
+    def validate(self, attrs):
+        # GPS is all-or-nothing and must be in range; an out-of-range or half-supplied fix is dropped
+        # (treated as "no fix") rather than 400-ing the batch, and (0, 0) is the classic "no fix"
+        # sentinel so we discard it too.
+        lat = attrs.get("latitude")
+        lon = attrs.get("longitude")
+        bad = (
+            lat is None
+            or lon is None
+            or not (-90.0 <= lat <= 90.0)
+            or not (-180.0 <= lon <= 180.0)
+            or (lat == 0.0 and lon == 0.0)
+        )
+        if bad:
+            attrs["latitude"] = None
+            attrs["longitude"] = None
+
+        # Odometry is all-or-nothing too, but — unlike GPS — (0, 0) is legitimate (the session origin),
+        # so it is never treated as a "no data" sentinel. A half-supplied pair, any non-finite value
+        # (json parsers accept NaN/Infinity literals) or an implausible magnitude (>10 km of walking is
+        # junk) drops BOTH to null ("unknown"), never 400.
+        ox = attrs.get("odo_x_m")
+        oy = attrs.get("odo_y_m")
+        odo_bad = (
+            (ox is None) != (oy is None)
+            or (ox is not None and (not math.isfinite(ox) or not math.isfinite(oy)))
+            or (ox is not None and (abs(ox) > 10000.0 or abs(oy) > 10000.0))
+        )
+        if odo_bad:
+            attrs["odo_x_m"] = None
+            attrs["odo_y_m"] = None
+        return attrs
 
 
 class MobileWatchSerializer(serializers.Serializer):

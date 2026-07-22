@@ -24,7 +24,22 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions.ar_mapping import ISLAND_GAP_M, Observation, solve_positions, update_positions_for_auction
+from auctions.ar_mapping import (
+    ISLAND_GAP_M,
+    M_PER_DEG_LAT,
+    M_PER_DEG_LON,
+    Observation,
+    _build_residual_fn,
+    _compass_targets,
+    _components,
+    _declination_deg,
+    _initial_guess,
+    _prepare,
+    _residual_context,
+    _session_chains,
+    solve_positions,
+    update_positions_for_auction,
+)
 from auctions.mobile.services import ar as ar_service
 from auctions.models import Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
 from auctions.tests import StandardTestCase
@@ -34,14 +49,33 @@ def _bearer(user):
     return {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(user).access_token}"}
 
 
-def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0, quality=1.0, fov=True):
+def _gen_observations(
+    lots,
+    cams,
+    session_id,
+    *,
+    h=0.65,
+    now=None,
+    age_hours=0.0,
+    quality=1.0,
+    fov=True,
+    gps=None,
+    heading=False,
+    declination=0.0,
+):
     """Exact synthetic sightings of ``lots`` (id -> (x, y)) from camera poses ``cams``
-    ((x, y, theta_rad)). ``h`` is the phone height above the label plane."""
+    ((x, y, theta_rad)). ``h`` is the phone height above the label plane. ``gps`` is an optional
+    ``(lat, lon)`` fix stamped on every frame of the session (for island-anchoring tests). When
+    ``heading`` is truthy each frame is stamped with the ground-truth *magnetic* compass heading that
+    matches its camera θ — the inverse of the solver's conversion, ``H = (90 − deg(θ) − declination)
+    % 360`` — so a compass-fed solve should recover the scene's absolute ENU orientation. Default off,
+    so every existing call is byte-for-byte unchanged."""
     now = now or timezone.now()
     captured = now - timedelta(hours=age_hours)
     obs = []
     for ci, (cx, cy, theta) in enumerate(cams):
         frame_id = f"{str(session_id)[:6]}f{ci:03d}"
+        frame_heading = ((90.0 - math.degrees(theta) - declination) % 360.0) if heading else None
         for lot_id, (lx, ly) in lots.items():
             world_bearing = math.atan2(ly - cy, lx - cx)
             bearing_ccw = world_bearing - theta
@@ -56,6 +90,9 @@ def _gen_observations(lots, cams, session_id, *, h=0.65, now=None, age_hours=0.0
                     depression_deg=math.degrees(math.atan(h / r)),
                     quality=quality,
                     fov_calibrated=fov,
+                    latitude=gps[0] if gps else None,
+                    longitude=gps[1] if gps else None,
+                    heading_deg=frame_heading,
                 )
             )
     return obs
@@ -168,10 +205,18 @@ def _face(cam, lot):
     return math.atan2(lot[1] - cam[1], lot[0] - cam[0])
 
 
-def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=None, h=0.65):
+def _walk_observations(
+    session, *, with_yaw=True, with_odo=False, drift_deg_per_min=0.0, odo_noise_m=0.0, now=None, h=0.65
+):
     """One-detection-per-frame walk across CLUSTER_A then CLUSTER_B: each lot is seen from two camera
     stations (a baseline), and the camera turns to face each label, so the reported cumulative yaw
-    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app."""
+    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app.
+
+    ``with_odo`` additionally stamps each frame with the ground-truth cumulative dead-reckoning
+    displacement in the session odo frame: ``p_f = R(−φ_s)·(C_f − C_0)`` with ``φ_s = θ_0 −
+    radians(yaw_0)`` derived from the FIRST frame's true θ and reported yaw (so odo and yaw share one
+    frame, any drift included). Optional ``odo_noise_m`` adds isotropic gaussian jitter. Odo is
+    meaningless without yaw, so ``with_odo`` implies yaw is also sent."""
     now = now or timezone.now()
     stations = [
         ((0.0, -2.0), [10, 11, 12]),
@@ -181,14 +226,25 @@ def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=Non
     ]
     frames = [(cam, lid) for cam, lids in stations for lid in lids]
     theta0 = _face(frames[0][0], _ALL_CLUSTER_LOTS[frames[0][1]])
+    c0 = frames[0][0]
     obs = []
     drift = 0.0
+    phi_s = theta0
     dt_s = 4.0
     n = len(frames)
     for i, (cam, lid) in enumerate(frames):
         theta = _face(cam, _ALL_CLUSTER_LOTS[lid])
         drift += random.uniform(-1, 1) * drift_deg_per_min * (dt_s / 60.0)
         yaw = (math.degrees(theta - theta0) + drift) if with_yaw else None
+        if i == 0:
+            phi_s = theta0 - math.radians(yaw if yaw is not None else 0.0)
+        odo_x = odo_y = None
+        if with_odo:
+            # Rotate the world displacement (C_f − C_0) into the session odo frame by R(−φ_s).
+            rx, ry = cam[0] - c0[0], cam[1] - c0[1]
+            cs, sn = math.cos(-phi_s), math.sin(-phi_s)
+            odo_x = cs * rx - sn * ry + (random.gauss(0, odo_noise_m) if odo_noise_m else 0.0)
+            odo_y = sn * rx + cs * ry + (random.gauss(0, odo_noise_m) if odo_noise_m else 0.0)
         lx, ly = _ALL_CLUSTER_LOTS[lid]
         r = math.hypot(lx - cam[0], ly - cam[1])
         obs.append(
@@ -202,9 +258,19 @@ def _walk_observations(session, *, with_yaw=True, drift_deg_per_min=0.0, now=Non
                 quality=1.0,
                 fov_calibrated=True,
                 yaw_deg=yaw,
+                odo_x_m=odo_x,
+                odo_y_m=odo_y,
             )
         )
     return obs
+
+
+def _ab_distance(sol):
+    """Recovered metric distance between the CLUSTER_A and CLUSTER_B centroids (no alignment — odo
+    makes the map absolute-scale, so we compare the raw distance to the true 6.0 m separation)."""
+    ca = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_A]).mean(0)
+    cb = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_B]).mean(0)
+    return float(np.hypot(*(cb - ca)))
 
 
 def _ab_direction_error_deg(sol):
@@ -264,6 +330,112 @@ class ArHeadingOdometryTests(TestCase):
         self.assertLess(rmse, 0.2)
 
 
+class ArOdometryTests(TestCase):
+    """Translation dead-reckoning (``odo_x_m``/``odo_y_m``): a measured walk displacement between
+    consecutive frames. Yaw fixes the *direction* between two tables; odo additionally fixes the
+    metric *distance* — the thing that was only pace-cap-bounded before."""
+
+    def setUp(self):
+        self.now = timezone.now()
+        random.seed(4321)
+
+    def _one_pair_data(self, *, yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0)):
+        """Two same-session frames of one lot, both carrying yaw + odo (frame b's odo = frame a's +
+        dodo). Returns the prepared solver data dict."""
+        session = "odo-geom"
+        obs = [
+            Observation(
+                lot_id=1,
+                session_id=session,
+                frame_id="a",
+                captured_at=self.now - timedelta(seconds=4),
+                bearing_deg=0.0,
+                depression_deg=20.0,
+                quality=1.0,
+                fov_calibrated=True,
+                yaw_deg=yaw_a,
+                odo_x_m=0.0,
+                odo_y_m=0.0,
+            ),
+            Observation(
+                lot_id=1,
+                session_id=session,
+                frame_id="b",
+                captured_at=self.now,
+                bearing_deg=0.0,
+                depression_deg=20.0,
+                quality=1.0,
+                fov_calibrated=True,
+                yaw_deg=yaw_b,
+                odo_x_m=dodo[0],
+                odo_y_m=dodo[1],
+            ),
+        ]
+        return session, _prepare(obs, self.now)
+
+    def test_session_chains_builds_odo_pair_and_supersedes_motion(self):
+        _session, data = self._one_pair_data(yaw_a=90.0, yaw_b=90.0, dodo=(2.0, 0.0))
+        motion, _heading, odo = _session_chains(data)
+        self.assertEqual(len(odo), 1)
+        _ia, _ib, dpx, dpy, yaw_a_rad, sigma = odo[0]
+        self.assertAlmostEqual(dpx, 2.0)
+        self.assertAlmostEqual(dpy, 0.0)
+        self.assertAlmostEqual(yaw_a_rad, math.radians(90.0))  # yaw of frame a, in radians
+        self.assertAlmostEqual(sigma, 0.3 + 0.05 * 2.0 + 0.01 * 4.0)  # base + per_m·‖Δp‖ + per_s·Δt
+        # A pair that got a measured odo displacement must NOT also get a pace-cap motion pair.
+        self.assertEqual(len(motion), 0)
+
+    def test_no_odo_pair_without_yaw(self):
+        # Odo needs yaw (it recovers the odo frame's world rotation); drop yaw and there is no odo pair.
+        _session, data = self._one_pair_data(yaw_a=None, yaw_b=None, dodo=(2.0, 0.0))
+        _motion, _heading, odo = _session_chains(data)
+        self.assertEqual(len(odo), 0)
+
+    def test_odometry_residual_zero_at_ground_truth(self):
+        # φ = θ_a − yaw_a. With θ_a = π/2, yaw_a = 0 and Δodo = (2, 0), the predicted world displacement
+        # is R(π/2)·(2, 0) = (0, 2); place frame b there and the odometry residual vanishes.
+        session, data = self._one_pair_data(yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0))
+        motion, heading, odo = _session_chains(data)
+        components, _lm_component = _components(data, motion, heading, odo)
+        compass_target = _compass_targets(data, self.now)
+        compass_frames = sorted(compass_target.items())
+        x0, gauges = _initial_guess(data, {}, components, compass_target)
+        mask = np.ones(len(data["live"]), dtype=bool)
+        ctx = _residual_context(data, motion, heading, odo, compass_frames, gauges, mask)
+        residual, seg, _active, _r0, _sparsity = _build_residual_fn(data, ctx, x0)
+
+        ia = data["cam_index"][(session, "a")]
+        ib = data["cam_index"][(session, "b")]
+        params = x0.copy()
+        params[3 * ia : 3 * ia + 3] = [0.0, 0.0, math.pi / 2]  # frame a at origin, facing +y
+        params[3 * ib : 3 * ib + 3] = [0.0, 2.0, math.pi / 2]  # frame b at the odo-predicted (0, 2)
+        r = residual(params)
+        od0, od1 = seg["odometry"]
+        self.assertEqual(od1 - od0, 2)  # one pair → two rows (ex, ey)
+        self.assertLess(abs(r[od0]), 1e-9)
+        self.assertLess(abs(r[od0 + 1]), 1e-9)
+
+    def test_walk_recovers_cross_table_distance_with_odo(self):
+        # The headline: a one-label-per-frame walk between two tables 6 m apart (lots never co-visible).
+        # Yaw alone gives the direction; odo makes the distance metric.
+        sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=True, now=self.now), {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
+        self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=0.9)  # within ~15 % of the true 6.0 m
+        self.assertLess(_ab_direction_error_deg(sol), 8.0)  # odo does not spoil the yaw-fixed direction
+
+    def test_walk_with_odo_noise_still_close(self):
+        sol = solve_positions(
+            _walk_observations(uuid.uuid4(), with_odo=True, odo_noise_m=0.1, now=self.now), {}, now=self.now
+        )
+        self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=1.2)
+
+    def test_without_odo_distance_is_not_metric(self):
+        # Same scan, yaw only (no odo): the direction is fixed but the inter-table distance is only
+        # cap-bounded, so it collapses well short of the true 6 m — the gap odo closes.
+        sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=False, now=self.now), {}, now=self.now)
+        self.assertLess(_ab_distance(sol), 4.0)
+
+
 class ArComponentTests(TestCase):
     """Disconnected scans become distinct islands (non-overlapping); a linking walk merges them."""
 
@@ -299,6 +471,167 @@ class ArComponentTests(TestCase):
         )
         sol = solve_positions(obs, {}, now=self.now)
         self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
+
+    def test_gps_anchors_disconnected_islands_by_location(self):
+        # Two disjoint scans ~100 m apart north-south. Without GPS they'd be marched ~20 m apart in x;
+        # with GPS their bases reflect the real separation (distance and direction).
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        lat0, lon0 = 40.0, -75.0
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0)
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
+        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
+        d = cb - ca
+        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
+        self.assertGreater(abs(d[1]), abs(d[0]) * 3)  # separation is mostly north (y), not east (x)
+
+    def test_gps_east_west_separation(self):
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        lat0, lon0 = 40.0, -75.0
+        dlon = 100.0 / (M_PER_DEG_LON * math.cos(math.radians(lat0)))  # 100 m east
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0 + dlon)
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
+        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
+        d = cb - ca
+        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
+        self.assertGreater(abs(d[0]), abs(d[1]) * 3)  # separation is mostly east (x)
+
+    def test_gps_island_sits_past_prior_map(self):
+        # A prior-anchored island fixes the map frame; a disconnected GPS island lands past it, never
+        # on top of it (GPS never disturbs the established map).
+        priors = {10: (0.0, 0.0), 11: (2.0, 0.0)}
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}  # 2 prior lots → prior island
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}  # cold GPS island
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now, gps=(40.0, -75.0)
+        )
+        sol = solve_positions(obs, priors, now=self.now)
+        self.assertGreater(min(sol[k].x for k in b), max(sol[k].x for k in a))
+
+    def test_no_gps_keeps_marched_layout(self):
+        # Without GPS the disconnected islands still march side by side (unchanged behaviour).
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
+        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
+        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
+            b, CAMS, uuid.uuid4(), now=self.now
+        )
+        sol = solve_positions(obs, {}, now=self.now)
+        ax = [sol[k].x for k in a]
+        bx = [sol[k].x for k in b]
+        self.assertTrue(max(ax) < min(bx) or max(bx) < min(ax))
+
+
+def _wrap_deg(x):
+    """Wrap degrees to (−180, 180]."""
+    return (x + 180.0) % 360.0 - 180.0
+
+
+def _rot_pts(pts, ang):
+    c, s = math.cos(ang), math.sin(ang)
+    return {k: (c * x - s * y, s * x + c * y) for k, (x, y) in pts.items()}
+
+
+def _rot_cams(cams, ang):
+    c, s = math.cos(ang), math.sin(ang)
+    return [(c * x - s * y, s * x + c * y, th + ang) for (x, y, th) in cams]
+
+
+class ArCompassHeadingTests(TestCase):
+    """Absolute compass heading as a soft island-orientation prior. GPS anchors *where* an island
+    sits; the compass anchors *which way it faces* — the one thing bearings + GPS cannot fix on a
+    disconnected island. Magnetic→true is corrected via WMM declination (patched here for
+    determinism)."""
+
+    def setUp(self):
+        self.now = timezone.now()
+
+    def _targets(self, headings, *, gps=None):
+        """Run the frame-heading → camera-θ conversion (:func:`_compass_targets`) on a minimal data
+        stub: one frame per heading, cam indices 0..n-1."""
+        keys = [("s", f"f{i}") for i in range(len(headings))]
+        data = {
+            "frame_heading": dict(zip(keys, headings)),
+            "frame_gps": dict.fromkeys(keys, gps) if gps else {},
+            "cam_index": {k: i for i, k in enumerate(keys)},
+        }
+        return _compass_targets(data, self.now)
+
+    def test_heading_to_theta_conversion(self):
+        # ENU world (east=+x, north=+y): a compass heading H points along (sin H, cos H), whose
+        # ccw-from-+x angle is 90°−H. No GPS ⇒ declination 0.
+        targets = self._targets([0.0, 90.0])
+        self.assertAlmostEqual(targets[0], math.pi / 2)  # north ⇒ θ = +π/2
+        self.assertAlmostEqual(targets[1], 0.0)  # east ⇒ θ = 0
+
+    def test_declination_applied_before_conversion(self):
+        # With +10° east declination, a magnetic heading of 80° is true 90° (east) ⇒ θ = 0.
+        with patch("auctions.ar_mapping._declination_deg", return_value=10.0):
+            targets = self._targets([80.0], gps=(40.0, -75.0))
+        self.assertAlmostEqual(targets[0], 0.0)
+
+    def test_disconnected_islands_recover_absolute_orientation(self):
+        # Two disjoint sessions (no shared lots) ~100 m apart. Island A's internal axis runs due east
+        # in ENU; island B's identical scene is rotated 90° so its axis runs due north. GPS alone
+        # leaves each island's rotation free; the compass pins it. Declination patched to 0.
+        lat0, lon0 = 40.0, -75.0
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
+        b_base = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (2.0, 2.0), 23: (0.0, 2.0)}
+        ang = math.radians(90)
+        b = _rot_pts(b_base, ang)
+        with patch("auctions.ar_mapping._declination_deg", return_value=0.0):
+            obs = _gen_observations(
+                a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0), heading=True
+            ) + _gen_observations(
+                b,
+                _rot_cams(CAMS, ang),
+                uuid.uuid4(),
+                now=self.now,
+                gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0),
+                heading=True,
+            )
+            sol = solve_positions(obs, {}, now=self.now)
+        self.assertGreaterEqual(set(sol), set(a) | set(b))
+        # Two separate islands.
+        self.assertNotEqual({sol[k].component for k in a}, {sol[k].component for k in b})
+        # A's 10→11 axis is due east (0°); B's 20→21 axis is due north (+90°) — absolutely, no
+        # per-island rotation freedom removed.
+        dir_a = math.degrees(math.atan2(sol[11].y - sol[10].y, sol[11].x - sol[10].x))
+        dir_b = math.degrees(math.atan2(sol[21].y - sol[20].y, sol[21].x - sol[20].x))
+        self.assertLess(abs(_wrap_deg(dir_a - 0.0)), 5.0, f"island A axis off ({dir_a:.1f}°)")
+        self.assertLess(abs(_wrap_deg(dir_b - 90.0)), 5.0, f"island B axis off ({dir_b:.1f}°)")
+
+    def test_declination_rotates_recovered_island(self):
+        # Same scene, declination 0 vs +10°. θ_target = wrap(π/2 − rad(H + D)) = θ_true − rad(D), so a
+        # +10° declination rotates the recovered island −10°.
+        lat0, lon0 = 40.0, -75.0
+        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
+
+        def solve_with_decl(decl):
+            with patch("auctions.ar_mapping._declination_deg", return_value=decl):
+                obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0), heading=True)
+                return solve_positions(obs, {}, now=self.now)
+
+        sol0 = solve_with_decl(0.0)
+        sol10 = solve_with_decl(10.0)
+        dir0 = math.degrees(math.atan2(sol0[11].y - sol0[10].y, sol0[11].x - sol0[10].x))
+        dir10 = math.degrees(math.atan2(sol10[11].y - sol10[10].y, sol10[11].x - sol10[10].x))
+        self.assertAlmostEqual(_wrap_deg(dir10 - dir0), -10.0, delta=3.0)
+
+    def test_declination_smoke_pittsburgh_and_garbage(self):
+        # Real WMM2025 lookup: Pittsburgh sits at roughly −9° (west) declination in 2026.
+        when = self.now.replace(year=2026, month=7, day=1)
+        d = _declination_deg(40.44, -79.99, when)
+        self.assertGreater(d, -13.0)
+        self.assertLess(d, -5.0)
+        # Garbage coordinates must never raise a solve to death — they yield 0.0 (no correction).
+        self.assertEqual(_declination_deg(999.0, -79.99, when), 0.0)
 
 
 class ArApiBaseTestCase(StandardTestCase):
@@ -648,6 +981,175 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         payload["frames"][0]["yaw_deg"] = 1080.0  # three left turns; cumulative + unwrapped, valid
         self._post(self.user, payload)
         self.assertEqual(LotObservation.objects.get(auction=self.auction).yaw_deg, 1080.0)
+
+    # --- GPS (island anchoring) ----------------------------------------------
+    def test_gps_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 40.12
+        payload["frames"][0]["longitude"] = -75.34
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        rows = LotObservation.objects.filter(auction=self.auction)
+        self.assertEqual({(r.latitude, r.longitude) for r in rows}, {(40.12, -75.34)})
+
+    def test_gps_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no lat/lon keys at all
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_zero_zero_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 0.0  # classic "no fix" sentinel
+        payload["frames"][0]["longitude"] = 0.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_out_of_range_dropped_not_400(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 200.0  # out of range
+        payload["frames"][0]["longitude"] = -75.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    def test_gps_half_supplied_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["latitude"] = 40.0  # longitude missing → drop the whole fix
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.latitude)
+        self.assertIsNone(obs.longitude)
+
+    # --- heading_deg (absolute compass heading) ------------------------------
+    def test_heading_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = 137.5
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        # Every detection row of the frame stores the frame's heading.
+        headings = list(LotObservation.objects.filter(auction=self.auction).values_list("heading_deg", flat=True))
+        self.assertEqual(headings, [137.5, 137.5])
+
+    def test_heading_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no heading_deg key at all
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_null_tolerated(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = None
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_junk_dropped_to_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = 9999.0  # outside [-360, 360] → dropped as "unknown"
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIsNone(LotObservation.objects.get(auction=self.auction).heading_deg)
+
+    def test_heading_negative_normalized_to_range(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["heading_deg"] = -90.0  # a valid bearing; normalized to [0, 360)
+        self._post(self.user, payload)
+        self.assertEqual(LotObservation.objects.get(auction=self.auction).heading_deg, 270.0)
+
+    # --- odo_x_m/odo_y_m (translation dead-reckoning) -------------------------
+    def test_odo_persisted_on_every_detection_row(self):
+        det = [
+            {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
+            {"lot": self.lot_b.pk, "bearing_deg": 5.0, "depression_deg": 22.0},
+        ]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 3.5
+        payload["frames"][0]["odo_y_m"] = -1.25
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.json()["accepted"], 2)
+        rows = LotObservation.objects.filter(auction=self.auction)
+        self.assertEqual({(r.odo_x_m, r.odo_y_m) for r in rows}, {(3.5, -1.25)})
+
+    def test_odo_optional_defaults_null(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        self._post(self.user, self._batch(det))  # no odo keys at all
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_zero_zero_preserved(self):
+        # The deliberate difference from GPS: (0, 0) is the session origin, a VALID reading — keep it.
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 0.0
+        payload["frames"][0]["odo_y_m"] = 0.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertEqual(obs.odo_x_m, 0.0)
+        self.assertEqual(obs.odo_y_m, 0.0)
+
+    def test_odo_half_supplied_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 2.0  # odo_y_m missing → drop the whole pair
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_junk_out_of_range_dropped(self):
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        payload["frames"][0]["odo_x_m"] = 99999.0  # > 10 km of walking is junk → drop BOTH as "unknown"
+        payload["frames"][0]["odo_y_m"] = 1.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        self.assertIsNone(obs.odo_x_m)
+        self.assertIsNone(obs.odo_y_m)
+
+    def test_odo_non_finite_dropped_by_validate(self):
+        # A bare NaN/Infinity literal in the JSON *body* is rejected upstream by DRF's strict JSON
+        # parser (400) before our code runs, so it can't be expressed via a posted payload. We instead
+        # assert the server-side isfinite guard directly at the serializer: a non-finite odo value that
+        # does reach validate() (e.g. inf produced numerically) nulls BOTH, never raising.
+        from auctions.mobile.serializers import ArFrameSerializer
+
+        ser = ArFrameSerializer(
+            data={
+                "frame_id": "f001",
+                "captured_at": timezone.now().isoformat(),
+                "odo_x_m": float("inf"),
+                "odo_y_m": 1.0,
+                "detections": [],
+            }
+        )
+        self.assertTrue(ser.is_valid(), ser.errors)
+        self.assertIsNone(ser.validated_data["odo_x_m"])
+        self.assertIsNone(ser.validated_data["odo_y_m"])
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):

@@ -11254,6 +11254,27 @@ class LotObservation(models.Model):
     # start — same sign as the solver's θ). Null ⇒ the device gave no gyro data ("unknown", never
     # "didn't turn"). Every detection row of a frame stores that frame's yaw. Heading odometry.
     yaw_deg = models.FloatField(null=True, blank=True)
+    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
+    # tilt-compensated, for the camera's forward axis. Null ⇒ the device gave no compass reading
+    # ("unknown", never "didn't point north"). Every detection row of a frame stores that frame's
+    # heading. Unlike the *relative* gyro yaw above, this is an *absolute* bearing: the solver uses it
+    # as a soft prior that fixes each disconnected island's absolute orientation (magnetic→true is
+    # corrected server-side via WMM declination); see ar_mapping.
+    heading_deg = models.FloatField(null=True, blank=True)
+    # Phone GPS fix at capture (WGS84 degrees), or null when the device had no fix. Every detection
+    # row of a frame stores that frame's fix. GPS is far too coarse to place individual lots, but it
+    # anchors the *base location of each disconnected island* so separately-scanned areas render
+    # roughly where they physically are instead of at arbitrary offsets (see ar_mapping).
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
+    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = the camera's
+    # forward direction at yaw 0 (session start), +y = 90° ccw from +x (the camera's left). Null ⇒ no
+    # tracking ("unknown", never "didn't move"). Every detection row of a frame stores that frame's
+    # displacement. The solver uses consecutive frames' difference as translation odometry between
+    # frames (a measured walk, superseding the pace-cap guess); see ar_mapping.
+    odo_x_m = models.FloatField(null=True, blank=True)
+    odo_y_m = models.FloatField(null=True, blank=True)
 
     class Meta:
         indexes = [

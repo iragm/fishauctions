@@ -373,6 +373,8 @@ pydantic-settings==2.14.2
     # via django-bootstrap-datepicker-plus
 pydyf==0.12.1
     # via weasyprint
+pygeomag==1.1.0
+    # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
 pyjwt[crypto]==2.13.0
