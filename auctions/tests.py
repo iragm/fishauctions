@@ -7263,6 +7263,31 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertJSONEqual(response.content, {"status": "ignored"})
         mock_verify.assert_not_called()
 
+    def test_handled_event_without_subscription_id_ignored(self):
+        # A handled lifecycle event whose resource has no id must be ignored outright -- never
+        # verified, never applied.
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            missing = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {}})
+            empty = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": ""}})
+            no_resource = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED"})
+        for response in (missing, empty, no_resource):
+            self.assertEqual(response.status_code, 200)
+            self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
+    def test_sale_without_billing_agreement_id_ignored(self):
+        # A one-off (non-subscription) PAYMENT.SALE.COMPLETED carries no billing_agreement_id and
+        # must be ignored, not verified.
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            response = self._post_event({"event_type": "PAYMENT.SALE.COMPLETED", "resource": {"id": "PAY-9"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
     def test_missing_headers_rejected(self):
         response = self._post_event(
             {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-SUB1"}}, headers=False
