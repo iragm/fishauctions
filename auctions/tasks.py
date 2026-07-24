@@ -221,6 +221,13 @@ def maybe_send_membership_renewal_confirmation(member):
         date_str = member.membership_expiration_date.strftime("%B %-d, %Y")
         expiration_text = f"  Your membership is paid through {date_str}."
     message_text = f"Your {member.club.name} membership has been renewed.{expiration_text}"
+    if member.paypal_subscription_id:
+        # PayPal-subscription renewal: tell them it's automatic and where to manage/cancel it.
+        # paypal.com/myaccount/autopay is PayPal's "Automatic payments" page for subscribers.
+        message_text += (
+            " This renews automatically through your PayPal subscription. To manage or cancel it, "
+            "visit your PayPal automatic payments page: https://www.paypal.com/myaccount/autopay/"
+        )
     return send_club_member_email(
         member,
         subject=f"Your {member.club.name} membership has been renewed",
@@ -601,6 +608,9 @@ def update_expired_membership_discord_roles(self):
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
         membership_expiration_reminder_30_days_due__lte=now,
+        # PayPal-subscription members auto-renew, so don't nag them to renew (their due timestamp is
+        # left intact, so reminders resume if the subscription is later cancelled).
+        paypal_subscription_id="",
     ).select_related("club")
     for member in reminder_30_days_qs:
         if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
@@ -619,6 +629,8 @@ def update_expired_membership_discord_roles(self):
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
         membership_expiration_reminder_due__lte=now,
+        # PayPal-subscription members auto-renew; skip the nag (see the 30-day query above).
+        paypal_subscription_id="",
     ).select_related("club")
     for member in reminder_qs:
         if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:

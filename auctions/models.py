@@ -816,6 +816,17 @@ class Club(CloudflareImageMixin, models.Model):
             "Only used when non-OAuth PayPal is allowed."
         ),
     )
+    paypal_webhook_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        verbose_name="PayPal subscription webhook ID",
+        help_text=(
+            "Webhook ID from this club's PayPal dashboard, used to verify incoming membership "
+            "subscription webhooks. Create a webhook pointing at /clubs/paypal/webhook subscribed to "
+            "BILLING.SUBSCRIPTION events, then paste its ID here."
+        ),
+    )
     auction_email_member = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -1231,6 +1242,17 @@ class Club(CloudflareImageMixin, models.Model):
         return bool(seller and seller.square_merchant_id)
 
     @property
+    def supports_paypal_subscriptions(self):
+        """True when membership subscription webhooks can be verified for this club.
+
+        Verifying a subscription webhook needs credentials that own the club's webhook: the club's
+        own REST app (non-OAuth mode) or the site account (site-PayPal clubs). An OAuth-linked club
+        never exposes a usable client secret, so we can't obtain a token that owns its webhook and
+        verification would always fail -- the feature is hidden for those clubs.
+        """
+        return self.uses_site_paypal or self.uses_own_paypal_credentials
+
+    @property
     def membership_payment_emails_enabled(self):
         return bool((self.membership_annual_fee or 0) > 0 and (self.can_accept_paypal or self.can_accept_square))
 
@@ -1376,6 +1398,17 @@ class ClubMember(ContactRecord):
     culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
     membership_expiration_date = models.DateField(null=True, blank=True)
+    paypal_subscription_id = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=(
+            "PayPal recurring subscription ID (e.g. I-XXXXXXXX). Set/cleared by the PayPal subscription "
+            "webhook. While set, the member auto-renews via PayPal: expiring-soon reminders are skipped "
+            "and the invoice membership-renewal box is disabled."
+        ),
+    )
     membership_number = models.BigIntegerField(
         default=_default_membership_number,
         unique=True,
@@ -1525,6 +1558,11 @@ class ClubMember(ContactRecord):
         if self.user and self.user.email:
             return self.user.email
         return ""
+
+    @property
+    def has_paypal_subscription(self) -> bool:
+        """True when this member auto-renews through a PayPal recurring subscription."""
+        return bool(self.paypal_subscription_id)
 
     @property
     def is_paid_member(self) -> bool:
@@ -2331,6 +2369,8 @@ class Auction(models.Model):
     sealed_bid.help_text = "Users won't be able to see what the current bid is"
     lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
     lot_entry_fee.help_text = "The amount the seller will be charged if a lot sells"
+    registration_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    registration_fee.help_text = "Added to all invoices"
     unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
     unsold_lot_fee.help_text = "The amount the seller will be charged if their lot doesn't sell"
     winning_bid_percent_to_club = models.PositiveIntegerField(
@@ -2487,6 +2527,11 @@ class Auction(models.Model):
     winning_bid_percent_to_club_for_club_members.verbose_name = "Alternate winning bid percent to club"
     winning_bid_percent_to_club_for_club_members.help_text = (
         "Used instead of the standard split, when you mark someone as using alternative fees"
+    )
+    registration_fee_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+    registration_fee_for_club_members.verbose_name = "Alternate registration fee"
+    registration_fee_for_club_members.help_text = (
+        "Used instead of the registration fee, when you mark someone as using alternative fees"
     )
     ALTERNATE_SPLIT_MODE_CHOICES = (
         ("off", "Off"),
@@ -8140,6 +8185,15 @@ class Invoice(models.Model):
         return self.auctiontos_user.club_member_record
 
     @property
+    def member_has_paypal_subscription(self):
+        """True when this invoice's club member auto-renews via a PayPal subscription.
+
+        Used to disable the membership-renewal checkbox on the invoice — a PayPal subscription
+        renews the membership on its own, so the manual fee should not be applied here."""
+        member = self.club_member_for_auction
+        return bool(member and member.paypal_subscription_id)
+
+    @property
     def treat_as_club_member(self):
         """True when club member benefits (club member discount, automatic alternate split) apply
         to this invoice's user: either their membership is current, or this invoice will renew it
@@ -8233,6 +8287,21 @@ class Invoice(models.Model):
         return self.auction.club_member_discount
 
     @property
+    def registration_fee_amount(self):
+        """Flat registration fee charged on every invoice for the auction ("Added to all invoices").
+
+        A user on the alternate split (``AuctionTOS.is_club_member`` while the auction's alternate
+        split is on) gets the alternate registration fee instead — mirroring the alternate lot-entry
+        fee. Unlike the club-member discount, this applies whether or not the user bought a lot."""
+        auction = self.auction
+        if not auction:
+            return Decimal("0.00")
+        tos = self.auctiontos_user
+        if auction.uses_alternate_split and tos and tos.is_club_member:
+            return Decimal(auction.registration_fee_for_club_members or 0)
+        return Decimal(auction.registration_fee or 0)
+
+    @property
     def tax(self):
         totals = self.bought_lots_queryset.aggregate(
             total_final=Coalesce(
@@ -8290,6 +8359,8 @@ class Invoice(models.Model):
         subtotal += Decimal(self.manual_adjustment_amount)
         subtotal -= Decimal(self.membership_fee_amount)
         subtotal -= Decimal(self.tax)
+        # flat registration fee charged on every invoice (alternate amount for alternate-split users)
+        subtotal -= Decimal(self.registration_fee_amount)
         if not subtotal:
             subtotal = 0
         return Decimal(subtotal)
@@ -8844,13 +8915,15 @@ class Invoice(models.Model):
             membership = _q(self.membership_fee_amount)
             first_bid = -_q(self.first_bid_payout)
             member_discount = -_q(self.club_member_discount)
+            # Registration fee is a charge to the user, so it's cash into the club (positive), like tax.
+            registration = _q(self.registration_fee_amount)
             # Book the flat + legacy percent adjustment on the SAME base net uses
             # (manual_adjustment_amount), so the percent isn't computed on the bare subtotal here
             # while net computes it on the running base. Otherwise the difference would be silently
             # swept into the rounding category below (Item 21).
             adjustment = -_q(self.manual_adjustment_amount)
             rounding = -_q(self.rounded_net) - (
-                sale + payout + tax + membership + first_bid + member_discount + adjustment
+                sale + payout + tax + membership + first_bid + member_discount + registration + adjustment
             )
             desired = {
                 ClubMoney.CATEGORY_AUCTION_SALE: sale,
@@ -8860,6 +8933,7 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: adjustment,
                 ClubMoney.CATEGORY_FIRST_BID_PAYOUT: first_bid,
                 ClubMoney.CATEGORY_CLUB_MEMBER_DISCOUNT: member_discount,
+                ClubMoney.CATEGORY_REGISTRATION_FEE: registration,
                 ClubMoney.CATEGORY_ROUNDING: rounding,
             }
             descriptions = {
@@ -8870,6 +8944,7 @@ class Invoice(models.Model):
                 ClubMoney.CATEGORY_INVOICE_ADJUSTMENT: f"Invoice adjustment for {who} in {auction}",
                 ClubMoney.CATEGORY_FIRST_BID_PAYOUT: f"First-bid payout to {who} in {auction}",
                 ClubMoney.CATEGORY_CLUB_MEMBER_DISCOUNT: f"Club member discount for {who} in {auction}",
+                ClubMoney.CATEGORY_REGISTRATION_FEE: f"Registration fee from {who} in {auction}",
                 ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
             }
         elif self.status == "PAID":
@@ -9016,6 +9091,7 @@ class ClubMoney(models.Model):
     CATEGORY_INVOICE_ADJUSTMENT = "invoice_adjustment"
     CATEGORY_FIRST_BID_PAYOUT = "first_bid_payout"
     CATEGORY_CLUB_MEMBER_DISCOUNT = "club_member_discount"
+    CATEGORY_REGISTRATION_FEE = "registration_fee"
     CATEGORY_ROUNDING = "rounding"
     # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
@@ -9044,6 +9120,7 @@ class ClubMoney(models.Model):
         (CATEGORY_INVOICE_ADJUSTMENT, "Invoice adjustment"),
         (CATEGORY_FIRST_BID_PAYOUT, "First-bid payout"),
         (CATEGORY_CLUB_MEMBER_DISCOUNT, "Club member discount"),
+        (CATEGORY_REGISTRATION_FEE, "Registration fee"),
         (CATEGORY_ROUNDING, "Invoice rounding"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),

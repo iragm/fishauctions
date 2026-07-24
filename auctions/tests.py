@@ -7070,6 +7070,281 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
+class PayPalSubscriptionWebhookTests(StandardTestCase):
+    """The club membership subscription webhook (PayPalSubscriptionWebhookView) and its apply logic."""
+
+    def setUp(self):
+        super().setUp()
+        # Own-credentials (non-OAuth) club, so supports_paypal_subscriptions is True and its webhook
+        # can be identified/verified.
+        self.club = Club.objects.create(
+            name="Subscription Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_membership_renewal_confirmation=True,
+            allow_non_oauth_paypal=True,
+            paypal_client_id="club-client-id",
+            paypal_secret="club-secret",
+            paypal_webhook_id="WH-CLUB-1",
+        )
+        self.webhook_url = reverse("club_paypal_subscription_webhook")
+
+    def _active_subscription(self, sub_id="I-SUB1", email="subscriber@example.com", next_days=365):
+        next_time = (timezone.now() + datetime.timedelta(days=next_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "id": sub_id,
+            "status": "ACTIVE",
+            "subscriber": {"email_address": email},
+            "billing_info": {"next_billing_time": next_time},
+        }
+
+    def _headers(self):
+        return {
+            "HTTP_PAYPAL_AUTH_ALGO": "SHA256withRSA",
+            "HTTP_PAYPAL_CERT_URL": "https://api.paypal.com/cert",
+            "HTTP_PAYPAL_TRANSMISSION_ID": "tid",
+            "HTTP_PAYPAL_TRANSMISSION_SIG": "sig",
+            "HTTP_PAYPAL_TRANSMISSION_TIME": "2026-07-24T00:00:00Z",
+        }
+
+    def _post_event(self, event, headers=True):
+        extra = self._headers() if headers else {}
+        return self.client.post(self.webhook_url, data=json.dumps(event), content_type="application/json", **extra)
+
+    # --- Club.supports_paypal_subscriptions gating ---
+
+    def test_supports_paypal_subscriptions(self):
+        self.assertTrue(self.club.supports_paypal_subscriptions)
+        oauth_user = User.objects.create_user(username="oauth_sub_user", password="x", email="oauth_sub@example.com")
+        oauth_club = Club.objects.create(name="OAuth Club", membership_system="rolling")
+        PayPalSeller.objects.create(user=oauth_user, club=oauth_club, paypal_merchant_id="merchant_x")
+        self.assertFalse(oauth_club.supports_paypal_subscriptions)
+
+    def test_form_hides_webhook_field_when_unsupported(self):
+        oauth_club = Club.objects.create(name="OAuth Club 2", membership_system="rolling")
+        form = ClubMembershipSettingsForm(instance=oauth_club, show_paypal_subscriptions=False)
+        self.assertNotIn("paypal_webhook_id", form.fields)
+
+    def test_form_shows_webhook_field_when_supported(self):
+        form = ClubMembershipSettingsForm(instance=self.club, show_paypal_subscriptions=True)
+        self.assertIn("paypal_webhook_id", form.fields)
+
+    def test_hidden_field_does_not_blank_saved_webhook_id(self):
+        # A club that loses PayPal eligibility must not have its saved webhook id wiped on save.
+        form = ClubMembershipSettingsForm(
+            instance=self.club,
+            data={"membership_system": "rolling", "membership_annual_fee": "25.00"},
+            show_paypal_subscriptions=False,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_webhook_id, "WH-CLUB-1")
+
+    # --- _subscription_id_for_event ---
+
+    def test_subscription_id_for_event(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        view = PayPalSubscriptionWebhookView()
+        self.assertEqual(view._subscription_id_for_event("BILLING.SUBSCRIPTION.ACTIVATED", {"id": "I-1"}), "I-1")
+        self.assertEqual(
+            view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"billing_agreement_id": "I-2"}), "I-2"
+        )
+        # A one-off sale carries no billing_agreement_id, and CREATED (approval-pending) is unhandled.
+        self.assertEqual(view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"id": "PAY-9"}), "")
+        self.assertEqual(view._subscription_id_for_event("BILLING.SUBSCRIPTION.CREATED", {"id": "I-3"}), "")
+
+    # --- _apply_paypal_subscription_event (no network) ---
+
+    def test_active_subscription_links_member_and_extends(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, self._active_subscription())
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "I-SUB1")
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+        mock_email.assert_called_once()
+
+    def test_active_subscription_creates_member_when_none(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(email="new@example.com"))
+        member = ClubMember.objects.get(club=self.club, paypal_subscription_id="I-SUB1")
+        self.assertEqual(member.email, "new@example.com")
+
+    def test_duplicate_active_event_does_not_resend_email(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)  # same cycle -> no change, no second email
+        self.assertEqual(mock_email.call_count, 1)
+
+    def test_renewal_advances_expiration_and_emails_again(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730))
+        self.assertEqual(mock_email.call_count, 2)
+        member.refresh_from_db()
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
+
+    def test_cancelled_clears_subscription_but_keeps_expiration(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        expiry = (timezone.now() + datetime.timedelta(days=100)).date()
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=expiry,
+        )
+        cancelled = {
+            "id": "I-SUB1",
+            "status": "CANCELLED",
+            "subscriber": {"email_address": "subscriber@example.com"},
+        }
+        _apply_paypal_subscription_event(self.club, cancelled)
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "")
+        self.assertEqual(member.membership_expiration_date, expiry)
+
+    def test_approval_pending_does_not_grant_membership(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        pending = {
+            "id": "I-SUB1",
+            "status": "APPROVAL_PENDING",
+            "subscriber": {"email_address": "pending@example.com"},
+        }
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, pending)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, email__iexact="pending@example.com").exists())
+        mock_email.assert_not_called()
+
+    # --- post() integration ---
+
+    def test_renewal_payment_extends_membership(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=5)).date(),
+        )
+        event = {"event_type": "PAYMENT.SALE.COMPLETED", "resource": {"billing_agreement_id": "I-SUB1"}}
+        with (
+            patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club", return_value=self.club),
+            patch.object(PayPalSubscriptionWebhookView, "get_from_paypal", return_value=self._active_subscription()),
+            patch("auctions.views.maybe_send_membership_renewal_confirmation"),
+        ):
+            response = self._post_event(event)
+        self.assertEqual(response.status_code, 200)
+        member.refresh_from_db()
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+
+    def test_unhandled_event_ignored_without_verification(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            response = self._post_event({"event_type": "BILLING.SUBSCRIPTION.CREATED", "resource": {"id": "I-SUB1"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
+    def test_missing_headers_rejected(self):
+        response = self._post_event(
+            {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-SUB1"}}, headers=False
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_unverified_club_rejected(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club", return_value=None):
+            response = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-SUB1"}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_dict_body_rejected(self):
+        response = self.client.post(
+            self.webhook_url, data=json.dumps([1, 2, 3]), content_type="application/json", **self._headers()
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_event_only_matches_verifying_club(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        # A second webhook-configured club must not receive another club's subscriber.
+        other = Club.objects.create(
+            name="Other Sub Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("10.00"),
+            allow_non_oauth_paypal=True,
+            paypal_client_id="o",
+            paypal_secret="o",
+            paypal_webhook_id="WH-OTHER",
+        )
+        event = {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-NEW"}}
+        with (
+            patch.object(
+                PayPalSubscriptionWebhookView,
+                "_verify_for_club",
+                side_effect=lambda club, headers, evt: club.pk == self.club.pk,
+            ),
+            patch.object(
+                PayPalSubscriptionWebhookView,
+                "get_from_paypal",
+                return_value=self._active_subscription(sub_id="I-NEW", email="x@example.com"),
+            ),
+            patch("auctions.views.maybe_send_membership_renewal_confirmation"),
+        ):
+            response = self._post_event(event)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, paypal_subscription_id="I-NEW").exists())
+        self.assertFalse(ClubMember.objects.filter(club=other, paypal_subscription_id="I-NEW").exists())
+
+    # --- renewal email manage link ---
+
+    def test_renewal_email_includes_paypal_manage_link(self):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+        )
+        with patch("auctions.tasks.send_club_member_email") as mock_send:
+            maybe_send_membership_renewal_confirmation(member)
+        mock_send.assert_called_once()
+        self.assertIn("paypal.com/myaccount/autopay", mock_send.call_args.kwargs["message_text"])
+
+    def test_renewal_email_omits_manage_link_without_subscription(self):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Manual Member",
+            email="manual@example.com",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+        )
+        with patch("auctions.tasks.send_club_member_email") as mock_send:
+            maybe_send_membership_renewal_confirmation(member)
+        self.assertNotIn("autopay", mock_send.call_args.kwargs["message_text"])
+
+
 class ClubMemberDiscountTests(StandardTestCase):
     """Tests for Auction.club_member_discount and Auction.alternate_split_mode.
 

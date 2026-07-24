@@ -1,0 +1,8 @@
+{% if invoice.registration_fee_amount %}
+<tr id="invoice-registration-fee-row">
+  <td>Registration fee</td>
+  <td>{{ invoice.currency_symbol }}{{ invoice.registration_fee_amount|floatformat:2 }}</td>
+</tr>
+{% else %}
+<tr id="invoice-registration-fee-row" style="display: none;"><td></td><td></td></tr>
+{% endif %}

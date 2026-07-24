@@ -682,6 +682,11 @@ urlpatterns = [
     ),
     re_path(r"^webpush/", include("webpush.urls")),
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
+    re_path(
+        r"^clubs/paypal/webhook/?$",
+        views.PayPalSubscriptionWebhookView.as_view(),
+        name="club_paypal_subscription_webhook",
+    ),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
     re_path(

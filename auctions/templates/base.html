@@ -50,10 +50,17 @@ window.onload = function() {
                 {% endwith %}
             {% endblock %}
         </title>
+        {% comment %} Prefer an explicit `club` in context (club pages); on auction pages fall back to
+        the auction's club so the club favicon shows there too. `{% if %}` safely treats a missing
+        `auction` as falsy (the `default` filter would raise on it). {% endcomment %}
         {% if club and club.icon %}
         <link rel="icon" type="image/png" href="{{ club.icon_display_url }}"/>
         <link rel="shortcut icon" href="{{ club.icon_display_url }}"/>
         <link rel="apple-touch-icon" sizes="180x180" href="{{ club.icon_display_url }}"/>
+        {% elif auction.club and auction.club.icon %}
+        <link rel="icon" type="image/png" href="{{ auction.club.icon_display_url }}"/>
+        <link rel="shortcut icon" href="{{ auction.club.icon_display_url }}"/>
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ auction.club.icon_display_url }}"/>
         {% else %}
         <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}"/>
         <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}"/>
@@ -442,7 +449,7 @@ window.onload = function() {
         <div class="{% if view.club_sidebar_can_view %}container-fluid{% else %}container{% endif %} mt-5 mb-5">
             <div class="row">
               {% if view.club_sidebar_can_view %}
-              <div class="col-lg-3 col-xl-2 mb-3">{% club_sidebar %}</div>
+              <div class="col-lg-3 col-xl-2 mb-3 min-w-0">{% club_sidebar %}</div>
               {% endif %}
               <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% else %}col-md-12{% endif %}">
                 {% block content %}{% endblock %}
