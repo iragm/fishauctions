@@ -2119,6 +2119,10 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
         # Hidden via js unless a club is selected; don't block submission when it's not shown.
         self.fields["club_member_discount"].required = False
+        # Optional fees: leaving them blank means "no fee", not a validation error. The model default
+        # is already 0 and the column is NOT NULL, so clean() coerces a blank submission back to 0.
+        self.fields["registration_fee"].required = False
+        self.fields["registration_fee_for_club_members"].required = False
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
 
         # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
@@ -2563,6 +2567,11 @@ class AuctionEditForm(forms.ModelForm):
         cleaned_data = super().clean()
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
         existing_instance = self.instance
+
+        # Both registration fees are optional (see __init__): a blank submission is "no fee". The
+        # columns are NOT NULL, so fold the resulting None back to the model default of 0.
+        for fee_field in ("registration_fee", "registration_fee_for_club_members"):
+            cleaned_data[fee_field] = cleaned_data.get(fee_field) or 0
 
         # When a club is selected, payments are controlled by club settings, not auction settings
         single_club = get_single_club(create=False)

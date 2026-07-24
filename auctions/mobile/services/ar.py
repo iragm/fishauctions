@@ -11,7 +11,7 @@ import logging
 from django.core.cache import cache
 from django.utils import timezone
 
-from auctions.models import Lot, LotObservation, LotPosition, Watch
+from auctions.models import Lot, LotObservation, LotPosition, PageView, Watch
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,15 @@ DEPRESSION_ABS_MAX = 90.0
 # Recommended-lot set is an expensive ordering query; cache the pk set per (user, auction).
 RECOMMENDED_QTY = 25
 RECOMMENDED_CACHE_SECONDS = 300
+
+# AR interaction events (item: track who scanned / zoomed in / zoomed all the way in on a lot). Each
+# becomes a PageView tagged with the mapped ``source`` so it's counted as a lot pageview but can be
+# broken out separately on the lot page. The app posts these to POST /api/mobile/ar/events/; it should
+# send each (lot, event) at most once per AR session — the server also de-dupes to one row per user per
+# lot per event type, so a count is "number of distinct users who did X", never inflated by re-scans.
+AR_EVENT_SOURCES = {"scanned": "ar_scan", "zoomed": "ar_zoom", "zoomed_full": "ar_zoom_full"}
+AR_EVENT_TYPES = tuple(AR_EVENT_SOURCES)  # accepted "event" values in the payload
+MAX_AR_EVENTS_PER_BATCH = 100
 
 
 AR_DIRTY_REGISTRY_KEY = "ar_dirty_auctions"
@@ -247,6 +256,67 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
     if to_create:
         LotObservation.objects.bulk_create(to_create)
         mark_auction_dirty(auction)
+    return len(to_create)
+
+
+def _client_ip(request):
+    """Best-effort client IP (first X-Forwarded-For hop, else REMOTE_ADDR); '' when unknown."""
+    fwd = request.META.get("HTTP_X_FORWARDED_FOR")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR") or ""
+
+
+def record_ar_events(auction, user, events, request):
+    """Record AR interaction events (scan / zoom-in / zoom-all-the-way) as lot PageViews.
+
+    Each accepted event becomes a ``PageView`` with ``source`` in ``AR_EVENT_SOURCES.values()`` so it
+    is counted among the lot's page views but can be listed separately on the lot page. Events for a
+    lot not live in this auction, or with an unknown event type, are dropped silently (never fail the
+    batch). De-duped to one row per (user, lot, source) so the per-source counts are "distinct users
+    who did X" and a user re-scanning the same lot never inflates them. Returns the accepted count.
+    """
+    if not (user and user.is_authenticated):
+        return 0  # AR endpoints are JWT-authed, so this is just defensive.
+
+    # De-dupe the batch to (lot_pk, source) and collect the referenced lot pks.
+    wanted = set()
+    lot_pks = set()
+    for ev in events:
+        source = AR_EVENT_SOURCES.get(ev.get("event"))
+        lot_pk = ev.get("lot")
+        if source and isinstance(lot_pk, int):
+            wanted.add((lot_pk, source))
+            lot_pks.add(lot_pk)
+    if not wanted:
+        return 0
+
+    lots = {lot.pk: lot for lot in Lot.objects.filter(pk__in=lot_pks, auction=auction, is_deleted=False)}
+    # Rows this user already has for these lots — skip so a re-scan/re-zoom doesn't double-count them.
+    existing = set(
+        PageView.objects.filter(
+            user=user, lot_number_id__in=lot_pks, source__in=set(AR_EVENT_SOURCES.values())
+        ).values_list("lot_number_id", "source")
+    )
+    ip = _client_ip(request)
+
+    to_create = []
+    for lot_pk, source in wanted:
+        lot = lots.get(lot_pk)
+        if lot is None or (lot_pk, source) in existing:
+            continue
+        to_create.append(
+            PageView(
+                user=user,
+                lot_number=lot,
+                source=source,
+                url=(lot.lot_link or "")[:600],
+                title=(lot.lot_name or "")[:600],
+                ip_address=(ip[:100] or None),
+            )
+        )
+    if to_create:
+        PageView.objects.bulk_create(to_create)
     return len(to_create)
 
 

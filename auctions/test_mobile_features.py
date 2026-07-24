@@ -257,6 +257,9 @@ class MobileLabelPdfTests(StandardTestCase):
 
 
 class PushConfiguredTests(TestCase):
+    # Pinned empty rather than relying on the ambient env: a dev box / staging with real
+    # FIREBASE_CREDENTIALS_JSON exported would otherwise make "unconfigured" tests fail.
+    @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_default_is_disabled(self):
         self.assertFalse(notifications.push_configured())
 
@@ -297,6 +300,7 @@ class UserPrefersPushTests(TestCase):
         self._device()
         self.assertTrue(self.user.userdata.user_prefers_push())
 
+    @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_false_when_push_not_configured_globally(self):
         self.ud.push_notifications_instead_of_email = True
         self.ud.save()
@@ -334,6 +338,7 @@ class NotifyUserTests(TestCase):
         self.assertEqual(sent, [])
         delay.assert_called_once()
 
+    @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_falls_back_to_email_when_unconfigured(self):
         sent = []
         with patch("auctions.tasks.send_push_to_user.delay") as delay:

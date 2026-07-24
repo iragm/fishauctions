@@ -26,8 +26,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from auctions.ar_mapping import (
     ISLAND_GAP_M,
-    M_PER_DEG_LAT,
-    M_PER_DEG_LON,
     Observation,
     _build_residual_fn,
     _compass_targets,
@@ -472,48 +470,25 @@ class ArComponentTests(TestCase):
         sol = solve_positions(obs, {}, now=self.now)
         self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
 
-    def test_gps_anchors_disconnected_islands_by_location(self):
-        # Two disjoint scans ~100 m apart north-south. Without GPS they'd be marched ~20 m apart in x;
-        # with GPS their bases reflect the real separation (distance and direction).
+    def test_gps_is_ignored_for_island_layout(self):
+        # A ≤10 m venue is finer than any consumer GPS fix, so GPS must NOT translate islands: two
+        # disjoint scans stamped with wildly separated fixes still land in the marched layout (side by
+        # side ~ISLAND_GAP_M apart in x), exactly as they would with no GPS at all.
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
         b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
         lat0, lon0 = 40.0, -75.0
         obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0)
+            b,
+            CAMS,
+            uuid.uuid4(),
+            now=self.now,
+            gps=(lat0 + 1.0, lon0 + 1.0),  # ~140 km away — must be ignored
         )
         sol = solve_positions(obs, {}, now=self.now)
         ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
         cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
-        d = cb - ca
-        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
-        self.assertGreater(abs(d[1]), abs(d[0]) * 3)  # separation is mostly north (y), not east (x)
-
-    def test_gps_east_west_separation(self):
-        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
-        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
-        lat0, lon0 = 40.0, -75.0
-        dlon = 100.0 / (M_PER_DEG_LON * math.cos(math.radians(lat0)))  # 100 m east
-        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0 + dlon)
-        )
-        sol = solve_positions(obs, {}, now=self.now)
-        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
-        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
-        d = cb - ca
-        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
-        self.assertGreater(abs(d[0]), abs(d[1]) * 3)  # separation is mostly east (x)
-
-    def test_gps_island_sits_past_prior_map(self):
-        # A prior-anchored island fixes the map frame; a disconnected GPS island lands past it, never
-        # on top of it (GPS never disturbs the established map).
-        priors = {10: (0.0, 0.0), 11: (2.0, 0.0)}
-        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}  # 2 prior lots → prior island
-        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}  # cold GPS island
-        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(40.0, -75.0)
-        )
-        sol = solve_positions(obs, priors, now=self.now)
-        self.assertGreater(min(sol[k].x for k in b), max(sol[k].x for k in a))
+        # Islands stay hall-scale apart (marched), never flung ~140 km by the GPS fix.
+        self.assertLess(float(np.hypot(*(cb - ca))), 3 * ISLAND_GAP_M)
 
     def test_no_gps_keeps_marched_layout(self):
         # Without GPS the disconnected islands still march side by side (unchanged behaviour).
@@ -577,9 +552,10 @@ class ArCompassHeadingTests(TestCase):
         self.assertAlmostEqual(targets[0], 0.0)
 
     def test_disconnected_islands_recover_absolute_orientation(self):
-        # Two disjoint sessions (no shared lots) ~100 m apart. Island A's internal axis runs due east
-        # in ENU; island B's identical scene is rotated 90° so its axis runs due north. GPS alone
-        # leaves each island's rotation free; the compass pins it. Declination patched to 0.
+        # Two disjoint sessions (no shared lots) scanned in the same ≤10 m venue. Island A's internal
+        # axis runs due east in ENU; island B's identical scene is rotated 90° so its axis runs due
+        # north. The marched layout leaves each island's rotation free; the compass pins it (islands
+        # end up side by side but each individually oriented). Declination patched to 0.
         lat0, lon0 = 40.0, -75.0
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
         b_base = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (2.0, 2.0), 23: (0.0, 2.0)}
@@ -593,7 +569,7 @@ class ArCompassHeadingTests(TestCase):
                 _rot_cams(CAMS, ang),
                 uuid.uuid4(),
                 now=self.now,
-                gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0),
+                gps=(lat0, lon0),
                 heading=True,
             )
             sol = solve_positions(obs, {}, now=self.now)
@@ -1150,6 +1126,97 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertTrue(ser.is_valid(), ser.errors)
         self.assertIsNone(ser.validated_data["odo_x_m"])
         self.assertIsNone(ser.validated_data["odo_y_m"])
+
+
+class ArEventsEndpointTests(ArApiBaseTestCase):
+    """AR interaction events (scanned / zoomed / zoomed all the way in) → per-lot PageViews.
+
+    They count toward the lot's page views but are broken out on the lot page, and are de-duped to one
+    row per (user, lot, event) so a user re-scanning a label can never inflate the numbers.
+    """
+
+    def _post(self, user, events, auction=None):
+        return self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": (auction or self.auction).slug, "events": events}),
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def test_requires_jwt(self):
+        resp = self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": self.auction.slug, "events": []}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_missing_auction_404(self):
+        resp = self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": "no-such-auction", "events": []}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_each_event_type_creates_a_tagged_pageview(self):
+        resp = self._post(
+            self.user,
+            [
+                {"lot": self.lot_a.pk, "event": "scanned"},
+                {"lot": self.lot_a.pk, "event": "zoomed"},
+                {"lot": self.lot_a.pk, "event": "zoomed_full"},
+            ],
+        )
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json(), {"accepted": 3})
+        sources = set(PageView.objects.filter(lot_number=self.lot_a, user=self.user).values_list("source", flat=True))
+        self.assertEqual(sources, {"ar_scan", "ar_zoom", "ar_zoom_full"})
+
+    def test_counts_are_broken_out_on_the_lot(self):
+        self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}, {"lot": self.lot_a.pk, "event": "zoomed"}])
+        self._post(self.user_with_no_lots, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        counts = Lot.objects.get(pk=self.lot_a.pk).ar_interaction_counts
+        self.assertEqual(counts["scanned"], 2)
+        self.assertEqual(counts["zoomed"], 1)
+        self.assertEqual(counts["zoomed_full"], 0)
+        self.assertEqual(counts["total"], 3)
+
+    def test_repeat_events_are_deduped_per_user(self):
+        # The same user re-scanning the same lot must not inflate the count (or the page views).
+        for _ in range(4):
+            self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        self.assertEqual(PageView.objects.filter(lot_number=self.lot_a, source="ar_scan").count(), 1)
+        self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).ar_interaction_counts["scanned"], 1)
+
+    def test_events_count_toward_lot_page_views(self):
+        before = Lot.objects.get(pk=self.lot_a.pk).page_views
+        self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).page_views, before + 1)
+
+    def test_cross_auction_and_unknown_lots_dropped_silently(self):
+        resp = self._post(
+            self.user,
+            [
+                {"lot": self.other_auction_lot.pk, "event": "scanned"},
+                {"lot": 99999999, "event": "scanned"},
+                {"lot": self.lot_a.pk, "event": "scanned"},
+            ],
+        )
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json(), {"accepted": 1})
+        self.assertFalse(PageView.objects.filter(lot_number=self.other_auction_lot).exists())
+
+    def test_unknown_event_type_is_400(self):
+        resp = self._post(self.user, [{"lot": self.lot_a.pk, "event": "teleported"}])
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(PageView.objects.filter(lot_number=self.lot_a, source__startswith="ar_").exists())
+
+    def test_batch_cap_enforced(self):
+        events = [{"lot": self.lot_a.pk, "event": "scanned"}] * (ar_service.MAX_AR_EVENTS_PER_BATCH + 1)
+        resp = self._post(self.user, events)
+        self.assertEqual(resp.status_code, 400)
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):

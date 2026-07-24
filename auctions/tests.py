@@ -7089,14 +7089,26 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         )
         self.webhook_url = reverse("club_paypal_subscription_webhook")
 
-    def _active_subscription(self, sub_id="I-SUB1", email="subscriber@example.com", next_days=365):
+    def _active_subscription(
+        self, sub_id="I-SUB1", email="subscriber@example.com", next_days=365, last_payment="25.00", paid_days_ago=0
+    ):
         next_time = (timezone.now() + datetime.timedelta(days=next_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        billing_info = {"next_billing_time": next_time}
+        if last_payment is not None:
+            paid_time = timezone.now() - datetime.timedelta(days=paid_days_ago)
+            billing_info["last_payment"] = {
+                "amount": {"currency_code": "USD", "value": last_payment},
+                "time": paid_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
         return {
             "id": sub_id,
             "status": "ACTIVE",
             "subscriber": {"email_address": email},
-            "billing_info": {"next_billing_time": next_time},
+            "billing_info": billing_info,
         }
+
+    def _membership_money(self):
+        return ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_MEMBERSHIP)
 
     def _headers(self):
         return {
@@ -7175,6 +7187,98 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             _apply_paypal_subscription_event(self.club, self._active_subscription(email="new@example.com"))
         member = ClubMember.objects.get(club=self.club, paypal_subscription_id="I-SUB1")
         self.assertEqual(member.email, "new@example.com")
+
+    def test_active_subscription_books_club_money(self):
+        # A subscription renewal is cash into the club, exactly like the manual renewal button.
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="25.00"))
+        entry = self._membership_money().get()
+        self.assertEqual(entry.amount, Decimal("25.00"))
+        self.assertEqual(entry.date, timezone.now().date())
+        self.assertIn("I-SUB1", entry.description)
+        self.assertIn(str(member), entry.description)
+        self.assertIsNone(entry.created_by)  # a webhook has no acting user
+
+    def test_books_amount_paypal_actually_charged_not_club_fee(self):
+        # The club's list price is 25.00, but this subscriber is grandfathered at 18.50.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="18.50"))
+        self.assertEqual(self._membership_money().get().amount, Decimal("18.50"))
+
+    def test_duplicate_delivery_books_club_money_once(self):
+        # PayPal retries and sends several events per cycle; the ledger must not double-count.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(self._membership_money().count(), 1)
+
+    def test_each_cycle_books_its_own_payment(self):
+        # A genuine second charge (later date) is a separate ledger row.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365, paid_days_ago=365))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730, paid_days_ago=0))
+        self.assertEqual(self._membership_money().count(), 2)
+        self.assertEqual(sum(e.amount for e in self._membership_money()), Decimal("50.00"))
+
+    def test_billing_date_advance_without_new_payment_books_nothing_extra(self):
+        # BILLING.SUBSCRIPTION.UPDATED can push next_billing_time with no new charge -- booking is
+        # keyed on the payment, not on the membership advancing, so this must not invent revenue.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+            # Same last_payment, later billing date.
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730))
+        self.assertEqual(self._membership_money().count(), 1)
+
+    def test_payment_booked_even_when_dates_did_not_move(self):
+        # ACTIVATED can land before the first charge posts; the follow-up PAYMENT.SALE.COMPLETED
+        # doesn't advance any date, but its money still has to reach the ledger.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment=None))
+            self.assertEqual(self._membership_money().count(), 0)
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="25.00"))
+        self.assertEqual(self._membership_money().get().amount, Decimal("25.00"))
+
+    def test_junk_or_zero_payment_amount_books_nothing(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="not-a-number"))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(sub_id="I-SUB2", last_payment="0.00"))
+        self.assertEqual(self._membership_money().count(), 0)
+
+    def test_cancelled_subscription_books_nothing(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(
+            club=self.club, name="Sub Member", email="subscriber@example.com", paypal_subscription_id="I-SUB1"
+        )
+        sub = self._active_subscription()
+        sub["status"] = "CANCELLED"
+        _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(self._membership_money().count(), 0)
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "")
 
     def test_duplicate_active_event_does_not_resend_email(self):
         from auctions.views import _apply_paypal_subscription_event

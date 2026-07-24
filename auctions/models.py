@@ -7484,6 +7484,30 @@ class Lot(models.Model):
         return len(pageViews)
 
     @property
+    def ar_interaction_counts(self):
+        """How many distinct users scanned / zoomed in on / zoomed all the way in on this lot in AR.
+
+        The app posts these to ``/api/mobile/ar/events/``; each is stored as a PageView tagged with an
+        ``ar_*`` source, so they already count toward :attr:`page_views` — this breaks them out so the
+        lot page can list them separately. One row is stored per (user, lot, source), so the counts are
+        distinct users by construction. Returns a dict with ``scanned``/``zoomed``/``zoomed_full`` and
+        a ``total`` (any AR interaction) for cheap template gating; one query.
+        """
+        rows = (
+            PageView.objects.filter(lot_number=self.lot_number, source__in=("ar_scan", "ar_zoom", "ar_zoom_full"))
+            .values("source")
+            .annotate(n=Count("user", distinct=True))
+        )
+        by_source = {row["source"]: row["n"] for row in rows}
+        counts = {
+            "scanned": by_source.get("ar_scan", 0),
+            "zoomed": by_source.get("ar_zoom", 0),
+            "zoomed_full": by_source.get("ar_zoom_full", 0),
+        }
+        counts["total"] = sum(counts.values())
+        return counts
+
+    @property
     def number_of_bids(self):
         """How many users placed bids on this lot?"""
         return (
@@ -11339,9 +11363,10 @@ class LotObservation(models.Model):
     # corrected server-side via WMM declination); see ar_mapping.
     heading_deg = models.FloatField(null=True, blank=True)
     # Phone GPS fix at capture (WGS84 degrees), or null when the device had no fix. Every detection
-    # row of a frame stores that frame's fix. GPS is far too coarse to place individual lots, but it
-    # anchors the *base location of each disconnected island* so separately-scanned areas render
-    # roughly where they physically are instead of at arbitrary offsets (see ar_mapping).
+    # row of a frame stores that frame's fix. GPS is far too coarse for a ≤10 m venue to place a lot OR
+    # separate two islands, so the solver no longer uses it to position/translate anything (islands are
+    # marched + compass-rotated). Its only remaining use is looking up magnetic declination for the
+    # heading_deg magnetic→true correction; the app may omit GPS entirely with no map impact.
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same

@@ -16355,6 +16355,68 @@ def _find_or_create_subscription_member(club, subscription_id, email):
     return None
 
 
+def _book_paypal_subscription_payment(club, member, subscription):
+    """Book a PayPal subscription charge into the club ledger. Idempotent; returns the row or None.
+
+    A subscription renewal is real money into the club, exactly like the manual renewal button
+    (ClubMembershipRenewView) and a paid dues invoice (Invoice.sync_club_money) -- without this the
+    treasurer's ledger and the "Membership dues" total silently miss every auto-renewal.
+
+    We book what PayPal actually charged (``billing_info.last_payment.amount.value``) rather than the
+    club's ``membership_annual_fee``: the two drift whenever a club changes its fee after members have
+    already subscribed, and the ledger must reflect the cash that really moved.
+
+    Idempotency matters more here than anywhere else in this flow: PayPal retries webhooks, sends
+    several BILLING.SUBSCRIPTION events per cycle, and a BILLING.SUBSCRIPTION.UPDATED can advance the
+    billing date with no new payment at all. So the booking is keyed on (club, membership category,
+    payment date, subscription id) -- the same charge can arrive any number of times and books once.
+    That key is also why this runs *outside* the membership-date guard in the caller: a payment whose
+    cycle dates didn't move (e.g. the first PAYMENT.SALE.COMPLETED after ACTIVATED already set the
+    dates) still has to reach the ledger.
+    """
+    subscription_id = subscription.get("id") or ""
+    if not subscription_id:
+        return None
+    last_payment = (subscription.get("billing_info") or {}).get("last_payment") or {}
+    raw_amount = (last_payment.get("amount") or {}).get("value")
+    if raw_amount is None:
+        # ACTIVATED can arrive before the first charge posts; the next event carries the payment.
+        return None
+    try:
+        amount = Decimal(str(raw_amount))
+    except (InvalidOperation, TypeError, ValueError):
+        logger.warning(
+            "PayPal subscription %s: unparseable last_payment amount %r; not booking", subscription_id, raw_amount
+        )
+        return None
+    if amount <= 0:
+        return None
+    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.now().date()
+    if ClubMoney.objects.filter(
+        club=club,
+        category=ClubMoney.CATEGORY_MEMBERSHIP,
+        date=payment_date,
+        description__contains=subscription_id,
+    ).exists():
+        return None
+    entry = ClubMoney.objects.create(
+        club=club,
+        # created_by stays null: a webhook has no acting user (the field is nullable for this case).
+        date=payment_date,
+        amount=amount,
+        description=f"PayPal subscription renewal for {member} ({subscription_id})",
+        category=ClubMoney.CATEGORY_MEMBERSHIP,
+    )
+    logger.info(
+        "PayPal subscription %s: booked %s to club %s ledger for member %s",
+        subscription_id,
+        amount,
+        club.pk,
+        member.pk,
+    )
+    return entry
+
+
 def _apply_paypal_subscription_event(club, subscription):
     """Apply an authoritative PayPal subscription resource (re-fetched from PayPal) to its member.
 
@@ -16362,10 +16424,11 @@ def _apply_paypal_subscription_event(club, subscription):
       - CANCELLED/SUSPENDED/EXPIRED -> clear paypal_subscription_id (they no longer auto-renew).
         The paid-through date is left intact, so they keep the time already paid for and expiry
         reminders resume on their own once the subscription id is gone.
-      - ACTIVE -> record the subscription and extend membership to next_billing_time. A renewal
-        confirmation email goes out only when the membership is newly linked or actually advances,
-        so PayPal's webhook retries (and its several BILLING.SUBSCRIPTION events per cycle) don't
-        spam the member.
+      - ACTIVE -> book the charge into the club ledger (see
+        :func:`_book_paypal_subscription_payment`), record the subscription, and extend membership to
+        next_billing_time. A renewal confirmation email goes out only when the membership is newly
+        linked or actually advances, so PayPal's webhook retries (and its several
+        BILLING.SUBSCRIPTION events per cycle) don't spam the member.
       - anything else (APPROVAL_PENDING / APPROVED -- created but not yet paid) -> do nothing, so
         an abandoned, never-paid subscription can't grant membership.
     ClubMember.save() reschedules expiry reminders."""
@@ -16399,6 +16462,10 @@ def _apply_paypal_subscription_event(club, subscription):
             club.pk,
         )
         return
+    # Book the cash first, and outside the change guard below: the ledger entry is keyed on the
+    # payment itself (idempotent), so it must not be skipped just because this delivery didn't move
+    # the membership dates.
+    _book_paypal_subscription_payment(club, member, subscription)
     next_date = _parse_paypal_datetime_date((subscription.get("billing_info") or {}).get("next_billing_time"))
     newly_linked = not member.paypal_subscription_id
     advanced = bool(

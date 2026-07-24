@@ -43,6 +43,11 @@
 <script>
 (function(){
   const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
+  // "Open in AR" jumps the app straight into AR mode beaconing this lot. Same custom scheme the lot
+  // page's "Back to AR" bar uses, and like it we only offer it inside the app WebView — on a desktop
+  // browser the scheme has no handler, so the button would be dead.
+  const inApp = {{ request.is_mobile_app|yesno:"true,false" }};
+  const auctionSlug = "{{ auction.slug|escapejs }}";
   const SVGNS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById('ar-map');
   const content = document.getElementById('ar-map-content');
@@ -82,14 +87,20 @@
     if(!pts.length){ emptyMsg.style.display='block'; svg.style.display='none'; return; }
     emptyMsg.style.display='none'; svg.style.display='block';
 
-    const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
-    let minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
-    let w=Math.max(maxX-minX, 1), h=Math.max(maxY-minY, 1);
-    const pad = 0.12*Math.max(w,h);
-    minX-=pad; minY-=pad; w+=2*pad; h+=2*pad;
-    unit = Math.max(w,h);
-    // Equal axis scale (square viewBox span each way via preserveAspectRatio); flip Y so +y points up.
-    svg.setAttribute('viewBox', `${minX} ${-(minY+h)} ${w} ${h}`);
+    // Fit to the points, centred on the *median* rather than the bounding-box midpoint. A lone stray
+    // dot (e.g. a mislocated lot) then only grows the view symmetrically — it can't shove the whole
+    // cluster off to one side, which is what used to make the map look "off center". The half-extent
+    // in each axis still reaches every dot, so nothing is clipped.
+    const xs = pts.map(p=>p.x).sort((a,b)=>a-b), ys = pts.map(p=>p.y).sort((a,b)=>a-b);
+    const median = a => a.length%2 ? a[(a.length-1)/2] : (a[a.length/2-1]+a[a.length/2])/2;
+    const cx = median(xs), cy = median(ys);
+    let halfX = Math.max(0.5, ...pts.map(p=>Math.abs(p.x-cx)));
+    let halfY = Math.max(0.5, ...pts.map(p=>Math.abs(p.y-cy)));
+    const pad = 0.12*Math.max(halfX, halfY);
+    halfX += pad; halfY += pad;
+    unit = 2*Math.max(halfX, halfY);
+    // Equal axis scale is preserved by preserveAspectRatio="xMidYMid meet"; flip Y so +y points up.
+    svg.setAttribute('viewBox', `${cx-halfX} ${-(cy+halfY)} ${2*halfX} ${2*halfY}`);
     pts.forEach(drawDot);
   }
 
@@ -115,11 +126,20 @@
   }
 
   function showPopover(p, ev){
+    // "Locate" re-centres/pulses the dot on this web map; "Open in AR" (app only) hands off to the
+    // native AR screen so an admin on the floor can be walked to the lot.
+    const arButton = inApp
+      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-badge-ar"></i> Open in AR</a>`
+      : '';
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
-         <div class="small text-muted mb-1">${escapeHtml(p.name)}</div>
-         <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
+         <div class="small text-muted mb-2">${escapeHtml(p.name)}</div>
+         <div class="d-flex flex-wrap gap-1">
+           <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
+           <button type="button" class="btn btn-sm btn-outline-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
+           ${arButton}
+         </div>
        </div>`;
     const wrap = svg.parentElement.getBoundingClientRect();
     const x = ev ? ev.clientX - wrap.left : wrap.width/2;
@@ -127,8 +147,20 @@
     popover.style.left = Math.min(x, wrap.width-240) + 'px';
     popover.style.top = y + 'px';
     popover.style.display='block';
+    const locBtn = document.getElementById('ar-pop-locate');
+    if(locBtn){ locBtn.addEventListener('click', ()=>{ hidePopover(); focusLot(p.lot); }); }
   }
   function hidePopover(){ popover.style.display='none'; }
+
+  // Pulse + scroll a lot's dot into the centre of the map. Shared by the locate search and the
+  // per-lot "Locate" button in the popover.
+  function focusLot(pk){
+    const dot = dotByLot[pk];
+    if(!dot){ return false; }
+    dot.g.classList.remove('ar-pulse'); void dot.g.offsetWidth; dot.g.classList.add('ar-pulse');
+    dot.g.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+    return true;
+  }
   svg.addEventListener('click', (e)=>{ if(e.target===svg) hidePopover(); });
 
   function locate(){
@@ -138,12 +170,8 @@
     const lot = lots.find(l => `${l.lot_number} — ${l.name}` === val)
              || lots.find(l => String(l.lot_number) === num);
     if(!lot){ locateMsg.textContent = 'No matching lot.'; return; }
-    const dot = dotByLot[lot.pk];
-    if(!dot){ locateMsg.className='form-text text-warning'; locateMsg.textContent = `Lot ${lot.lot_number} has no location known yet.`; return; }
+    if(!focusLot(lot.pk)){ locateMsg.className='form-text text-warning'; locateMsg.textContent = `Lot ${lot.lot_number} has no location known yet.`; return; }
     locateMsg.className='form-text'; locateMsg.textContent = `Showing lot ${lot.lot_number}.`;
-    // Pulse the target dot.
-    dot.g.classList.remove('ar-pulse'); void dot.g.offsetWidth; dot.g.classList.add('ar-pulse');
-    dot.g.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
   }
   locateInput.addEventListener('change', locate);
 

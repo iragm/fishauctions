@@ -323,6 +323,7 @@ from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
 from .serializers import (
+    ArEventBatchSerializer,
     ArObservationBatchSerializer,
     CheckinJoinSerializer,
     CheckinPingSerializer,
@@ -1068,6 +1069,33 @@ class MobileArObservationsView(APIView):
             fov_hdeg=data.get("fov_hdeg"),
             frames=data["frames"],
         )
+        return Response({"accepted": accepted}, status=status.HTTP_202_ACCEPTED)
+
+
+class MobileArEventsView(APIView):
+    """POST /api/mobile/ar/events/ — record AR interaction events (scan / zoom / zoom-all-the-way).
+
+    Each event becomes a lot PageView tagged with an ``ar_*`` source, de-duped to one row per user per
+    lot per event type, so the lot page can show how many users scanned / zoomed / zoomed all the way
+    in — separately from ordinary page views. Foreign/unknown lots are dropped silently; returns 202
+    with the accepted count.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_ar"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = ArEventBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        auction = _get_ar_auction(str(data["auction"]))
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        accepted = ar_service.record_ar_events(auction, request.user, data["events"], request)
         return Response({"accepted": accepted}, status=status.HTTP_202_ACCEPTED)
 
 

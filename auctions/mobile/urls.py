@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    MobileArEventsView,
     MobileArLotsView,
     MobileArObservationsView,
     MobileArPositionsView,
@@ -65,6 +66,7 @@ urlpatterns = [
     # AR lot scanning
     path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
     path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
+    path("ar/events/", MobileArEventsView.as_view(), name="mobile-ar-events"),
     path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
     # Proximity check-in & welcome
     path("checkin/ping/", MobileCheckinPingView.as_view(), name="mobile-checkin-ping"),

@@ -477,6 +477,20 @@ App-only; the deep link is handled natively. {% endcomment %}
                         <tr>
                             <td><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
                         </tr>
+                        {# AR interactions are counted in the view total above; broken out here so it's clear how many
+                           people actually found this lot in person with the app's AR mode. #}
+                        {% with ar_counts=lot.ar_interaction_counts %}
+                        {% if ar_counts.total %}
+                        <tr>
+                            <td><b>In AR:</b></td>
+                            <td>
+                                {% if ar_counts.scanned %}{{ ar_counts.scanned }} scanned{% endif %}
+                                {% if ar_counts.zoomed %}{% if ar_counts.scanned %}, {% endif %}{{ ar_counts.zoomed }} zoomed in{% endif %}
+                                {% if ar_counts.zoomed_full %}{% if ar_counts.scanned or ar_counts.zoomed %}, {% endif %}{{ ar_counts.zoomed_full }} zoomed all the way in{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% endwith %}
                         {% endif %}
                     </table>
                 {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
