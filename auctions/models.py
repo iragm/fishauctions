@@ -11260,7 +11260,14 @@ class ThermalPrinterProfile(models.Model):
     # ── Matching (how the app decides a scanned BLE device uses this profile) ──
     # JSON list of case-insensitive regexes tested against the advertised name,
     # e.g. ["^D11", "^Fichero"]. Empty list = never auto-matched (manual pick only).
+    # The BLE name is user-editable and resellers rename the same board freely, so a
+    # name miss is normal; the app then reads the GATT Device Information Service
+    # (0x180A) and matches what the *printer* reports against these two lists — same
+    # case-insensitive regex semantics, tested against model (0x2A24) and
+    # manufacturer (0x2A29). Empty list = that field never matches.
     ble_name_patterns = models.JSONField(default=list, blank=True)
+    model_patterns = models.JSONField(default=list, blank=True)
+    manufacturer_patterns = models.JSONField(default=list, blank=True)
     # Optional exact GATT ids; blank = discover (first writable characteristic).
     service_uuid = models.CharField(max_length=40, blank=True, default="")
     write_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
@@ -11295,7 +11302,11 @@ class ThermalPrinterProfile(models.Model):
 
     def clean(self):
         """Validate the command programs so an admin typo is rejected here, not on the printer."""
-        from auctions.printer_programs import ProgramValidationError, validate_profile_programs
+        from auctions.printer_programs import (
+            ProgramValidationError,
+            validate_match_patterns,
+            validate_profile_programs,
+        )
 
         super().clean()
         try:
@@ -11306,8 +11317,67 @@ class ThermalPrinterProfile(models.Model):
                 status_flags=self.status_flags,
                 label_size_parse=self.label_size_parse,
             )
+            for field in ("ble_name_patterns", "model_patterns", "manufacturer_patterns"):
+                validate_match_patterns(getattr(self, field), field)
         except ProgramValidationError as exc:
             raise ValidationError({exc.field or "print_program": str(exc)}) from exc
+
+
+class ObservedPrinter(models.Model):
+    """One Bluetooth printer a user actually paired, and how the app identified it.
+
+    Posted fire-and-forget by the app on every successful pairing (see
+    POST /api/mobile/printers/observed/). This is a work queue, not analytics:
+
+    * ``matched_by="manual"`` rows are printers no profile claimed — the user had to be
+      asked. Whatever this row reports as ``model``/``manufacturer`` is exactly what
+      belongs in ``ThermalPrinterProfile.model_patterns`` / ``manufacturer_patterns``,
+      after which that printer pairs itself for everyone.
+    * ``deviceInfo`` / ``serviceUuid`` rows confirm the patterns work, and show which
+      printers people own.
+    * A blank ``profile_slug`` (user cancelled) or a blank ``model`` (the printer
+      identifies as nothing) means a BLE-name pattern or a brand-new profile is needed.
+
+    One row per (user, ble_name, model, profile_slug); re-pairing bumps times_seen."""
+
+    MATCHED_BY_CHOICES = [
+        # Values are the app's wire strings, stored verbatim so admin filters read the same
+        # thing the app sent.
+        ("bleName", "BLE name pattern"),
+        ("deviceInfo", "Device Information Service (model/manufacturer)"),
+        ("serviceUuid", "Service UUID"),
+        ("manual", "User picked it manually"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    ble_name = models.CharField(max_length=100, blank=True, default="")  # advertised, user-editable
+    # ── What the printer reported over GATT 0x180A; blank = it didn't say ──
+    manufacturer = models.CharField(max_length=100, blank=True, default="")  # 0x2A29
+    model = models.CharField(max_length=100, blank=True, default="")  # 0x2A24
+    firmware = models.CharField(max_length=100, blank=True, default="")  # 0x2A26
+    hardware = models.CharField(max_length=100, blank=True, default="")  # 0x2A27
+    service_uuids = models.JSONField(default=list, blank=True)  # advertised GATT services
+    # Slug rather than a FK: it must survive a profile being renamed or deleted, and the app
+    # may report a slug this deployment has never had. Blank = the user cancelled the dialog.
+    profile_slug = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    matched_by = models.CharField(max_length=20, choices=MATCHED_BY_CHOICES, db_index=True)
+    printed_ok = models.BooleanField(default=False)  # a label actually came out, not just paired
+    times_seen = models.PositiveIntegerField(default=1)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "ble_name", "model", "profile_slug"],
+                name="unique_observed_printer_per_user",
+            )
+        ]
+
+    def __str__(self):
+        label = self.model or self.ble_name or "unidentified printer"
+        return f"{label} → {self.profile_slug or 'no profile'} ({self.matched_by})"
 
 
 class PushNotificationSent(models.Model):

@@ -24,6 +24,7 @@ from .views import (
     MobileOfflineSyncView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
+    MobilePrinterObservedView,
     MobilePrinterProfilesView,
     MobileTokenRefreshView,
     MobileUserMeView,
@@ -55,6 +56,7 @@ urlpatterns = [
     path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),
     # Printers
     path("printers/profiles/", MobilePrinterProfilesView.as_view(), name="mobile-printer-profiles"),
+    path("printers/observed/", MobilePrinterObservedView.as_view(), name="mobile-printer-observed"),
     # Labels
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),

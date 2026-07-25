@@ -10,7 +10,7 @@ from auctions.mobile.services.ar import (
     MAX_FRAMES_PER_BATCH,
 )
 from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
-from auctions.models import MobileDevice, UserLabelPrefs
+from auctions.models import MobileDevice, ObservedPrinter, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -145,6 +145,34 @@ class MobileLabelPrefsSerializer(serializers.ModelSerializer):
         from auctions.printing import label_prefs_warnings
 
         return label_prefs_warnings(obj)
+
+
+class PrinterObservationSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/printers/observed/ — one successful pairing.
+
+    Deliberately permissive: the app fires this and ignores the response, so a row it can't
+    parse back is a row we simply never see. Strings carry no max_length (the service truncates
+    to the column width instead of 400-ing), and everything except ``matched_by`` is optional —
+    a printer that reports no model/manufacturer is itself a finding worth storing.
+    """
+
+    ble_name = serializers.CharField(required=False, allow_blank=True, default="")
+    manufacturer = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    model = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    firmware = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    hardware = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    service_uuids = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    # Null/absent when the user cancelled out of the manual dialog — no profile was chosen.
+    profile_slug = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    matched_by = serializers.ChoiceField(choices=[c[0] for c in ObservedPrinter.MATCHED_BY_CHOICES])
+    # Not sent by the app yet: reserved for the post-first-print confirmation, so "what works"
+    # can mean printed rather than merely paired.
+    printed_ok = serializers.BooleanField(required=False, default=False)
 
 
 # ---------------------------------------------------------------------------

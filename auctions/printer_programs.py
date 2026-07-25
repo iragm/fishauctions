@@ -234,6 +234,28 @@ def _validate_label_size_parse(label_size_parse):
             raise ProgramValidationError(msg, "label_size_parse") from exc
 
 
+def validate_match_patterns(patterns, field):
+    """Validate one of the match-pattern lists (ble_name / model / manufacturer).
+
+    These are case-insensitive regexes the *app* compiles, so a bad one there is invisible until
+    a printer fails to pair. Reject it in the admin instead.
+    """
+    if not patterns:
+        return
+    if not isinstance(patterns, list):
+        msg = f"{field} must be a list of regex strings"
+        raise ProgramValidationError(msg, field)
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not pattern.strip():
+            msg = f"{field} entries must be non-empty strings, got {pattern!r}"
+            raise ProgramValidationError(msg, field)
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            msg = f"{field} entry {pattern!r} is not a valid regex: {exc}"
+            raise ProgramValidationError(msg, field) from exc
+
+
 def validate_profile_programs(
     *,
     print_program,
@@ -259,6 +281,10 @@ def serialize_profile(profile):
         "priority": profile.priority,
         "match": {
             "ble_name_patterns": profile.ble_name_patterns or [],
+            # Matched against the GATT Device Information Service when the BLE name (which the
+            # user can rename) matches nothing.
+            "model_patterns": profile.model_patterns or [],
+            "manufacturer_patterns": profile.manufacturer_patterns or [],
             "service_uuid": profile.service_uuid,
             "write_characteristic_uuid": profile.write_characteristic_uuid,
             "notify_characteristic_uuid": profile.notify_characteristic_uuid,
@@ -328,6 +354,12 @@ SEED_PROFILES = [
         "name": "Fichero / AiYin D11s",
         "priority": 10,
         "ble_name_patterns": ["^d11", "^fichero", "^aiyin"],
+        # Device Information Service fallback for a renamed unit. Provisional until real units
+        # report in via ObservedPrinter — widen/correct these from that admin list rather than
+        # guessing again. Both D11s rows claim ^d11 (they are the same printer, different internal
+        # board), so a model match still falls through to priority, exactly as the name match does.
+        "model_patterns": ["^d11"],
+        "manufacturer_patterns": ["aiyin", "fichero"],
         "service_uuid": "000018f0-0000-1000-8000-00805f9b34fb",
         "write_characteristic_uuid": "00002af1-0000-1000-8000-00805f9b34fb",
         "notify_characteristic_uuid": "00002af0-0000-1000-8000-00805f9b34fb",
@@ -345,6 +377,8 @@ SEED_PROFILES = [
         "name": "Fichero / AiYin D11s (LuJiang board)",
         "priority": 20,
         "ble_name_patterns": ["^d11", "^fichero", "^aiyin"],
+        "model_patterns": ["^d11"],
+        "manufacturer_patterns": ["lujiang"],
         "service_uuid": "000018f0-0000-1000-8000-00805f9b34fb",
         "write_characteristic_uuid": "00002af1-0000-1000-8000-00805f9b34fb",
         "notify_characteristic_uuid": "00002af0-0000-1000-8000-00805f9b34fb",
@@ -382,9 +416,11 @@ SEED_PROFILES = [
         "slug": "escpos-raster",
         "name": "Raw ESC/POS raster (GS v 0)",
         "priority": 900,
-        # No name patterns → never auto-matched; the app falls back to it for an unknown printer
+        # No match patterns → never auto-matched; the app falls back to it for an unknown printer
         # by writing to the first writable characteristic (blank GATT ids = discover).
         "ble_name_patterns": [],
+        "model_patterns": [],
+        "manufacturer_patterns": [],
         "service_uuid": "",
         "write_characteristic_uuid": "",
         "notify_characteristic_uuid": "",

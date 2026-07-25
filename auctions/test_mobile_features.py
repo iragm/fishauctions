@@ -163,6 +163,43 @@ class PrinterProgramValidationTests(TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Part 8.1 — matching on what the printer reports over GATT 0x180A
+# ---------------------------------------------------------------------------
+
+
+class PrinterMatchPatternTests(TestCase):
+    def test_seeded_d11s_rows_have_device_info_patterns(self):
+        for slug in ("d11s-aiyin", "d11s-lujiang"):
+            profile = ThermalPrinterProfile.objects.get(slug=slug)
+            self.assertTrue(profile.model_patterns, slug)
+            self.assertTrue(profile.manufacturer_patterns, slug)
+
+    def test_empty_patterns_allowed(self):
+        validate_match_patterns([], "model_patterns")
+        validate_match_patterns(None, "model_patterns")
+
+    def test_bad_regex_rejected(self):
+        with self.assertRaises(ProgramValidationError):
+            validate_match_patterns(["^d11("], "model_patterns")
+
+    def test_non_string_entry_rejected(self):
+        with self.assertRaises(ProgramValidationError):
+            validate_match_patterns([7], "manufacturer_patterns")
+
+    def test_non_list_rejected(self):
+        with self.assertRaises(ProgramValidationError):
+            validate_match_patterns("^d11", "model_patterns")
+
+    def test_model_clean_rejects_bad_pattern(self):
+        profile = ThermalPrinterProfile(
+            slug="bad-pattern", name="Bad pattern", print_program=[{"tx": "1d 0c"}], model_patterns=["*nope"]
+        )
+        with self.assertRaises(ValidationError) as caught:
+            profile.clean()
+        self.assertIn("model_patterns", caught.exception.message_dict)
+
+
+# ---------------------------------------------------------------------------
 # Part 1 — mobile printer profiles API
 # ---------------------------------------------------------------------------
 

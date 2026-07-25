@@ -35,6 +35,7 @@ from .models import (
     LotHistory,
     MobileDevice,
     MobileOfflineOp,
+    ObservedPrinter,
     PageView,
     PickupLocation,
     Product,
@@ -428,12 +429,19 @@ class ThermalPrinterProfileAdmin(admin.ModelAdmin):
         (
             "Matching",
             {
+                "description": (
+                    "Case-insensitive regex lists. BLE names are user-editable, so model/manufacturer "
+                    "(read from the printer's GATT Device Information Service) are what make a renamed "
+                    "printer pair itself — fill them from the Observed printers list."
+                ),
                 "fields": (
                     "ble_name_patterns",
+                    "model_patterns",
+                    "manufacturer_patterns",
                     "service_uuid",
                     "write_characteristic_uuid",
                     "notify_characteristic_uuid",
-                )
+                ),
             },
         ),
         ("Transport pacing", {"fields": ("chunk_size", "chunk_delay_ms", "prefer_write_with_response")}),
@@ -446,6 +454,36 @@ class ThermalPrinterProfileAdmin(admin.ModelAdmin):
             {"fields": ("print_program", "status_program", "status_flags", "label_size_program", "label_size_parse")},
         ),
     )
+
+
+@admin.register(ObservedPrinter)
+class ObservedPrinterAdmin(admin.ModelAdmin):
+    """Printers users actually paired — the work queue for new printer support.
+
+    Filter to ``matched_by = manual``: each row there is a printer no profile matched, so the user
+    had to be asked what it was. Copy its model/manufacturer into a ThermalPrinterProfile's
+    model_patterns / manufacturer_patterns and that printer auto-pairs for everyone afterwards.
+    Rows with no profile (the user cancelled) or no model (the printer identifies as nothing) need
+    a BLE-name pattern or a brand-new profile instead."""
+
+    list_display = (
+        "ble_name",
+        "manufacturer",
+        "model",
+        "firmware",
+        "profile_slug",
+        "matched_by",
+        "printed_ok",
+        "times_seen",
+        "user",
+        "last_seen",
+    )
+    list_filter = ("matched_by", "printed_ok", "profile_slug")
+    search_fields = ("ble_name", "manufacturer", "model", "firmware", "hardware", "user__username")
+    raw_id_fields = ("user",)
+    readonly_fields = ("first_seen", "last_seen", "times_seen")
+    date_hierarchy = "last_seen"
+    actions = [export_to_csv]
 
 
 @admin.register(PushNotificationSent)
