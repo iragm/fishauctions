@@ -156,7 +156,7 @@ class PrinterObservationSerializer(serializers.Serializer):
     a printer that reports no model/manufacturer is itself a finding worth storing.
     """
 
-    ble_name = serializers.CharField(required=False, allow_blank=True, default="")
+    ble_name = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     manufacturer = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     model = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     firmware = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
@@ -165,6 +165,7 @@ class PrinterObservationSerializer(serializers.Serializer):
         child=serializers.CharField(allow_blank=True),
         required=False,
         allow_empty=True,
+        allow_null=True,
         default=list,
     )
     # Null/absent when the user cancelled out of the manual dialog — no profile was chosen.

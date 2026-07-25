@@ -6,13 +6,7 @@ truncated rather than rejected, because a printer nobody has a profile for is ex
 worth keeping (see :class:`auctions.models.ObservedPrinter`).
 """
 
-import logging
-
-from django.db import IntegrityError, transaction
-
 from auctions.models import ObservedPrinter
-
-logger = logging.getLogger(__name__)
 
 MAX_SERVICE_UUIDS = 32  # a chatty printer advertises a handful; cap the JSON blob regardless
 
@@ -60,12 +54,9 @@ def record_observation(user, data):
         "model": fields["model"],
         "profile_slug": fields["profile_slug"],
     }
-    try:
-        with transaction.atomic():
-            observation, created = ObservedPrinter.objects.get_or_create(defaults=fields, **key)
-    except IntegrityError:
-        # Two pairings racing on the same unique key; the loser just re-reads the winner's row.
-        observation, created = ObservedPrinter.objects.get(**key), False
+    # get_or_create already resolves the unique-constraint race (create in a savepoint, re-get on
+    # IntegrityError), which is all two phones pairing the same printer at once need.
+    observation, created = ObservedPrinter.objects.get_or_create(defaults=fields, **key)
     if created:
         return observation, True
 

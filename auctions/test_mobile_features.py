@@ -2,6 +2,9 @@
 
 Part 1 — label printing: the mismatch-warning matrix, the ThermalPrinterProfile command-program
 validator + seed data, and the mobile printer/label API.
+Part 8 — printer identification: the device-info match patterns served to the app, and the
+observed-printer feed that tells us which printers need a profile.
+Part 9 — binary label endpoints must accept an honest Accept header (application/pdf, image/png).
 Part 2 — push notifications: the push-routing decision (user_prefers_push / notify_user), the
 send_push_to_user fan-out + token pruning, device register/unregister, and the promo push job.
 """
@@ -23,12 +26,13 @@ from auctions.mobile.services.devices import DeviceService
 from auctions.models import (
     Auction,
     MobileDevice,
+    ObservedPrinter,
     PickupLocation,
     PushNotificationSent,
     ThermalPrinterProfile,
     UserLabelPrefs,
 )
-from auctions.printer_programs import ProgramValidationError, validate_profile_programs
+from auctions.printer_programs import ProgramValidationError, validate_match_patterns, validate_profile_programs
 from auctions.printing import label_prefs_warnings, warning_matrix
 from auctions.tests import StandardTestCase
 
@@ -228,8 +232,109 @@ class MobilePrinterProfilesApiTests(StandardTestCase):
         resp2 = self.client.get(self.url, HTTP_IF_NONE_MATCH=etag, **_bearer(self.user))
         self.assertEqual(resp2.status_code, 304)
 
+    def test_match_section_carries_device_info_patterns(self):
+        data = self.client.get(self.url, **_bearer(self.user)).json()
+        match = next(p for p in data["profiles"] if p["slug"] == "d11s-aiyin")["match"]
+        self.assertEqual(match["model_patterns"], ["^d11"])
+        self.assertIn("aiyin", match["manufacturer_patterns"])
+        self.assertIn("ble_name_patterns", match)
+
     def test_requires_jwt(self):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
+
+
+# ---------------------------------------------------------------------------
+# Part 8.2 — POST /api/mobile/printers/observed/
+# ---------------------------------------------------------------------------
+
+
+class MobilePrinterObservedApiTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("mobile-printer-observed")
+
+    def _post(self, user=None, **overrides):
+        payload = {
+            "ble_name": "D11-4C21",
+            "manufacturer": "AiYin",
+            "model": "D11S",
+            "firmware": "1.0.3",
+            "hardware": "V2",
+            "service_uuids": ["18F0", "180A", "18f0"],
+            "profile_slug": "d11s-aiyin",
+            "matched_by": "deviceInfo",
+        }
+        payload.update(overrides)
+        return self.client.post(self.url, payload, content_type="application/json", **_bearer(user or self.user))
+
+    def test_records_a_pairing(self):
+        resp = self._post()
+        self.assertEqual(resp.status_code, 201)
+        observed = ObservedPrinter.objects.get(user=self.user)
+        self.assertEqual(observed.model, "D11S")
+        self.assertEqual(observed.manufacturer, "AiYin")
+        self.assertEqual(observed.profile_slug, "d11s-aiyin")
+        self.assertEqual(observed.matched_by, "deviceInfo")
+        self.assertEqual(observed.times_seen, 1)
+
+    def test_service_uuids_lowercased_and_deduped(self):
+        self._post()
+        self.assertEqual(ObservedPrinter.objects.get(user=self.user).service_uuids, ["18f0", "180a"])
+
+    def test_repeat_pairing_bumps_count_not_rows(self):
+        self._post()
+        resp = self._post(firmware="1.0.4")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(ObservedPrinter.objects.filter(user=self.user).count(), 1)
+        observed = ObservedPrinter.objects.get(user=self.user)
+        self.assertEqual(observed.times_seen, 2)
+        self.assertEqual(observed.firmware, "1.0.4")  # refreshed to current truth
+
+    def test_manual_row_without_profile_is_kept(self):
+        # The work queue: a printer nobody had a profile for, and the user cancelled the dialog.
+        resp = self._post(profile_slug=None, matched_by="manual", model="", manufacturer="")
+        self.assertEqual(resp.status_code, 201)
+        observed = ObservedPrinter.objects.get(user=self.user)
+        self.assertEqual(observed.profile_slug, "")
+        self.assertEqual(observed.matched_by, "manual")
+
+    def test_different_printer_is_a_new_row(self):
+        self._post()
+        self._post(ble_name="Fichero-99", model="D11")
+        self.assertEqual(ObservedPrinter.objects.filter(user=self.user).count(), 2)
+
+    def test_each_user_gets_their_own_row(self):
+        self._post()
+        self._post(user=self.userB)
+        self.assertEqual(ObservedPrinter.objects.count(), 2)
+
+    def test_printed_ok_latches_true(self):
+        self._post(printed_ok=True)
+        self._post()  # a later pairing that didn't print must not unsay it
+        self.assertTrue(ObservedPrinter.objects.get(user=self.user).printed_ok)
+
+    def test_over_long_strings_are_truncated_not_rejected(self):
+        resp = self._post(model="M" * 400)
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(ObservedPrinter.objects.get(user=self.user).model), 100)
+
+    def test_nulls_are_tolerated(self):
+        # Dart omits nothing: an unset field arrives as an explicit null.
+        resp = self._post(ble_name=None, manufacturer=None, model=None, firmware=None, service_uuids=None)
+        self.assertEqual(resp.status_code, 201)
+        observed = ObservedPrinter.objects.get(user=self.user)
+        self.assertEqual(observed.manufacturer, "")
+        self.assertEqual(observed.service_uuids, [])
+
+    def test_unknown_matched_by_rejected(self):
+        self.assertEqual(self._post(matched_by="telepathy").status_code, 400)
+
+    def test_matched_by_required(self):
+        resp = self.client.post(self.url, {"ble_name": "D11"}, content_type="application/json", **_bearer(self.user))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_jwt(self):
+        self.assertIn(self.client.post(self.url, {}, content_type="application/json").status_code, (401, 403))
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +391,41 @@ class MobileLabelPdfTests(StandardTestCase):
     def test_pdf_forbidden_for_non_owner(self):
         resp = self.client.get(self.url, {"fmt": "pdf"}, **_bearer(self.userB))
         self.assertEqual(resp.status_code, 403)
+
+
+class MobileLabelAcceptHeaderTests(StandardTestCase):
+    """Part 9 — an honest Accept header must not be a 406.
+
+    DRF negotiates content before authentication, against the view's renderers; with the default
+    JSON-only set, ``Accept: application/pdf`` / ``image/png`` 406'd before the view ran and *all*
+    label fetching broke in production.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("mobile-label-lot", kwargs={"pk": self.lot.pk})
+
+    def test_accept_pdf_returns_pdf(self):
+        resp = self.client.get(self.url, {"fmt": "pdf"}, HTTP_ACCEPT="application/pdf", **_bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/pdf")
+        self.assertEqual(resp.content[:4], b"%PDF")
+
+    def test_accept_png_returns_png(self):
+        resp = self.client.get(self.url, HTTP_ACCEPT="image/png", **_bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+
+    def test_accept_any_still_works(self):
+        resp = self.client.get(self.url, HTTP_ACCEPT="*/*", **_bearer(self.user))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_error_body_is_json_even_for_a_binary_accept(self):
+        # The app reads `detail` off DRF errors; a binary-only Accept must not corrupt it.
+        resp = self.client.get(self.url, {"fmt": "pdf"}, HTTP_ACCEPT="application/pdf", **_bearer(self.userB))
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp["Content-Type"], "application/json")
+        self.assertIn("detail", resp.json())
 
 
 # ---------------------------------------------------------------------------
