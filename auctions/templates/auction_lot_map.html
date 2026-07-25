@@ -43,10 +43,13 @@
 <script>
 (function(){
   const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
-  // "Open in AR" jumps the app straight into AR mode beaconing this lot. Same custom scheme the lot
-  // page's "Back to AR" bar uses, and like it we only offer it inside the app WebView — on a desktop
-  // browser the scheme has no handler, so the button would be dead.
+  // "Locate with AR" jumps the app straight into AR mode beaconing this lot, via the same custom
+  // scheme as the lot page's "Back to AR" bar. A desktop browser has no handler for the scheme, but
+  // per style_reference.md an unavailable action stays clickable and says why: outside the app the
+  // button toasts "open this in the app" instead of vanishing (this page is used on desktop, where a
+  // missing button just looks like the feature doesn't exist).
   const inApp = {{ request.is_mobile_app|yesno:"true,false" }};
+  const AR_APP_ONLY_MSG = "AR mode lives in the {{ navbar_brand|escapejs }} app — open this lot map there to be walked to the lot.";
   const auctionSlug = "{{ auction.slug|escapejs }}";
   const SVGNS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById('ar-map');
@@ -122,23 +125,24 @@
     g.appendChild(c); g.appendChild(t);
     g.addEventListener('click', (ev)=> showPopover(p, ev));
     content.appendChild(g);
-    dotByLot[p.lot] = {g, c, r};
+    dotByLot[p.lot] = {g, c, r, p};
   }
 
   function showPopover(p, ev){
-    // "Locate" re-centres/pulses the dot on this web map; "Open in AR" (app only) hands off to the
-    // native AR screen so an admin on the floor can be walked to the lot.
+    // "Locate with AR" sits right next to "Open lot" — it's the action an admin on the floor
+    // actually wants — and hands off to the native AR screen, which walks them to the lot.
+    // "Locate" just re-centres/pulses the dot on this web map.
     const arButton = inApp
-      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-badge-ar"></i> Open in AR</a>`
-      : '';
+      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-badge-ar"></i> Locate with AR</a>`
+      : `<button type="button" class="btn btn-sm btn-outline-secondary" id="ar-pop-ar"><i class="bi bi-badge-ar"></i> Locate with AR</button>`;
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
          <div class="small text-muted mb-2">${escapeHtml(p.name)}</div>
          <div class="d-flex flex-wrap gap-1">
            <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
-           <button type="button" class="btn btn-sm btn-outline-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
            ${arButton}
+           <button type="button" class="btn btn-sm btn-outline-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
          </div>
        </div>`;
     const wrap = svg.parentElement.getBoundingClientRect();
@@ -149,6 +153,12 @@
     popover.style.display='block';
     const locBtn = document.getElementById('ar-pop-locate');
     if(locBtn){ locBtn.addEventListener('click', ()=>{ hidePopover(); focusLot(p.lot); }); }
+    const arBtn = document.getElementById('ar-pop-ar');
+    if(arBtn){
+      arBtn.addEventListener('click', ()=>{
+        window.jQuery.toast({title: 'AR mode is in the app', content: AR_APP_ONLY_MSG, type: 'info', delay: 8000});
+      });
+    }
   }
   function hidePopover(){ popover.style.display='none'; }
 
@@ -172,6 +182,9 @@
     if(!lot){ locateMsg.textContent = 'No matching lot.'; return; }
     if(!focusLot(lot.pk)){ locateMsg.className='form-text text-warning'; locateMsg.textContent = `Lot ${lot.lot_number} has no location known yet.`; return; }
     locateMsg.className='form-text'; locateMsg.textContent = `Showing lot ${lot.lot_number}.`;
+    // Open the dot's popover too, so a search lands on the same "Open lot" / "Locate with AR"
+    // buttons as clicking the dot does — searching for a lot is exactly when you want to walk to it.
+    showPopover(dotByLot[lot.pk].p, null);
   }
   locateInput.addEventListener('change', locate);
 

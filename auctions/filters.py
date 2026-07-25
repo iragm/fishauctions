@@ -30,6 +30,7 @@ from .models import (
     ClubMember,
     Location,
     Lot,
+    LotPosition,
     UserInterestCategory,
     Watch,
     add_tos_info,
@@ -458,6 +459,7 @@ class LotFilter(django_filters.FilterSet):
 
     def __init__(self, *args, **kwargs):
         self.canShowAuction = True
+        self._locatable_auctions = None  # lazily filled by qs, app requests only
         self.latitude = kwargs.pop("latitude", None)
         self.longitude = kwargs.pop("longitude", None)
         self.listType = kwargs.pop("listType", None)  # a special filter for recommended lot views
@@ -723,6 +725,25 @@ class LotFilter(django_filters.FilterSet):
                 distinct=True,
             )
         )
+        # App-only "Locate with AR" button on lot lists (lot_tile_page.html / lot_list_page.html).
+        # An EXISTS annotation rather than touching lot.ar_position per row, which would be an N+1
+        # across the page. Gated first on the app UA — the fishauctions:// deep link is dead in a
+        # browser — and then on there being a locatable in-person auction at all, so a web lot list
+        # costs exactly nothing, not even the auction lookup.
+        request = getattr(self, "request", None)
+        if getattr(request, "is_mobile_app", False):
+            from auctions.mobile.services.ar import locatable_auction_pks
+
+            # qs is a property and gets rebuilt on every access, so remember the answer per instance.
+            if self._locatable_auctions is None:
+                self._locatable_auctions = locatable_auction_pks()
+            locatable_auctions = self._locatable_auctions
+            if locatable_auctions:
+                primary_queryset = primary_queryset.annotate(
+                    ar_locate_available=Exists(
+                        LotPosition.objects.filter(lot=OuterRef("pk"), auction__in=locatable_auctions)
+                    )
+                )
         if self.order == "popularity" or self.order == "-popularity":
             primary_queryset = primary_queryset.annotate(
                 popularity=2 * Count("pageview", distinct=True)

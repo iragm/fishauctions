@@ -6,12 +6,14 @@ sensor + display: it sends angle measurements and renders overlays from the meta
 fusion lives in :mod:`auctions.ar_mapping`.
 """
 
+import datetime
 import logging
 
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 
-from auctions.models import Lot, LotObservation, LotPosition, PageView, Watch
+from auctions.models import Auction, Lot, LotObservation, LotPosition, PageView, Watch
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,12 @@ RECOMMENDED_CACHE_SECONDS = 300
 AR_EVENT_SOURCES = {"scanned": "ar_scan", "zoomed": "ar_zoom", "zoomed_full": "ar_zoom_full"}
 AR_EVENT_TYPES = tuple(AR_EVENT_SOURCES)  # accepted "event" values in the payload
 MAX_AR_EVENTS_PER_BATCH = 100
+
+# "Locate with AR" entry points on lot lists only make sense while an in-person auction is actually
+# happening: from LOCATE_LEAD_TIME before the start until pretty_much_over (24 h after wind-down).
+LOCATE_LEAD_TIME = datetime.timedelta(hours=2)
+# pretty_much_over's grace period, mirrored here only to pre-filter candidates in SQL.
+LOCATE_GRACE = datetime.timedelta(hours=24)
 
 
 AR_DIRTY_REGISTRY_KEY = "ar_dirty_auctions"
@@ -64,6 +72,30 @@ def drain_dirty_auction_pks():
     for pk in registry:
         cache.delete(ar_dirty_key(pk))
     return set(registry)
+
+
+def locatable_auction_pks():
+    """Auction pks whose lots may offer "locate with AR" right now — one small query.
+
+    In-person auctions only (there is nothing to walk to at an online one), from
+    ``LOCATE_LEAD_TIME`` before the start until :attr:`Auction.pretty_much_over`.
+
+    The SQL half is a superset pre-filter: ``wind_down_time`` is the max of three dates, so an
+    auction can only still be inside the 24 h grace period if at least one of them is. The final
+    call is left to ``pretty_much_over`` in Python so this can't drift from the property — the
+    pre-filtered set is a handful of rows (in-person auctions from roughly the last day).
+    """
+    now = timezone.now()
+    grace_floor = now - LOCATE_GRACE
+    candidates = Auction.objects.filter(
+        Q(date_start__gte=grace_floor)
+        | Q(date_online_bidding_ends__gte=grace_floor)
+        | Q(lot_submission_end_date__gte=grace_floor),
+        is_online=False,
+        is_deleted=False,
+        date_start__lte=now + LOCATE_LEAD_TIME,
+    ).only("is_online", "date_start", "date_online_bidding_ends", "lot_submission_end_date")
+    return {auction.pk for auction in candidates if not auction.pretty_much_over}
 
 
 def _recommended_pks(user, auction):

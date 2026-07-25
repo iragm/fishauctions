@@ -132,6 +132,18 @@ render).
 **Exception:** features that are exclusive to one auction type (in-person vs
 online) may stay hidden in the other type.
 
+**Exception: app-only actions** (`fishauctions://` deep links — native printing,
+AR mode, Tap to Pay). The scheme has no handler in a browser, so the button is
+dead rather than merely unavailable. Judge it by the page:
+
+- A page people use *on desktop* keeps the button clickable and toasts "this
+  lives in the app" — hiding it there reads as "the feature doesn't exist". See
+  the "Locate with AR" button in `auction_lot_map.html`.
+- A page that is only useful in the app, or a long public list where the button
+  would be pure noise on web, gates on `request.is_mobile_app` (lot page's
+  "Locate with AR", `auction.html`'s "AR Lots", the lot-list AR button in
+  `lot_tile_page.html` / `lot_list_page.html`, Bluetooth label printing).
+
 Reference implementation: the "Payment not available" button in
 `auctions/templates/invoice.html` — a plain `btn btn-secondary` (no `disabled`)
 that fires an `info` toast with `invoice.reason_for_payment_not_available` on

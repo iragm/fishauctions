@@ -39,7 +39,7 @@ from auctions.ar_mapping import (
     update_positions_for_auction,
 )
 from auctions.mobile.services import ar as ar_service
-from auctions.models import Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
+from auctions.models import Category, Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
 from auctions.tests import StandardTestCase
 
 
@@ -1438,6 +1438,124 @@ class ArWebMapTests(ArApiBaseTestCase):
         PageView.objects.create(lot_number=self.lot_b, source="ar")
         PageView.objects.create(lot_number=self.lot_c, source="")  # not a scan
         self.assertEqual(self.auction.number_of_lots_with_scanned_qr, 2)
+
+
+class ArLocatableAuctionsTests(ArApiBaseTestCase):
+    """``locatable_auction_pks``: in-person auctions from 2 h before the start until pretty_much_over."""
+
+    def _set_start(self, auction, delta):
+        # date_end has to move with date_start: the pre_save signal swaps the two if end < start.
+        auction.date_start = timezone.now() + delta
+        auction.date_end = auction.date_start + timedelta(hours=6)
+        auction.save()
+        auction.refresh_from_db()
+
+    def test_in_person_auction_about_to_start_is_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(minutes=30))
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_in_person_auction_in_progress_is_locatable(self):
+        self._set_start(self.in_person_auction, -timedelta(hours=2))
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_too_far_before_start_is_not_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(hours=5))
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_pretty_much_over_is_not_locatable(self):
+        # The fixture starts 3 days ago, so it's well past the 24 h wind-down grace period.
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_late_submission_window_keeps_it_locatable(self):
+        # Agrees with pretty_much_over, which takes the latest of start / bidding end / submission end.
+        self.in_person_auction.lot_submission_end_date = timezone.now()
+        self.in_person_auction.save()
+        self.assertFalse(self.in_person_auction.pretty_much_over)
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_online_auction_is_never_locatable(self):
+        self._set_start(self.auction, timedelta(minutes=30))
+        self.assertTrue(self.auction.is_online)
+        self.assertFalse(self.auction.pretty_much_over)
+        self.assertNotIn(self.auction.pk, ar_service.locatable_auction_pks())
+
+    def test_deleted_auction_is_not_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(minutes=30))
+        self.in_person_auction.is_deleted = True
+        self.in_person_auction.save()
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+
+class ArLocateOnLotListTests(ArApiBaseTestCase):
+    """The lot list offers "Locate with AR" only in the app, and only for a located lot in an
+    in-person auction that's happening now (LotFilter.qs annotation + the two page templates)."""
+
+    APP_UA = "FishAuctionsApp/1.0 (iOS)"
+
+    def setUp(self):
+        super().setUp()
+        self.in_person_auction.date_start = timezone.now() + timedelta(minutes=30)
+        self.in_person_auction.date_end = timezone.now() + timedelta(hours=6)
+        self.in_person_auction.save()
+        # LotFilter drops lots with no category for signed-in users (ignored-category filter), and
+        # hides lots posted in the last 20 minutes in online auctions.
+        Lot.objects.filter(pk__in=[self.other_auction_lot.pk, self.lot_a.pk]).update(
+            species_category=Category.objects.first(),
+            date_posted=timezone.now() - timedelta(hours=1),
+        )
+        self.position = LotPosition.objects.create(
+            lot=self.other_auction_lot, auction=self.in_person_auction, x=1, y=2, confidence=0.6
+        )
+        self.deep_link = f"fishauctions://ar/{self.in_person_auction.slug}?locate={self.other_auction_lot.pk}"
+
+    def _lot_list(self, auction, user_agent):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("allLots"), {"auction": auction.slug}, HTTP_USER_AGENT=user_agent)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def test_button_shown_in_app_for_located_lot(self):
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Locate with AR", html)
+        self.assertIn(self.deep_link, html)
+
+    def test_button_shown_in_list_view_too(self):
+        self.user.userdata.use_list_view = True
+        self.user.userdata.save()
+        self.assertIn(self.deep_link, self._lot_list(self.in_person_auction, self.APP_UA))
+
+    def test_button_absent_on_web(self):
+        html = self._lot_list(self.in_person_auction, "Mozilla/5.0")
+        self.assertIn("Stray lot", html)  # the lot is listed...
+        self.assertNotIn(self.deep_link, html)  # ...just without the AR handoff
+
+    def test_button_absent_without_a_position(self):
+        self.position.delete()
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Stray lot", html)
+        self.assertNotIn(self.deep_link, html)
+
+    def test_button_absent_when_auction_is_over(self):
+        self.in_person_auction.date_start = timezone.now() - timedelta(days=3)
+        self.in_person_auction.date_end = timezone.now() - timedelta(days=2)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Stray lot", html)
+        self.assertNotIn(self.deep_link, html)
+
+    def test_button_absent_for_online_auction_lot(self):
+        LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=0, y=0, confidence=0.9)
+        html = self._lot_list(self.auction, self.APP_UA)
+        self.assertIn("Apisto pair", html)
+        self.assertNotIn(f"fishauctions://ar/{self.auction.slug}?locate={self.lot_a.pk}", html)
+
+    def test_web_lot_list_does_not_query_for_locatable_auctions(self):
+        # The app-UA gate comes first, so an ordinary web lot list pays nothing for this feature.
+        with patch.object(ar_service, "locatable_auction_pks") as mocked:
+            self._lot_list(self.in_person_auction, "Mozilla/5.0")
+        mocked.assert_not_called()
 
 
 class FollowUpFixTests(StandardTestCase):
