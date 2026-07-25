@@ -20,6 +20,8 @@ from django.contrib.sites.models import Site
 from django.urls import reverse
 from django.utils import timezone
 
+from auctions.helper_functions import scrub_emails
+
 logger = logging.getLogger(__name__)
 
 # Custom merge fields provisioned on connect. (FNAME / LNAME already exist on every new list.)
@@ -173,7 +175,7 @@ def ensure_merge_fields(club):
                 "Failed to create Mailchimp merge field %s for club %s: %s",
                 tag,
                 club.pk,
-                _readable_api_error(exc),
+                scrub_emails(_readable_api_error(exc)),
             )
 
 
@@ -339,12 +341,13 @@ def sync_member(member, force_status=False):
         if status_code == 400:
             # Mailchimp rejected this specific address (fake/invalid email, bad merge field, etc.).
             # Record it on the member row but don't propagate — other members in the batch should still sync.
-            logger.warning("Mailchimp rejected member %s (%s): %s", member.pk, member.email, detail)
+            # The member pk is enough to identify them; addresses never go to the logs.
+            logger.warning("Mailchimp rejected member %s: %s", member.pk, scrub_emails(detail))
             _record_sync(member, status="cleaned", web_id=member.mailchimp_web_id or "")
         else:
             # 4xx auth or 5xx — record on the club so admins see it in the status panel.
             _record_error(club, detail)
-            logger.error("Mailchimp sync failed for member %s (club %s): %s", member.pk, club.pk, detail)
+            logger.error("Mailchimp sync failed for member %s (club %s): %s", member.pk, club.pk, scrub_emails(detail))
         return False
 
 
@@ -410,8 +413,12 @@ def _sync_tags(client, member, list_id):
     tags = [{"name": name, "status": "active" if active else "inactive"} for name, active in tag_states.items()]
     try:
         client.lists.update_list_member_tags(list_id, subscriber_hash(member.email), {"tags": tags})
-    except ApiClientError:
-        logger.exception("Failed to update Mailchimp tags for member %s", member.pk)
+    except ApiClientError as e:
+        # No logger.exception here: the traceback would include the raw API response, which
+        # echoes back the address we sent. The readable detail is scrubbed and enough to debug.
+        logger.error(
+            "Failed to update Mailchimp tags for member %s: %s", member.pk, scrub_emails(_readable_api_error(e))
+        )
 
 
 def _archive_member(client, member, list_id):
@@ -446,7 +453,10 @@ def change_member_email(member, old_email):
             # Old address was never synced; just create the new contact.
             sync_member(member)
         else:
-            logger.exception("Failed to update Mailchimp email for member %s", member.pk)
+            # Not logger.exception: the traceback carries the old/new addresses in the API body.
+            logger.error(
+                "Failed to update Mailchimp email for member %s: %s", member.pk, scrub_emails(_readable_api_error(e))
+            )
 
 
 # --- bulk / scope helpers --------------------------------------------------------------------

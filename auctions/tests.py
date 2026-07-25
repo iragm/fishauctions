@@ -26526,6 +26526,141 @@ class BrevoSyncTests(TestCase):
         self.assertEqual(client.request.call_args.args, ("DELETE", "/contacts/old%40example.com"))
 
 
+class MarketingSyncLogRedactionTests(TestCase):
+    """Member email addresses must never reach the log files.
+
+    Mailchimp and Brevo both echo the address back in their error bodies, so it isn't enough to
+    keep it out of the format string — the third-party detail has to be scrubbed too.
+    """
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Redaction Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.save()
+
+    @staticmethod
+    def _mailchimp_error(status_code=400):
+        from mailchimp_marketing.api_client import ApiClientError
+
+        return ApiClientError(
+            json.dumps(
+                {
+                    "title": "Invalid Resource",
+                    "status": status_code,
+                    "detail": "joe@example.com looks fake or invalid, please enter a real email address.",
+                }
+            ),
+            status_code,
+        )
+
+    def test_scrub_emails_replaces_addresses(self):
+        from auctions.helper_functions import scrub_emails
+
+        self.assertEqual(
+            scrub_emails("joe@example.com looks fake"),
+            "[email redacted] looks fake",
+        )
+        self.assertEqual(
+            scrub_emails("both a@b.co and c.d+tag@e.example.org"),
+            "both [email redacted] and [email redacted]",
+        )
+        # Non-strings (API details are sometimes dicts) and empty values must not blow up.
+        self.assertEqual(scrub_emails(""), "")
+        self.assertIsNone(scrub_emails(None))
+        self.assertNotIn("joe@example.com", scrub_emails({"detail": "joe@example.com"}))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_rejection_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.side_effect = self._mailchimp_error(400)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="WARNING") as logs:
+            self.assertFalse(mc.sync_member(self.member))
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertIn("[email redacted]", output)
+        self.assertIn(str(self.member.pk), output)
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_sync_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.side_effect = self._mailchimp_error(500)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            self.assertFalse(mc.sync_member(self.member))
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_tag_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "subscribed"}
+        client.lists.update_list_member_tags.side_effect = self._mailchimp_error(400)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            mc.sync_member(self.member)
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_change_email_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.update_list_member.side_effect = self._mailchimp_error(500)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            mc.change_member_email(self.member, "old@example.com")
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertNotIn("old@example.com", output)
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_rejection_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(400, "Invalid email address: joe@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="WARNING") as logs:
+            self.assertFalse(brevo.sync_member(self.member))
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertIn("[email redacted]", output)
+        self.assertIn(str(self.member.pk), output)
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_sync_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(500, "Server error syncing joe@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="ERROR") as logs:
+            self.assertFalse(brevo.sync_member(self.member))
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_change_email_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(500, "Could not delete old@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="ERROR") as logs:
+            brevo.change_member_email(self.member, "old@example.com")
+
+        self.assertNotIn("old@example.com", "\n".join(logs.output))
+
+
 class BrevoWebhookTests(TestCase):
     """Inbound webhook only records Brevo status; never touches the site account."""
 

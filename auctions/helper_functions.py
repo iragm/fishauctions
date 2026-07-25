@@ -1,8 +1,23 @@
 """Got sick of these being scattered all over the codebase,
 will move more functions here as they get edited"""
 
+import re
 from collections import Counter
 from datetime import datetime, timedelta
+
+EMAIL_IN_TEXT_RE = re.compile(r"[^\s<>@,;:\"'()\[\]]+@[^\s<>@,;:\"'()\[\]]+\.[A-Za-z]{2,}")
+
+
+def scrub_emails(text):
+    """Strip any email addresses out of `text`, replacing each with "[email redacted]".
+
+    Use this on anything third-party bound for the logs: API error bodies routinely echo back the
+    address we sent them ("x@y.com looks fake or invalid, please enter a real email address"), so
+    removing our own interpolated email isn't enough to keep addresses out of the log files.
+    """
+    if not text:
+        return text
+    return EMAIL_IN_TEXT_RE.sub("[email redacted]", str(text))
 
 
 def get_currency_symbol(currency_code):

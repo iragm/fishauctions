@@ -29,6 +29,8 @@ import requests
 from django.urls import reverse
 from django.utils import timezone
 
+from auctions.helper_functions import scrub_emails
+
 # Reuse the platform-agnostic helpers from the Mailchimp module (same source of truth).
 from auctions.mailchimp import _self_service_url, _site_domain, _top_category_names, in_scope_members
 
@@ -222,7 +224,9 @@ def ensure_attributes(club):
         except BrevoApiError as exc:
             # 400 here almost always means "attribute already exists" — safe to ignore.
             if exc.status_code != 400:
-                logger.error("Failed to create Brevo attribute %s for club %s: %s", name, club.pk, exc.detail)
+                logger.error(
+                    "Failed to create Brevo attribute %s for club %s: %s", name, club.pk, scrub_emails(exc.detail)
+                )
 
 
 def ensure_webhook(club):
@@ -348,11 +352,12 @@ def sync_member(member, force_status=False):
         if e.status_code in (400, 422):
             # Brevo rejected this specific address (invalid email, etc.). Record on the member row
             # but don't propagate — other members in the batch should still sync.
-            logger.warning("Brevo rejected member %s (%s): %s", member.pk, member.email, e.detail)
+            # The member pk is enough to identify them; addresses never go to the logs.
+            logger.warning("Brevo rejected member %s: %s", member.pk, scrub_emails(e.detail))
             _record_sync(member, status="cleaned", contact_id=member.brevo_contact_id or "")
         else:
             _record_error(club, e.detail)
-            logger.error("Brevo sync failed for member %s (club %s): %s", member.pk, club.pk, e.detail)
+            logger.error("Brevo sync failed for member %s (club %s): %s", member.pk, club.pk, scrub_emails(e.detail))
         return False
     except BrevoError as e:
         _record_error(club, str(e))
@@ -412,7 +417,8 @@ def change_member_email(member, old_email):
         client.request("DELETE", f"/contacts/{quote(old_email)}")
     except BrevoApiError as e:
         if e.status_code != 404:
-            logger.exception("Failed to delete old Brevo contact for member %s", member.pk)
+            # Not logger.exception: the traceback includes the request URL, which is the old address.
+            logger.error("Failed to delete old Brevo contact for member %s: %s", member.pk, scrub_emails(e.detail))
 
 
 # --- bulk / scope helpers --------------------------------------------------------------------
