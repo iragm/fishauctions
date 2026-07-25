@@ -101,6 +101,25 @@ overrides `.pagination` to neutral grays: bg `#444`, hover `#5a5a5a`, active
 `#6c757d`, disabled `#2b2b2b`/muted `#888`, white text. Fixed site-wide; no
 per-table markup needed.
 
+## Truncating text inside a flex column
+
+`text-truncate` only clips when the element has a boundary narrower than its text.
+Inside a **wrapping** flex container it doesn't get one: `.nav` sets
+`flex-wrap: wrap`, and a multi-line column flex container sizes its line to the
+widest item's *max-content* width, then stretches every item to that line — so a
+`white-space: nowrap` child (which is what `text-truncate` makes it) grows to the
+full text width and spills over the neighbouring content.
+
+Fix the container, not the child: add **`flex-nowrap`** to the `.nav.flex-column`
+(see `auctions/templates/club_sidebar_nav.html`). Then the line's cross size is the
+container's width and every child, truncating or not, is clipped to it.
+
+Things that look like they should fix this but don't: `min-width: 0` on the
+column or on the truncating child (it isn't failing to shrink, it's stretching),
+and `overflow-x: hidden` on an ancestor (hides the symptom, still cuts the text
+mid-word with no ellipsis). `w-100` / `max-width: 100%` on the child does work,
+but only for that one child.
+
 ## Unavailable actions stay clickable
 
 **Don't hide or disable a button when its action is currently unavailable.** Keep
