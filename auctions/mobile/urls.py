@@ -15,6 +15,7 @@ from .views import (
     MobileDeviceUnregisterView,
     MobileGoogleAuthView,
     MobileLabelPrefsView,
+    MobileLastUsedAuctionView,
     MobileLoginView,
     MobileLotLabelView,
     MobileLotWatchView,
@@ -47,6 +48,8 @@ urlpatterns = [
     ),
     # Clubs
     path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
+    # Auctions
+    path("auctions/last-used/", MobileLastUsedAuctionView.as_view(), name="mobile-last-used-auction"),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
     path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),

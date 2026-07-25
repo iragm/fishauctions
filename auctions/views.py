@@ -16339,6 +16339,18 @@ def _parse_paypal_datetime_date(value):
     return parsed.date() if parsed else None
 
 
+def _mask_subscription_id(subscription_id):
+    """Redact a PayPal subscription id for logging.
+
+    The full id (e.g. ``I-BW452GLLEP1G``) is a sensitive account identifier and must never reach the
+    logs. Keep only the last 4 characters so log lines can still be correlated with each other (and
+    with PayPal support) without exposing the whole id."""
+    subscription_id = subscription_id or ""
+    if len(subscription_id) <= 4:
+        return "****"
+    return f"****{subscription_id[-4:]}"
+
+
 def _find_or_create_subscription_member(club, subscription_id, email):
     """Resolve the ClubMember for a subscription: by subscription id, then email, then create.
 
@@ -16386,7 +16398,9 @@ def _book_paypal_subscription_payment(club, member, subscription):
         amount = Decimal(str(raw_amount))
     except (InvalidOperation, TypeError, ValueError):
         logger.warning(
-            "PayPal subscription %s: unparseable last_payment amount %r; not booking", subscription_id, raw_amount
+            "PayPal subscription %s: unparseable last_payment amount %r; not booking",
+            _mask_subscription_id(subscription_id),
+            raw_amount,
         )
         return None
     if amount <= 0:
@@ -16409,7 +16423,7 @@ def _book_paypal_subscription_payment(club, member, subscription):
     )
     logger.info(
         "PayPal subscription %s: booked %s to club %s ledger for member %s",
-        subscription_id,
+        _mask_subscription_id(subscription_id),
         amount,
         club.pk,
         member.pk,
@@ -16446,18 +16460,25 @@ def _apply_paypal_subscription_event(club, subscription):
         if member and member.paypal_subscription_id:
             member.paypal_subscription_id = ""
             member.save(update_fields=["paypal_subscription_id"])
-            logger.info("PayPal subscription %s %s: cleared for member %s", subscription_id, status, member.pk)
+            logger.info(
+                "PayPal subscription %s %s: cleared for member %s",
+                _mask_subscription_id(subscription_id),
+                status,
+                member.pk,
+            )
         return
 
     if status != "ACTIVE":
-        logger.info("PayPal subscription %s status %s: nothing to apply", subscription_id, status)
+        logger.info(
+            "PayPal subscription %s status %s: nothing to apply", _mask_subscription_id(subscription_id), status
+        )
         return
 
     member = _find_or_create_subscription_member(club, subscription_id, email)
     if not member:
         logger.warning(
             "PayPal subscription %s (%s): no member and no email to create one in club %s",
-            subscription_id,
+            _mask_subscription_id(subscription_id),
             status,
             club.pk,
         )
@@ -16473,7 +16494,9 @@ def _apply_paypal_subscription_event(club, subscription):
     )
     if not newly_linked and not advanced:
         # Duplicate / out-of-order delivery for a cycle we already recorded -- nothing changed.
-        logger.info("PayPal subscription %s: already current for member %s", subscription_id, member.pk)
+        logger.info(
+            "PayPal subscription %s: already current for member %s", _mask_subscription_id(subscription_id), member.pk
+        )
         return
     member.paypal_subscription_id = subscription_id
     member.membership_last_paid = timezone.now().date()
@@ -16483,7 +16506,7 @@ def _apply_paypal_subscription_event(club, subscription):
     maybe_send_membership_renewal_confirmation(member)
     logger.info(
         "PayPal subscription %s (%s): renewed member %s through %s",
-        subscription_id,
+        _mask_subscription_id(subscription_id),
         status,
         member.pk,
         member.membership_expiration_date,
@@ -16642,7 +16665,10 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
 
         club = self._identify_and_verify_club(subscription_id, headers, event)
         if not club:
-            logger.warning("PayPal subscription webhook: no club verified for subscription %s", subscription_id)
+            logger.warning(
+                "PayPal subscription webhook: no club verified for subscription %s",
+                _mask_subscription_id(subscription_id),
+            )
             return HttpResponseBadRequest("webhook verification failed")
 
         # Re-fetch authoritative subscription state (the triggering event body may be a bare sale
@@ -16651,7 +16677,9 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
         try:
             subscription = self.get_from_paypal(f"v1/billing/subscriptions/{subscription_id}", include_bn_code=False)
         except PayPalRequestError:
-            logger.exception("PayPal subscription webhook: failed to fetch subscription %s", subscription_id)
+            logger.exception(
+                "PayPal subscription webhook: failed to fetch subscription %s", _mask_subscription_id(subscription_id)
+            )
             # 500 -> PayPal retries later, so a transient fetch failure doesn't drop the renewal.
             return HttpResponse(status=500)
 

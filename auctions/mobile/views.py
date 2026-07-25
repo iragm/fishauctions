@@ -158,6 +158,28 @@ GET /api/mobile/clubs/mine/
           ]
         }
 
+Auctions
+--------
+GET /api/mobile/auctions/last-used/
+    The caller's current ("last used") auction, as read-only state the command palette fetches once
+    when it opens to decide — client-side — whether to surface the native AR lot-scanning entry.
+    No side effects (unlike ``checkin/ping/``). Always 200; a 404 means an older backend without
+    this endpoint (the app then just omits the AR entry, same degrade-on-404 as the AR/check-in
+    endpoints). Every field is null when there's no last-used auction or it was deleted.
+    ``latitude``/``longitude`` are the single physical pickup location's coordinates, or null when
+    there isn't exactly one with coordinates set.
+
+    Response 200::
+
+        {
+          "slug":             "spring-fry-swap-2026",
+          "title":            "Spring Fry Swap 2026",
+          "is_online":        false,
+          "pretty_much_over": false,
+          "latitude":         40.4406,
+          "longitude":        -79.9959
+        }
+
 Labels
 ------
 GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
@@ -344,6 +366,7 @@ from .serializers import (
 from .services import ar as ar_service
 from .services import checkin as checkin_service
 from .services.auth import MobileAuthService
+from .services.checkin import _single_pickup_location
 from .services.devices import DeviceService
 from .services.labels import LabelService
 from .services.payments import (
@@ -993,6 +1016,73 @@ class MobileCommandPaletteLogView(APIView):
             result_object_id=data.get("result_object_id"),
         )
         return Response({"id": search_id})
+
+
+class MobileLastUsedAuctionView(APIView):
+    """GET /api/mobile/auctions/last-used/ — the caller's current auction, for client-side gating.
+
+    A read-only, side-effect-free lookup the command palette makes once when it opens, so it can
+    decide locally whether to surface the native AR lot-scanning entry: the app computes distance
+    from the device's live GPS to this auction's pickup coordinates and only offers AR (near-mode)
+    for an in-person auction that isn't ``pretty_much_over``. This deliberately does *not* reuse
+    ``checkin/ping/`` — that's a ~500 ft welcome geofence with real side effects (auto-check-in,
+    one-shot nudge rows, ``last_auction_used`` writes); here we only report state.
+
+    Always 200. Every field is null when the user has no ``last_auction_used`` or it points at a
+    soft-deleted auction — the same "plain when unset/deleted" fallback as ``MyLastAuctionLots``. A
+    404 is reserved for older backend builds that predate this endpoint, matching the app's standard
+    degrade-on-404 for optional mobile endpoints (``ar/lots``, ``ar/positions``, ``checkin/ping``).
+
+    ``latitude``/``longitude`` come from the auction's single physical pickup location (exactly one
+    non-mail ``PickupLocation`` whose coordinates are set); null otherwise — ambiguous/no physical
+    location, mail-only, or coordinates left at the ``(0, 0)`` "unset" sentinel the rest of the
+    codebase excludes. A null pair tells the app "can't distance-gate, don't show AR near-mode".
+
+    Response 200::
+
+        {
+          "slug":             "spring-fry-swap-2026",  // null when unset / deleted
+          "title":            "Spring Fry Swap 2026",
+          "is_online":        false,
+          "pretty_much_over": false,
+          "latitude":         40.4406,                 // null if no single physical location
+          "longitude":        -79.9959
+        }
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        auction = getattr(request.user.userdata, "last_auction_used", None)
+        if auction is None or auction.is_deleted:
+            return Response(
+                {
+                    "slug": None,
+                    "title": None,
+                    "is_online": None,
+                    "pretty_much_over": None,
+                    "latitude": None,
+                    "longitude": None,
+                }
+            )
+        location = _single_pickup_location(auction)
+        # PickupLocation coordinates default to (0, 0) rather than null — the codebase's "unset"
+        # sentinel (see Auction.physical_location_qs / get_closest_location_distance_subquery, which
+        # both exclude latitude=0, longitude=0). Report null there so the app reads it as "no usable
+        # location" instead of distance-gating against a real point in the Gulf of Guinea.
+        has_coordinates = location is not None and not (location.latitude == 0 and location.longitude == 0)
+        return Response(
+            {
+                "slug": auction.slug,
+                "title": auction.title,
+                "is_online": auction.is_online,
+                "pretty_much_over": auction.pretty_much_over,
+                "latitude": location.latitude if has_coordinates else None,
+                "longitude": location.longitude if has_coordinates else None,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
