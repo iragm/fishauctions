@@ -30747,3 +30747,178 @@ class UniqueViewsCountTest(StandardTestCase):
 
         # logged_in = distinct users {userB, user}; anonymous = {s1, s2, s3} - {s3} = {s1, s2}.
         self.assertEqual(auction.unique_views, {"total": 4, "logged_in": 2, "anonymous": 2})
+
+
+class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
+    """Label/barcode printing must be reachable inside the native app exactly as it is on the web.
+
+    Regression (reported 2026-07-25): every batch/bulk print entry point was wrapped in
+    ``{% if not request.is_mobile_app %}`` on the assumption that the app always prints natively
+    over Bluetooth. That only ever held for the per-lot button on the lot page, and only for one of
+    three print methods -- users on the PDF or System-printer method (the default) lost label
+    printing entirely inside the app. The app intercepts these downloads itself, so the links must
+    render for every user agent.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (iOS)"
+    WEB_UA = "Mozilla/5.0"
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Printing Club")
+        ClubMember.objects.create(club=self.club, user=self.admin_user, permission_admin=True)
+        self.in_person_auction.club = self.club
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.save()
+        userdata = self.user.userdata
+        userdata.last_auction_used = self.in_person_auction
+        userdata.save()
+
+    def _get(self, url, user_agent, user=None):
+        self.client.force_login(user or self.user)
+        return self.client.get(url, HTTP_USER_AGENT=user_agent)
+
+    def _assert_same_for_app_and_web(self, url, needle, user=None):
+        """The link must render identically under both user agents."""
+        for ua in (self.WEB_UA, self.APP_UA):
+            response = self._get(url, ua, user=user)
+            self.assertEqual(response.status_code, 200, f"{url} returned {response.status_code} for {ua}")
+            self.assertIn(needle, response.content.decode("utf-8"), f"{needle} missing from {url} for UA {ua}")
+
+    def test_printing_prefs_page_shows_print_labels_button(self):
+        """user_labels.html: 'Print labels for <auction>'."""
+        self._assert_same_for_app_and_web(
+            reverse("printing"),
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_selling_dashboard_shows_print_labels_button(self):
+        """auctions/partials/lot_user_table_header.html, on lot lists."""
+        self._assert_same_for_app_and_web(
+            reverse("selling"),
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_auction_page_shows_my_print_labels_button(self):
+        """auction.html: the seller's own 'Print Labels'."""
+        Lot.objects.create(
+            lot_name="a lot so user_has_lots is true",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            user=self.user,
+            quantity=1,
+        )
+        self._assert_same_for_app_and_web(
+            self.in_person_auction.url,
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_auction_page_admin_actions_show_print_labels(self):
+        """auction.html admin actions + auction_ribbon.html dropdown: 'Print labels'."""
+        self._assert_same_for_app_and_web(
+            self.in_person_auction.url,
+            reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug}),
+            user=self.admin_user,
+        )
+
+    def test_auction_printing_page_itself_loads_in_app(self):
+        self._assert_same_for_app_and_web(
+            reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug}),
+            "Print labels",
+            user=self.admin_user,
+        )
+
+    def test_bulk_add_lots_shows_save_and_print(self):
+        """auctions/bulk_add_lots.html: the 'Save and print labels' submit."""
+        self._assert_same_for_app_and_web(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_tos.bidder_number},
+            ),
+            "Save and print labels",
+        )
+
+    def test_quick_check_in_shows_print_barcodes_link(self):
+        """auctions/quick_check_in_users.html: 'print barcodes to scan here'."""
+        self._assert_same_for_app_and_web(
+            reverse("auction_quick_check_in", kwargs={"slug": self.in_person_auction.slug}),
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            user=self.admin_user,
+        )
+
+    def test_self_check_in_shows_print_barcodes_link(self):
+        """auctions/self_check_in.html: 'Print barcodes here.'"""
+        self.in_person_auction.manage_users_through_club = "checkin"
+        self.in_person_auction.save()
+        self._assert_same_for_app_and_web(
+            reverse("auction_self_check_in", kwargs={"slug": self.in_person_auction.slug}),
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            user=self.admin_user,
+        )
+
+    def test_club_barcode_labels_page_itself_loads_in_app(self):
+        self._assert_same_for_app_and_web(
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            "Print",
+            user=self.admin_user,
+        )
+
+    def test_users_table_print_links_are_reachable_at_every_width(self):
+        """The users table's 'Print labels' / 'Print only N unprinted labels' are not UA-gated, and
+        the desktop column and the phone Actions dropdown cover complementary widths.
+
+        The ``Lot labels`` column is ``d-md-table-cell d-none`` (md and up only), so on a phone the
+        links have to come from the row's Actions dropdown -- whose items carry ``d-md-none`` (below
+        md only). Neither width may lose a link.
+        """
+        tos = self.in_person_tos
+        for i in range(3):
+            Lot.objects.create(
+                lot_name=f"users table lot {i}",
+                auction=self.in_person_auction,
+                auctiontos_seller=tos,
+                quantity=1,
+                label_printed=(i == 0),
+            )
+        self.assertEqual(tos.unprinted_label_count, 2)
+        print_all_url = reverse(
+            "print_labels_by_bidder_number",
+            kwargs={"slug": self.in_person_auction.slug, "bidder_number": tos.bidder_number},
+        )
+        unprinted_url = reverse(
+            "print_unprinted_labels_by_bidder_number",
+            kwargs={"slug": self.in_person_auction.slug, "bidder_number": tos.bidder_number},
+        )
+
+        # md and up: the Lot labels column carries both.
+        column = tos.print_labels_html
+        self.assertIn(print_all_url, column)
+        self.assertIn(unprinted_url, column)
+
+        # Below md: the column is hidden, so the Actions dropdown must carry both, marked d-md-none
+        # so they appear exactly where the column does not.
+        dropdown = tos.actions_dropdown_html
+        for url in (print_all_url, unprinted_url):
+            self.assertIn(url, dropdown)
+            item = next(chunk for chunk in dropdown.split("<span class='dropdown-item") if url in chunk)
+            self.assertTrue(item.startswith(" d-md-none"), f"{url} is not shown at phone widths: {item[:80]}")
+
+    def test_no_printing_template_still_gates_on_the_app_user_agent(self):
+        """Guard against the gate creeping back in. The only legitimate request.is_mobile_app uses
+        left in printing templates are app-only *additions* (the native Bluetooth per-lot button and
+        the Bluetooth connect card), never a wrapper that hides a web print link."""
+        template_dir = Path(__file__).resolve().parent / "templates"
+        allowed = {"view_lot_images.html", "printing_extras.html"}
+        offenders = []
+        for path in template_dir.rglob("*.html"):
+            if path.name in allowed:
+                continue
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+                if "is_mobile_app" not in line:
+                    continue
+                if re.search(r"print|label|barcode", line, re.IGNORECASE):
+                    offenders.append(f"{path.relative_to(template_dir)}:{lineno}: {line.strip()}")
+        self.assertEqual(
+            offenders, [], "Label printing must not be gated on the mobile app UA:\n" + "\n".join(offenders)
+        )

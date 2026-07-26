@@ -10,7 +10,7 @@
       Configure your barcode scanner to use a prefix character <code class="scanner-prefix-key">F9</code> and a suffix CR character, and attach it in HID (keyboard) mode.
       This page will only allow users to check in -- it won't let them assign bidder numbers or add stuff to their invoice.
       But, you can use a barcode scanner on any page of this auction to assign bidder numbers or add items to a user's invoice.
-      {% if not request.is_mobile_app %}<a href="{% url 'club_barcode_labels' slug=auction.club.slug %}">Print barcodes here.</a>{% endif %}
+      <a href="{% url 'club_barcode_labels' slug=auction.club.slug %}">Print barcodes here.</a>
     </p>
     <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
   </div>
