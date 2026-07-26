@@ -588,6 +588,9 @@ def _should_mark_invoice_renewal_needed(invoice):
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
+    # A PayPal subscription auto-renews the membership, so never auto-add the manual renewal fee.
+    if member.paypal_subscription_id:
+        return False
     expiration_date = member.membership_expiration_date
     if not expiration_date:
         return True
@@ -3951,7 +3954,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
             "<div class='text-center text-muted p-4'>"
             "<i class='bi bi-people fs-1 d-block mb-2'></i>"
             "<p class='mb-1'>No users yet.</p>"
-            "<p class='mb-0'>Users are added automatically when someone joins, bids, or submits a lot. "
+            "<p class='mb-0'>Users are added automatically when someone joins. "
             "You can also add one now with the <strong>Add user</strong> button above. "
             "Each user's invoice appears here automatically once they buy or sell a lot.</p>"
             "</div>"
@@ -8798,6 +8801,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "minimum_bid",
                 "winning_bid_percent_to_club_for_club_members",
                 "lot_entry_fee_for_club_members",
+                "registration_fee",
+                "registration_fee_for_club_members",
                 "set_lot_winners_url",
                 "require_phone_number",
                 "buy_now",
@@ -12687,6 +12692,7 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["show_print_method"] = self._show_print_method()
+        kwargs["is_mobile_app"] = bool(self.request.is_mobile_app)
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -12697,9 +12703,13 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         prefs = self.object
         context["label_prefs"] = prefs
         context["show_print_method"] = self._show_print_method()
-        context["warnings"] = label_prefs_warnings(prefs)
+        # Print-method mismatch warnings talk about switching to Bluetooth / thermal printers, which
+        # only work in the app. On the web only PDF is available, so the warnings aren't actionable —
+        # suppress them there and keep them in the app.
+        show_warnings = bool(self.request.is_mobile_app)
+        context["warnings"] = label_prefs_warnings(prefs) if show_warnings else []
         # A plain dict; the template embeds it safely with |json_script for the live-warning JS.
-        context["warning_map"] = warning_matrix()
+        context["warning_map"] = warning_matrix() if show_warnings else {}
         userData = self.request.user.userdata
         context["last_auction_used"] = userData.last_auction_used
         context["last_admin_auction"] = (
@@ -16319,6 +16329,364 @@ class PayPalWebhookView(PayPalAPIMixin, View):
         return JsonResponse({"status": "ok"})
 
 
+def _parse_paypal_datetime_date(value):
+    """PayPal ISO-8601 timestamp (e.g. next_billing_time) -> a date, or None."""
+    from django.utils.dateparse import parse_datetime
+
+    if not value:
+        return None
+    parsed = parse_datetime(value)
+    return parsed.date() if parsed else None
+
+
+def _mask_subscription_id(subscription_id):
+    """Redact a PayPal subscription id for logging.
+
+    The full id (e.g. ``I-BW452GLLEP1G``) is a sensitive account identifier and must never reach the
+    logs. Keep only the last 4 characters so log lines can still be correlated with each other (and
+    with PayPal support) without exposing the whole id."""
+    subscription_id = subscription_id or ""
+    if len(subscription_id) <= 4:
+        return "****"
+    return f"****{subscription_id[-4:]}"
+
+
+def _find_or_create_subscription_member(club, subscription_id, email):
+    """Resolve the ClubMember for a subscription: by subscription id, then email, then create.
+
+    Creation needs an email (we can't make a usable member without one). Returns None when no
+    member exists and none can be created."""
+    member = ClubMember.objects.filter(club=club, paypal_subscription_id=subscription_id, is_deleted=False).first()
+    if member:
+        return member
+    if email:
+        member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
+        if member:
+            return member
+        return ClubMember.objects.create(club=club, email=email)
+    return None
+
+
+def _book_paypal_subscription_payment(club, member, subscription):
+    """Book a PayPal subscription charge into the club ledger. Idempotent; returns the row or None.
+
+    A subscription renewal is real money into the club, exactly like the manual renewal button
+    (ClubMembershipRenewView) and a paid dues invoice (Invoice.sync_club_money) -- without this the
+    treasurer's ledger and the "Membership dues" total silently miss every auto-renewal.
+
+    We book what PayPal actually charged (``billing_info.last_payment.amount.value``) rather than the
+    club's ``membership_annual_fee``: the two drift whenever a club changes its fee after members have
+    already subscribed, and the ledger must reflect the cash that really moved.
+
+    Idempotency matters more here than anywhere else in this flow: PayPal retries webhooks, sends
+    several BILLING.SUBSCRIPTION events per cycle, and a BILLING.SUBSCRIPTION.UPDATED can advance the
+    billing date with no new payment at all. So the booking is keyed on (club, membership category,
+    payment date, subscription id) -- the same charge can arrive any number of times and books once.
+    That key is also why this runs *outside* the membership-date guard in the caller: a payment whose
+    cycle dates didn't move (e.g. the first PAYMENT.SALE.COMPLETED after ACTIVATED already set the
+    dates) still has to reach the ledger.
+    """
+    subscription_id = subscription.get("id") or ""
+    if not subscription_id:
+        return None
+    last_payment = (subscription.get("billing_info") or {}).get("last_payment") or {}
+    raw_amount = (last_payment.get("amount") or {}).get("value")
+    if raw_amount is None:
+        # ACTIVATED can arrive before the first charge posts; the next event carries the payment.
+        return None
+    try:
+        amount = Decimal(str(raw_amount))
+    except (InvalidOperation, TypeError, ValueError):
+        logger.warning(
+            "PayPal subscription %s: unparseable last_payment amount %r; not booking",
+            _mask_subscription_id(subscription_id),
+            raw_amount,
+        )
+        return None
+    if amount <= 0:
+        return None
+    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.now().date()
+    if ClubMoney.objects.filter(
+        club=club,
+        category=ClubMoney.CATEGORY_MEMBERSHIP,
+        date=payment_date,
+        description__contains=subscription_id,
+    ).exists():
+        return None
+    entry = ClubMoney.objects.create(
+        club=club,
+        # created_by stays null: a webhook has no acting user (the field is nullable for this case).
+        date=payment_date,
+        amount=amount,
+        description=f"PayPal subscription renewal for {member} ({subscription_id})",
+        category=ClubMoney.CATEGORY_MEMBERSHIP,
+    )
+    logger.info(
+        "PayPal subscription %s: booked %s to club %s ledger for member %s",
+        _mask_subscription_id(subscription_id),
+        amount,
+        club.pk,
+        member.pk,
+    )
+    return entry
+
+
+def _apply_paypal_subscription_event(club, subscription):
+    """Apply an authoritative PayPal subscription resource (re-fetched from PayPal) to its member.
+
+    Acts on the subscription's real status, not on which webhook triggered us:
+      - CANCELLED/SUSPENDED/EXPIRED -> clear paypal_subscription_id (they no longer auto-renew).
+        The paid-through date is left intact, so they keep the time already paid for and expiry
+        reminders resume on their own once the subscription id is gone.
+      - ACTIVE -> book the charge into the club ledger (see
+        :func:`_book_paypal_subscription_payment`), record the subscription, and extend membership to
+        next_billing_time. A renewal confirmation email goes out only when the membership is newly
+        linked or actually advances, so PayPal's webhook retries (and its several
+        BILLING.SUBSCRIPTION events per cycle) don't spam the member.
+      - anything else (APPROVAL_PENDING / APPROVED -- created but not yet paid) -> do nothing, so
+        an abandoned, never-paid subscription can't grant membership.
+    ClubMember.save() reschedules expiry reminders."""
+    subscription_id = subscription.get("id") or ""
+    if not subscription_id:
+        return
+    status = (subscription.get("status") or "").upper()
+    subscriber = subscription.get("subscriber") or {}
+    email = (subscriber.get("email_address") or "").strip()
+
+    if status in ("CANCELLED", "SUSPENDED", "EXPIRED"):
+        member = ClubMember.objects.filter(club=club, paypal_subscription_id=subscription_id, is_deleted=False).first()
+        if not member and email:
+            member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
+        if member and member.paypal_subscription_id:
+            member.paypal_subscription_id = ""
+            member.save(update_fields=["paypal_subscription_id"])
+            logger.info(
+                "PayPal subscription %s %s: cleared for member %s",
+                _mask_subscription_id(subscription_id),
+                status,
+                member.pk,
+            )
+        return
+
+    if status != "ACTIVE":
+        logger.info(
+            "PayPal subscription %s status %s: nothing to apply", _mask_subscription_id(subscription_id), status
+        )
+        return
+
+    member = _find_or_create_subscription_member(club, subscription_id, email)
+    if not member:
+        logger.warning(
+            "PayPal subscription %s (%s): no member and no email to create one in club %s",
+            _mask_subscription_id(subscription_id),
+            status,
+            club.pk,
+        )
+        return
+    # Book the cash first, and outside the change guard below: the ledger entry is keyed on the
+    # payment itself (idempotent), so it must not be skipped just because this delivery didn't move
+    # the membership dates.
+    _book_paypal_subscription_payment(club, member, subscription)
+    next_date = _parse_paypal_datetime_date((subscription.get("billing_info") or {}).get("next_billing_time"))
+    newly_linked = not member.paypal_subscription_id
+    advanced = bool(
+        next_date and (not member.membership_expiration_date or next_date > member.membership_expiration_date)
+    )
+    if not newly_linked and not advanced:
+        # Duplicate / out-of-order delivery for a cycle we already recorded -- nothing changed.
+        logger.info(
+            "PayPal subscription %s: already current for member %s", _mask_subscription_id(subscription_id), member.pk
+        )
+        return
+    member.paypal_subscription_id = subscription_id
+    member.membership_last_paid = timezone.now().date()
+    if advanced:
+        member.membership_expiration_date = next_date
+    member.save()
+    maybe_send_membership_renewal_confirmation(member)
+    logger.info(
+        "PayPal subscription %s (%s): renewed member %s through %s",
+        _mask_subscription_id(subscription_id),
+        status,
+        member.pk,
+        member.membership_expiration_date,
+    )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
+    """Club membership subscription webhooks at /clubs/paypal/webhook.
+
+    One shared URL serves every club. Because the incoming request doesn't say which club it's
+    for, the club is identified by whichever configured club webhook ID verifies the PayPal
+    signature: existing members carry the subscription id (a one-club fast path), and a brand-new
+    subscription is verified against each candidate club's webhook id until one succeeds. Only after
+    the signature verifies do we act.
+
+    We don't trust the webhook body's state: each recurring charge arrives as PAYMENT.SALE.COMPLETED
+    (which carries no subscriber email or next_billing_time), and PayPal sends several
+    BILLING.SUBSCRIPTION events per subscription. So once verified, we re-fetch the authoritative
+    subscription from PayPal and apply *that* (see ``_apply_paypal_subscription_event``).
+    """
+
+    # Subscription lifecycle events whose ``resource.id`` is the subscription id. CREATED
+    # (approval-pending, unpaid) and PAYMENT.FAILED are deliberately excluded: re-fetching on those
+    # would find a not-yet-active / unchanged subscription, and repeated failures end as
+    # SUSPENDED/CANCELLED, which we do handle.
+    _HANDLED_SUBSCRIPTION_EVENTS = (
+        "BILLING.SUBSCRIPTION.ACTIVATED",
+        "BILLING.SUBSCRIPTION.UPDATED",
+        "BILLING.SUBSCRIPTION.CANCELLED",
+        "BILLING.SUBSCRIPTION.SUSPENDED",
+        "BILLING.SUBSCRIPTION.EXPIRED",
+    )
+
+    _WEBHOOK_HEADER_NAMES = {
+        "auth_algo": "PayPal-Auth-Algo",
+        "cert_url": "PayPal-Cert-Url",
+        "transmission_id": "PayPal-Transmission-Id",
+        "transmission_sig": "PayPal-Transmission-Sig",
+        "transmission_time": "PayPal-Transmission-Time",
+    }
+
+    def _get_access_token(self):
+        """Cache the token per credential-set for this request so the multi-club verify loop
+        doesn't re-authenticate once per club (all site-PayPal clubs share one token)."""
+        creds = getattr(self, "club_paypal_credentials", None)
+        key = creds or "__site__"
+        cache = getattr(self, "_sub_token_cache", None)
+        if cache is None:
+            cache = self._sub_token_cache = {}
+        if key not in cache:
+            cache[key] = super()._get_access_token()
+        return cache[key]
+
+    def _subscription_id_for_event(self, event_type, resource):
+        """The subscription id this event concerns, or "" when we don't handle the event.
+
+        Recurring subscription *payments* arrive as PAYMENT.SALE.COMPLETED carrying
+        ``billing_agreement_id`` (the subscription id); a PAYMENT.SALE.COMPLETED without one is a
+        non-subscription sale and is ignored. Subscription lifecycle changes carry the id directly.
+        """
+        if event_type == "PAYMENT.SALE.COMPLETED":
+            return resource.get("billing_agreement_id") or ""
+        if event_type in self._HANDLED_SUBSCRIPTION_EVENTS:
+            return resource.get("id") or ""
+        return ""
+
+    def _webhook_headers(self, request):
+        def hdr(name):
+            return request.META.get(f"HTTP_{name.upper().replace('-', '_')}", request.headers.get(name))
+
+        return {key: hdr(name) for key, name in self._WEBHOOK_HEADER_NAMES.items()}
+
+    def _verify_for_club(self, club, headers, event):
+        """Ask PayPal to verify this transmission against ``club``'s webhook id + credentials."""
+        # club.paypal_credentials is None for site-PayPal clubs, which _get_access_token reads as
+        # "use the site keys" -- the same account that owns those clubs' webhooks.
+        self.club_paypal_credentials = club.paypal_credentials
+        try:
+            access_token = self._get_access_token()
+        except Exception:
+            logger.exception("PayPal subscription webhook: token fetch failed for club %s", club.pk)
+            return False
+        verify_payload = {
+            "auth_algo": headers["auth_algo"],
+            "cert_url": headers["cert_url"],
+            "transmission_id": headers["transmission_id"],
+            "transmission_sig": headers["transmission_sig"],
+            "transmission_time": headers["transmission_time"],
+            "webhook_id": club.paypal_webhook_id,
+            "webhook_event": event,
+        }
+        try:
+            resp = requests.post(
+                f"{settings.PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                json=verify_payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("verification_status") == "SUCCESS"
+        except (requests.RequestException, ValueError):
+            logger.exception("PayPal subscription webhook: signature verify errored for club %s", club.pk)
+            return False
+
+    def _candidate_clubs(self):
+        """Active clubs that both have a webhook id and could actually verify one.
+
+        Mirrors ``Club.supports_paypal_subscriptions`` at the DB level: only site-PayPal clubs and
+        own-credential (non-OAuth) clubs can produce a token that owns their webhook, so OAuth-only
+        clubs are skipped (they'd always fail verification and just cost a round-trip)."""
+        return (
+            Club.objects.filter(active=True)
+            .exclude(paypal_webhook_id="")
+            .filter(
+                Q(use_site_paypal_account=True)
+                | (Q(allow_non_oauth_paypal=True) & ~Q(paypal_client_id="") & ~Q(paypal_secret=""))
+            )
+        )
+
+    def _identify_and_verify_club(self, subscription_id, headers, event):
+        member = (
+            ClubMember.objects.filter(paypal_subscription_id=subscription_id, is_deleted=False)
+            .select_related("club")
+            .first()
+        )
+        if member and member.club and member.club.paypal_webhook_id:
+            return member.club if self._verify_for_club(member.club, headers, event) else None
+        for club in self._candidate_clubs():
+            if self._verify_for_club(club, headers, event):
+                return club
+        return None
+
+    def post(self, request, *args, **kwargs):
+        try:
+            event = json.loads(request.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return HttpResponseBadRequest("invalid json")
+        if not isinstance(event, dict):
+            return HttpResponseBadRequest("invalid json")
+
+        event_type = event.get("event_type", "") or ""
+        resource = event.get("resource", {})
+        if not isinstance(resource, dict):
+            resource = {}
+        subscription_id = self._subscription_id_for_event(event_type, resource)
+        # Ack events we don't handle (other event types, one-off sales, missing id) so PayPal stops
+        # retrying them.
+        if not subscription_id:
+            return JsonResponse({"status": "ignored"})
+
+        headers = self._webhook_headers(request)
+        if not all(headers.values()):
+            logger.warning("PayPal subscription webhook: missing verification headers")
+            return HttpResponseBadRequest("missing verification headers")
+
+        club = self._identify_and_verify_club(subscription_id, headers, event)
+        if not club:
+            logger.warning(
+                "PayPal subscription webhook: no club verified for subscription %s",
+                _mask_subscription_id(subscription_id),
+            )
+            return HttpResponseBadRequest("webhook verification failed")
+
+        # Re-fetch authoritative subscription state (the triggering event body may be a bare sale
+        # with no subscriber/next_billing_time, or a stale/out-of-order lifecycle event).
+        self.club_paypal_credentials = club.paypal_credentials
+        try:
+            subscription = self.get_from_paypal(f"v1/billing/subscriptions/{subscription_id}", include_bn_code=False)
+        except PayPalRequestError:
+            logger.exception(
+                "PayPal subscription webhook: failed to fetch subscription %s", _mask_subscription_id(subscription_id)
+            )
+            # 500 -> PayPal retries later, so a transient fetch failure doesn't drop the renewal.
+            return HttpResponse(status=500)
+
+        _apply_paypal_subscription_event(club, subscription)
+        return JsonResponse({"status": "ok"})
+
+
 class SquareWebhookView(SquareAPIMixin, View):
     """Handle Square webhook events for payment notifications
     Implements webhook signature verification using HMAC-SHA256
@@ -18907,6 +19275,8 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["current_user"] = self.request.user
+        kwargs["webhook_url"] = self.request.build_absolute_uri(reverse("club_paypal_subscription_webhook"))
+        kwargs["show_paypal_subscriptions"] = self.club.supports_paypal_subscriptions
         return kwargs
 
     def get_context_data(self, **kwargs):

@@ -8,9 +8,9 @@
       id="renewal_needed_checkbox_{{ invoice.pk }}"
       name="renewal_needed"
       value="1"
-      {% if invoice.renewal_needed %}checked{% endif %}
-      {% if invoice.renewal_processed or not is_admin or invoice.status != 'DRAFT' %}disabled{% endif %}
-      {% if is_admin and not invoice.renewal_processed %}
+      {% if invoice.renewal_needed and not invoice.member_has_paypal_subscription %}checked{% endif %}
+      {% if invoice.renewal_processed or not is_admin or invoice.status != 'DRAFT' or invoice.member_has_paypal_subscription %}disabled{% endif %}
+      {% if is_admin and not invoice.renewal_processed and not invoice.member_has_paypal_subscription %}
       hx-post="{% url 'invoice_renewal_toggle' pk=invoice.pk %}"
       hx-target="#invoice-membership-renewal"
       hx-swap="outerHTML"
@@ -22,7 +22,11 @@
       {% if invoice.auction.club.membership_annual_fee %}({{ invoice.auction.currency_symbol }}{{ invoice.auction.club.membership_annual_fee|floatformat:2 }}){% endif %}
     </label>
   </div>
+  {% if invoice.member_has_paypal_subscription %}
+  <small class="text-muted">This member renews automatically through a PayPal subscription, so the membership fee isn't applied here.</small>
+  {% else %}
   <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>
+  {% endif %}
   {% if invoice.renewal_processed %}
   <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
   {% endif %}

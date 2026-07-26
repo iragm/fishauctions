@@ -309,6 +309,7 @@ document.addEventListener("DOMContentLoaded", function() {
   {% include "auctions/partials/invoice_club_member_discount_row.html" %}
   {% include "auctions/partials/invoice_tax_row.html" %}
   {% include "auctions/partials/invoice_membership_fee_row.html" %}
+  {% include "auctions/partials/invoice_registration_fee_row.html" %}
   {% for adjustment in invoice.changed_adjustments %}
     <tr>
       <td>{{ adjustment.notes }}</td>

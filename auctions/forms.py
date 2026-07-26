@@ -1867,6 +1867,10 @@ class CreateImageForm(forms.ModelForm):
         self.fields[
             "image"
         ].help_text = "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
+        # Marking the input as image-only lets the native app's WebView file chooser offer the camera
+        # (many WebViews only surface "Take photo" when accept is set to an image type). We deliberately
+        # do NOT set `capture`, so picking from the photo library stays available too.
+        self.fields["image"].widget.attrs["accept"] = "image/*"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -2047,6 +2051,7 @@ class AuctionEditForm(forms.ModelForm):
         fields = [
             "summernote_description",
             "lot_entry_fee",
+            "registration_fee",
             "unsold_lot_fee",
             "winning_bid_percent_to_club",
             "date_start",
@@ -2068,6 +2073,7 @@ class AuctionEditForm(forms.ModelForm):
             "alternate_split_mode",
             "winning_bid_percent_to_club_for_club_members",
             "lot_entry_fee_for_club_members",
+            "registration_fee_for_club_members",
             "alternative_split_label",
             "club_member_discount",
             "force_donation_threshold",
@@ -2113,6 +2119,10 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
         # Hidden via js unless a club is selected; don't block submission when it's not shown.
         self.fields["club_member_discount"].required = False
+        # Optional fees: leaving them blank means "no fee", not a validation error. The model default
+        # is already 0 and the column is NOT NULL, so clean() coerces a blank submission back to 0.
+        self.fields["registration_fee"].required = False
+        self.fields["registration_fee_for_club_members"].required = False
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
 
         # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
@@ -2322,6 +2332,12 @@ class AuctionEditForm(forms.ModelForm):
                     wrapper_class="col-lg-3",
                 ),
                 PrependedAppendedText(
+                    "registration_fee",
+                    currency_symbol,
+                    ".00",
+                    wrapper_class="col-lg-3",
+                ),
+                PrependedAppendedText(
                     "winning_bid_percent_to_club",
                     "",
                     "%",
@@ -2365,6 +2381,12 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee_for_club_members",
+                    currency_symbol,
+                    ".00",
+                    wrapper_class="col-lg-3",
+                ),
+                PrependedAppendedText(
+                    "registration_fee_for_club_members",
                     currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
@@ -2545,6 +2567,11 @@ class AuctionEditForm(forms.ModelForm):
         cleaned_data = super().clean()
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
         existing_instance = self.instance
+
+        # Both registration fees are optional (see __init__): a blank submission is "no fee". The
+        # columns are NOT NULL, so fold the resulting None back to the model default of 0.
+        for fee_field in ("registration_fee", "registration_fee_for_club_members"):
+            cleaned_data[fee_field] = cleaned_data.get(fee_field) or 0
 
         # When a club is selected, payments are controlled by club settings, not auction settings
         single_club = get_single_club(create=False)
@@ -3545,12 +3572,30 @@ class ChangeUsernameForm(forms.ModelForm):
         )
 
 
+class DisabledOptionSelect(forms.Select):
+    """A ``<select>`` that renders specific option values as ``disabled``.
+
+    The options are still shown (so the user can see the choice exists) but can't be picked. Used for
+    print methods that only work in the native app when the page is viewed on the web.
+    """
+
+    def __init__(self, *args, disabled_values=(), **kwargs):
+        self.disabled_values = {str(v) for v in disabled_values}
+        super().__init__(*args, **kwargs)
+
+    def create_option(self, name, value, *args, **kwargs):
+        option = super().create_option(name, value, *args, **kwargs)
+        if str(option["value"]) in self.disabled_values:
+            option["attrs"]["disabled"] = True
+        return option
+
+
 class UserLabelPrefsForm(forms.ModelForm):
     class Meta:
         model = UserLabelPrefs
         exclude = ("user",)
 
-    def __init__(self, *args, show_print_method=True, **kwargs):
+    def __init__(self, *args, show_print_method=True, is_mobile_app=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -3562,6 +3607,18 @@ class UserLabelPrefsForm(forms.ModelForm):
         # device (see UserLabelPrefsView). When hidden, drop the field so the form leaves it as-is.
         print_method_layout = []
         if show_print_method:
+            if not is_mobile_app:
+                # On the web those two methods do nothing (they need the native app), so show them
+                # disabled with a note that only PDF works from a browser. PDF stays selectable, and a
+                # value the user set in the app (e.g. bluetooth) is preserved on save.
+                self.fields["print_method"].widget = DisabledOptionSelect(
+                    choices=UserLabelPrefs.PRINT_METHODS,
+                    disabled_values=("system", "bluetooth"),
+                )
+                self.fields["print_method"].help_text = (
+                    "System printer and Bluetooth printing only work in the FishAuctions app. "
+                    "Only PDF labels are available from the web."
+                )
             print_method_layout = [
                 Div(
                     Div("print_method", css_class="col-sm-7"),
@@ -4104,6 +4161,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "show_member_barcode",
+            "paypal_webhook_id",
         ]
         help_texts = {
             "membership_system": (
@@ -4114,16 +4172,69 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_annual_fee": "The amount members pay each year to renew. Required when dues are enabled.",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, show_paypal_subscriptions=True, **kwargs):
         kwargs.pop("current_user", None)
+        # The full, copyable URL to paste into PayPal; falls back to the path if the view didn't
+        # supply it (e.g. in a unit test that builds the form directly).
+        webhook_url = kwargs.pop("webhook_url", "") or "/clubs/paypal/webhook"
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.layout = Layout(
-            "membership_system",
-            "membership_annual_fee",
-            "show_member_barcode",
-        )
+
+        layout_fields = ["membership_system", "membership_annual_fee", "show_member_barcode"]
+        if show_paypal_subscriptions:
+            self.fields["paypal_webhook_id"].label = "PayPal webhook ID"
+            self.fields["paypal_webhook_id"].required = False
+            setup_toggle_html = (
+                '<button class="btn btn-outline-secondary btn-sm mb-2" type="button" '
+                'data-bs-toggle="collapse" data-bs-target="#paypalSubSetup" aria-expanded="false" '
+                'aria-controls="paypalSubSetup"><i class="bi bi-paypal"></i> '
+                "PayPal membership subscriptions &mdash; setup instructions</button>"
+            )
+            setup_instructions_html = (
+                '<p class="small text-muted mb-2">Let members pay dues with a recurring PayPal subscription '
+                "so their membership renews automatically. Set this up once in the PayPal account that "
+                "receives your dues:</p>"
+                '<ol class="small text-muted mb-2 ps-3">'
+                "<li>Create a subscription plan and share its link with members under "
+                '<a href="https://www.paypal.com/billing/plans" target="_blank" rel="noopener">'
+                "PayPal &rarr; Pay &amp; Get Paid &rarr; Subscriptions</a>. Members subscribe from that "
+                "link &mdash; that is what starts the automatic renewals.</li>"
+                '<li>In the <a href="https://developer.paypal.com/dashboard/applications/live" '
+                'target="_blank" rel="noopener">PayPal Developer Dashboard &rarr; Apps &amp; Credentials'
+                "</a>, open the app for that account and add a webhook pointing to the URL below.</li>"
+                "<li>Subscribe that webhook to these events: <code>BILLING.SUBSCRIPTION.ACTIVATED</code>, "
+                "<code>CANCELLED</code>, <code>SUSPENDED</code>, <code>EXPIRED</code>, "
+                "<code>UPDATED</code>, and <code>PAYMENT.SALE.COMPLETED</code> (that last one is how "
+                "each recurring renewal payment reaches us).</li>"
+                "<li>Copy the <strong>Webhook ID</strong> PayPal shows you and paste it in the box "
+                "below so we can verify and process your members&rsquo; subscription payments.</li>"
+                "</ol>"
+                '<div class="input-group input-group-sm mb-2">'
+                f'<input type="text" class="form-control" id="paypalWebhookUrl" readonly value="{webhook_url}" '
+                'onclick="this.select()">'
+                '<button class="btn btn-outline-secondary" type="button" '
+                "onclick=\"var i=document.getElementById('paypalWebhookUrl');i.select();"
+                'navigator.clipboard&amp;&amp;navigator.clipboard.writeText(i.value);">Copy</button>'
+                "</div>"
+            )
+            layout_fields += [
+                HTML(setup_toggle_html),
+                Div(
+                    HTML(setup_instructions_html),
+                    "paypal_webhook_id",
+                    css_class="collapse border rounded p-3 mb-3",
+                    css_id="paypalSubSetup",
+                ),
+            ]
+        else:
+            # Subscriptions can only be verified for site-PayPal or own-credential clubs (see
+            # Club.supports_paypal_subscriptions). Drop the field entirely for everyone else so it
+            # isn't rendered -- and, since it's no longer part of the form, a previously saved value
+            # is preserved rather than blanked on submit.
+            self.fields.pop("paypal_webhook_id", None)
+
+        self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
 
     def clean(self):

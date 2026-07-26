@@ -10,15 +10,16 @@
       Configure your barcode scanner to use a prefix character <code class="scanner-prefix-key">F9</code> and a suffix CR character, and attach it in HID (keyboard) mode.
       This page will only allow users to check in -- it won't let them assign bidder numbers or add stuff to their invoice.
       But, you can use a barcode scanner on any page of this auction to assign bidder numbers or add items to a user's invoice.
-      {% if not request.is_mobile_app %}<a href="{% url 'club_barcode_labels' slug=auction.club.slug %}">Print barcodes here.</a>{% endif %}
+      <a href="{% url 'club_barcode_labels' slug=auction.club.slug %}">Print barcodes here.</a>
     </p>
     <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
   </div>
 </span>
 {% endblock %}
 {% block undiv_content %}
-<div id="self-checkin-stage" class="d-flex align-items-center justify-content-center text-center px-4" style="min-height: 50vh;">
+<div id="self-checkin-stage" class="d-flex flex-column align-items-center justify-content-center text-center px-4" style="min-height: 50vh;">
   <div id="self-checkin-message" class="fw-bold" style="font-size: clamp(2rem, 8vw, 14vh); line-height: 1.15; overflow-wrap: anywhere; max-width: 100%;">Scan your card to check in</div>
+  <div id="self-checkin-bidder" class="fw-bold" style="font-size: clamp(2rem, 8vw, 14vh); line-height: 1.15; overflow-wrap: anywhere; max-width: 100%;"></div>
 </div>
 {% endblock %}
 {% block extra_js %}
@@ -27,6 +28,7 @@
 <script>
   (() => {
     const messageEl = document.getElementById("self-checkin-message");
+    const bidderEl = document.getElementById("self-checkin-bidder");
     const stage = document.getElementById("self-checkin-stage");
     const idleMessage = "Scan your card to check in";
     const phrases = [
@@ -49,7 +51,7 @@
       el.textContent = window.auctionBarcodeScanner ? window.auctionBarcodeScanner.prefixKey : "F9";
     });
 
-    function showWelcome(name) {
+    function showWelcome(name, bidderNumber) {
       let index = Math.floor(Math.random() * phrases.length);
       if (index === lastPhraseIndex) {
         index = (index + 1) % phrases.length;
@@ -57,11 +59,14 @@
       lastPhraseIndex = index;
       // textContent keeps member-supplied names from being interpreted as HTML
       messageEl.textContent = phrases[index].replace("{name}", name);
+      // Their bidder number, same size, on the line below the welcome text.
+      bidderEl.textContent = bidderNumber ? "Bidder number " + bidderNumber : "";
       if (idleTimer) {
         clearTimeout(idleTimer);
       }
       idleTimer = setTimeout(() => {
         messageEl.textContent = idleMessage;
+        bidderEl.textContent = "";
       }, 20000);
     }
 
@@ -69,7 +74,7 @@
       const detail = event.detail || {};
       // errors already show a toast from the shared scanner pipeline
       if (detail.ok && detail.payload) {
-        showWelcome(detail.payload.name || "");
+        showWelcome(detail.payload.name || "", detail.payload.bidder_number);
       }
     });
 

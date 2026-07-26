@@ -26,8 +26,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from auctions.ar_mapping import (
     ISLAND_GAP_M,
-    M_PER_DEG_LAT,
-    M_PER_DEG_LON,
     Observation,
     _build_residual_fn,
     _compass_targets,
@@ -41,7 +39,7 @@ from auctions.ar_mapping import (
     update_positions_for_auction,
 )
 from auctions.mobile.services import ar as ar_service
-from auctions.models import Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
+from auctions.models import Category, Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
 from auctions.tests import StandardTestCase
 
 
@@ -472,48 +470,25 @@ class ArComponentTests(TestCase):
         sol = solve_positions(obs, {}, now=self.now)
         self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
 
-    def test_gps_anchors_disconnected_islands_by_location(self):
-        # Two disjoint scans ~100 m apart north-south. Without GPS they'd be marched ~20 m apart in x;
-        # with GPS their bases reflect the real separation (distance and direction).
+    def test_gps_is_ignored_for_island_layout(self):
+        # A ≤10 m venue is finer than any consumer GPS fix, so GPS must NOT translate islands: two
+        # disjoint scans stamped with wildly separated fixes still land in the marched layout (side by
+        # side ~ISLAND_GAP_M apart in x), exactly as they would with no GPS at all.
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
         b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
         lat0, lon0 = 40.0, -75.0
         obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0)
+            b,
+            CAMS,
+            uuid.uuid4(),
+            now=self.now,
+            gps=(lat0 + 1.0, lon0 + 1.0),  # ~140 km away — must be ignored
         )
         sol = solve_positions(obs, {}, now=self.now)
         ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
         cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
-        d = cb - ca
-        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
-        self.assertGreater(abs(d[1]), abs(d[0]) * 3)  # separation is mostly north (y), not east (x)
-
-    def test_gps_east_west_separation(self):
-        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
-        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
-        lat0, lon0 = 40.0, -75.0
-        dlon = 100.0 / (M_PER_DEG_LON * math.cos(math.radians(lat0)))  # 100 m east
-        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0)) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(lat0, lon0 + dlon)
-        )
-        sol = solve_positions(obs, {}, now=self.now)
-        ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
-        cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
-        d = cb - ca
-        self.assertAlmostEqual(float(np.hypot(*d)), 100.0, delta=15.0)
-        self.assertGreater(abs(d[0]), abs(d[1]) * 3)  # separation is mostly east (x)
-
-    def test_gps_island_sits_past_prior_map(self):
-        # A prior-anchored island fixes the map frame; a disconnected GPS island lands past it, never
-        # on top of it (GPS never disturbs the established map).
-        priors = {10: (0.0, 0.0), 11: (2.0, 0.0)}
-        a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}  # 2 prior lots → prior island
-        b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}  # cold GPS island
-        obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
-            b, CAMS, uuid.uuid4(), now=self.now, gps=(40.0, -75.0)
-        )
-        sol = solve_positions(obs, priors, now=self.now)
-        self.assertGreater(min(sol[k].x for k in b), max(sol[k].x for k in a))
+        # Islands stay hall-scale apart (marched), never flung ~140 km by the GPS fix.
+        self.assertLess(float(np.hypot(*(cb - ca))), 3 * ISLAND_GAP_M)
 
     def test_no_gps_keeps_marched_layout(self):
         # Without GPS the disconnected islands still march side by side (unchanged behaviour).
@@ -577,9 +552,10 @@ class ArCompassHeadingTests(TestCase):
         self.assertAlmostEqual(targets[0], 0.0)
 
     def test_disconnected_islands_recover_absolute_orientation(self):
-        # Two disjoint sessions (no shared lots) ~100 m apart. Island A's internal axis runs due east
-        # in ENU; island B's identical scene is rotated 90° so its axis runs due north. GPS alone
-        # leaves each island's rotation free; the compass pins it. Declination patched to 0.
+        # Two disjoint sessions (no shared lots) scanned in the same ≤10 m venue. Island A's internal
+        # axis runs due east in ENU; island B's identical scene is rotated 90° so its axis runs due
+        # north. The marched layout leaves each island's rotation free; the compass pins it (islands
+        # end up side by side but each individually oriented). Declination patched to 0.
         lat0, lon0 = 40.0, -75.0
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
         b_base = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (2.0, 2.0), 23: (0.0, 2.0)}
@@ -593,7 +569,7 @@ class ArCompassHeadingTests(TestCase):
                 _rot_cams(CAMS, ang),
                 uuid.uuid4(),
                 now=self.now,
-                gps=(lat0 + 100.0 / M_PER_DEG_LAT, lon0),
+                gps=(lat0, lon0),
                 heading=True,
             )
             sol = solve_positions(obs, {}, now=self.now)
@@ -1152,6 +1128,97 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIsNone(ser.validated_data["odo_y_m"])
 
 
+class ArEventsEndpointTests(ArApiBaseTestCase):
+    """AR interaction events (scanned / zoomed / zoomed all the way in) → per-lot PageViews.
+
+    They count toward the lot's page views but are broken out on the lot page, and are de-duped to one
+    row per (user, lot, event) so a user re-scanning a label can never inflate the numbers.
+    """
+
+    def _post(self, user, events, auction=None):
+        return self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": (auction or self.auction).slug, "events": events}),
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def test_requires_jwt(self):
+        resp = self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": self.auction.slug, "events": []}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_missing_auction_404(self):
+        resp = self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": "no-such-auction", "events": []}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_each_event_type_creates_a_tagged_pageview(self):
+        resp = self._post(
+            self.user,
+            [
+                {"lot": self.lot_a.pk, "event": "scanned"},
+                {"lot": self.lot_a.pk, "event": "zoomed"},
+                {"lot": self.lot_a.pk, "event": "zoomed_full"},
+            ],
+        )
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json(), {"accepted": 3})
+        sources = set(PageView.objects.filter(lot_number=self.lot_a, user=self.user).values_list("source", flat=True))
+        self.assertEqual(sources, {"ar_scan", "ar_zoom", "ar_zoom_full"})
+
+    def test_counts_are_broken_out_on_the_lot(self):
+        self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}, {"lot": self.lot_a.pk, "event": "zoomed"}])
+        self._post(self.user_with_no_lots, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        counts = Lot.objects.get(pk=self.lot_a.pk).ar_interaction_counts
+        self.assertEqual(counts["scanned"], 2)
+        self.assertEqual(counts["zoomed"], 1)
+        self.assertEqual(counts["zoomed_full"], 0)
+        self.assertEqual(counts["total"], 3)
+
+    def test_repeat_events_are_deduped_per_user(self):
+        # The same user re-scanning the same lot must not inflate the count (or the page views).
+        for _ in range(4):
+            self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        self.assertEqual(PageView.objects.filter(lot_number=self.lot_a, source="ar_scan").count(), 1)
+        self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).ar_interaction_counts["scanned"], 1)
+
+    def test_events_count_toward_lot_page_views(self):
+        before = Lot.objects.get(pk=self.lot_a.pk).page_views
+        self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).page_views, before + 1)
+
+    def test_cross_auction_and_unknown_lots_dropped_silently(self):
+        resp = self._post(
+            self.user,
+            [
+                {"lot": self.other_auction_lot.pk, "event": "scanned"},
+                {"lot": 99999999, "event": "scanned"},
+                {"lot": self.lot_a.pk, "event": "scanned"},
+            ],
+        )
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json(), {"accepted": 1})
+        self.assertFalse(PageView.objects.filter(lot_number=self.other_auction_lot).exists())
+
+    def test_unknown_event_type_is_400(self):
+        resp = self._post(self.user, [{"lot": self.lot_a.pk, "event": "teleported"}])
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(PageView.objects.filter(lot_number=self.lot_a, source__startswith="ar_").exists())
+
+    def test_batch_cap_enforced(self):
+        events = [{"lot": self.lot_a.pk, "event": "scanned"}] * (ar_service.MAX_AR_EVENTS_PER_BATCH + 1)
+        resp = self._post(self.user, events)
+        self.assertEqual(resp.status_code, 400)
+
+
 class ArPositionsEndpointTests(ArApiBaseTestCase):
     def _get(self, user, auction=None):
         url = reverse("mobile-ar-positions")
@@ -1371,6 +1438,124 @@ class ArWebMapTests(ArApiBaseTestCase):
         PageView.objects.create(lot_number=self.lot_b, source="ar")
         PageView.objects.create(lot_number=self.lot_c, source="")  # not a scan
         self.assertEqual(self.auction.number_of_lots_with_scanned_qr, 2)
+
+
+class ArLocatableAuctionsTests(ArApiBaseTestCase):
+    """``locatable_auction_pks``: in-person auctions from 2 h before the start until pretty_much_over."""
+
+    def _set_start(self, auction, delta):
+        # date_end has to move with date_start: the pre_save signal swaps the two if end < start.
+        auction.date_start = timezone.now() + delta
+        auction.date_end = auction.date_start + timedelta(hours=6)
+        auction.save()
+        auction.refresh_from_db()
+
+    def test_in_person_auction_about_to_start_is_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(minutes=30))
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_in_person_auction_in_progress_is_locatable(self):
+        self._set_start(self.in_person_auction, -timedelta(hours=2))
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_too_far_before_start_is_not_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(hours=5))
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_pretty_much_over_is_not_locatable(self):
+        # The fixture starts 3 days ago, so it's well past the 24 h wind-down grace period.
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_late_submission_window_keeps_it_locatable(self):
+        # Agrees with pretty_much_over, which takes the latest of start / bidding end / submission end.
+        self.in_person_auction.lot_submission_end_date = timezone.now()
+        self.in_person_auction.save()
+        self.assertFalse(self.in_person_auction.pretty_much_over)
+        self.assertIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+    def test_online_auction_is_never_locatable(self):
+        self._set_start(self.auction, timedelta(minutes=30))
+        self.assertTrue(self.auction.is_online)
+        self.assertFalse(self.auction.pretty_much_over)
+        self.assertNotIn(self.auction.pk, ar_service.locatable_auction_pks())
+
+    def test_deleted_auction_is_not_locatable(self):
+        self._set_start(self.in_person_auction, timedelta(minutes=30))
+        self.in_person_auction.is_deleted = True
+        self.in_person_auction.save()
+        self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
+
+
+class ArLocateOnLotListTests(ArApiBaseTestCase):
+    """The lot list offers "Locate with AR" only in the app, and only for a located lot in an
+    in-person auction that's happening now (LotFilter.qs annotation + the two page templates)."""
+
+    APP_UA = "FishAuctionsApp/1.0 (iOS)"
+
+    def setUp(self):
+        super().setUp()
+        self.in_person_auction.date_start = timezone.now() + timedelta(minutes=30)
+        self.in_person_auction.date_end = timezone.now() + timedelta(hours=6)
+        self.in_person_auction.save()
+        # LotFilter drops lots with no category for signed-in users (ignored-category filter), and
+        # hides lots posted in the last 20 minutes in online auctions.
+        Lot.objects.filter(pk__in=[self.other_auction_lot.pk, self.lot_a.pk]).update(
+            species_category=Category.objects.first(),
+            date_posted=timezone.now() - timedelta(hours=1),
+        )
+        self.position = LotPosition.objects.create(
+            lot=self.other_auction_lot, auction=self.in_person_auction, x=1, y=2, confidence=0.6
+        )
+        self.deep_link = f"fishauctions://ar/{self.in_person_auction.slug}?locate={self.other_auction_lot.pk}"
+
+    def _lot_list(self, auction, user_agent):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("allLots"), {"auction": auction.slug}, HTTP_USER_AGENT=user_agent)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def test_button_shown_in_app_for_located_lot(self):
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Locate with AR", html)
+        self.assertIn(self.deep_link, html)
+
+    def test_button_shown_in_list_view_too(self):
+        self.user.userdata.use_list_view = True
+        self.user.userdata.save()
+        self.assertIn(self.deep_link, self._lot_list(self.in_person_auction, self.APP_UA))
+
+    def test_button_absent_on_web(self):
+        html = self._lot_list(self.in_person_auction, "Mozilla/5.0")
+        self.assertIn("Stray lot", html)  # the lot is listed...
+        self.assertNotIn(self.deep_link, html)  # ...just without the AR handoff
+
+    def test_button_absent_without_a_position(self):
+        self.position.delete()
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Stray lot", html)
+        self.assertNotIn(self.deep_link, html)
+
+    def test_button_absent_when_auction_is_over(self):
+        self.in_person_auction.date_start = timezone.now() - timedelta(days=3)
+        self.in_person_auction.date_end = timezone.now() - timedelta(days=2)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        html = self._lot_list(self.in_person_auction, self.APP_UA)
+        self.assertIn("Stray lot", html)
+        self.assertNotIn(self.deep_link, html)
+
+    def test_button_absent_for_online_auction_lot(self):
+        LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=0, y=0, confidence=0.9)
+        html = self._lot_list(self.auction, self.APP_UA)
+        self.assertIn("Apisto pair", html)
+        self.assertNotIn(f"fishauctions://ar/{self.auction.slug}?locate={self.lot_a.pk}", html)
+
+    def test_web_lot_list_does_not_query_for_locatable_auctions(self):
+        # The app-UA gate comes first, so an ordinary web lot list pays nothing for this feature.
+        with patch.object(ar_service, "locatable_auction_pks") as mocked:
+            self._lot_list(self.in_person_auction, "Mozilla/5.0")
+        mocked.assert_not_called()
 
 
 class FollowUpFixTests(StandardTestCase):

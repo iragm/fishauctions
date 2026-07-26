@@ -55,6 +55,18 @@ def _record_nudge(user, auction, kind):
     return created
 
 
+def _set_last_auction_used(user, auction):
+    """Make ``auction`` the user's current auction (drives the command palette, AR, lot queue, etc.).
+
+    Arriving near an in-person auction you're part of (joined or admin-added) is a strong signal it's
+    the auction you're now working with. Guarded so a routine ping doesn't write on every fix."""
+    userdata = getattr(user, "userdata", None)
+    if userdata is None or userdata.last_auction_used_id == auction.pk:
+        return
+    userdata.last_auction_used = auction
+    userdata.save(update_fields=["last_auction_used"])
+
+
 def _rules_url(auction):
     return auction.get_absolute_url()
 
@@ -72,7 +84,11 @@ def _check_in(user, auction, tos, now):
 
 
 def _evaluate_auction(user, auction, location, now):
-    """Return the action dicts for a single candidate auction (usually 0-2)."""
+    """Return ``(actions, is_member)`` for a single candidate auction.
+
+    ``actions`` is the display-ready list (usually 0-2). ``is_member`` is True when the user already
+    has an AuctionTOS here — i.e. they've joined or been added by an admin — so the caller can point
+    ``last_auction_used`` at the nearest auction the user actually belongs to."""
     actions = []
     distance = location.distance  # miles, annotated
     within_welcome = distance <= WELCOME_RADIUS_MI
@@ -113,7 +129,7 @@ def _evaluate_auction(user, auction, location, now):
                     "message": "Use this phone's current position as the auction's location.",
                 }
             )
-    return actions
+    return actions, tos is not None
 
 
 def evaluate_ping(user, latitude, longitude, now=None):
@@ -134,6 +150,7 @@ def evaluate_ping(user, latitude, longitude, now=None):
     )
     actions = []
     seen = set()
+    nearest_member_auction = None
     for location in locations:
         auction = location.auction
         if auction.pk in seen:
@@ -143,7 +160,13 @@ def evaluate_ping(user, latitude, longitude, now=None):
             continue  # feature only applies to auctions with exactly one physical location
         if not auction.in_welcome_window(now):
             continue
-        actions.extend(_evaluate_auction(user, auction, location, now))
+        auction_actions, is_member = _evaluate_auction(user, auction, location, now)
+        actions.extend(auction_actions)
+        # Locations are distance-ordered, so the first auction the user belongs to is the nearest one.
+        if is_member and nearest_member_auction is None:
+            nearest_member_auction = auction
+    if nearest_member_auction is not None:
+        _set_last_auction_used(user, nearest_member_auction)
     return actions
 
 
@@ -187,6 +210,8 @@ def join_auction(user, auction, now=None):
             action=f"{tos.name or user.username} joined via the app's welcome prompt",
             user=user,
         )
+    # Joining from the welcome prompt makes this the auction the user is working with.
+    _set_last_auction_used(user, auction)
     return tos, checked_in
 
 

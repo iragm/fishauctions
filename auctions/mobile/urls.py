@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    MobileArEventsView,
     MobileArLotsView,
     MobileArObservationsView,
     MobileArPositionsView,
@@ -14,6 +15,7 @@ from .views import (
     MobileDeviceUnregisterView,
     MobileGoogleAuthView,
     MobileLabelPrefsView,
+    MobileLastUsedAuctionView,
     MobileLoginView,
     MobileLotLabelView,
     MobileLotWatchView,
@@ -22,6 +24,7 @@ from .views import (
     MobileOfflineSyncView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
+    MobilePrinterObservedView,
     MobilePrinterProfilesView,
     MobileTokenRefreshView,
     MobileUserMeView,
@@ -46,11 +49,14 @@ urlpatterns = [
     ),
     # Clubs
     path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
+    # Auctions
+    path("auctions/last-used/", MobileLastUsedAuctionView.as_view(), name="mobile-last-used-auction"),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
     path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),
     # Printers
     path("printers/profiles/", MobilePrinterProfilesView.as_view(), name="mobile-printer-profiles"),
+    path("printers/observed/", MobilePrinterObservedView.as_view(), name="mobile-printer-observed"),
     # Labels
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
@@ -65,6 +71,7 @@ urlpatterns = [
     # AR lot scanning
     path("ar/lots/", MobileArLotsView.as_view(), name="mobile-ar-lots"),
     path("ar/observations/", MobileArObservationsView.as_view(), name="mobile-ar-observations"),
+    path("ar/events/", MobileArEventsView.as_view(), name="mobile-ar-events"),
     path("ar/positions/", MobileArPositionsView.as_view(), name="mobile-ar-positions"),
     # Proximity check-in & welcome
     path("checkin/ping/", MobileCheckinPingView.as_view(), name="mobile-checkin-ping"),

@@ -3,9 +3,14 @@ import math
 from django.urls import reverse
 from rest_framework import serializers
 
-from auctions.mobile.services.ar import MAX_DETECTIONS_PER_FRAME, MAX_FRAMES_PER_BATCH
+from auctions.mobile.services.ar import (
+    AR_EVENT_TYPES,
+    MAX_AR_EVENTS_PER_BATCH,
+    MAX_DETECTIONS_PER_FRAME,
+    MAX_FRAMES_PER_BATCH,
+)
 from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
-from auctions.models import MobileDevice, UserLabelPrefs
+from auctions.models import MobileDevice, ObservedPrinter, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -142,6 +147,35 @@ class MobileLabelPrefsSerializer(serializers.ModelSerializer):
         return label_prefs_warnings(obj)
 
 
+class PrinterObservationSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/printers/observed/ — one successful pairing.
+
+    Deliberately permissive: the app fires this and ignores the response, so a row it can't
+    parse back is a row we simply never see. Strings carry no max_length (the service truncates
+    to the column width instead of 400-ing), and everything except ``matched_by`` is optional —
+    a printer that reports no model/manufacturer is itself a finding worth storing.
+    """
+
+    ble_name = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    manufacturer = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    model = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    firmware = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    hardware = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    service_uuids = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        allow_empty=True,
+        allow_null=True,
+        default=list,
+    )
+    # Null/absent when the user cancelled out of the manual dialog — no profile was chosen.
+    profile_slug = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    matched_by = serializers.ChoiceField(choices=[c[0] for c in ObservedPrinter.MATCHED_BY_CHOICES])
+    # Not sent by the app yet: reserved for the post-first-print confirmation, so "what works"
+    # can mean printed rather than merely paired.
+    printed_ok = serializers.BooleanField(required=False, default=False)
+
+
 # ---------------------------------------------------------------------------
 # Payments
 # ---------------------------------------------------------------------------
@@ -253,9 +287,10 @@ class ArFrameSerializer(serializers.Serializer):
     # The server corrects magnetic→true (WMM declination) and uses it to fix each island's absolute
     # orientation. Unlike yaw_deg (relative gyro odometry), this is an absolute bearing.
     heading_deg = serializers.FloatField(required=False, allow_null=True)
-    # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. Used only
-    # to anchor disconnected islands' base locations, so a coarse fix is fine — but the app should omit
-    # them (or send null) when it has no location permission or no fix, rather than sending (0, 0).
+    # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. The solver
+    # no longer positions/translates anything with GPS (a ≤10 m venue is finer than any consumer fix);
+    # it is used only to look up magnetic declination for the heading correction, so a single coarse
+    # fix is plenty and the app may omit GPS entirely. Never send (0, 0); just omit when there's no fix.
     latitude = serializers.FloatField(required=False, allow_null=True)
     longitude = serializers.FloatField(required=False, allow_null=True)
     # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
@@ -323,6 +358,23 @@ class MobileWatchSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/lots/<pk>/watch/ — set (not toggle) the caller's watch state."""
 
     watch = serializers.BooleanField()
+
+
+class ArEventSerializer(serializers.Serializer):
+    """One AR interaction event: the user scanned a lot, zoomed in on it, or zoomed all the way in."""
+
+    lot = serializers.IntegerField()
+    event = serializers.ChoiceField(choices=AR_EVENT_TYPES)
+
+
+class ArEventBatchSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/ar/events/ — a batch of AR interaction events.
+
+    Foreign/unknown lots are dropped in the service (never a 400); only the envelope is enforced here.
+    """
+
+    auction = serializers.CharField()
+    events = ArEventSerializer(many=True, max_length=MAX_AR_EVENTS_PER_BATCH)
 
 
 class ArObservationBatchSerializer(serializers.Serializer):

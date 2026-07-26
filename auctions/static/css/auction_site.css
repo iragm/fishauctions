@@ -6,6 +6,14 @@
     color: #444 !important;
 }
 
+/* Let a flex/grid child shrink below its content's intrinsic width, instead of the default
+   min-width:auto growing it to fit its content. Applied to the club sidebar column in base.html.
+   Note this does NOT make text-truncate work on a child of a wrapping flex container -- see
+   club_sidebar_nav.html and "Truncating text inside a flex column" in style_reference.md. */
+.min-w-0 {
+    min-width: 0 !important;
+}
+
 @media (min-width: 1200px) {
     .nowrap {
         white-space: nowrap !important;

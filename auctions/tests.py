@@ -7070,6 +7070,410 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
+class PayPalSubscriptionWebhookTests(StandardTestCase):
+    """The club membership subscription webhook (PayPalSubscriptionWebhookView) and its apply logic."""
+
+    def setUp(self):
+        super().setUp()
+        # Own-credentials (non-OAuth) club, so supports_paypal_subscriptions is True and its webhook
+        # can be identified/verified.
+        self.club = Club.objects.create(
+            name="Subscription Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_membership_renewal_confirmation=True,
+            allow_non_oauth_paypal=True,
+            paypal_client_id="club-client-id",
+            paypal_secret="club-secret",
+            paypal_webhook_id="WH-CLUB-1",
+        )
+        self.webhook_url = reverse("club_paypal_subscription_webhook")
+
+    def _active_subscription(
+        self, sub_id="I-SUB1", email="subscriber@example.com", next_days=365, last_payment="25.00", paid_days_ago=0
+    ):
+        next_time = (timezone.now() + datetime.timedelta(days=next_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        billing_info = {"next_billing_time": next_time}
+        if last_payment is not None:
+            paid_time = timezone.now() - datetime.timedelta(days=paid_days_ago)
+            billing_info["last_payment"] = {
+                "amount": {"currency_code": "USD", "value": last_payment},
+                "time": paid_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        return {
+            "id": sub_id,
+            "status": "ACTIVE",
+            "subscriber": {"email_address": email},
+            "billing_info": billing_info,
+        }
+
+    def _membership_money(self):
+        return ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_MEMBERSHIP)
+
+    def _headers(self):
+        return {
+            "HTTP_PAYPAL_AUTH_ALGO": "SHA256withRSA",
+            "HTTP_PAYPAL_CERT_URL": "https://api.paypal.com/cert",
+            "HTTP_PAYPAL_TRANSMISSION_ID": "tid",
+            "HTTP_PAYPAL_TRANSMISSION_SIG": "sig",
+            "HTTP_PAYPAL_TRANSMISSION_TIME": "2026-07-24T00:00:00Z",
+        }
+
+    def _post_event(self, event, headers=True):
+        extra = self._headers() if headers else {}
+        return self.client.post(self.webhook_url, data=json.dumps(event), content_type="application/json", **extra)
+
+    # --- Club.supports_paypal_subscriptions gating ---
+
+    def test_supports_paypal_subscriptions(self):
+        self.assertTrue(self.club.supports_paypal_subscriptions)
+        oauth_user = User.objects.create_user(username="oauth_sub_user", password="x", email="oauth_sub@example.com")
+        oauth_club = Club.objects.create(name="OAuth Club", membership_system="rolling")
+        PayPalSeller.objects.create(user=oauth_user, club=oauth_club, paypal_merchant_id="merchant_x")
+        self.assertFalse(oauth_club.supports_paypal_subscriptions)
+
+    def test_form_hides_webhook_field_when_unsupported(self):
+        oauth_club = Club.objects.create(name="OAuth Club 2", membership_system="rolling")
+        form = ClubMembershipSettingsForm(instance=oauth_club, show_paypal_subscriptions=False)
+        self.assertNotIn("paypal_webhook_id", form.fields)
+
+    def test_form_shows_webhook_field_when_supported(self):
+        form = ClubMembershipSettingsForm(instance=self.club, show_paypal_subscriptions=True)
+        self.assertIn("paypal_webhook_id", form.fields)
+
+    def test_hidden_field_does_not_blank_saved_webhook_id(self):
+        # A club that loses PayPal eligibility must not have its saved webhook id wiped on save.
+        form = ClubMembershipSettingsForm(
+            instance=self.club,
+            data={"membership_system": "rolling", "membership_annual_fee": "25.00"},
+            show_paypal_subscriptions=False,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.paypal_webhook_id, "WH-CLUB-1")
+
+    # --- _subscription_id_for_event ---
+
+    def test_subscription_id_for_event(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        view = PayPalSubscriptionWebhookView()
+        self.assertEqual(view._subscription_id_for_event("BILLING.SUBSCRIPTION.ACTIVATED", {"id": "I-1"}), "I-1")
+        self.assertEqual(
+            view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"billing_agreement_id": "I-2"}), "I-2"
+        )
+        # A one-off sale carries no billing_agreement_id, and CREATED (approval-pending) is unhandled.
+        self.assertEqual(view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"id": "PAY-9"}), "")
+        self.assertEqual(view._subscription_id_for_event("BILLING.SUBSCRIPTION.CREATED", {"id": "I-3"}), "")
+
+    # --- _apply_paypal_subscription_event (no network) ---
+
+    def test_active_subscription_links_member_and_extends(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, self._active_subscription())
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "I-SUB1")
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+        mock_email.assert_called_once()
+
+    def test_active_subscription_creates_member_when_none(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(email="new@example.com"))
+        member = ClubMember.objects.get(club=self.club, paypal_subscription_id="I-SUB1")
+        self.assertEqual(member.email, "new@example.com")
+
+    def test_active_subscription_books_club_money(self):
+        # A subscription renewal is cash into the club, exactly like the manual renewal button.
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="25.00"))
+        entry = self._membership_money().get()
+        self.assertEqual(entry.amount, Decimal("25.00"))
+        self.assertEqual(entry.date, timezone.now().date())
+        self.assertIn("I-SUB1", entry.description)
+        self.assertIn(str(member), entry.description)
+        self.assertIsNone(entry.created_by)  # a webhook has no acting user
+
+    def test_books_amount_paypal_actually_charged_not_club_fee(self):
+        # The club's list price is 25.00, but this subscriber is grandfathered at 18.50.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="18.50"))
+        self.assertEqual(self._membership_money().get().amount, Decimal("18.50"))
+
+    def test_duplicate_delivery_books_club_money_once(self):
+        # PayPal retries and sends several events per cycle; the ledger must not double-count.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(self._membership_money().count(), 1)
+
+    def test_each_cycle_books_its_own_payment(self):
+        # A genuine second charge (later date) is a separate ledger row.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365, paid_days_ago=365))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730, paid_days_ago=0))
+        self.assertEqual(self._membership_money().count(), 2)
+        self.assertEqual(sum(e.amount for e in self._membership_money()), Decimal("50.00"))
+
+    def test_billing_date_advance_without_new_payment_books_nothing_extra(self):
+        # BILLING.SUBSCRIPTION.UPDATED can push next_billing_time with no new charge -- booking is
+        # keyed on the payment, not on the membership advancing, so this must not invent revenue.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+            # Same last_payment, later billing date.
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730))
+        self.assertEqual(self._membership_money().count(), 1)
+
+    def test_payment_booked_even_when_dates_did_not_move(self):
+        # ACTIVATED can land before the first charge posts; the follow-up PAYMENT.SALE.COMPLETED
+        # doesn't advance any date, but its money still has to reach the ledger.
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment=None))
+            self.assertEqual(self._membership_money().count(), 0)
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="25.00"))
+        self.assertEqual(self._membership_money().get().amount, Decimal("25.00"))
+
+    def test_junk_or_zero_payment_amount_books_nothing(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="not-a-number"))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(sub_id="I-SUB2", last_payment="0.00"))
+        self.assertEqual(self._membership_money().count(), 0)
+
+    def test_cancelled_subscription_books_nothing(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(
+            club=self.club, name="Sub Member", email="subscriber@example.com", paypal_subscription_id="I-SUB1"
+        )
+        sub = self._active_subscription()
+        sub["status"] = "CANCELLED"
+        _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(self._membership_money().count(), 0)
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "")
+
+    def test_duplicate_active_event_does_not_resend_email(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)  # same cycle -> no change, no second email
+        self.assertEqual(mock_email.call_count, 1)
+
+    def test_renewal_advances_expiration_and_emails_again(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730))
+        self.assertEqual(mock_email.call_count, 2)
+        member.refresh_from_db()
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
+
+    def test_cancelled_clears_subscription_but_keeps_expiration(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        expiry = (timezone.now() + datetime.timedelta(days=100)).date()
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=expiry,
+        )
+        cancelled = {
+            "id": "I-SUB1",
+            "status": "CANCELLED",
+            "subscriber": {"email_address": "subscriber@example.com"},
+        }
+        _apply_paypal_subscription_event(self.club, cancelled)
+        member.refresh_from_db()
+        self.assertEqual(member.paypal_subscription_id, "")
+        self.assertEqual(member.membership_expiration_date, expiry)
+
+    def test_approval_pending_does_not_grant_membership(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        pending = {
+            "id": "I-SUB1",
+            "status": "APPROVAL_PENDING",
+            "subscriber": {"email_address": "pending@example.com"},
+        }
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation") as mock_email:
+            _apply_paypal_subscription_event(self.club, pending)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, email__iexact="pending@example.com").exists())
+        mock_email.assert_not_called()
+
+    # --- post() integration ---
+
+    def test_renewal_payment_extends_membership(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=5)).date(),
+        )
+        event = {"event_type": "PAYMENT.SALE.COMPLETED", "resource": {"billing_agreement_id": "I-SUB1"}}
+        with (
+            patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club", return_value=self.club),
+            patch.object(PayPalSubscriptionWebhookView, "get_from_paypal", return_value=self._active_subscription()),
+            patch("auctions.views.maybe_send_membership_renewal_confirmation"),
+        ):
+            response = self._post_event(event)
+        self.assertEqual(response.status_code, 200)
+        member.refresh_from_db()
+        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+
+    def test_unhandled_event_ignored_without_verification(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            response = self._post_event({"event_type": "BILLING.SUBSCRIPTION.CREATED", "resource": {"id": "I-SUB1"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
+    def test_handled_event_without_subscription_id_ignored(self):
+        # A handled lifecycle event whose resource has no id must be ignored outright -- never
+        # verified, never applied.
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            missing = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {}})
+            empty = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": ""}})
+            no_resource = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED"})
+        for response in (missing, empty, no_resource):
+            self.assertEqual(response.status_code, 200)
+            self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
+    def test_sale_without_billing_agreement_id_ignored(self):
+        # A one-off (non-subscription) PAYMENT.SALE.COMPLETED carries no billing_agreement_id and
+        # must be ignored, not verified.
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
+            response = self._post_event({"event_type": "PAYMENT.SALE.COMPLETED", "resource": {"id": "PAY-9"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(response.content, {"status": "ignored"})
+        mock_verify.assert_not_called()
+
+    def test_missing_headers_rejected(self):
+        response = self._post_event(
+            {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-SUB1"}}, headers=False
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_unverified_club_rejected(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club", return_value=None):
+            response = self._post_event({"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-SUB1"}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_dict_body_rejected(self):
+        response = self.client.post(
+            self.webhook_url, data=json.dumps([1, 2, 3]), content_type="application/json", **self._headers()
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_event_only_matches_verifying_club(self):
+        from auctions.views import PayPalSubscriptionWebhookView
+
+        # A second webhook-configured club must not receive another club's subscriber.
+        other = Club.objects.create(
+            name="Other Sub Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("10.00"),
+            allow_non_oauth_paypal=True,
+            paypal_client_id="o",
+            paypal_secret="o",
+            paypal_webhook_id="WH-OTHER",
+        )
+        event = {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": "I-NEW"}}
+        with (
+            patch.object(
+                PayPalSubscriptionWebhookView,
+                "_verify_for_club",
+                side_effect=lambda club, headers, evt: club.pk == self.club.pk,
+            ),
+            patch.object(
+                PayPalSubscriptionWebhookView,
+                "get_from_paypal",
+                return_value=self._active_subscription(sub_id="I-NEW", email="x@example.com"),
+            ),
+            patch("auctions.views.maybe_send_membership_renewal_confirmation"),
+        ):
+            response = self._post_event(event)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, paypal_subscription_id="I-NEW").exists())
+        self.assertFalse(ClubMember.objects.filter(club=other, paypal_subscription_id="I-NEW").exists())
+
+    # --- renewal email manage link ---
+
+    def test_renewal_email_includes_paypal_manage_link(self):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Sub Member",
+            email="subscriber@example.com",
+            paypal_subscription_id="I-SUB1",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+        )
+        with patch("auctions.tasks.send_club_member_email") as mock_send:
+            maybe_send_membership_renewal_confirmation(member)
+        mock_send.assert_called_once()
+        self.assertIn("paypal.com/myaccount/autopay", mock_send.call_args.kwargs["message_text"])
+
+    def test_renewal_email_omits_manage_link_without_subscription(self):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Manual Member",
+            email="manual@example.com",
+            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+        )
+        with patch("auctions.tasks.send_club_member_email") as mock_send:
+            maybe_send_membership_renewal_confirmation(member)
+        self.assertNotIn("autopay", mock_send.call_args.kwargs["message_text"])
+
+
 class ClubMemberDiscountTests(StandardTestCase):
     """Tests for Auction.club_member_discount and Auction.alternate_split_mode.
 
@@ -26122,6 +26526,141 @@ class BrevoSyncTests(TestCase):
         self.assertEqual(client.request.call_args.args, ("DELETE", "/contacts/old%40example.com"))
 
 
+class MarketingSyncLogRedactionTests(TestCase):
+    """Member email addresses must never reach the log files.
+
+    Mailchimp and Brevo both echo the address back in their error bodies, so it isn't enough to
+    keep it out of the format string — the third-party detail has to be scrubbed too.
+    """
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Redaction Club")
+        self.member = ClubMember.objects.create(club=self.club, name="Joe Member", email="joe@example.com")
+        self.club.mailchimp_access_token = "token"
+        self.club.mailchimp_server_prefix = "us1"
+        self.club.mailchimp_audience_id = "list123"
+        self.club.brevo_api_key = "xkeysib-test"
+        self.club.brevo_list_id = "7"
+        self.club.save()
+
+    @staticmethod
+    def _mailchimp_error(status_code=400):
+        from mailchimp_marketing.api_client import ApiClientError
+
+        return ApiClientError(
+            json.dumps(
+                {
+                    "title": "Invalid Resource",
+                    "status": status_code,
+                    "detail": "joe@example.com looks fake or invalid, please enter a real email address.",
+                }
+            ),
+            status_code,
+        )
+
+    def test_scrub_emails_replaces_addresses(self):
+        from auctions.helper_functions import scrub_emails
+
+        self.assertEqual(
+            scrub_emails("joe@example.com looks fake"),
+            "[email redacted] looks fake",
+        )
+        self.assertEqual(
+            scrub_emails("both a@b.co and c.d+tag@e.example.org"),
+            "both [email redacted] and [email redacted]",
+        )
+        # Non-strings (API details are sometimes dicts) and empty values must not blow up.
+        self.assertEqual(scrub_emails(""), "")
+        self.assertIsNone(scrub_emails(None))
+        self.assertNotIn("joe@example.com", scrub_emails({"detail": "joe@example.com"}))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_rejection_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.side_effect = self._mailchimp_error(400)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="WARNING") as logs:
+            self.assertFalse(mc.sync_member(self.member))
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertIn("[email redacted]", output)
+        self.assertIn(str(self.member.pk), output)
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_sync_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.side_effect = self._mailchimp_error(500)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            self.assertFalse(mc.sync_member(self.member))
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_tag_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.set_list_member.return_value = {"web_id": 1, "status": "subscribed"}
+        client.lists.update_list_member_tags.side_effect = self._mailchimp_error(400)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            mc.sync_member(self.member)
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.mailchimp.get_client")
+    def test_mailchimp_change_email_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.lists.update_list_member.side_effect = self._mailchimp_error(500)
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.mailchimp", level="ERROR") as logs:
+            mc.change_member_email(self.member, "old@example.com")
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertNotIn("old@example.com", output)
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_rejection_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(400, "Invalid email address: joe@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="WARNING") as logs:
+            self.assertFalse(brevo.sync_member(self.member))
+
+        output = "\n".join(logs.output)
+        self.assertNotIn("joe@example.com", output)
+        self.assertIn("[email redacted]", output)
+        self.assertIn(str(self.member.pk), output)
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_sync_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(500, "Server error syncing joe@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="ERROR") as logs:
+            self.assertFalse(brevo.sync_member(self.member))
+
+        self.assertNotIn("joe@example.com", "\n".join(logs.output))
+
+    @patch("auctions.brevo.get_client")
+    def test_brevo_change_email_failure_logs_no_email(self, mock_get_client):
+        client = MagicMock()
+        client.request.side_effect = brevo.BrevoApiError(500, "Could not delete old@example.com")
+        mock_get_client.return_value = client
+
+        with self.assertLogs("auctions.brevo", level="ERROR") as logs:
+            brevo.change_member_email(self.member, "old@example.com")
+
+        self.assertNotIn("old@example.com", "\n".join(logs.output))
+
+
 class BrevoWebhookTests(TestCase):
     """Inbound webhook only records Brevo status; never touches the site account."""
 
@@ -30208,3 +30747,178 @@ class UniqueViewsCountTest(StandardTestCase):
 
         # logged_in = distinct users {userB, user}; anonymous = {s1, s2, s3} - {s3} = {s1, s2}.
         self.assertEqual(auction.unique_views, {"total": 4, "logged_in": 2, "anonymous": 2})
+
+
+class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
+    """Label/barcode printing must be reachable inside the native app exactly as it is on the web.
+
+    Regression (reported 2026-07-25): every batch/bulk print entry point was wrapped in
+    ``{% if not request.is_mobile_app %}`` on the assumption that the app always prints natively
+    over Bluetooth. That only ever held for the per-lot button on the lot page, and only for one of
+    three print methods -- users on the PDF or System-printer method (the default) lost label
+    printing entirely inside the app. The app intercepts these downloads itself, so the links must
+    render for every user agent.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (iOS)"
+    WEB_UA = "Mozilla/5.0"
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Printing Club")
+        ClubMember.objects.create(club=self.club, user=self.admin_user, permission_admin=True)
+        self.in_person_auction.club = self.club
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.save()
+        userdata = self.user.userdata
+        userdata.last_auction_used = self.in_person_auction
+        userdata.save()
+
+    def _get(self, url, user_agent, user=None):
+        self.client.force_login(user or self.user)
+        return self.client.get(url, HTTP_USER_AGENT=user_agent)
+
+    def _assert_same_for_app_and_web(self, url, needle, user=None):
+        """The link must render identically under both user agents."""
+        for ua in (self.WEB_UA, self.APP_UA):
+            response = self._get(url, ua, user=user)
+            self.assertEqual(response.status_code, 200, f"{url} returned {response.status_code} for {ua}")
+            self.assertIn(needle, response.content.decode("utf-8"), f"{needle} missing from {url} for UA {ua}")
+
+    def test_printing_prefs_page_shows_print_labels_button(self):
+        """user_labels.html: 'Print labels for <auction>'."""
+        self._assert_same_for_app_and_web(
+            reverse("printing"),
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_selling_dashboard_shows_print_labels_button(self):
+        """auctions/partials/lot_user_table_header.html, on lot lists."""
+        self._assert_same_for_app_and_web(
+            reverse("selling"),
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_auction_page_shows_my_print_labels_button(self):
+        """auction.html: the seller's own 'Print Labels'."""
+        Lot.objects.create(
+            lot_name="a lot so user_has_lots is true",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            user=self.user,
+            quantity=1,
+        )
+        self._assert_same_for_app_and_web(
+            self.in_person_auction.url,
+            reverse("print_my_labels", kwargs={"slug": self.in_person_auction.slug}),
+        )
+
+    def test_auction_page_admin_actions_show_print_labels(self):
+        """auction.html admin actions + auction_ribbon.html dropdown: 'Print labels'."""
+        self._assert_same_for_app_and_web(
+            self.in_person_auction.url,
+            reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug}),
+            user=self.admin_user,
+        )
+
+    def test_auction_printing_page_itself_loads_in_app(self):
+        self._assert_same_for_app_and_web(
+            reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug}),
+            "Print labels",
+            user=self.admin_user,
+        )
+
+    def test_bulk_add_lots_shows_save_and_print(self):
+        """auctions/bulk_add_lots.html: the 'Save and print labels' submit."""
+        self._assert_same_for_app_and_web(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_tos.bidder_number},
+            ),
+            "Save and print labels",
+        )
+
+    def test_quick_check_in_shows_print_barcodes_link(self):
+        """auctions/quick_check_in_users.html: 'print barcodes to scan here'."""
+        self._assert_same_for_app_and_web(
+            reverse("auction_quick_check_in", kwargs={"slug": self.in_person_auction.slug}),
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            user=self.admin_user,
+        )
+
+    def test_self_check_in_shows_print_barcodes_link(self):
+        """auctions/self_check_in.html: 'Print barcodes here.'"""
+        self.in_person_auction.manage_users_through_club = "checkin"
+        self.in_person_auction.save()
+        self._assert_same_for_app_and_web(
+            reverse("auction_self_check_in", kwargs={"slug": self.in_person_auction.slug}),
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            user=self.admin_user,
+        )
+
+    def test_club_barcode_labels_page_itself_loads_in_app(self):
+        self._assert_same_for_app_and_web(
+            reverse("club_barcode_labels", kwargs={"slug": self.club.slug}),
+            "Print",
+            user=self.admin_user,
+        )
+
+    def test_users_table_print_links_are_reachable_at_every_width(self):
+        """The users table's 'Print labels' / 'Print only N unprinted labels' are not UA-gated, and
+        the desktop column and the phone Actions dropdown cover complementary widths.
+
+        The ``Lot labels`` column is ``d-md-table-cell d-none`` (md and up only), so on a phone the
+        links have to come from the row's Actions dropdown -- whose items carry ``d-md-none`` (below
+        md only). Neither width may lose a link.
+        """
+        tos = self.in_person_tos
+        for i in range(3):
+            Lot.objects.create(
+                lot_name=f"users table lot {i}",
+                auction=self.in_person_auction,
+                auctiontos_seller=tos,
+                quantity=1,
+                label_printed=(i == 0),
+            )
+        self.assertEqual(tos.unprinted_label_count, 2)
+        print_all_url = reverse(
+            "print_labels_by_bidder_number",
+            kwargs={"slug": self.in_person_auction.slug, "bidder_number": tos.bidder_number},
+        )
+        unprinted_url = reverse(
+            "print_unprinted_labels_by_bidder_number",
+            kwargs={"slug": self.in_person_auction.slug, "bidder_number": tos.bidder_number},
+        )
+
+        # md and up: the Lot labels column carries both.
+        column = tos.print_labels_html
+        self.assertIn(print_all_url, column)
+        self.assertIn(unprinted_url, column)
+
+        # Below md: the column is hidden, so the Actions dropdown must carry both, marked d-md-none
+        # so they appear exactly where the column does not.
+        dropdown = tos.actions_dropdown_html
+        for url in (print_all_url, unprinted_url):
+            self.assertIn(url, dropdown)
+            item = next(chunk for chunk in dropdown.split("<span class='dropdown-item") if url in chunk)
+            self.assertTrue(item.startswith(" d-md-none"), f"{url} is not shown at phone widths: {item[:80]}")
+
+    def test_no_printing_template_still_gates_on_the_app_user_agent(self):
+        """Guard against the gate creeping back in. The only legitimate request.is_mobile_app uses
+        left in printing templates are app-only *additions* (the native Bluetooth per-lot button and
+        the Bluetooth connect card), never a wrapper that hides a web print link."""
+        template_dir = Path(__file__).resolve().parent / "templates"
+        allowed = {"view_lot_images.html", "printing_extras.html"}
+        offenders = []
+        for path in template_dir.rglob("*.html"):
+            if path.name in allowed:
+                continue
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+                if "is_mobile_app" not in line:
+                    continue
+                if re.search(r"print|label|barcode", line, re.IGNORECASE):
+                    offenders.append(f"{path.relative_to(template_dir)}:{lineno}: {line.strip()}")
+        self.assertEqual(
+            offenders, [], "Label printing must not be gated on the mobile app UA:\n" + "\n".join(offenders)
+        )

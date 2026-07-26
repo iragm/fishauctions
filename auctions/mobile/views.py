@@ -158,6 +158,28 @@ GET /api/mobile/clubs/mine/
           ]
         }
 
+Auctions
+--------
+GET /api/mobile/auctions/last-used/
+    The caller's current ("last used") auction, as read-only state the command palette fetches once
+    when it opens to decide — client-side — whether to surface the native AR lot-scanning entry.
+    No side effects (unlike ``checkin/ping/``). Always 200; a 404 means an older backend without
+    this endpoint (the app then just omits the AR entry, same degrade-on-404 as the AR/check-in
+    endpoints). Every field is null when there's no last-used auction or it was deleted.
+    ``latitude``/``longitude`` are the single physical pickup location's coordinates, or null when
+    there isn't exactly one with coordinates set.
+
+    Response 200::
+
+        {
+          "slug":             "spring-fry-swap-2026",
+          "title":            "Spring Fry Swap 2026",
+          "is_online":        false,
+          "pretty_much_over": false,
+          "latitude":         40.4406,
+          "longitude":        -79.9959
+        }
+
 Labels
 ------
 GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
@@ -172,7 +194,41 @@ GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
     Access is restricted to the lot's own seller or an admin of its auction (mirrors the web
     SingleLotLabelView). Others get 403; a missing/deleted lot is 404.
 
+    ``Accept: application/pdf`` / ``image/png`` / ``*/*`` all negotiate (see
+    ``auctions.mobile.renderers``); error bodies stay JSON.
+
     Response 200:  binary image body with ``Content-Type: image/png``.
+
+Printers
+--------
+GET /api/mobile/printers/profiles/
+    Every enabled ThermalPrinterProfile, priority-ordered, weak-ETagged (an ``If-None-Match`` hit
+    is a 304) because the app caches it to print offline in an auction hall. Each profile's
+    ``match`` section carries ``ble_name_patterns``, ``model_patterns`` and
+    ``manufacturer_patterns`` (case-insensitive regexes) plus the optional GATT ids: the app tries
+    the advertised BLE name first, and — since that name is user-editable and resellers rename the
+    same board — falls back to what the printer reports over the GATT Device Information Service.
+
+POST /api/mobile/printers/observed/
+    Record a successful pairing. Fire-and-forget: the app ignores the body, and a 404 here just
+    disables the call for that process, so this endpoint is optional and non-breaking.
+
+    Request::
+
+        {
+          "ble_name": "D11-4C21",
+          "manufacturer": "AiYin",         // omitted when the printer didn't say
+          "model": "D11S",
+          "firmware": "1.0.3",
+          "hardware": "V2",
+          "service_uuids": ["18f0", "180a", "1800"],
+          "profile_slug": "d11s-aiyin",    // null/omitted when the user cancelled out
+          "matched_by": "bleName"          // bleName | deviceInfo | serviceUuid | manual
+        }
+
+    Response 201 (new) / 200 (already seen)::
+
+        { "id": 12, "times_seen": 3 }
 
 Lots
 ----
@@ -312,6 +368,7 @@ from django.templatetags.static import static
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from rest_framework import status
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -322,7 +379,9 @@ from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfil
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
+from .renderers import PdfRenderer, PngRenderer
 from .serializers import (
+    ArEventBatchSerializer,
     ArObservationBatchSerializer,
     CheckinJoinSerializer,
     CheckinPingSerializer,
@@ -339,10 +398,13 @@ from .serializers import (
     MobileUserSerializer,
     MobileWatchSerializer,
     OfflineSyncSerializer,
+    PrinterObservationSerializer,
 )
 from .services import ar as ar_service
 from .services import checkin as checkin_service
+from .services import printers as printer_service
 from .services.auth import MobileAuthService
+from .services.checkin import _single_pickup_location
 from .services.devices import DeviceService
 from .services.labels import LabelService
 from .services.payments import (
@@ -709,9 +771,16 @@ class MobileMyClubsView(APIView):
 
 
 class MobileLotLabelView(APIView):
-    """GET /api/mobile/labels/<pk>/?fmt=png&resolution=600x400&dpi=203 — rendered label image for a lot."""
+    """GET /api/mobile/labels/<pk>/?fmt=png&resolution=600x400&dpi=203 — rendered label image for a lot.
+
+    The body is a plain HttpResponse of bytes, but DRF negotiates content *before* the view runs:
+    without renderers that can satisfy them, ``Accept: application/pdf`` / ``Accept: image/png``
+    were answered with 406 and label printing failed outright. JSON stays first so error payloads
+    (``{"detail": …}``, which the app surfaces) still render as JSON for ordinary clients.
+    """
 
     permission_classes = [IsMobileAuthenticated]
+    renderer_classes = [JSONRenderer, PdfRenderer, PngRenderer]
     throttle_scope = "mobile_api"
     throttle_classes = [ScopedRateThrottle]
 
@@ -810,6 +879,31 @@ class MobilePrinterProfilesView(APIView):
         response = Response(data)
         response["ETag"] = etag
         return response
+
+
+class MobilePrinterObservedView(APIView):
+    """POST /api/mobile/printers/observed/ — record a printer that paired, and how it was identified.
+
+    Fire-and-forget from the app (it ignores the response), so this is lenient by design: over-long
+    strings are truncated rather than rejected, and only ``matched_by`` is required. The point is the
+    admin list — every ``matched_by: "manual"`` row is a printer no profile claimed, and the
+    model/manufacturer it reports is what belongs in that profile's match patterns.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = PrinterObservationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        observation, created = printer_service.record_observation(request.user, serializer.validated_data)
+        return Response(
+            {"id": observation.pk, "times_seen": observation.times_seen},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 class MobileLabelPrefsView(APIView):
@@ -994,6 +1088,73 @@ class MobileCommandPaletteLogView(APIView):
         return Response({"id": search_id})
 
 
+class MobileLastUsedAuctionView(APIView):
+    """GET /api/mobile/auctions/last-used/ — the caller's current auction, for client-side gating.
+
+    A read-only, side-effect-free lookup the command palette makes once when it opens, so it can
+    decide locally whether to surface the native AR lot-scanning entry: the app computes distance
+    from the device's live GPS to this auction's pickup coordinates and only offers AR (near-mode)
+    for an in-person auction that isn't ``pretty_much_over``. This deliberately does *not* reuse
+    ``checkin/ping/`` — that's a ~500 ft welcome geofence with real side effects (auto-check-in,
+    one-shot nudge rows, ``last_auction_used`` writes); here we only report state.
+
+    Always 200. Every field is null when the user has no ``last_auction_used`` or it points at a
+    soft-deleted auction — the same "plain when unset/deleted" fallback as ``MyLastAuctionLots``. A
+    404 is reserved for older backend builds that predate this endpoint, matching the app's standard
+    degrade-on-404 for optional mobile endpoints (``ar/lots``, ``ar/positions``, ``checkin/ping``).
+
+    ``latitude``/``longitude`` come from the auction's single physical pickup location (exactly one
+    non-mail ``PickupLocation`` whose coordinates are set); null otherwise — ambiguous/no physical
+    location, mail-only, or coordinates left at the ``(0, 0)`` "unset" sentinel the rest of the
+    codebase excludes. A null pair tells the app "can't distance-gate, don't show AR near-mode".
+
+    Response 200::
+
+        {
+          "slug":             "spring-fry-swap-2026",  // null when unset / deleted
+          "title":            "Spring Fry Swap 2026",
+          "is_online":        false,
+          "pretty_much_over": false,
+          "latitude":         40.4406,                 // null if no single physical location
+          "longitude":        -79.9959
+        }
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        auction = getattr(request.user.userdata, "last_auction_used", None)
+        if auction is None or auction.is_deleted:
+            return Response(
+                {
+                    "slug": None,
+                    "title": None,
+                    "is_online": None,
+                    "pretty_much_over": None,
+                    "latitude": None,
+                    "longitude": None,
+                }
+            )
+        location = _single_pickup_location(auction)
+        # PickupLocation coordinates default to (0, 0) rather than null — the codebase's "unset"
+        # sentinel (see Auction.physical_location_qs / get_closest_location_distance_subquery, which
+        # both exclude latitude=0, longitude=0). Report null there so the app reads it as "no usable
+        # location" instead of distance-gating against a real point in the Gulf of Guinea.
+        has_coordinates = location is not None and not (location.latitude == 0 and location.longitude == 0)
+        return Response(
+            {
+                "slug": auction.slug,
+                "title": auction.title,
+                "is_online": auction.is_online,
+                "pretty_much_over": auction.pretty_much_over,
+                "latitude": location.latitude if has_coordinates else None,
+                "longitude": location.longitude if has_coordinates else None,
+            }
+        )
+
+
 # ---------------------------------------------------------------------------
 # AR lot scanning
 # ---------------------------------------------------------------------------
@@ -1068,6 +1229,33 @@ class MobileArObservationsView(APIView):
             fov_hdeg=data.get("fov_hdeg"),
             frames=data["frames"],
         )
+        return Response({"accepted": accepted}, status=status.HTTP_202_ACCEPTED)
+
+
+class MobileArEventsView(APIView):
+    """POST /api/mobile/ar/events/ — record AR interaction events (scan / zoom / zoom-all-the-way).
+
+    Each event becomes a lot PageView tagged with an ``ar_*`` source, de-duped to one row per user per
+    lot per event type, so the lot page can show how many users scanned / zoomed / zoomed all the way
+    in — separately from ordinary page views. Foreign/unknown lots are dropped silently; returns 202
+    with the accepted count.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_ar"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = ArEventBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        auction = _get_ar_auction(str(data["auction"]))
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        accepted = ar_service.record_ar_events(auction, request.user, data["events"], request)
         return Response({"accepted": accepted}, status=status.HTTP_202_ACCEPTED)
 
 

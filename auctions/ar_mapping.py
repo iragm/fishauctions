@@ -31,16 +31,16 @@ Formulation (see the backend spec): one camera pose ``(x, y, θ)`` per distinct
   with ≥2 lots that already have stored positions is rigidly tied to the existing map frame; a
   component with fewer gets a cold-start gauge at an offset origin so islands never render
   overlapping. One scanning walk between two areas links their components into one.
-* **GPS island anchoring**: bearings/gyro fix each island's *internal* layout and orientation, but
-  say nothing about where one disconnected island sits relative to another — cold-start islands are
-  otherwise marched along +x in an arbitrary order. When observations carry a phone GPS fix, each
-  cold-start island's base is instead placed at its GPS centroid, converted to a local east/north
-  (ENU) metre frame (east→+x, north→+y) relative to the solve's mean fix. GPS gives position but no
-  heading, so this only *translates* islands (relative arrangement becomes roughly geographic,
-  north-up); within-island orientation stays bearing-derived. The GPS group is shifted to sit past
-  any prior-anchored island, so the established map never moves. Islands with no GPS fall back to the
-  marched layout. See :func:`_gps_cold_bases`.
-* **Compass heading**: GPS fixes each island's *position* but never its *orientation* — two areas
+* **Island layout**: bearings/gyro fix each island's *internal* layout and orientation, but say
+  nothing about where one disconnected island sits relative to another. Cold-start islands are simply
+  marched along +x in a stable order with a fixed gap so they never render overlapping. GPS is **not**
+  used to translate islands: a whole auction fits in a ≤10 m room and consumer GPS error is ≥ that, so
+  a fix can neither place a lot nor reliably separate two islands within one venue — trusting it only
+  flung islands to noisy offsets (which then wrecked the map's zoom-to-fit). GPS is still ingested but
+  used *only* to look up magnetic declination for the compass correction below (which tolerates a
+  coarse fix). A disconnected island's absolute rotation comes entirely from the compass.
+* **Compass heading**: the marched layout fixes each island's *position* but not its *orientation* —
+  two areas
   scanned separately still float in absolute rotation. When a frame carries an absolute compass
   ``heading_deg`` (degrees CW from magnetic north for the camera's forward axis) it becomes a soft
   prior on that camera's world θ: ``θ_target = wrap(π/2 − radians(H + D))``, where ``D`` is the
@@ -111,14 +111,13 @@ GAUGE_WEIGHT = 1.0e3  # strong cold-start anchor (origin / +x axis)
 OUTLIER_FACTOR = 3.0  # drop observations with residual > factor × median, then re-solve
 DEFAULT_INIT_RANGE_M = 2.0  # init-only guess when depression gives no range
 ISLAND_GAP_M = 20.0  # gap between cold-start islands' bounding boxes so they never render overlapping
-M_PER_DEG_LAT = 110540.0  # metres per degree latitude (WGS84 mean); good enough for a hall-scale ENU
-M_PER_DEG_LON = 111320.0  # metres per degree longitude at the equator; scaled by cos(lat) in use
 
 # Normalised observation the solver consumes (DB-agnostic, so the solver is unit-testable).
 # ``yaw_deg`` is the phone's cumulative gyro heading at capture (ccw-positive about gravity, zero at
 # session start, same sign as θ); None ⇒ the device gave no gyro data ("unknown", never "no turn").
 # ``latitude``/``longitude`` are the phone's GPS fix at capture (WGS84 deg) or None ⇒ no fix; used
-# only to anchor disconnected islands' base locations (see ``_gps_cold_bases``).
+# only to look up magnetic declination for the compass correction (see ``_compass_targets``) — never
+# to place lots or translate islands (a ≤10 m venue is finer than any consumer GPS fix).
 # ``heading_deg`` is the phone's *absolute* compass heading (deg CW from magnetic north, camera
 # forward axis) or None ⇒ no compass reading; used to softly fix each island's absolute orientation
 # (see ``_compass_targets``).
@@ -194,7 +193,7 @@ def _compass_targets(data, now):
     the solver's ENU world (east=+x, north=+y) that forward vector is ``(sin H, cos H)`` whose
     ccw-from-+x angle is ``90° − H``; correcting magnetic→true adds the declination D first, giving
     ``θ_target = wrap(π/2 − radians(H + D))``. D is evaluated once, at the solve's mean GPS fix (the
-    same reference :func:`_gps_cold_bases` uses); with no GPS fix in the whole solve D = 0, which
+    only thing GPS is still used for); with no GPS fix in the whole solve D = 0, which
     merely leaves every heading in one shared magnetic-north frame — still enough to fix islands'
     *relative* orientation. Returns ``{cam_index: θ_target}``; empty when no frame has a heading.
     """
@@ -538,62 +537,21 @@ def _initial_guess(data, priors, components, compass_target):
     return np.concatenate([cams.ravel(), lms.ravel(), heights]), gauges
 
 
-def _gps_cold_bases(data, components, running_x):
-    """World positions (ENU metres) to anchor each cold-start island whose frames carry a GPS fix.
-
-    Returns ``({component_index: np.array([east, north])}, running_x)``. Cold islands with no GPS
-    frame are omitted (the caller marches them along +x as before). The whole GPS group is translated
-    as one rigid block so it sits just past any prior-anchored island (its min-x → the incoming
-    ``running_x``) and is vertically centred (mean north → 0) — a pure translation that preserves the
-    islands' relative geography while never disturbing the established map. GPS gives no heading, so
-    only the base translation is anchored; within-island orientation stays bearing-derived. The
-    returned ``running_x`` is advanced past the group so non-GPS cold islands march after it.
-    """
-    frame_gps = data["frame_gps"]
-    if not frame_gps:
-        return {}, running_x
-
-    # ENU reference = mean of every fix in the solve (self-contained; the map is relative anyway).
-    lats = [ll[0] for ll in frame_gps.values()]
-    lons = [ll[1] for ll in frame_gps.values()]
-    lat0, lon0 = sum(lats) / len(lats), sum(lons) / len(lons)
-    cos_lat0 = math.cos(math.radians(lat0))
-
-    def enu(lat, lon):
-        return np.array([(lon - lon0) * M_PER_DEG_LON * cos_lat0, (lat - lat0) * M_PER_DEG_LAT])
-
-    frame_keys = data["frame_keys"]
-    raw = {}
-    for cidx, comp in enumerate(components):
-        if comp["mode"] != "cold":
-            continue
-        pts = [enu(*frame_gps[frame_keys[ci]]) for ci in comp["frames"] if frame_keys[ci] in frame_gps]
-        if pts:
-            raw[cidx] = np.mean(pts, axis=0)
-    if not raw:
-        return {}, running_x
-
-    centroids = np.array(list(raw.values()))
-    shift = np.array([running_x - float(centroids[:, 0].min()), -float(centroids[:, 1].mean())])
-    bases = {cidx: (c + shift) for cidx, c in raw.items()}
-    running_x = running_x + float(centroids[:, 0].max() - centroids[:, 0].min()) + ISLAND_GAP_M
-    return bases, running_x
-
-
 def _layout_components(data, components, priors, lms, cams, compass_target):
     """Classify each component and lay out cold-start ones at non-overlapping origins.
 
     Mutates ``lms``/``cams`` in place for cold-start components (canonicalises rotation to put the
-    first anchor at the origin and the second on +x, then shifts the island to its base — its GPS
-    centroid when the island's frames carry a fix, else beyond the running bounding box). Returns
-    ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components rigidly tied to stored
-    positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
+    first anchor at the origin and the second on +x, then marches the island past the running bounding
+    box). Returns ``gauges``: a list of ``("prior", [(j, px, py), ...])`` for components rigidly tied
+    to stored positions and ``("cold", j1, ox, oy, j2_or_None)`` for cold-start ones.
 
-    ``compass_target`` maps ``cam_index → θ_target`` (see :func:`_compass_targets`). A cold island
-    with ≥2 anchors whose frames carry any heading is additionally rotated (rigidly, about its first
-    anchor) to the circular-mean orientation its compass frames want, and its gauge drops the second
-    anchor (``j2_or_None = None``) so the soft compass residuals — not the strong ``+x`` gauge — own
-    the island's absolute rotation. Islands with no heading frame are laid out exactly as before.
+    Islands are laid out purely by marching + compass — GPS is never used to translate them (see the
+    module docstring: a ≤10 m venue is finer than any consumer GPS fix). ``compass_target`` maps
+    ``cam_index → θ_target`` (see :func:`_compass_targets`). A cold island with ≥2 anchors whose frames
+    carry any heading is rotated (rigidly, about its first anchor) to the circular-mean orientation its
+    compass frames want, and its gauge drops the second anchor (``j2_or_None = None``) so the soft
+    compass residuals — not the strong ``+x`` gauge — own the island's absolute rotation. Islands with
+    no heading frame are laid out with the second anchor pinned on +x.
     """
     lot_ids = data["lot_ids"]
     prior_ids = set(priors)
@@ -608,23 +566,19 @@ def _layout_components(data, components, priors, lms, cams, compass_target):
             placed_max_x = mx if placed_max_x is None else max(placed_max_x, mx)
 
     running_x = (placed_max_x + ISLAND_GAP_M) if placed_max_x is not None else 0.0
-    # GPS-anchored bases for the cold islands that carry a fix (arranged as a group past the priors).
-    gps_bases, running_x = _gps_cold_bases(data, components, running_x)
 
     gauges = []
-    for cidx, comp in enumerate(components):
+    for comp in components:
         lms_in = comp["lms"]
         if comp["mode"] == "prior":
             gauges.append(("prior", [(j, float(px), float(py)) for j, (px, py) in comp["prior_in"]]))
             continue
-        gps_base = gps_bases.get(cidx)
         if len(lms_in) == 1:
             j1 = lms_in[0]
-            base = gps_base if gps_base is not None else np.array([running_x, 0.0])
+            base = np.array([running_x, 0.0])
             lms[j1] = np.array([float(base[0]), float(base[1])])
             gauges.append(("cold", j1, float(base[0]), float(base[1]), None))
-            if gps_base is None:
-                running_x += ISLAND_GAP_M
+            running_x += ISLAND_GAP_M
             continue
         # Two anchors: the two lowest lot-ids in the component (lms_in is sorted by landmark index,
         # which is lot-id order). Canonicalise: j1 → origin, j2 → +x axis. Landmark coords and camera
@@ -657,14 +611,10 @@ def _layout_components(data, components, priors, lms, cams, compass_target):
         else:
             j2_gauge = j2
 
-        # Extents/centroid are recomputed after any rotation so the base placement uses the final shape.
+        # Extents are recomputed after any rotation so the marched placement uses the final shape.
         min_x = float(pts[:, 0].min())
         max_x = float(pts[:, 0].max())
-        if gps_base is not None:
-            # Land the island's landmark centroid on its GPS centroid (2D translate, no marching).
-            base = np.asarray(gps_base, dtype=float) - pts.mean(0)
-        else:
-            base = np.array([running_x - min_x, 0.0])
+        base = np.array([running_x - min_x, 0.0])
         for local_i, j in enumerate(lms_in):
             lms[j] = np.array([pts[local_i, 0] + base[0], pts[local_i, 1] + base[1]])
         for ci in frames:
@@ -672,8 +622,7 @@ def _layout_components(data, components, priors, lms, cams, compass_target):
             cams[ci, 0], cams[ci, 1] = xy[0] + base[0], xy[1] + base[1]
             cams[ci, 2] = th
         gauges.append(("cold", j1, float(lms[j1, 0]), float(lms[j1, 1]), j2_gauge))
-        if gps_base is None:
-            running_x = base[0] + max_x + ISLAND_GAP_M
+        running_x = base[0] + max_x + ISLAND_GAP_M
     return gauges
 
 
