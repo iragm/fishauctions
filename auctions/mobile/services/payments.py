@@ -70,13 +70,18 @@ class PaymentService:
 
     @staticmethod
     def _get_seller_for_invoice(invoice):
-        """Return the SquareSeller responsible for this invoice, or None."""
-        from auctions.models import SquareSeller
+        """Return the SquareSeller responsible for this invoice, or None.
 
+        Auction invoices always carry ``club=None`` (that FK is for membership invoices), so the
+        club routing for a club auction has to come from the auction, not the invoice -- reading
+        ``invoice.club`` alone would charge the creator's personal Square account for a club
+        auction and hand out that personal token. ``Auction.effective_square_seller`` applies the
+        club-then-creator order and matches what ``Invoice.show_square_button`` advertises.
+        """
         if invoice.club:
             return invoice.club.effective_square_seller
-        if invoice.auction and invoice.auction.created_by:
-            return SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        if invoice.auction:
+            return invoice.auction.effective_square_seller
         return None
 
     @staticmethod
@@ -127,11 +132,37 @@ class PaymentService:
         return False
 
     @staticmethod
-    def create_mobile_payment(invoice_pk: int, user) -> dict:
+    def _record_token_handout(invoice, user, request):
+        """Log to auction/club history that a Square access token was handed to a device.
+
+        The response ships the seller's merchant-wide OAuth token, so every issuance is worth an
+        entry an auction owner can actually read: it is the only record that a given admin pulled
+        the credential, and a create with no matching payment is the signal worth noticing.
+        Best-effort — a history write must never block a cashier from taking payment.
+        """
+        from auctions.mobile.services.ar import _client_ip
+
+        ip = _client_ip(request) if request else ""
+        detail = f" from {ip}" if ip else ""
+        action = f"Square Tap to Pay access token issued to {user} for invoice {invoice.pk}{detail}"
+        try:
+            if invoice.auction:
+                invoice.auction.create_history(applies_to="INVOICES", action=action, user=user)
+            elif invoice.club:
+                from auctions.models import ClubHistory
+
+                ClubHistory.objects.create(club=invoice.club, user=user, action=action[:800], applies_to="MEMBERSHIP")
+        except Exception:
+            logger.exception("Failed to record Square token handout for invoice %s", invoice.pk)
+
+    @staticmethod
+    def create_mobile_payment(invoice_pk: int, user, request=None) -> dict:
         """Validate an invoice and return payment context for the mobile SDK.
 
         The returned dict contains everything the Flutter client needs to
         authorize the Square Mobile Payments SDK and start a Tap-to-Pay charge.
+
+        ``request`` is optional and used only to record the caller's IP on the audit entry.
 
         Raises
         ------
@@ -186,6 +217,9 @@ class PaymentService:
         if amount_due <= 0:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
+
+        # Nothing below here can fail, so this records exactly the calls that hand out a token.
+        PaymentService._record_token_handout(invoice, user, request)
 
         return {
             "invoice_pk": invoice_pk,

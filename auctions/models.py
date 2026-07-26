@@ -2721,12 +2721,20 @@ class Auction(models.Model):
     def effective_square_seller(self):
         """The SquareSeller used for payments on this auction.
 
-        Same routing rules as ``effective_paypal_seller`` (no site fallback for Square).
+        A club auction routes through the club's linked seller whenever the club has one, so a
+        club's money never lands in an individual's Square account (and Tap to Pay hands out that
+        club account's token, not a personal one). If the club has *not* connected Square, fall
+        back to the creator's personal seller so the auction can still take payment -- that
+        fallback is what ``show_square_button`` already offers, gated on the creator being trusted
+        and having ``enable_square_payments`` set. Non-club auctions always use the creator's.
+        Unlike ``effective_paypal_seller`` there is no site fallback for Square.
         """
         from auctions.models import SquareSeller
 
         if self.club:
-            return self.club.effective_square_seller
+            club_seller = self.club.effective_square_seller
+            if club_seller:
+                return club_seller
         if self.created_by_id:
             return SquareSeller.objects.filter(user=self.created_by).first()
         return None

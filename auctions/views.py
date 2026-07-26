@@ -11641,12 +11641,13 @@ class SquareAPIMixin:
         """Create a Square payment link using SquareSeller model methods
         Returns tuple: (payment_url, error_message)
         """
-        from auctions.models import SquareSeller
-
         if invoice.club:
             seller = invoice.club.effective_square_seller
         elif invoice.auction:
-            seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+            # Auction invoices always have club=None, so the club routing for a club auction has
+            # to come from the auction itself -- otherwise a club auction charges the creator's
+            # personal Square account while show_square_button advertises the club's.
+            seller = invoice.auction.effective_square_seller
         else:
             seller = None
         if not seller:

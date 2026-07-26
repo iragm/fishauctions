@@ -260,7 +260,9 @@ POST /api/mobile/payments/create/
     Validate an invoice and return the parameters needed to authorize the Mobile Payments SDK.
     The seller's OAuth access token is returned because the SDK authorizes on-device with
     authorize(accessToken, locationId). Charge with the returned ``reference_id`` so confirm and
-    the Square webhook can bind the payment back to the invoice.
+    the Square webhook can bind the payment back to the invoice. Since that token is a
+    merchant-wide credential, every successful create writes an auction (or club) history entry
+    naming the admin who requested it — a create with no matching payment is worth a look.
 
     Request::
 
@@ -949,7 +951,7 @@ class MobilePaymentCreateView(APIView):
 
         invoice_pk = serializer.validated_data["invoice_pk"]
         try:
-            result = PaymentService.create_mobile_payment(invoice_pk=invoice_pk, user=request.user)
+            result = PaymentService.create_mobile_payment(invoice_pk=invoice_pk, user=request.user, request=request)
         except LookupError as exc:
             logger.warning("Mobile payment create failed: invoice lookup error.", exc_info=exc)
             return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
