@@ -10059,6 +10059,20 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
+    # Rendering a label sheet is what marks its labels printed. That is right for a PDF the user is
+    # about to send to a printer, and wrong for the PNG raster path, where the label is only being
+    # *drawn* -- the app posts labels/printed/ for the ones that actually come out.
+    mark_labels_printed = True
+    # Size the page to a single label instead of a sheet. The PNG raster is a picture of one label,
+    # so an Avery preset's 8.5x11 page would otherwise come out as a label in the corner of a mostly
+    # blank image. A preset whose page already holds exactly one label (both thermal presets) is
+    # left exactly as it is, so the raster stays a pixel-for-pixel view of the PDF.
+    single_label_page = False
+    # A custom-scheme URL has no standard length limit and the app has no cap of its own (it prints
+    # serially and cancellably), but platform URL handling varies, so keep the deep link near 2000
+    # characters. The PDF path's own 100-label cap does not apply -- nothing is being laid out on a
+    # page here.
+    MAX_DEEP_LINK_LOTS = 300
     # Tuned for known overflow breakpoints (long seller emails/lot numbers) per label preset.
     # shrink_threshold: start scaling after this length.
     # ratio_base: numerator for ratio_base / text_length scaling.
@@ -10143,6 +10157,47 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     def get_pdf_filename(self):
         label_name = re.sub(r"[^a-zA-Z0-9]", "_", (self.filename or "labels").lower())
         return f"{label_name}.pdf"
+
+    def get(self, request, *args, **kwargs):
+        """Hand a Bluetooth-printing app user the lot set instead of a PDF sheet.
+
+        Gated here rather than in the templates that build bulk label links, because every bulk
+        entry point funnels through this view -- the users-table anchors, ``?printredirect=``, the
+        command palette, print-after-bulk-add, a bookmarked URL -- and gating them one at a time
+        leaves entry points behind (it also keeps label printing out of the mobile-app UA
+        conditionals the templates are deliberately free of; see
+        MobileAppLabelPrintingVisibilityTests). Everyone else gets the PDF, unchanged.
+
+        Deliberately before ``get_context_data``, which marks labels printed as a side effect of
+        rendering: nothing has printed yet, and the app posts labels/printed/ for the ones that
+        actually come out.
+        """
+        deep_link_response = self.bluetooth_deep_link_response()
+        if deep_link_response is not None:
+            return deep_link_response
+        return super().get(request, *args, **kwargs)
+
+    def bluetooth_deep_link_response(self):
+        """The ``fishauctions://print/?lots=…`` handoff page, or None to render the PDF."""
+        if not getattr(self.request, "is_mobile_app", False) or not self.request.user.is_authenticated:
+            return None
+        prefs = UserLabelPrefs.objects.filter(user=self.request.user).first()
+        if not prefs or prefs.print_method != "bluetooth":
+            return None
+        # Same queryset, same order as the PDF prints them -- that's the order they come out of the
+        # printer.
+        pks = list(self.get_queryset().values_list("pk", flat=True))
+        if not pks:
+            return None
+        truncated_count = len(pks) if len(pks) > self.MAX_DEEP_LINK_LOTS else 0
+        pks = pks[: self.MAX_DEEP_LINK_LOTS]
+        context = {
+            "deep_link": "fishauctions://print/?lots=" + ",".join(str(pk) for pk in pks),
+            "label_count": len(pks),
+            "truncated_count": truncated_count,
+            "back_url": self.auction.get_absolute_url() if self.auction else reverse("selling"),
+        }
+        return render(self.request, "label_bluetooth_redirect.html", context)
 
     @staticmethod
     def get_seller_email_font_size(seller_email, preset):
@@ -10268,6 +10323,22 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         labels_per_row = int(available_width // (context["label_width"] + context["label_margin_right"]))
         labels_per_column = int(available_height // (context["label_height"] + context["label_margin_bottom"]))
         context["labels_per_page"] = labels_per_row * labels_per_column
+
+        if self.single_label_page and context["labels_per_page"] != 1:
+            # Shrink the page onto the label. Only reached for sheet presets (and a custom size that
+            # tiles): the thermal presets already describe one physical label per page and keep
+            # their exact geometry.
+            #
+            # The page margins go with it. On a sheet they are the unprintable border of a sheet of
+            # Avery stock -- keeping them here would print the label offset into a corner with a
+            # wide blank margin above and to the left of it, which on a label roll is just wasted
+            # label.
+            for margin in ("page_margin_top", "page_margin_bottom", "page_margin_left", "page_margin_right"):
+                context[margin] = 0
+            context["page_width"] = context["label_width"]
+            context["page_height"] = context["label_height"]
+            context["labels_per_page"] = 1
+
         if context["labels_per_page"] == 0:
             messages.error(
                 self.request,
@@ -10309,10 +10380,11 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         else:
             labels = list(labels)
 
-        for label in labels:
-            label.label_printed = True
-            label.label_needs_reprinting = False
-        Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
+        if self.mark_labels_printed:
+            for label in labels:
+                label.label_printed = True
+                label.label_needs_reprinting = False
+            Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
         # First column width is fixed at 0.63 for most labels and overridden for large and thermal
         # context['first_column_width'] = (context['label_width'] / 4)
@@ -10427,6 +10499,7 @@ class SingleLotLabelView(LotLabelView):
                     "png",
                     resolution=request.GET.get("resolution"),
                     dpi=request.GET.get("dpi"),
+                    request=request,
                 )
             except ValueError:
                 logging.getLogger(__name__).warning(

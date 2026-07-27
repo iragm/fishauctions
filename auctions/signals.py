@@ -5,7 +5,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -706,3 +706,65 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
         from .tasks import delete_cloudflare_image
 
         delete_cloudflare_image.delay(instance.cloudflare_image_id)
+
+
+@receiver(post_save, sender="auctions.ThermalPrinterProfile")
+def notify_users_their_printer_is_supported(sender, instance, **kwargs):
+    """Tell people whose hand-identified printer this profile has just started claiming.
+
+    Without this the loop never visibly closes: their next connect silently starts matching
+    properly, which from where they are standing looks exactly like nothing happened. The push
+    tells them to go reconnect it.
+
+    Only ``manual`` observations (and ones that matched nothing at all) are considered -- those are
+    the printers somebody had to identify by hand, i.e. the ones this is news for.
+    """
+    from auctions.models import ObservedPrinter
+    from auctions.printer_drafts import profile_matches_observation
+
+    if not instance.enabled:
+        return
+
+    candidates = ObservedPrinter.objects.filter(support_notified=False).filter(
+        models.Q(matched_by="manual") | models.Q(profile_slug="")
+    )
+    notified_users = set()
+    for observation in candidates.select_related("user"):
+        if not profile_matches_observation(instance, observation):
+            continue
+        if observation.user_id in notified_users or _push_printer_supported(observation, instance):
+            notified_users.add(observation.user_id)
+            ObservedPrinter.objects.filter(pk=observation.pk).update(support_notified=True)
+
+
+def _push_printer_supported(observation, profile):
+    """Enqueue the push for one observation. False (leave it unnotified) if the user can't get it.
+
+    Left unnotified rather than marked-and-dropped so the news still reaches them if they turn
+    push on later -- the scan is a cheap indexed query on an already-small table.
+    """
+    from auctions import notifications
+    from auctions.tasks import send_push_to_user
+
+    if not observation.user_id or not notifications.user_prefers_push(observation.user):
+        return False
+    printer = observation.model or observation.ble_name or "Your Bluetooth printer"
+
+    def enqueue():
+        try:
+            send_push_to_user.delay(
+                observation.user_id,
+                title="Your printer is supported now",
+                body=f"{printer} works with label printing now. Open the printing page and reconnect it.",
+                url="/printing/",
+                category=notifications.CATEGORY_PRINTER,
+                # One per user even if a profile is saved repeatedly while being tuned.
+                collapse_key=f"printer-supported-{profile.slug}",
+            )
+        except Exception:
+            # A courtesy notification must never be the reason an admin can't enable a profile.
+            logger.exception("Could not enqueue the printer-supported push for user %s", observation.user_id)
+
+    # On commit so a rolled-back save can't push about a profile that was never enabled.
+    transaction.on_commit(enqueue)
+    return True

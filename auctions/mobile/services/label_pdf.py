@@ -3,6 +3,9 @@
 Reuses the web ``SingleLotLabelView`` WeasyPrint pipeline verbatim so a lot printed from the app
 (when ``print_method`` is ``pdf``/``system``) has the exact same layout — and honours the same
 ``UserLabelPrefs`` — as one printed from the website.
+
+Also the source of the Bluetooth PNG: see ``label_raster``, which rasterizes what this produces
+rather than redrawing the label a second way.
 """
 
 import logging
@@ -10,12 +13,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def render_single_lot_pdf(lot, request):
+def render_single_lot_pdf(lot, request, *, single_label_page=False, mark_printed=True):
     """Render *lot*'s label as a one-lot PDF using the caller's saved label prefs.
 
     ``request`` is the DRF request (its ``user`` is the JWT-authenticated user). Returns
     ``(pdf_bytes, "application/pdf")``. Raises ``ValueError`` if the lot has no auction to render
     against (mirrors the web view, which drives labels off the auction's print-field config).
+
+    ``single_label_page`` sizes the page to one label rather than a sheet, and ``mark_printed=False``
+    suppresses the "rendering a sheet marks it printed" side effect — both for the raster path,
+    where the label is being drawn rather than sent to a printer.
     """
     from auctions.views import SingleLotLabelView
 
@@ -35,6 +42,8 @@ def render_single_lot_pdf(lot, request):
     view.kwargs = {}
     view.lot = lot
     view.auction = auction
+    view.single_label_page = single_label_page
+    view.mark_labels_printed = mark_printed
 
     context = view.get_context_data()
     response = view.render_to_response(context)

@@ -60,6 +60,7 @@ django-ses[events]
 django-webpush
 django-summernote
 django-weasyprint
+pypdfium2
 reportlab
 beautifulsoup4
 django-encrypted-model-fields

@@ -199,6 +199,24 @@ GET /api/mobile/labels/<lot_pk>/?fmt=png&resolution=600x400&dpi=203
 
     Response 200:  binary image body with ``Content-Type: image/png``.
 
+POST /api/mobile/labels/printed/
+    Mark labels as printed. The PDF views set ``label_printed`` as a side effect of rendering, but
+    native Bluetooth printing never goes through them, so without this "print unprinted labels"
+    never shrinks for anyone printing natively. The app posts the lots whose labels actually came
+    out (including the ones sent before a failure or a cancel), fire-and-forget.
+
+    Request::
+
+        { "lots": [12, 13, 14] }
+
+    Response 200::
+
+        { "marked": 3 }
+
+    Per-lot permission is the same rule as ``labels/<pk>/``. Lots the caller can't touch are
+    silently skipped rather than failing the batch — some of them printed fine. Idempotent: a
+    reprint posting the same pks is normal.
+
 Printers
 --------
 GET /api/mobile/printers/profiles/
@@ -223,7 +241,35 @@ POST /api/mobile/printers/observed/
           "hardware": "V2",
           "service_uuids": ["18f0", "180a", "1800"],
           "profile_slug": "d11s-aiyin",    // null/omitted when the user cancelled out
-          "matched_by": "bleName"          // bleName | deviceInfo | serviceUuid | manual
+          "matched_by": "bleName",         // bleName | deviceInfo | serviceUuid | probe | manual
+
+          // Everything below is optional and additive. The DIS often names the *radio module*
+          // rather than the printer (a Y486BT reports "Feasycom" / "FSC-BT986"), which isn't
+          // enough to author a profile from — so the app also asks each command language its
+          // standard read-only status query, and reports the full GATT tree. Absent when the
+          // printer matched a profile without probing.
+          "probe_replies": {"tspl_status": {"hex": "00", "ascii": "."}},
+          "probed_language": "tspl",       // tspl | escpos | zpl | cpcl | d11s | null
+          "gatt": [                        // service/characteristic tree, with properties
+            {"uuid": "49535343-fe7d-4ae5-8fa9-9fafd205e455",
+             "characteristics": [
+               {"uuid": "49535343-8841-43f4-a8d4-ecbe34729bb3", "properties": ["write", "writeNR"]},
+               {"uuid": "49535343-1e4d-4bd9-ba61-23c647249616", "properties": ["notify"]}
+             ]}
+          ],
+
+          // From the app's "Improve support" walkthrough: the printer's status reply in four
+          // physical states whose meaning is known in advance, so the derived map is a
+          // derivation rather than a guess. Sets `characterized`, the admin's work-queue filter.
+          "status_captures": {
+            "ready":                {"tspl_status": {"hex": "00"}},
+            "cover_open":           {"tspl_status": {"hex": "01"}},
+            "no_labels_cover_open": {"tspl_status": {"hex": "05"}},
+            "no_labels":            {"tspl_status": {"hex": "04"}}
+          },
+          "derived_status_values": {"00": [], "01": ["cover_open"],
+                                    "05": ["cover_open", "out_of_paper"], "04": ["out_of_paper"]},
+          "status_ambiguities": ["01: cover_open and no_labels_cover_open are indistinguishable"]
         }
 
     Response 201 (new) / 200 (already seen)::
@@ -394,6 +440,7 @@ from .serializers import (
     MobileDeviceUnregisterSerializer,
     MobileGoogleAuthSerializer,
     MobileLabelPrefsSerializer,
+    MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
@@ -841,6 +888,7 @@ class MobileLotLabelView(APIView):
                 request.GET.get("fmt"),
                 resolution=request.GET.get("resolution"),
                 dpi=request.GET.get("dpi"),
+                request=request,
             )
         except ValueError:
             logger.warning("Invalid label request.", exc_info=True)
@@ -850,6 +898,42 @@ class MobileLotLabelView(APIView):
             )
 
         return HttpResponse(content, content_type=content_type)
+
+
+class MobileLabelsPrintedView(APIView):
+    """POST /api/mobile/labels/printed/ — mark a batch of lot labels as printed.
+
+    The PDF views set ``label_printed`` as a side effect of rendering
+    (``LotLabelView.get_context_data`` → ``bulk_update``), and neither ``labels/<pk>/`` nor the
+    ``fishauctions://print/`` deep-link path goes through them — so "print unprinted labels" would
+    never shrink for anyone printing natively over Bluetooth. This closes that.
+
+    Fire-and-forget from the app, and self-disabling: a 404 turns it off for the process, so a
+    deployment without this endpoint behaves exactly as before.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileLabelsPrintedSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        pks = serializer.validated_data["lots"]
+        lots = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
+            "auctiontos_seller", "auctiontos_seller__auction"
+        )
+        # Lots the caller can't touch are skipped, not refused: a batch of forty is one print run,
+        # and most of it printed fine. Same per-lot rule as GET labels/<pk>/.
+        allowed = [lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)]
+        for lot in allowed:
+            lot.label_printed = True
+            lot.label_needs_reprinting = False
+        # Matches what the PDF views write, so the two paths agree on what "printed" means.
+        Lot.objects.bulk_update(allowed, ["label_printed", "label_needs_reprinting"])
+        return Response({"marked": len(allowed)})
 
 
 # ---------------------------------------------------------------------------

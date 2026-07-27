@@ -386,6 +386,8 @@ pyopenssl==26.3.0
     # via -r requirements.in
 pyparsing==3.3.2
     # via -r requirements.in
+pypdfium2==5.12.1
+    # via -r requirements.in
 pyphen==0.17.2
     # via weasyprint
 python-barcode==0.16.1

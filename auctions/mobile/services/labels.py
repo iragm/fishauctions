@@ -21,9 +21,13 @@ _RESOLUTION_RE = re.compile(r"(\d{1,5})\s*[xX×]\s*(\d{1,5})\Z")
 class LabelService:
     """Builds label data for auction lots and renders it to a printable image.
 
-    Rendering is delegated to a pluggable :class:`LabelRenderer` (see ``label_renderers``), so this
-    service produces images only — never TSPL / ZPL / ESC/POS printer commands. The mobile app sends
-    the returned image straight to the Bluetooth printer.
+    A PNG is a raster of the *same* WeasyPrint PDF the website prints (see ``label_raster``), so the
+    Bluetooth label and the PDF label are the same label — same template, same
+    ``Auction.label_print_fields``, same ``UserLabelPrefs``. The standalone renderers below are the
+    fallback for the cases that can't produce a PDF.
+
+    This service produces images only — never TSPL / ZPL / ESC/POS printer commands. The mobile app
+    sends the returned image straight to the Bluetooth printer.
     """
 
     @staticmethod
@@ -77,17 +81,29 @@ class LabelService:
         return width, height, dpi_value
 
     @staticmethod
-    def render_label(lot, fmt=None, *, resolution=None, dpi=None) -> tuple[bytes, str]:
+    def render_label(lot, fmt=None, *, resolution=None, dpi=None, request=None) -> tuple[bytes, str]:
         """Render *lot*'s label in ``fmt`` (default PNG) at the requested ``resolution``/``dpi``.
 
         ``resolution`` is a ``"WIDTHxHEIGHT"`` string and ``dpi`` an integer (both default to
         600x400 @ 203dpi). Returns ``(content_bytes, content_type)``. Raises ``ValueError`` for an
         unsupported format or malformed resolution/dpi.
+
+        With a ``request`` (so there is a user whose label prefs apply), a PNG is a raster of that
+        user's label PDF — the same layout the website prints. Without one, or if the PDF can't be
+        produced, the standalone renderer draws it instead.
         """
         renderer = get_renderer(fmt)
         if renderer is None:
             msg = f"Unsupported label format {fmt!r}. Supported: {', '.join(supported_formats())}."
             raise ValueError(msg)
         width, height, dpi_value = LabelService.parse_dimensions(resolution, dpi)
+
+        if renderer.format == "png" and request is not None:
+            from .label_raster import render_lot_label_png
+
+            content = render_lot_label_png(lot, request, width=width, height=height, dpi=dpi_value)
+            if content is not None:
+                return content, renderer.content_type
+
         label_data = LabelService.build_label_data(lot)
         return renderer.render(label_data, width=width, height=height, dpi=dpi_value), renderer.content_type
