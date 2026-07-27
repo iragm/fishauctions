@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% comment %}
+Handoff page for bulk label printing when the user prints over Bluetooth inside the app.
+
+Rendered by LotLabelView.get() instead of the PDF, so every bulk entry point -- the users-table
+links, ?printredirect=, the command palette, a bookmarked URL, print-after-bulk-add -- goes to the
+printer rather than handing a thermal-printer user a letter-size PDF sheet they can't feed.
+
+It navigates rather than 302s: a synthesized <a> click is the path the app is known to intercept
+today (it is how the per-lot fishauctions://print/<pk> link already reaches it), and a redirect to a
+custom scheme is not. The manual button below is the fallback if the automatic click is blocked, and
+also the whole page on the web, where the scheme has no handler at all.
+{% endcomment %}
+{% block title %}Printing labels{% endblock %}
+{% block content %}
+<div class="container mt-4" style="max-width: 34rem;">
+  <h4><i class="bi bi-printer me-1"></i>Sending {{ label_count }} label{{ label_count|pluralize }} to your printer</h4>
+  {% if truncated_count %}
+  <div class="alert alert-warning text-dark mt-3" role="alert">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    Sending the first {{ label_count }} of {{ truncated_count }} labels. Once these have printed, use
+    <b>Print only unprinted labels</b> to send the rest.
+  </div>
+  {% endif %}
+  <p class="text-muted">Your labels print in the background &mdash; you can keep using the app.</p>
+  <a class="btn btn-primary" id="bluetooth-print-link" href="{{ deep_link }}">
+    <i class="bi bi-printer me-1"></i>Print labels
+  </a>
+  <a class="btn btn-secondary ms-1" href="{{ back_url }}">Go back</a>
+  <p class="text-muted mt-3">
+    <i class="bi bi-info-circle me-1"></i>
+    Bluetooth printing needs the FishAuctions app. To print a PDF instead, change
+    <a href="{% url 'printing' %}">your print method</a>.
+  </p>
+</div>
+<script>
+  (function () {
+    var link = document.getElementById('bluetooth-print-link');
+    if (!link) { return; }
+    // Fire it for the user, then get out of the way: Bluetooth printing has no screen of its own,
+    // so the point is that they keep their place rather than land here.
+    link.click();
+    if (window.history.length > 1) {
+      window.setTimeout(function () { window.history.back(); }, 1500);
+    }
+  })();
+</script>
+{% endblock %}

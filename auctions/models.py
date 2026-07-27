@@ -52,7 +52,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
-from . import cloudflare_images
+from . import cloudflare_images, printer_programs
 from .email_routing import admin_routing_email, build_routed_sender_address
 from .helper_functions import bin_data, get_currency_symbol
 
@@ -2721,12 +2721,20 @@ class Auction(models.Model):
     def effective_square_seller(self):
         """The SquareSeller used for payments on this auction.
 
-        Same routing rules as ``effective_paypal_seller`` (no site fallback for Square).
+        A club auction routes through the club's linked seller whenever the club has one, so a
+        club's money never lands in an individual's Square account (and Tap to Pay hands out that
+        club account's token, not a personal one). If the club has *not* connected Square, fall
+        back to the creator's personal seller so the auction can still take payment -- that
+        fallback is what ``show_square_button`` already offers, gated on the creator being trusted
+        and having ``enable_square_payments`` set. Non-club auctions always use the creator's.
+        Unlike ``effective_paypal_seller`` there is no site fallback for Square.
         """
         from auctions.models import SquareSeller
 
         if self.club:
-            return self.club.effective_square_seller
+            club_seller = self.club.effective_square_seller
+            if club_seller:
+                return club_seller
         if self.created_by_id:
             return SquareSeller.objects.filter(user=self.created_by).first()
         return None
@@ -11251,11 +11259,21 @@ class ThermalPrinterProfile(models.Model):
     sent to a printer is defined here, not in the app. Adding support for a new
     printer means adding a row, no app release."""
 
+    # User-facing when the app has to ask which printer this is, so name the printer ("MUNBYN
+    # ITPP941"), not the protocol — the person choosing is looking at a box on a table.
     slug = models.SlugField(unique=True)  # stable id the app caches/reports
     name = models.CharField(max_length=100)  # "Fichero / AiYin D11s"
     enabled = models.BooleanField(default=True)
     priority = models.PositiveIntegerField(default=100)  # match order, low wins
     schema_version = models.PositiveIntegerField(default=1)  # command-program schema
+    # What the print program speaks. The app can infer this from the program's bytes (TSPL if it
+    # contains BITMAP, ESC/POS if 1d7630 …) and still does for older deployments, but stating it
+    # lets a command-language probe auto-select this profile when it is the only one that speaks
+    # the language the printer answered in — which is what removes the "pick your printer type"
+    # dialog for most printers.
+    command_language = models.CharField(
+        max_length=20, choices=printer_programs.COMMAND_LANGUAGE_CHOICES, blank=True, default=""
+    )
 
     # ── Matching (how the app decides a scanned BLE device uses this profile) ──
     # JSON list of case-insensitive regexes tested against the advertised name,
@@ -11337,6 +11355,9 @@ class ObservedPrinter(models.Model):
       printers people own.
     * A blank ``profile_slug`` (user cancelled) or a blank ``model`` (the printer
       identifies as nothing) means a BLE-name pattern or a brand-new profile is needed.
+    * ``characterized`` rows carry everything needed to write a profile — the printer's
+      GATT tree, its command language, and what each of its status codes means — so the
+      "Draft a profile from this observation" action can fill one in.
 
     One row per (user, ble_name, model, profile_slug); re-pairing bumps times_seen."""
 
@@ -11346,6 +11367,10 @@ class ObservedPrinter(models.Model):
         ("bleName", "BLE name pattern"),
         ("deviceInfo", "Device Information Service (model/manufacturer)"),
         ("serviceUuid", "Service UUID"),
+        # "We worked out its language by asking it" — distinct from "the printer told us over
+        # GATT", which is what deviceInfo means. Without this the app had to report probe matches
+        # as deviceInfo and the two were indistinguishable here.
+        ("probe", "Command-language probe"),
         ("manual", "User picked it manually"),
     ]
 
@@ -11357,6 +11382,43 @@ class ObservedPrinter(models.Model):
     firmware = models.CharField(max_length=100, blank=True, default="")  # 0x2A26
     hardware = models.CharField(max_length=100, blank=True, default="")  # 0x2A27
     service_uuids = models.JSONField(default=list, blank=True)  # advertised GATT services
+
+    # ── What the print engine itself answered ──
+    # The DIS often describes the radio module, not the printer (a Y486BT reports "Feasycom" /
+    # "FSC-BT986", a Bluetooth module that ships in dozens of unrelated products), which is not
+    # enough to author a profile from. So the app also sends the standard read-only status/identity
+    # query of each command language and records which ones answer: which query answers *is* the
+    # command language, and the payloads often carry a model string or media size.
+    # ``{"tspl_status": {"hex": "00", "ascii": "."}}`` — query id → what came back.
+    probe_replies = models.JSONField(default=dict, blank=True)
+    # tspl|escpos|zpl|cpcl|d11s, or blank when nothing answered / no probe ran. The single most
+    # useful column for triaging an unsupported printer: it says which profile family it belongs in.
+    probed_language = models.CharField(max_length=20, blank=True, default="", db_index=True)
+    # The full service/characteristic tree, which only a person holding the phone could see before.
+    # A profile's service/write/notify UUIDs can only be filled in from this, and picking them wrong
+    # is silent — the Y486BT's first *writable* characteristic is its radio module's control
+    # channel, so labels went nowhere at all.
+    gatt = models.JSONField(default=list, blank=True)
+
+    # ── Characterization: what this printer's status byte means ──
+    # No query can discover this, so the app walks the user through four physical states (labels
+    # loaded / cover open / roll removed / cover closed still empty) and records the status reply in
+    # each. Because each state's meaning is known in advance, the resulting map is a derivation, not
+    # a guess. ``{"cover_open": {"tspl_status": {"hex": "01", …}}, …}`` — state id → replies.
+    status_captures = models.JSONField(default=dict, blank=True)
+    # The status_flags.values map computed from those captures, ready to paste into a profile row.
+    derived_status_values = models.JSONField(default=dict, blank=True)
+    # States this printer cannot tell apart, e.g. "01: cover_open and no_labels_cover_open are
+    # indistinguishable". Worth carrying into the profile's notes verbatim.
+    status_ambiguities = models.JSONField(default=list, blank=True)
+    # Set when status_captures is non-empty. The admin's work queue filter: a characterized row has
+    # everything needed to write a profile.
+    characterized = models.BooleanField(default=False, db_index=True)
+    # Whether this user has been told their printer is supported now. When a profile is enabled
+    # that matches a printer somebody previously had to identify by hand, their next connect just
+    # starts working -- which, from where they are standing, looks exactly like nothing happened.
+    support_notified = models.BooleanField(default=False)
+
     # Slug rather than a FK: it must survive a profile being renamed or deleted, and the app
     # may report a slug this deployment has never had. Blank = the user cancelled the dialog.
     profile_slug = models.CharField(max_length=50, blank=True, default="", db_index=True)

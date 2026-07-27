@@ -147,6 +147,19 @@ class MobileLabelPrefsSerializer(serializers.ModelSerializer):
         return label_prefs_warnings(obj)
 
 
+class MobileLabelsPrintedSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/labels/printed/ — lots whose labels actually came out.
+
+    The PDF views set ``label_printed`` as a side effect of rendering, but native Bluetooth
+    printing never goes through them, so "print unprinted labels" would never shrink for anyone
+    printing over Bluetooth. The app posts this after the labels that really went out — including
+    the ones sent before a failure or a cancel — so a partially-printed batch marks exactly what
+    printed.
+    """
+
+    lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=1000)
+
+
 class PrinterObservationSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/printers/observed/ — one successful pairing.
 
@@ -174,6 +187,18 @@ class PrinterObservationSerializer(serializers.Serializer):
     # Not sent by the app yet: reserved for the post-first-print confirmation, so "what works"
     # can mean printed rather than merely paired.
     printed_ok = serializers.BooleanField(required=False, default=False)
+
+    # ── What the printer answered, and what its answers mean ──
+    # All optional and absent when the printer was matched without probing. Typed as JSONField
+    # rather than nested serializers on purpose: this is evidence about a printer nobody here
+    # owns, and a shape we didn't anticipate is still worth recording. The service caps the size
+    # and drops anything unusable; nothing here may 400 a report away.
+    probe_replies = serializers.JSONField(required=False, allow_null=True, default=dict)
+    probed_language = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    gatt = serializers.JSONField(required=False, allow_null=True, default=list)
+    status_captures = serializers.JSONField(required=False, allow_null=True, default=dict)
+    derived_status_values = serializers.JSONField(required=False, allow_null=True, default=dict)
+    status_ambiguities = serializers.JSONField(required=False, allow_null=True, default=list)
 
 
 # ---------------------------------------------------------------------------

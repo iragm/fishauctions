@@ -30,6 +30,9 @@ CATEGORY_CHAT = "chat"
 CATEGORY_MEMBERSHIP = "membership"
 CATEGORY_AUCTION_ADMIN = "auction_admin"
 CATEGORY_PROMO = "promo"
+# "Your Bluetooth printer is supported now." Push-only by nature: an ObservedPrinter row exists
+# only because someone paired a printer in the app.
+CATEGORY_PRINTER = "printer"
 
 PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT})
 

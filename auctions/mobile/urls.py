@@ -15,6 +15,7 @@ from .views import (
     MobileDeviceUnregisterView,
     MobileGoogleAuthView,
     MobileLabelPrefsView,
+    MobileLabelsPrintedView,
     MobileLastUsedAuctionView,
     MobileLoginView,
     MobileLotLabelView,
@@ -59,6 +60,7 @@ urlpatterns = [
     path("printers/observed/", MobilePrinterObservedView.as_view(), name="mobile-printer-observed"),
     # Labels
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
+    path("labels/printed/", MobileLabelsPrintedView.as_view(), name="mobile-labels-printed"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
     # Lots
     path("lots/<int:pk>/watch/", MobileLotWatchView.as_view(), name="mobile-lot-watch"),

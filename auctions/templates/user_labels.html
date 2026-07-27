@@ -92,14 +92,29 @@ var form_id = '#printing-prefs';
             stateEl.textContent = 'Bluetooth printing works in the FishAuctions app — install it and come back to this page.';
             return;
         }
+        // printerConnect opens the native sheet and resolves with the current state. The sheet is
+        // where "Print test label" lives, so it has to be reachable while connected too -- the only
+        // route used to be unpair and re-pair, which is exactly the wrong thing to tell someone
+        // whose printer is misbehaving.
+        var connect = document.createElement('button');
+        connect.type = 'button';
+        connect.className = state.connected ? 'btn btn-sm btn-outline-primary' : 'btn btn-sm btn-primary';
+        connect.textContent = state.connected ? 'Printer settings' : 'Connect a printer';
+        connect.addEventListener('click', function () {
+            connect.disabled = true;
+            callBridge('printerConnect').then(function (s) { connect.disabled = false; renderBtState(s); });
+        });
+
         if (state.connected) {
             var bits = [state.name || 'Connected printer'];
+            // Which profile is driving this is the setting most likely to be wrong.
             if (state.profile) { bits.push('driver: ' + state.profile); }
             stateEl.className = '';
             stateEl.textContent = bits.join(' · ');
+            actionsEl.appendChild(connect);
             var unpair = document.createElement('button');
             unpair.type = 'button';
-            unpair.className = 'btn btn-sm btn-outline-danger';
+            unpair.className = 'btn btn-sm btn-outline-danger ms-1';
             unpair.textContent = 'Unpair';
             unpair.addEventListener('click', function () {
                 stateEl.textContent = 'Disconnecting…';
@@ -110,14 +125,6 @@ var form_id = '#printing-prefs';
         } else {
             stateEl.className = 'text-muted';
             stateEl.textContent = 'No printer connected';
-            var connect = document.createElement('button');
-            connect.type = 'button';
-            connect.className = 'btn btn-sm btn-primary';
-            connect.textContent = 'Connect a printer';
-            connect.addEventListener('click', function () {
-                connect.disabled = true;
-                callBridge('printerConnect').then(function (s) { connect.disabled = false; renderBtState(s); });
-            });
             actionsEl.appendChild(connect);
         }
     }

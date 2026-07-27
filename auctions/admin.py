@@ -1,10 +1,12 @@
 import csv
 import datetime
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.http import HttpResponse
+from django.urls import reverse
+from django.utils.html import format_html
 
 from .models import (
     FAQ,
@@ -419,13 +421,42 @@ class ThermalPrinterProfileAdmin(admin.ModelAdmin):
     validated on save via ThermalPrinterProfile.clean(), so a typo is rejected here, not on the
     printer."""
 
-    list_display = ("name", "slug", "enabled", "priority", "print_width_px", "dpi", "schema_version")
+    list_display = (
+        "name",
+        "slug",
+        "enabled",
+        "priority",
+        "command_language",
+        "print_width_px",
+        "dpi",
+        "schema_version",
+    )
     list_editable = ("enabled", "priority")
-    list_filter = ("enabled", "schema_version")
+    list_filter = ("enabled", "schema_version", "command_language")
     search_fields = ("name", "slug", "notes")
     prepopulated_fields = {"slug": ("name",)}
     fieldsets = (
-        (None, {"fields": ("slug", "name", "enabled", "priority", "schema_version", "notes")}),
+        (
+            None,
+            {
+                "description": (
+                    "The name is user-facing — the app shows it when it has to ask which printer "
+                    'this is, so name the printer ("MUNBYN ITPP941"), not the protocol. Bump '
+                    "schema_version to 2 only for a row that uses a v2 feature ({total_bytes}, "
+                    "{u32le:…}, a tx_raster encoding, or status_flags.values); older app builds "
+                    "then correctly ignore it rather than mis-driving the printer."
+                ),
+                "fields": (
+                    "slug",
+                    "name",
+                    "enabled",
+                    "priority",
+                    "command_language",
+                    "schema_version",
+                    "notes",
+                ),
+            },
+        ),
         (
             "Matching",
             {
@@ -464,13 +495,21 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
     had to be asked what it was. Copy its model/manufacturer into a ThermalPrinterProfile's
     model_patterns / manufacturer_patterns and that printer auto-pairs for everyone afterwards.
     Rows with no profile (the user cancelled) or no model (the printer identifies as nothing) need
-    a BLE-name pattern or a brand-new profile instead."""
+    a BLE-name pattern or a brand-new profile instead.
+
+    Better still, filter to ``characterized = yes``: those rows carry the printer's GATT tree, its
+    command language and what each of its status codes means, which is everything a profile needs.
+    Select them and run "Draft a profile from this observation"."""
 
     list_display = (
         "ble_name",
         "manufacturer",
         "model",
         "firmware",
+        # The single most useful column for triaging an unsupported printer: it says which profile
+        # family a new row belongs in, where model/manufacturer often name only the radio module.
+        "probed_language",
+        "characterized",
         "profile_slug",
         "matched_by",
         "printed_ok",
@@ -478,12 +517,74 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
         "user",
         "last_seen",
     )
-    list_filter = ("matched_by", "printed_ok", "profile_slug")
+    list_filter = ("matched_by", "characterized", "probed_language", "printed_ok", "profile_slug")
     search_fields = ("ble_name", "manufacturer", "model", "firmware", "hardware", "user__username")
     raw_id_fields = ("user",)
     readonly_fields = ("first_seen", "last_seen", "times_seen")
     date_hierarchy = "last_seen"
-    actions = [export_to_csv]
+    fieldsets = (
+        (None, {"fields": ("user", "ble_name", "profile_slug", "matched_by", "printed_ok")}),
+        (
+            "What the printer reported over GATT 0x180A",
+            {"fields": ("manufacturer", "model", "firmware", "hardware", "service_uuids")},
+        ),
+        (
+            "What the print engine answered",
+            {
+                "description": (
+                    "The Device Information Service often describes the radio module rather than "
+                    "the printer, so the app also asks each command language its standard "
+                    "read-only status query. Which query answers is the command language."
+                ),
+                "fields": ("probed_language", "probe_replies", "gatt"),
+            },
+        ),
+        (
+            "Characterization",
+            {
+                "description": (
+                    "Captured by walking the user through four known physical states, so the "
+                    "derived map is a derivation rather than a guess. Paste "
+                    "derived_status_values straight into a profile's status_flags.values — or "
+                    'use the "Draft a profile from this observation" action.'
+                ),
+                "fields": ("characterized", "status_captures", "derived_status_values", "status_ambiguities"),
+            },
+        ),
+        ("Seen", {"fields": ("times_seen", "first_seen", "last_seen")}),
+    )
+
+    @admin.action(description="Draft a profile from this observation")
+    def draft_profile(self, request, queryset):
+        """Create a disabled ThermalPrinterProfile pre-filled from each characterized row.
+
+        Left disabled because a drafted profile is a hypothesis: the person who submitted the
+        observation is the one holding the printer, and "Print test label" in the app is what
+        confirms it. Enable the row and their next print picks it up.
+        """
+        from auctions.printer_drafts import DraftError, draft_profile_from_observation
+
+        for observation in queryset:
+            try:
+                profile, created = draft_profile_from_observation(observation)
+            except DraftError as exc:
+                self.message_user(request, f"{observation}: {exc}", level=messages.WARNING)
+                continue
+            url = reverse("admin:auctions_thermalprinterprofile_change", args=[profile.pk])
+            verb = "Drafted" if created else "Updated draft"
+            self.message_user(
+                request,
+                format_html(
+                    '{} <a href="{}">{}</a> — disabled. Check print_width_px and dpi against the '
+                    "printer's spec sheet, then enable it.",
+                    verb,
+                    url,
+                    profile.slug,
+                ),
+                level=messages.SUCCESS,
+            )
+
+    actions = [draft_profile, export_to_csv]
 
 
 @admin.register(PushNotificationSent)

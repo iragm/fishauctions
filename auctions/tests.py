@@ -28461,6 +28461,164 @@ class MobilePaymentEndpointTests(StandardTestCase):
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
 
 
+class SquareSellerRoutingTests(StandardTestCase):
+    """Which Square account an auction's payments route to -- and which token Tap to Pay hands out.
+
+    Auction invoices always carry ``club=None`` (that FK is for membership invoices), so anything
+    resolving the seller from ``invoice.club`` alone silently falls through to the auction
+    creator's *personal* Square account on a club auction. That both misroutes the club's money and
+    ships a personal merchant token to whoever holds an is_admin AuctionTOS.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Routing Club")
+        # self.user creates online_auction; give them a personal Square account to compete with the
+        # club's, so a test failing over means money landed in the wrong account.
+        self.creator_seller = SquareSeller.objects.create(
+            user=self.user, square_merchant_id="CREATOR_MID", access_token="creator-tok", payer_email="c@example.com"
+        )
+        self.club_owner = User.objects.create_user("club_owner", "co@example.com", "pw")
+        self.buyer = User.objects.create_user("routingbuyer", "rb@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+    def _connect_club_square(self):
+        return SquareSeller.objects.create(
+            user=self.club_owner,
+            club=self.club,
+            square_merchant_id="CLUB_MID",
+            access_token="club-tok",
+            payer_email="club@example.com",
+        )
+
+    def test_club_auction_routes_to_club_seller_not_creator(self):
+        club_seller = self._connect_club_square()
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.assertEqual(self.online_auction.effective_square_seller, club_seller)
+        self.assertEqual(self.online_auction.square_information, "CLUB_MID")
+
+    def test_club_auction_falls_back_to_creator_when_club_has_no_square(self):
+        # The club never connected Square, so the creator's account is the only way to take money.
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.assertEqual(self.online_auction.effective_square_seller, self.creator_seller)
+
+    def test_non_club_auction_uses_creator_seller(self):
+        self.assertIsNone(self.online_auction.club_id)
+        self.assertEqual(self.online_auction.effective_square_seller, self.creator_seller)
+
+    def test_auction_invoice_on_club_auction_resolves_club_seller(self):
+        # The regression: invoice.club is None on an auction invoice, so resolving from the invoice
+        # alone would hand back self.creator_seller here.
+        from auctions.mobile.services.payments import PaymentService
+
+        club_seller = self._connect_club_square()
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.pay_invoice.refresh_from_db()
+        self.assertIsNone(self.pay_invoice.club_id)
+        self.assertEqual(PaymentService._get_seller_for_invoice(self.pay_invoice), club_seller)
+
+    def test_tap_to_pay_hands_out_club_token_not_creator_token(self):
+        from auctions.mobile.services.payments import PaymentService
+        from auctions.models import SQUARE_TAP_TO_PAY_SCOPE
+
+        club_seller = self._connect_club_square()
+        club_seller.scopes = SQUARE_TAP_TO_PAY_SCOPE
+        club_seller.save()
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        with patch.object(SquareSeller, "get_location_id", return_value="LOC1"):
+            result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+        # "creator-tok" here would mean an auction admin was handed a personal merchant credential.
+        self.assertEqual(result["access_token"], "club-tok")
+
+    def test_web_payment_link_routes_to_club_seller(self):
+        # SquareAPIMixin.create_payment_link had the identical mismatch as the mobile path.
+        from auctions.views import SquareAPIMixin
+
+        club_seller = self._connect_club_square()
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.pay_invoice.refresh_from_db()
+        mixin = SquareAPIMixin()
+        mixin.request = MagicMock()
+        # autospec so the bound instance shows up as call_args[0][0] -- that is the assertion.
+        with patch.object(
+            SquareSeller, "create_payment_link", autospec=True, return_value=("https://sq/pay", None)
+        ) as create_link:
+            url, error = mixin.create_payment_link(self.pay_invoice)
+        self.assertEqual(url, "https://sq/pay")
+        self.assertIsNone(error)
+        self.assertEqual(create_link.call_args[0][0], club_seller)
+
+    def test_membership_invoice_uses_club_seller_only(self):
+        # A membership invoice has no auction, so there is no creator to fall back to.
+        from auctions.mobile.services.payments import PaymentService
+
+        club_seller = self._connect_club_square()
+        membership_invoice = Invoice.objects.create(club=self.club, buyer=self.buyer)
+        self.assertEqual(PaymentService._get_seller_for_invoice(membership_invoice), club_seller)
+
+
+class SquareTokenHandoutAuditTests(StandardTestCase):
+    """Every create_mobile_payment that returns a token must leave a history entry.
+
+    The response carries a merchant-wide OAuth token, so the audit entry is the only record that a
+    given admin pulled the credential -- and a create with no matching payment is the signal.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.buyer = User.objects.create_user("auditbuyer", "ab@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.pay_invoice)
+        self.pay_invoice.refresh_from_db()
+
+    def _mock_seller(self):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        return seller
+
+    def test_successful_create_records_auction_history_with_admin_and_ip(self):
+        from auctions.mobile.services.payments import PaymentService
+
+        request = MagicMock()
+        request.META = {"HTTP_X_FORWARDED_FOR": "203.0.113.7, 70.41.3.18"}
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user, request=request)
+        history = AuctionHistory.objects.filter(auction=self.online_auction, user=self.admin_user).first()
+        self.assertIsNotNone(history)
+        self.assertIn("Square Tap to Pay access token issued", history.action)
+        self.assertIn(str(self.pay_invoice.pk), history.action)
+        self.assertIn("203.0.113.7", history.action)  # first X-Forwarded-For hop, not the proxy
+        self.assertEqual(history.applies_to, "INVOICES")
+
+    def test_denied_create_records_nothing(self):
+        # No token left the building, so there is nothing to audit.
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            with self.assertRaises(PermissionError):
+                PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.buyer)
+        self.assertFalse(AuctionHistory.objects.filter(action__contains="Square Tap to Pay access token").exists())
+
+    def test_history_failure_does_not_block_payment(self):
+        # A cashier must never be blocked from taking money by an audit write.
+        from auctions.mobile.services.payments import PaymentService
+
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
+            with patch.object(Auction, "create_history", side_effect=Exception("db down")):
+                result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+        self.assertEqual(result["access_token"], "tok")
+
+
 class AuctionJoinLinksUserTests(StandardTestCase):
     """Regression + guard tests for the AuctionTOS.user=None bug.
 
