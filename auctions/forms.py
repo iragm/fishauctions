@@ -2092,6 +2092,7 @@ class AuctionEditForm(forms.ModelForm):
             "enable_square_payments",
             "club",
             "manage_users_through_club",
+            "allow_self_checkin",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -2476,6 +2477,12 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "manage_users_through_club",
+                    css_class="col-md-6",
+                ),
+                # Only applies to check-in mode; shown/hidden by update_club_fields() in
+                # auction_edit_form.html as the mode select changes.
+                Div(
+                    "allow_self_checkin",
                     css_class="col-md-6",
                 ),
                 PrependedAppendedText(

@@ -49,8 +49,17 @@ function update_club_fields(club_val) {
     ].forEach(function(sel) {
         toggleCol(sel, club_val);
     });
+    update_self_checkin_field();
     update_alternate_split_fields();
 }
+// Self-check-in only means anything in check-in mode (that's where checking in is what assigns a
+// bidder number), so the option is only shown there.
+function update_self_checkin_field() {
+    var club_val = $('#id_club').val();
+    var checkin_mode = $('#id_manage_users_through_club').val() == 'checkin';
+    toggleCol('#div_id_allow_self_checkin', club_val && checkin_mode);
+}
+$('#id_manage_users_through_club').on('change', update_self_checkin_field);
 function update_alternate_split_fields() {
     var club_val = $('#id_club').val();
     var $mode = $('#id_alternate_split_mode');

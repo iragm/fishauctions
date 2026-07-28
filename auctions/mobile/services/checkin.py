@@ -72,9 +72,18 @@ def _rules_url(auction):
 
 
 def _check_in(user, auction, tos, now):
-    """Auto-check-in: stamp checked_in and log history. Idempotent (checked_in is a timestamp)."""
+    """Auto-check-in: stamp checked_in, grant bidding, log history. Idempotent (checked_in is a
+    timestamp).
+
+    Joining a check-in-mode auction deliberately leaves ``bidding_allowed`` False — checking in is
+    what grants it (see AuctionTOSFormView and the admin check-in modal, which both set it). Without
+    this the app's self-check-in stamped the timestamp but still left the user unable to bid."""
     tos.checked_in = now
-    tos.save(update_fields=["checked_in"])
+    update_fields = ["checked_in"]
+    if not tos.bidding_allowed:
+        tos.bidding_allowed = True
+        update_fields.append("bidding_allowed")
+    tos.save(update_fields=update_fields)
     _record_nudge(user, auction, "checked_in")  # sanity cap; the timestamp is the real guard
     auction.create_history(
         applies_to="USERS",
@@ -95,9 +104,13 @@ def _evaluate_auction(user, auction, location, now):
     title = auction.title
 
     tos = _find_and_bind_tos(user, auction)
+    # An auction that assigns bidder numbers at the door turns self-check-in off; then neither the
+    # join offer nor the auto-check-in is offered (checking the flag first so no one-shot nudge row
+    # is burned while the feature is off).
+    self_checkin = auction.allows_app_self_checkin
 
     if tos is None:
-        if within_welcome and _record_nudge(user, auction, "join_offer"):
+        if self_checkin and within_welcome and _record_nudge(user, auction, "join_offer"):
             actions.append(
                 {
                     "type": "join_offer",
@@ -107,14 +120,18 @@ def _evaluate_auction(user, auction, location, now):
                     "rules_url": _rules_url(auction),
                 }
             )
-    elif auction.use_check_in_mode and tos.checked_in is None and within_welcome:
+    elif self_checkin and auction.use_check_in_mode and tos.checked_in is None and within_welcome:
         _check_in(user, auction, tos, now)
+        message = f"Welcome to {title} — you're all checked in!"
+        if tos.bidder_number:
+            message += f" Your bidder number is {tos.bidder_number}."
         actions.append(
             {
                 "type": "checked_in",
                 "auction": auction.slug,
                 "title": title,
-                "message": f"Welcome to {title} — you're all checked in!",
+                "message": message,
+                "bidder_number": tos.bidder_number or "",
             }
         )
 
@@ -175,8 +192,13 @@ def join_auction(user, auction, now=None):
 
     Mirrors the essentials of the web rules-page confirm: bind an added-by-email row, otherwise
     create the AuctionTOS against the single pickup location, mark it a real (not manually-added)
-    join, and — for check-in-mode auctions — check the user in at the same time. Idempotent."""
+    join, and — for check-in-mode auctions — check the user in at the same time. Idempotent.
+
+    Returns ``(None, False)`` when the auction has app self-check-in turned off; nothing is written
+    (the endpoint turns that into a 403)."""
     now = now or timezone.now()
+    if not auction.allows_app_self_checkin:
+        return None, False
     tos = _find_and_bind_tos(user, auction)
     created = False
     if tos is None:
@@ -200,8 +222,8 @@ def join_auction(user, auction, now=None):
 
     checked_in = tos.checked_in is not None
     if auction.use_check_in_mode and tos.checked_in is None:
-        tos.checked_in = now
-        tos.save(update_fields=["checked_in"])
+        # Same path as arriving with an existing TOS, so bidding_allowed and the history entry match.
+        _check_in(user, auction, tos, now)
         checked_in = True
 
     if created:

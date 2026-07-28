@@ -6125,6 +6125,19 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # manage_users_through_club is always rendered so JS can toggle it based on club selection
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
 
+    def test_allow_self_checkin_field_rendered_for_js_toggling(self):
+        # Like manage_users_through_club, the real widget is always rendered so the form JS can show
+        # it only in check-in mode (see update_self_checkin_field in auction_edit_form.html).
+        form = AuctionEditForm(
+            instance=self.in_person_auction,
+            user=self.in_person_auction.created_by,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertNotIsInstance(form.fields["allow_self_checkin"].widget, forms.HiddenInput)
+        self.assertFalse(form.fields["allow_self_checkin"].required)
+        self.assertTrue(self.in_person_auction.allow_self_checkin)  # on by default
+
     def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
         paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
         self.online_auction.club = paid_club

@@ -7400,12 +7400,21 @@ class ViewLot(DetailView):
                     if _bap_override is not None
                     else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
                 )
-        if lot.use_images_from and self.request.user.is_authenticated:
-            is_lot_creator = (lot.user and lot.user == self.request.user) or (
-                lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
+        is_lot_creator = bool(
+            self.request.user.is_authenticated
+            and (
+                (lot.user and lot.user == self.request.user)
+                or (lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user)
             )
-            if is_lot_creator:
-                context["images_managed_from_lot"] = lot.use_images_from
+        )
+        if lot.use_images_from and is_lot_creator:
+            context["images_managed_from_lot"] = lot.use_images_from
+        # The seller of a lot in an in-person auction gets the per-source view breakdown: the AR
+        # sources only exist there, and how people found the lot in the room is useful to them and
+        # to nobody else. See Lot.page_view_source_breakdown.
+        context["show_page_view_breakdown"] = bool(
+            is_lot_creator and lot.auction and not lot.auction.is_online and not lot.sealed_bid
+        )
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
@@ -8907,6 +8916,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "only_whole_dollar_bids",
                 "club",
                 "manage_users_through_club",
+                "allow_self_checkin",
                 "exact_location_set",
             ]
             for field in fields_to_clone:

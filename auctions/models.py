@@ -2436,6 +2436,12 @@ class Auction(models.Model):
             "Changing this deletes existing per-auction participant records."
         ),
     )
+    allow_self_checkin = models.BooleanField(
+        default=True,
+        blank=True,
+        verbose_name="Allow users to self-check in with the app",
+        help_text="Uncheck if you need to assign bidder numbers",
+    )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
@@ -3142,6 +3148,18 @@ class Auction(models.Model):
     def use_check_in_mode(self):
         """True when this auction adds club members as they are checked in at an event."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
+
+    @property
+    def allows_app_self_checkin(self):
+        """True when attendees may join and check themselves in from the app's proximity prompt.
+
+        Only check-in-mode auctions can turn this off (``allow_self_checkin``): that's the mode where
+        checking in is what hands out a bidder number, so an auction that assigns numbers at the door
+        needs the app to stay out of it. Everywhere else the flag is meaningless and the app's
+        welcome prompt still offers to join."""
+        if not self.use_check_in_mode:
+            return True
+        return self.allow_self_checkin
 
     def in_welcome_window(self, now=None):
         """True during the proximity "welcome to the auction" window: from 3 h before the start
@@ -7514,6 +7532,68 @@ class Lot(models.Model):
         }
         counts["total"] = sum(counts.values())
         return counts
+
+    # Labels for the ``src`` values the site sets itself, for the seller's page view breakdown.
+    # Anything else (an AuctionCampaign uuid from a promo email, a hand-made link) is shown as the
+    # raw src, which is still the most useful thing we can say about it.
+    PAGE_VIEW_SOURCE_LABELS = {
+        "": "Opened the lot page directly",
+        "ar": '"Open lot page" from AR',
+        "ar_scan": "Scanned this lot's label in AR",
+        "ar_zoom": "Aimed at this label up close in AR",
+        "ar_zoom_full": "Held on the label until the AR card opened",
+        "qr": "Scanned the printed QR code",
+        "lot_list": "From a lot list",
+        "recommended": "From recommended lots",
+        "feedback": "From the leave-feedback page",
+        "invoice_sold": "From an invoice (sold)",
+        "invoice_bought": "From an invoice (bought)",
+        "userpage": "From a user's page",
+        "ban_page": "From the no-show page",
+    }
+    # The AR sources are one row per (user, lot) rather than one per visit, so "views" and "people"
+    # are the same number by construction and a repeat look never inflates them.
+    AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
+
+    @property
+    def page_view_source_breakdown(self):
+        """Page views on this lot grouped by ``src``, with a unique-viewer count for each.
+
+        Shown to the seller of a lot in an in-person auction so they can see how people are finding
+        it — above all the AR sources, which are events rather than visits (see
+        :attr:`ar_interaction_counts` and ``AR_EVENT_SOURCES`` in ``auctions.mobile.services.ar``).
+
+        A unique viewer is a distinct signed-in user, plus a distinct session for anonymous views, so
+        one person reloading counts once. (Unlike :meth:`Auction.unique_views` this doesn't subtract
+        anonymous sessions that later signed in — per source that's noise, and it would cost a second
+        pass over the rows.) Rows are ordered most views first; one query. Sources of ``None`` and
+        ``""`` are the same thing (no ``src`` on the URL) and are merged.
+        """
+        rows = (
+            PageView.objects.filter(lot_number=self.lot_number)
+            .values("source")
+            .annotate(
+                views=Count("pk"),
+                users=Count("user", distinct=True),
+                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+            )
+        )
+        merged = {}
+        for row in rows:
+            source = row["source"] or ""
+            entry = merged.setdefault(
+                source,
+                {
+                    "source": source,
+                    "label": self.PAGE_VIEW_SOURCE_LABELS.get(source, source),
+                    "is_ar_event": source in self.AR_PAGE_VIEW_SOURCES,
+                    "views": 0,
+                    "unique": 0,
+                },
+            )
+            entry["views"] += row["views"]
+            entry["unique"] += row["users"] + row["sessions"]
+        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     @property
     def number_of_bids(self):

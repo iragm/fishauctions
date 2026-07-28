@@ -1219,6 +1219,106 @@ class ArEventsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class LotPageViewSourceBreakdownTests(ArApiBaseTestCase):
+    """Lot.page_view_source_breakdown + the collapsed table on the lot page.
+
+    The seller of a lot in an in-person auction sees where its views came from; the AR sources are
+    the reason this exists (they're per-person events, not visits).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # other_auction_lot is in the in-person auction, sold by in_person_tos (self.user).
+        self.in_person_lot = self.other_auction_lot
+
+    def _view(self, lot, source, user=None, session_id=None):
+        return PageView.objects.create(lot_number=lot, source=source, user=user, session_id=session_id)
+
+    def _ar_events(self, user, events, auction=None):
+        return self.client.post(
+            reverse("mobile-ar-events"),
+            data=json.dumps({"auction": (auction or self.auction).slug, "events": events}),
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def _rows(self, lot):
+        return {row["source"]: row for row in Lot.objects.get(pk=lot.pk).page_view_source_breakdown}
+
+    def test_groups_by_source_with_unique_viewers(self):
+        self._view(self.lot_a, "ar", user=self.user)
+        self._view(self.lot_a, "ar", user=self.user)  # same person twice: 2 views, 1 person
+        self._view(self.lot_a, "ar", user=self.user_with_no_lots)
+        self._view(self.lot_a, "qr", user=self.user)
+        rows = self._rows(self.lot_a)
+        self.assertEqual((rows["ar"]["views"], rows["ar"]["unique"]), (3, 2))
+        self.assertEqual((rows["qr"]["views"], rows["qr"]["unique"]), (1, 1))
+        self.assertEqual(rows["ar"]["label"], '"Open lot page" from AR')
+        self.assertFalse(rows["ar"]["is_ar_event"])  # an ordinary visit, one row per view
+
+    def test_no_src_rows_merge_and_anonymous_sessions_count(self):
+        self._view(self.lot_a, "", user=self.user)
+        self._view(self.lot_a, None, session_id="anon-1")
+        self._view(self.lot_a, None, session_id="anon-1")  # same anonymous session: still one person
+        self._view(self.lot_a, "", session_id="anon-2")
+        rows = self._rows(self.lot_a)
+        self.assertEqual(list(rows), [""])  # None and "" are one row
+        self.assertEqual((rows[""]["views"], rows[""]["unique"]), (4, 3))
+        self.assertEqual(rows[""]["label"], "Opened the lot page directly")
+
+    def test_ar_events_appear_as_their_own_rows(self):
+        self._ar_events(
+            self.user, [{"lot": self.lot_a.pk, "event": "scanned"}, {"lot": self.lot_a.pk, "event": "zoomed"}]
+        )
+        self._ar_events(self.user_with_no_lots, [{"lot": self.lot_a.pk, "event": "zoomed_full"}])
+        rows = self._rows(self.lot_a)
+        self.assertEqual((rows["ar_scan"]["views"], rows["ar_scan"]["unique"]), (1, 1))
+        self.assertEqual(rows["ar_zoom"]["label"], "Aimed at this label up close in AR")
+        self.assertTrue(rows["ar_zoom_full"]["is_ar_event"])
+
+    def test_unknown_source_shown_as_is(self):
+        self._view(self.lot_a, "abc123-campaign-uuid", user=self.user)
+        self.assertEqual(self._rows(self.lot_a)["abc123-campaign-uuid"]["label"], "abc123-campaign-uuid")
+
+    def test_ordered_most_viewed_first(self):
+        self._view(self.lot_a, "qr", user=self.user)
+        for _ in range(3):
+            self._view(self.lot_a, "lot_list", user=self.user)
+        sources = [row["source"] for row in Lot.objects.get(pk=self.lot_a.pk).page_view_source_breakdown]
+        self.assertEqual(sources[0], "lot_list")
+
+    def test_seller_of_in_person_lot_sees_the_collapsed_table(self):
+        self._view(self.in_person_lot, "qr", user=self.user)
+        self.client.force_login(self.user)
+        response = self.client.get(f"/lots/{self.in_person_lot.pk}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["show_page_view_breakdown"])
+        self.assertContains(response, "Show detailed breakdown")
+        self.assertContains(response, "Scanned the printed QR code")
+        self.assertContains(response, 'class="collapse mt-2" id="pageViewBreakdown"')  # collapsed by default
+
+    def test_hidden_from_other_users(self):
+        self.client.force_login(self.user_with_no_lots)
+        response = self.client.get(f"/lots/{self.in_person_lot.pk}/")
+        self.assertFalse(response.context["show_page_view_breakdown"])
+        self.assertNotContains(response, "Show detailed breakdown")
+
+    def test_hidden_for_online_auction_lots(self):
+        self.client.force_login(self.user)
+        response = self.client.get(f"/lots/{self.lot_a.pk}/")  # lot_a is in the online auction
+        self.assertFalse(response.context["show_page_view_breakdown"])
+
+    def test_ar_summary_row_still_shown_to_everyone_else(self):
+        self._ar_events(
+            self.user_with_no_lots,
+            [{"lot": self.in_person_lot.pk, "event": "scanned"}],
+            auction=self.in_person_auction,
+        )
+        self.client.force_login(self.user_with_no_lots)
+        response = self.client.get(f"/lots/{self.in_person_lot.pk}/")
+        self.assertContains(response, "In AR:")
+
+
 class ArPositionsEndpointTests(ArApiBaseTestCase):
     def _get(self, user, auction=None):
         url = reverse("mobile-ar-positions")

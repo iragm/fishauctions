@@ -1432,8 +1432,10 @@ class MobileCheckinPingView(APIView):
 class MobileCheckinJoinView(APIView):
     """POST /api/mobile/checkin/join/ — join the auction from the welcome prompt (no scrolling rules).
 
-    Idempotent; auto-checks-in on check-in-mode auctions. No distance re-check (the offer already
-    required it and phones drift), but the auction must still be inside the welcome window.
+    Idempotent; auto-checks-in on check-in-mode auctions and returns the bidder number that check-in
+    assigned. No distance re-check (the offer already required it and phones drift), but the auction
+    must still be inside the welcome window, and 403s when the auction has app self-check-in turned
+    off (``Auction.allow_self_checkin``) — those auctions hand out bidder numbers at the door.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1451,8 +1453,20 @@ class MobileCheckinJoinView(APIView):
             return Response(
                 {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
             )
-        _tos, checked_in = checkin_service.join_auction(request.user, auction)
-        return Response({"joined": True, "checked_in": checked_in, "rules_url": auction.get_absolute_url()})
+        tos, checked_in = checkin_service.join_auction(request.user, auction)
+        if tos is None:
+            return Response(
+                {"detail": "Check in with an auction volunteer to get your bidder number."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response(
+            {
+                "joined": True,
+                "checked_in": checked_in,
+                "bidder_number": tos.bidder_number or "",
+                "rules_url": auction.get_absolute_url(),
+            }
+        )
 
 
 class MobileCheckinSetLocationView(APIView):
