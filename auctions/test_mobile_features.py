@@ -37,7 +37,9 @@ from auctions.models import (
     PickupLocation,
     PushNotificationSent,
     ThermalPrinterProfile,
+    UserData,
     UserLabelPrefs,
+    Watch,
 )
 from auctions.printer_drafts import (
     DraftError,
@@ -749,6 +751,24 @@ class PromoPushCommandTests(TestCase):
         delay.assert_called_once()
         self.auction.refresh_from_db()
         self.assertEqual(self.auction.promo_push_notifications_sent, 1)
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_title_is_short_and_the_body_carries_name_and_distance(self):
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            call_command("promo_push_notifications")
+        self.assertEqual(delay.call_args.kwargs["title"], "New auction")
+        body = delay.call_args.kwargs["body"]
+        self.assertIn(self.auction.title, body)
+        self.assertIn("miles away", body)
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_distance_uses_the_users_own_unit(self):
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            call_command("promo_push_notifications")
+        self.assertIn("km away", delay.call_args.kwargs["body"])
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_dedupes_via_ledger(self):
@@ -1611,3 +1631,315 @@ class PrinterSupportedNotificationTests(StandardTestCase):
         blank = ObservedPrinter(ble_name="", model="", manufacturer="")
         profile = ThermalPrinterProfile(slug="y", name="Y", print_program=[{"tx": "1d 0c"}], model_patterns=[".*"])
         self.assertFalse(profile_matches_observation(profile, blank))
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — watched-lot "bidding is starting" alerts pick one channel per person
+# ---------------------------------------------------------------------------
+
+
+class WatchedLotPushRoutingTests(StandardTestCase):
+    """A watcher who can be reached in the app is reached *only* there.
+
+    A browser subscription and the app on the same phone are indistinguishable from the server, so
+    sending both would buzz one person twice for one lot."""
+
+    def setUp(self):
+        super().setUp()
+        self.watcher = self.user_with_no_lots
+        userdata = UserData.objects.get(user=self.watcher)
+        userdata.push_notifications_when_lots_sell = True
+        userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.watcher)
+
+    def _web_subscription(self):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        subscription = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        return PushInformation.objects.create(user=self.watcher, subscription=subscription)
+
+    def _app_device(self, token="tok", push_enabled=True):
+        return MobileDevice.objects.create(
+            user=self.watcher, device_uuid=uuid.uuid4(), fcm_token=token, push_enabled=push_enabled
+        )
+
+    def _notify(self, **kwargs):
+        from auctions.views import notify_watchers_lot_selling_soon
+
+        with (
+            patch("auctions.views.send_push_to_user.delay") as app_push,
+            patch("auctions.views.send_user_notification") as web_push,
+        ):
+            notify_watchers_lot_selling_soon(self.in_person_lot, **kwargs)
+        return app_push, web_push
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_app_user_gets_the_app_push_and_no_browser_push(self):
+        self._web_subscription()
+        self._app_device()
+        app_push, web_push = self._notify()
+        web_push.assert_not_called()
+        app_push.assert_called_once()
+        self.assertEqual(app_push.call_args.args[0], self.watcher.pk)
+        self.assertEqual(app_push.call_args.kwargs["category"], notifications.CATEGORY_WATCHED)
+        # Same tag the browser payload uses, so "about to be sold" replaces "coming up soon".
+        self.assertEqual(app_push.call_args.kwargs["collapse_key"], f"lot_sell_notification_{self.in_person_lot.pk}")
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_the_email_toggle_does_not_govern_this_category(self):
+        """push_notifications_instead_of_email is about mail; this alert was never an email."""
+        self._app_device()
+        self.assertFalse(self.watcher.userdata.push_notifications_instead_of_email)
+        app_push, web_push = self._notify()
+        app_push.assert_called_once()
+        web_push.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_browser_only_watcher_is_unaffected(self):
+        self._web_subscription()
+        app_push, web_push = self._notify()
+        app_push.assert_not_called()
+        web_push.assert_called_once()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_device_with_push_switched_off_falls_back_to_the_browser(self):
+        self._web_subscription()
+        self._app_device(push_enabled=False)
+        app_push, web_push = self._notify()
+        app_push.assert_not_called()
+        web_push.assert_called_once()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON="")
+    def test_browser_still_used_when_fcm_is_not_configured(self):
+        self._web_subscription()
+        self._app_device()
+        app_push, web_push = self._notify()
+        app_push.assert_not_called()
+        web_push.assert_called_once()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_coming_up_soon_pushes_to_the_app_too(self):
+        self._app_device()
+        app_push, _ = self._notify(position=3)
+        app_push.assert_called_once()
+        self.assertIn("coming up soon", app_push.call_args.kwargs["title"])
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_test_notification_button_uses_the_app_channel(self):
+        self._app_device()
+        self.client.login(username=self.watcher.username, password="testpassword")
+        with (
+            patch("auctions.views.send_push_to_user.delay") as app_push,
+            patch("auctions.views.send_user_notification") as web_push,
+        ):
+            response = self.client.post(reverse("lot_push_test", kwargs={"pk": self.in_person_lot.pk}))
+        self.assertEqual(response.status_code, 200)
+        app_push.assert_called_once()
+        web_push.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_lot_page_points_an_app_user_at_their_phone(self):
+        self._app_device()
+        self.client.login(username=self.watcher.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "notification in the app on your phone")
+        self.assertNotContains(response, "webpush-subscribe-button")
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_lot_page_offers_an_app_user_a_way_to_turn_the_alerts_on(self):
+        """Without the browser subscribe button there has to be something else to opt in with."""
+        userdata = UserData.objects.get(user=self.watcher)
+        userdata.push_notifications_when_lots_sell = False
+        userdata.save()
+        self._app_device()
+        self.client.login(username=self.watcher.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        self.assertContains(response, 'id="enable-app-notifications"')
+
+    def test_lot_page_keeps_the_browser_button_for_everyone_else(self):
+        self.client.login(username=self.watcher.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        self.assertContains(response, "webpush-subscribe-button")
+
+
+class PreferencesWebpushVisibilityTests(TestCase):
+    """The browser "subscribe to push messaging" offer is dropped wherever it would be wrong."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="prefs_push", password="x")
+
+    def _form(self, **kwargs):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        return ChangeUserPreferencesForm(self.user, instance=self.user.userdata, **kwargs)
+
+    def test_offered_on_the_web_without_the_app(self):
+        self.assertTrue(self._form().can_subscribe_to_webpush)
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_hidden_for_an_app_user_with_an_explanation(self):
+        MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
+        form = self._form()
+        self.assertFalse(form.can_subscribe_to_webpush)
+        self.assertIn("app on your phone", form.fields["push_notifications_when_lots_sell"].help_text)
+
+    def test_hidden_inside_the_app_webview(self):
+        # No Push API in a WebView, so there is nothing to subscribe to even without a live token.
+        self.assertFalse(self._form(is_mobile_app=True).can_subscribe_to_webpush)
+
+
+class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
+    """The lot queue must honour message_users_when_lots_sell like the set-winners screen does.
+
+    Turning that setting off also hides the opt-in on the lot page, so an auction that opted out
+    would otherwise be notifying watchers who were never offered a way to say no."""
+
+    def setUp(self):
+        super().setUp()
+        userdata = UserData.objects.get(user=self.user_with_no_lots)
+        userdata.push_notifications_when_lots_sell = True
+        userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        from auctions.models import LotQueueEntry
+
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+
+    def _process(self):
+        from auctions.views import process_queue_notifications
+
+        with patch("auctions.views.notify_watchers_lot_selling_soon") as notify:
+            process_queue_notifications(self.in_person_auction)
+        return notify
+
+    def test_notifies_when_the_setting_is_on(self):
+        self.in_person_auction.message_users_when_lots_sell = True
+        self.in_person_auction.save()
+        self._process().assert_called_once()
+
+    def test_silent_when_the_setting_is_off(self):
+        self.in_person_auction.message_users_when_lots_sell = False
+        self.in_person_auction.save()
+        self._process().assert_not_called()
+
+    def test_kiosk_still_refreshes_when_the_setting_is_off(self):
+        self.in_person_auction.message_users_when_lots_sell = False
+        self.in_person_auction.save()
+        from auctions.views import process_queue_notifications
+
+        with patch("auctions.views.broadcast_queue_update") as broadcast:
+            process_queue_notifications(self.in_person_auction)
+        broadcast.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — which categories are allowed to leave the inbox at all
+# ---------------------------------------------------------------------------
+
+
+class PushExemptCategoryTests(TestCase):
+    """Some mail stays mail no matter how much the recipient prefers push."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="exempt", password="x")
+        userdata = self.user.userdata
+        userdata.push_notifications_instead_of_email = True
+        userdata.save()
+        MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
+
+    def _notify(self, category):
+        sent = []
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            pushed = notifications.notify_user(
+                self.user, category=category, title="t", body="b", url="u", send_email=lambda: sent.append(1)
+            )
+        return pushed, sent, delay
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_club_membership_is_always_emailed(self):
+        """Effectively account correspondence -- a record in an inbox is the point."""
+        pushed, sent, delay = self._notify(notifications.CATEGORY_MEMBERSHIP)
+        self.assertFalse(pushed)
+        self.assertEqual(sent, [1])
+        delay.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_auction_admin_mail_is_always_emailed(self):
+        pushed, sent, delay = self._notify(notifications.CATEGORY_AUCTION_ADMIN)
+        self.assertFalse(pushed)
+        self.assertEqual(sent, [1])
+        delay.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_the_join_reminder_is_a_good_push(self):
+        pushed, sent, delay = self._notify(notifications.CATEGORY_AUCTION_REMINDER)
+        self.assertTrue(pushed)
+        self.assertEqual(sent, [])
+        delay.assert_called_once()
+
+
+class JoinReminderPushTests(TestCase):
+    """The "you looked but never joined" nudge goes to the app when it can."""
+
+    def setUp(self):
+        now = timezone.now()
+        self.seller = User.objects.create_user(username="jr_seller", password="x")
+        self.auction = Auction.objects.create(
+            created_by=self.seller,
+            title="Reminder Auction",
+            is_online=True,
+            date_start=now + datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=3),
+        )
+        PickupLocation.objects.create(
+            name="loc",
+            auction=self.auction,
+            latitude=40.0,
+            longitude=-80.0,
+            pickup_time=now + datetime.timedelta(days=1),
+        )
+        self.user = User.objects.create_user(username="jr_viewer", password="x", email="jr@example.com")
+        userdata = self.user.userdata
+        userdata.push_notifications_instead_of_email = True
+        userdata.send_reminder_emails_about_joining_auctions = True
+        userdata.email_me_about_new_auctions_distance = 1000
+        userdata.latitude = 40.1
+        userdata.longitude = -80.1
+        userdata.save()
+        MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
+
+        from auctions.models import AuctionCampaign
+
+        self.campaign = AuctionCampaign.objects.create(auction=self.auction, user=self.user, email=self.user.email)
+        AuctionCampaign.objects.filter(pk=self.campaign.pk).update(timestamp=now - datetime.timedelta(hours=48))
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_pushes_instead_of_emailing(self):
+        with (
+            patch("auctions.tasks.send_push_to_user.delay") as delay,
+            patch("auctions.management.commands.auctiontos_notifications.mail.send") as send,
+        ):
+            call_command("auctiontos_notifications")
+        delay.assert_called_once()
+        self.assertEqual(delay.call_args.kwargs["title"], "Don't miss this auction")
+        self.assertIn(self.auction.title, delay.call_args.kwargs["body"])
+        # The campaign's tracked link, so a tap still marks the campaign VIEWED.
+        self.assertIn(str(self.campaign.uuid), delay.call_args.kwargs["url"])
+        emailed = [call.args[0] for call in send.call_args_list if call.args]
+        self.assertNotIn(self.user.email, emailed)
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON="")
+    def test_falls_back_to_email_without_push(self):
+        with (
+            patch("auctions.tasks.send_push_to_user.delay") as delay,
+            patch("auctions.management.commands.auctiontos_notifications.mail.send") as send,
+        ):
+            call_command("auctiontos_notifications")
+        delay.assert_not_called()
+        emailed = [call.args[0] for call in send.call_args_list if call.args]
+        self.assertIn(self.user.email, emailed)

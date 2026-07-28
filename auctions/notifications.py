@@ -26,6 +26,8 @@ CATEGORY_ACCOUNT = "account"
 CATEGORY_INVOICE = "invoice"
 CATEGORY_WATCHED = "watched"
 CATEGORY_AUCTION_CONFIRM = "auction_confirm"
+# "You looked at lots in this auction but never joined." Time-limited nudge, ideal as a push.
+CATEGORY_AUCTION_REMINDER = "auction_reminder"
 CATEGORY_CHAT = "chat"
 CATEGORY_MEMBERSHIP = "membership"
 CATEGORY_AUCTION_ADMIN = "auction_admin"
@@ -33,8 +35,16 @@ CATEGORY_PROMO = "promo"
 # "Your Bluetooth printer is supported now." Push-only by nature: an ObservedPrinter row exists
 # only because someone paired a printer in the app.
 CATEGORY_PRINTER = "printer"
+# "Someone needs help right now." Push-only by nature: an email arrives long after the job is done.
+CATEGORY_VOLUNTEER = "volunteer"
 
-PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT})
+# Categories that are always emailed, never pushed:
+#   account     - a signed-out or wrong phone must never receive password resets / security warnings
+#   membership  - effectively account correspondence for a club; a durable record in an inbox is the
+#                 point, and members are often not site users at all
+#   auction_admin - running an auction is desk work done from an inbox (invoices ready, follow-ups),
+#                 and the emails carry detail a notification can't hold
+PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT, CATEGORY_MEMBERSHIP, CATEGORY_AUCTION_ADMIN})
 
 # Result of a single-token FCM send.
 SEND_OK = "sent"
@@ -60,6 +70,19 @@ def user_prefers_push(user):
     if userdata is None:
         return False
     return userdata.user_prefers_push()
+
+
+def user_has_app_push(user):
+    """Whether *user* can be reached through the app right now, regardless of the email toggle.
+
+    Thin module-level wrapper over ``UserData.has_app_push``, for the notification categories that
+    were never emails (watched-lot "selling now" pushes) and so aren't governed by
+    ``push_notifications_instead_of_email``. Safe if userdata is missing (returns False).
+    """
+    userdata = getattr(user, "userdata", None)
+    if userdata is None:
+        return False
+    return userdata.has_app_push
 
 
 def notify_user(user, *, category, title, body, url, send_email, auction_pk=None, invoice_pk=None, collapse_key=None):
@@ -135,6 +158,12 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
     except ImportError:
         return SEND_ERROR
 
+    apns_headers = {"apns-priority": "10"}
+    if collapse_key:
+        # iOS has no notion of android's collapse_key; apns-collapse-id is the equivalent, and
+        # without it a phone that gets "coming up soon" then "about to be sold" stacks two alerts
+        # for the same lot instead of replacing the first. Apple caps the id at 64 bytes.
+        apns_headers["apns-collapse-id"] = collapse_key[:64]
     message = messaging.Message(
         notification=messaging.Notification(title=title or "", body=body or ""),
         data={
@@ -149,7 +178,7 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
             collapse_key=collapse_key or None,
         ),
         apns=messaging.APNSConfig(
-            headers={"apns-priority": "10"},
+            headers=apns_headers,
             payload=messaging.APNSPayload(aps=messaging.Aps(sound="default")),
         ),
     )

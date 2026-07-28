@@ -5,10 +5,15 @@
 {% load webpush_notifications %}
 
 {% block extra_head %}
-    {% webpush_header %}
+    {% comment %}
+    webpush.js dereferences the subscribe button on load, so only load it when we're actually
+    offering the browser subscription.
+    {% endcomment %}
+    {% if form.can_subscribe_to_webpush %}{% webpush_header %}{% endif %}
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();
+    {% if form.can_subscribe_to_webpush %}
     $('#subscribe_message_area').html(`. <span class=''>This will only work if you {% webpush_button with_class="btn btn-link btn-sm" %} on this device</span>`);
     if (Notification.permission !== "granted") {
         $('#subscribe_message_area').removeClass("d-none");
@@ -31,6 +36,7 @@
         // Start observing the target node for configured mutations
         observer.observe(targetNode, config);
     }
+    {% endif %}
 
     // Handle distance unit conversion
     const MILES_TO_KM = 1.60934;

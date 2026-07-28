@@ -8,10 +8,19 @@
       Use this page to get help from users in your auction. This will send a notification to people
       with the mobile app who can volunteer to help with the job you specify.
       <span tabindex="0" data-bs-toggle="tooltip"
-            title="{{ helper_count }} {% if helper_count == 1 %}person{% else %}people{% endif %} can be notified right now">
+            title="{{ helper_count }} {% if helper_count == 1 %}person has{% else %}people have{% endif %} the app with notifications turned on{% if auction.use_check_in_mode %} and {% if helper_count == 1 %}has{% else %}have{% endif %} checked in{% endif %}">
         <i class="bi bi-info-circle"></i> {{ helper_count }} reachable
       </span>
     </p>
+
+    {% if not auction.use_check_in_mode %}
+      <div class="alert alert-warning text-dark">
+        <i class="bi bi-exclamation-triangle"></i>
+        This auction doesn't use check-in, so there's no way to tell who is actually here. Asking for
+        help notifies <b>everyone</b> who joined and has the app &mdash; including people at home who
+        haven't arrived, or who never planned to come.
+      </div>
+    {% endif %}
 
     <form method="post" class="mb-4" style="max-width:520px;">
       {% csrf_token %}

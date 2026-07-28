@@ -4,7 +4,11 @@
 {% load webpush_notifications %}
 {% load currency_filters %}
 {% block extra_head %}
-    {% webpush_header %}
+    {% comment %}
+    webpush.js dereferences the subscribe button on load, so only load it when the button is
+    actually rendered -- app users and the app's own WebView never get the button.
+    {% endcomment %}
+    {% if push_notifications_possible and can_subscribe_to_webpush %}{% webpush_header %}{% endif %}
 {% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" type="text/css" href="{% static 'css/lot.css' %}">
@@ -477,8 +481,10 @@ App-only; the deep link is handled natively. {% endcomment %}
                         <tr>
                             <td><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
                         </tr>
-                        {# AR interactions are counted in the view total above; broken out here so it's clear how many
-                           people actually found this lot in person with the app's AR mode. #}
+                        {% comment %}
+                        AR interactions are counted in the view total above; broken out here so it's
+                        clear how many people actually found this lot in person with the app's AR mode.
+                        {% endcomment %}
                         {% with ar_counts=lot.ar_interaction_counts %}
                         {% if ar_counts.total %}
                         <tr>
@@ -633,7 +639,11 @@ App-only; the deep link is handled natively. {% endcomment %}
                 {% if push_notifications_possible %}
                     <span id='subscribe_success'>
                     {% if watched and request.user.userdata.push_notifications_when_lots_sell %}
+                        {% if has_app_push %}
+                        You'll get a notification in the app on your phone when bidding starts on this lot
+                        {% else %}
                         You'll get a notification when bidding starts on this lot
+                        {% endif %}
                         {% if has_push_subscription %}
                         <button id="test-notification" class='btn btn-primary btn-sm'>Test notification</button>
                         {% endif %}
@@ -643,11 +653,21 @@ App-only; the deep link is handled natively. {% endcomment %}
                         {% endif %}
                     {% endif %}
                     </span>
+                    {% if can_subscribe_to_webpush %}
                     <span id='subscribe_message_area' class='d-none'>
                         Enable push notifications on this device:
                         {% webpush_button with_class="btn btn-primary btn-sm" %} to get a notification when bidding starts on this lot
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
                     </span>
+                    {% endif %}
+                    {% if has_app_push and not request.user.userdata.push_notifications_when_lots_sell %}
+                    {# App users have nothing to subscribe to in the browser -- they only need to turn the preference on. #}
+                    <span id='app_push_opt_in'>
+                        <button id="enable-app-notifications" class='btn btn-primary btn-sm'>Notify me when bidding starts</button>
+                        <span class='text-muted'><small>Sent to the app on your phone</small></span>
+                        <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                    </span>
+                    {% endif %}
                     <div class="modal fade" id="notification-help" tabindex="-1" aria-labelledby="notification-help-label" aria-hidden="true">
                     <div class="modal-dialog">
                         <div class="modal-content">
@@ -697,7 +717,29 @@ App-only; the deep link is handled natively. {% endcomment %}
                     });
                     {% endif %}
 
-                    {% if not has_push_subscription %}
+                    {% if has_app_push and not request.user.userdata.push_notifications_when_lots_sell %}
+                    $('#enable-app-notifications').click(function() {
+                        $('#enable-app-notifications').prop("disabled", true);
+                        $.post({
+                            url: "{% url 'enable_notifications' %}",
+                            beforeSend: function (request) {
+                                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                            },
+                            success: function() {
+                                {% if watched %}
+                                $('#app_push_opt_in').html("You'll get a notification in the app on your phone when bidding starts on this lot");
+                                {% else %}
+                                $('#app_push_opt_in').html("Notifications enabled.  Make sure to watch this lot to get a notification");
+                                {% endif %}
+                            },
+                            error: function() {
+                                $('#enable-app-notifications').prop("disabled", false);
+                            }
+                        });
+                    });
+                    {% endif %}
+
+                    {% if can_subscribe_to_webpush and not has_push_subscription %}
                     $('#subscribe_success').addClass("d-none");
                     $('#subscribe_message_area').removeClass("d-none");
                     const targetNode = document.getElementById('webpush-subscribe-button');

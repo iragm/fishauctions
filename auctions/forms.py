@@ -3742,7 +3742,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "show_nearby_auctions",
         )
 
-    def __init__(self, user, *args, **kwargs):
+    def __init__(self, user, *args, is_mobile_app=False, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
         # Convert distances from miles to km for display if user prefers km
@@ -3776,6 +3776,23 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             self.fields["push_notifications_instead_of_email"].help_text = (
                 "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
                 "notifications in the app instead of emails, for everything except account emails."
+            )
+        # The watched-lot "bidding is starting" alert goes to the app whenever the app can receive
+        # it (see notify_watchers_lot_selling_soon), so for those users the browser-subscribe prompt
+        # this field's help text carries would point at the wrong device. There's nothing to
+        # subscribe to inside the app's own WebView either -- it has no Push API.
+        has_app_push = bool(self.instance and self.instance.pk and self.instance.has_app_push)
+        self.can_subscribe_to_webpush = not has_app_push and not is_mobile_app
+        if has_app_push:
+            self.fields["push_notifications_when_lots_sell"].help_text = (
+                "For in-person auctions, get a notification when bidding starts on a lot that you've "
+                "watched.  These go to the app on your phone -- including lots you watch here on the "
+                "website -- so you won't also get a browser notification."
+            )
+        elif is_mobile_app:
+            self.fields["push_notifications_when_lots_sell"].help_text = (
+                "For in-person auctions, get a notification when bidding starts on a lot that you've "
+                "watched.  Allow notifications for this app to receive them."
             )
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"

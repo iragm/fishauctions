@@ -234,6 +234,7 @@ from .models import (
     nearby_auctions,
     normalize_email,
 )
+from .notifications import CATEGORY_WATCHED, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
@@ -257,6 +258,7 @@ from .tasks import (
     cancel_invoice_notification,
     maybe_send_membership_renewal_confirmation,
     schedule_invoice_notification,
+    send_push_to_user,
 )
 
 # Distance conversion constant
@@ -2475,6 +2477,19 @@ class LotPushTestNotificationView(APIPostView):
         lot = get_object_or_404(Lot, pk=kwargs["pk"], is_deleted=False)
         if not Watch.objects.filter(lot_number=lot, user=request.user).exists():
             return JsonResponse({"result": "error", "message": "You must watch this lot first."}, status=403)
+        # Test the channel the real notification will actually use, otherwise an app user's test
+        # would go to a browser they aren't looking at (or fail) while the real one goes to the app.
+        if user_has_app_push(request.user):
+            send_push_to_user.delay(
+                request.user.pk,
+                title=f"{lot.lot_name} test notification",
+                body=f"Lot {lot.lot_number_display} test notification for this watched lot.",
+                url=f"https://{lot.full_lot_link}",
+                category=CATEGORY_WATCHED,
+                collapse_key=f"lot_sell_notification_test_{lot.pk}",
+                auction_pk=lot.auction_id,
+            )
+            return JsonResponse({"result": "success"})
         if not PushInformation.objects.filter(user=request.user).exists():
             return JsonResponse({"result": "error", "message": "No push subscription found."}, status=400)
 
@@ -4871,7 +4886,11 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
 
     ``request_user`` (the admin viewing/projecting the lot) is excluded so their own screen doesn't
     light up. Returns True when a push pass actually ran, False when skipped as a dedupe. The
-    transient websocket "about to be sold" chat message is handled by the caller, not here."""
+    transient websocket "about to be sold" chat message is handled by the caller, not here.
+
+    Delivery is per watcher: anyone who can receive an app notification gets it there *only*, and
+    their browser subscription is skipped -- we can't tell a phone's browser apart from the app
+    installed on that same phone, so sending both would buzz one person twice for one lot."""
     if not lot or lot.sold or not lot.auction:
         return False
     coming_up = position is not None and position > 1
@@ -4896,11 +4915,28 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
             f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
             "You're getting this notification because you watched this lot."
         )
-    watchers = Watch.objects.filter(lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True)
+    watchers = Watch.objects.filter(
+        lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
+    ).select_related("user__userdata")
     if request_user is not None:
         # it would be awkward to have notifications pop up when you're projecting an image of the lot
         watchers = watchers.exclude(user=request_user)
+    lot_url = "https://" + lot.full_lot_link
+    # Shared by both delivery paths so the "about to be sold" alert replaces the earlier
+    # "coming up soon" one on the device instead of stacking a second alert.
+    tag = f"lot_sell_notification_{lot.pk}"
     for watch in watchers:
+        if user_has_app_push(watch.user):
+            send_push_to_user.delay(
+                watch.user.pk,
+                title=head,
+                body=body,
+                url=lot_url,
+                category=CATEGORY_WATCHED,
+                collapse_key=tag,
+                auction_pk=lot.auction.pk,
+            )
+            continue
         # does the user actually have a subscription?
         push_info = PushInformation.objects.filter(user=watch.user).first()
         if not push_info:
@@ -4908,8 +4944,8 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
         payload = {
             "head": head,
             "body": body,
-            "url": "https://" + lot.full_lot_link,
-            "tag": f"lot_sell_notification_{lot.pk}",
+            "url": lot_url,
+            "tag": tag,
         }
         if lot.thumbnail:
             payload["icon"] = lot.thumbnail.display_url
@@ -4953,14 +4989,20 @@ def process_queue_notifications(auction):
     Each lot at position 2-10 gets one "coming up soon" push; the head lot (position 1) gets the
     "about to be sold" push, which overwrites the coming-up one. Both dedupe on the per-lot flags
     (Lot.coming_up_push_sent / Lot.selling_push_notification_sent), so re-running this after every
-    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies."""
-    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
-    for index, entry in enumerate(entries, start=1):
-        if index > 10:
-            break
-        if entry.lot.sold:
-            continue
-        notify_watchers_lot_selling_soon(entry.lot, position=index)
+    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies.
+
+    Watcher notifications honour the auction's message_users_when_lots_sell setting, the same gate
+    the set-lot-winners screen uses -- turning it off also hides the opt-in on the lot page, so an
+    auction that opted out must not notify from the queue either. The websocket poke is unrelated to
+    that setting and always fires, otherwise the kiosk would stop following the queue."""
+    if auction.message_users_when_lots_sell:
+        entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
+        for index, entry in enumerate(entries, start=1):
+            if index > 10:
+                break
+            if entry.lot.sold:
+                continue
+            notify_watchers_lot_selling_soon(entry.lot, position=index)
     broadcast_queue_update(auction)
 
 
@@ -5153,17 +5195,39 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
 
 
 def volunteer_eligible_tos(auction):
-    """AuctionTOS rows we can ask for help: real users holding a registered mobile device who are
-    checked in (in check-in-mode auctions) or simply joined (otherwise)."""
+    """AuctionTOS rows we can ask for help: people we can reach in the app *right now*.
+
+    A volunteer request is push-only -- an email asking someone to help carry tanks is useless by
+    the time it's read -- so the audience is exactly the people holding a device with a live push
+    token, not everyone who ever installed the app. Someone who installed it and denied
+    notifications, or signed out (which clears the token), is not reachable and is not counted.
+
+    In check-in-mode auctions this is further limited to people who have checked in, which is the
+    only proximity signal available: auto-check-in fires inside a ~500 ft geofence, so a checked-in
+    person is genuinely at the venue. Without check-in mode there is nothing to tell who is in the
+    room, so everyone who joined and has the app is asked -- the volunteers page warns admins about
+    exactly that."""
+    from auctions.notifications import push_configured
+
+    if not push_configured():
+        # Nothing can be delivered, so nobody is reachable. Being honest here keeps the page's
+        # "N reachable" count from promising an audience that doesn't exist.
+        return AuctionTOS.objects.none()
     qs = AuctionTOS.objects.filter(auction=auction, user__isnull=False)
     if auction.use_check_in_mode:
         qs = qs.filter(checked_in__isnull=False)
-    return qs.filter(user__mobile_devices__isnull=False).distinct()
+    # Exists() rather than a join filter: `.filter(devices__push_enabled=True).exclude(devices__
+    # fcm_token="")` spans two joins and would drop anyone owning *any* tokenless device.
+    live_device = MobileDevice.objects.filter(user=OuterRef("user"), push_enabled=True).exclude(fcm_token="")
+    return qs.filter(Exists(live_device))
 
 
 def volunteer_helper_count(auction):
-    """How many app users can be notified right now (the tooltip count)."""
-    return volunteer_eligible_tos(auction).count()
+    """How many people will actually receive the push (the tooltip count).
+
+    Counted per user, not per TOS row, so a duplicate TOS record can't inflate it -- this has to
+    match what notify_volunteers_of_job really sends."""
+    return volunteer_eligible_tos(auction).values("user").distinct().count()
 
 
 def _volunteer_job_url(job):
@@ -5174,21 +5238,26 @@ def _volunteer_job_url(job):
     return f"https://{domain}{path}"
 
 
+# Fixed and short so it survives the notification tray on both platforms: an auction title in the
+# title pushes "needs help" past the truncation point, which is the one word that has to be read.
+VOLUNTEER_PUSH_TITLE = "Auction help needed"
+
+
 def _volunteer_notification_text(job):
     body = job.description
     if job.bounty:
         body += f" (${job.bounty:.0f} bounty)"
-    return f"{job.auction.title} needs help", body
+    return VOLUNTEER_PUSH_TITLE, body
 
 
 def notify_volunteers_of_job(job):
-    """Fan out a job announcement to every eligible helper through the Part 2 push choke point.
+    """Fan out a job announcement to every helper we can reach in the app.
 
-    While FCM is inert this degrades to the existing email fallback, exactly like every other
-    notification. Uses a per-job collapse tag so the later 'filled' retract can target it."""
-    from post_office import mail
-
-    from auctions.notifications import CATEGORY_AUCTION_ADMIN, notify_user
+    Push-only, with no email fallback: this is a "someone is needed in this room now" message, and
+    an email that lands after the auction is over is worse than nothing. volunteer_eligible_tos
+    already restricts the audience to people who can actually receive it. Uses a per-job collapse
+    tag so the later 'filled' retract can target it."""
+    from auctions.notifications import CATEGORY_VOLUNTEER
 
     title, body = _volunteer_notification_text(job)
     url = _volunteer_job_url(job)
@@ -5199,24 +5268,14 @@ def notify_volunteers_of_job(job):
         if user.pk in seen:
             continue
         seen.add(user.pk)
-
-        def _send_email(u=user):
-            if not u.email:
-                return
-            try:
-                mail.send(u.email, subject=title, message=f"{body}\n\nTap to help: {url}")
-            except Exception:
-                logger.exception("Failed to email volunteer request to %s", u.pk)
-
-        notify_user(
-            user,
-            category=CATEGORY_AUCTION_ADMIN,
+        send_push_to_user.delay(
+            user.pk,
             title=title,
             body=body,
             url=url,
-            send_email=_send_email,
-            auction_pk=job.auction.pk,
+            category=CATEGORY_VOLUNTEER,
             collapse_key=collapse_key,
+            auction_pk=job.auction.pk,
         )
 
 
@@ -7172,10 +7231,22 @@ class ViewLot(DetailView):
             else:
                 defaultBidAmount = 0
                 context["viewer_bid"] = None
-            context["has_push_subscription"] = PushInformation.objects.filter(user=self.request.user).exists()
+            # When the app can be reached it is the only channel used (see
+            # notify_watchers_lot_selling_soon), so the browser subscribe UI is replaced by a note
+            # pointing at the phone. Inside the app's own WebView there is nothing to subscribe to
+            # either -- a WebView has no Push API -- so the button is dropped there too.
+            context["has_app_push"] = user_has_app_push(self.request.user)
+            context["can_subscribe_to_webpush"] = not context["has_app_push"] and not getattr(
+                self.request, "is_mobile_app", False
+            )
+            context["has_push_subscription"] = (
+                context["has_app_push"] or PushInformation.objects.filter(user=self.request.user).exists()
+            )
         else:
             defaultBidAmount = 0
             context["viewer_bid"] = None
+            context["has_app_push"] = False
+            context["can_subscribe_to_webpush"] = False
             context["has_push_subscription"] = False
         if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
             defaultBidAmount = lot.buy_now_price
@@ -12833,6 +12904,7 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
+        kwargs["is_mobile_app"] = bool(getattr(self.request, "is_mobile_app", False))
         return kwargs
 
 

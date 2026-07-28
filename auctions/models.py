@@ -10232,6 +10232,20 @@ class UserData(models.Model):
         """True when the user has at least one push-enabled device carrying an FCM token."""
         return self.user.mobile_devices.filter(push_enabled=True).exclude(fcm_token="").exists()
 
+    @property
+    def has_app_push(self):
+        """True when a notification can be delivered to this user's app right now.
+
+        Deliberately ignores ``push_notifications_instead_of_email``: that toggle governs mail we
+        would otherwise send by email. Notifications that were never email in the first place (the
+        "a lot you're watching is selling" browser push) route to the app whenever the app can
+        receive them. We can't tell a browser subscription apart from the app on the same phone, so
+        sending both would just buzz the same person twice.
+        """
+        from auctions.notifications import push_configured
+
+        return push_configured() and self.has_push_device
+
     def user_prefers_push(self):
         """Whether notifications for this user should go to the app (FCM) instead of email.
 
