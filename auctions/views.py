@@ -234,7 +234,7 @@ from .models import (
     nearby_auctions,
     normalize_email,
 )
-from .notifications import CATEGORY_WATCHED, user_has_app_push
+from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
@@ -2485,7 +2485,7 @@ class LotPushTestNotificationView(APIPostView):
                 title=f"{lot.lot_name} test notification",
                 body=f"Lot {lot.lot_number_display} test notification for this watched lot.",
                 url=f"https://{lot.full_lot_link}",
-                category=CATEGORY_WATCHED,
+                category=CATEGORY_LOT_SELLING,
                 collapse_key=f"lot_sell_notification_test_{lot.pk}",
                 auction_pk=lot.auction_id,
             )
@@ -4932,7 +4932,7 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
                 title=head,
                 body=body,
                 url=lot_url,
-                category=CATEGORY_WATCHED,
+                category=CATEGORY_LOT_SELLING,
                 collapse_key=tag,
                 auction_pk=lot.auction.pk,
             )

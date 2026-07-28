@@ -27,7 +27,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions import notifications
+from auctions import notifications, tasks
 from auctions.mobile.services.devices import DeviceService
 from auctions.models import (
     Auction,
@@ -1686,7 +1686,7 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         web_push.assert_not_called()
         app_push.assert_called_once()
         self.assertEqual(app_push.call_args.args[0], self.watcher.pk)
-        self.assertEqual(app_push.call_args.kwargs["category"], notifications.CATEGORY_WATCHED)
+        self.assertEqual(app_push.call_args.kwargs["category"], notifications.CATEGORY_LOT_SELLING)
         # Same tag the browser payload uses, so "about to be sold" replaces "coming up soon".
         self.assertEqual(app_push.call_args.kwargs["collapse_key"], f"lot_sell_notification_{self.in_person_lot.pk}")
 
@@ -1943,3 +1943,119 @@ class JoinReminderPushTests(TestCase):
         delay.assert_not_called()
         emailed = [call.args[0] for call in send.call_args_list if call.args]
         self.assertIn(self.user.email, emailed)
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — losing the app: nothing is dropped, and the UI says what's going on
+# ---------------------------------------------------------------------------
+
+
+class UninstallFallbackTests(TestCase):
+    """Uninstalling / revoking notifications has to degrade to email without losing a message."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="gone", password="x", email="gone@example.com")
+        userdata = self.user.userdata
+        userdata.push_notifications_instead_of_email = True
+        userdata.save()
+        self.device = MobileDevice.objects.create(
+            user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True
+        )
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_dead_token_is_pruned_and_the_notification_is_emailed_not_lost(self):
+        """The send that *discovers* the uninstall is the one that would otherwise vanish."""
+        with (
+            patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_INVALID_TOKEN),
+            patch("auctions.tasks.mail.send") as send,
+        ):
+            sent = tasks.send_push_to_user(
+                self.user.pk, title="Your invoice is ready", body="b", url="https://x/y", category="invoice"
+            )
+        self.assertEqual(sent, 0)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.fcm_token, "")
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[0], self.user.email)
+        self.assertEqual(send.call_args.kwargs["subject"], "Your invoice is ready")
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_transient_fcm_failure_also_emails_rather_than_dropping(self):
+        with (
+            patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_ERROR),
+            patch("auctions.tasks.mail.send") as send,
+        ):
+            tasks.send_push_to_user(self.user.pk, title="t", body="b", url="u", category="invoice")
+        send.assert_called_once()
+        # A transient error is not proof the token is dead, so it survives for the next try.
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.fcm_token, "tok")
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_push_only_categories_are_dropped_rather_than_emailed(self):
+        """A volunteer request or "your lot is selling now" email would arrive uselessly late."""
+        for category in ("volunteer", "lot_selling", "promo", "printer"):
+            with (
+                patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_INVALID_TOKEN),
+                patch("auctions.tasks.mail.send") as send,
+            ):
+                tasks.send_push_to_user(self.user.pk, title="t", body="b", url="u", category=category)
+            send.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_a_successful_send_does_not_also_email(self):
+        with (
+            patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_OK),
+            patch("auctions.tasks.mail.send") as send,
+        ):
+            sent = tasks.send_push_to_user(self.user.pk, title="t", body="b", url="u", category="invoice")
+        self.assertEqual(sent, 1)
+        send.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_later_notifications_route_to_email_on_their_own(self):
+        """Once the token is gone the routing decision flips, so nothing else needs the fallback."""
+        self.assertTrue(self.user.userdata.user_prefers_push())
+        MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
+        self.assertFalse(self.user.userdata.user_prefers_push())
+        emailed = []
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            pushed = notifications.notify_user(
+                self.user,
+                category="invoice",
+                title="t",
+                body="b",
+                url="u",
+                send_email=lambda: emailed.append(1),
+            )
+        self.assertFalse(pushed)
+        self.assertEqual(emailed, [1])
+        delay.assert_not_called()
+
+    def test_preferences_explain_a_phone_that_has_gone_quiet(self):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
+        form = ChangeUserPreferencesForm(self.user, instance=self.user.userdata)
+        field = form.fields["push_notifications_instead_of_email"]
+        self.assertTrue(field.disabled)
+        self.assertIn("isn't receiving notifications right now", field.help_text)
+
+    def test_preferences_still_pitch_the_app_to_someone_who_never_had_it(self):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        newcomer = User.objects.create_user(username="newbie", password="x")
+        form = ChangeUserPreferencesForm(newcomer, instance=newcomer.userdata)
+        self.assertIn("Install the FishAuctions app", form.fields["push_notifications_instead_of_email"].help_text)
+
+    def test_the_stored_choice_survives_so_reinstalling_resumes_push(self):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
+        form = ChangeUserPreferencesForm(
+            self.user, data={"distance_unit": "mi", "preferred_currency": "USD"}, instance=self.user.userdata
+        )
+        form.is_valid()
+        # A disabled field ignores POST and keeps the stored value, so an uninstall can't quietly
+        # erase what the user asked for.
+        self.assertTrue(form.cleaned_data["push_notifications_instead_of_email"])

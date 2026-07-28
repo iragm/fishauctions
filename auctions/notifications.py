@@ -37,6 +37,14 @@ CATEGORY_PROMO = "promo"
 CATEGORY_PRINTER = "printer"
 # "Someone needs help right now." Push-only by nature: an email arrives long after the job is done.
 CATEGORY_VOLUNTEER = "volunteer"
+# "A lot you're watching is being sold right now." Distinct from CATEGORY_WATCHED (the nightly
+# "watched lots ending soon" mail): this one has no email form and is worthless minutes later.
+CATEGORY_LOT_SELLING = "lot_selling"
+
+# Categories with no email equivalent -- either app-native, or so time-critical that a late email is
+# worse than nothing. A push that can't be delivered in these categories is simply dropped; every
+# other category falls back to email (see send_push_to_user).
+PUSH_ONLY_CATEGORIES = frozenset({CATEGORY_PROMO, CATEGORY_PRINTER, CATEGORY_VOLUNTEER, CATEGORY_LOT_SELLING})
 
 # Categories that are always emailed, never pushed:
 #   account     - a signed-out or wrong phone must never receive password resets / security warnings

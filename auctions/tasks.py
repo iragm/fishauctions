@@ -287,6 +287,12 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
     token the offending device's token is cleared. One ``PushNotificationSent`` row is logged per
     successful device send (dedupe + stats). ``collapse_key`` folds chatty categories so a phone
     that was off shows one notification, not many.
+
+    If nothing reaches a device, the notification is emailed instead rather than dropped. That
+    matters most the moment someone uninstalls the app: the send that *discovers* the dead token is
+    the one that would otherwise vanish, and by then the caller has already recorded the
+    notification as delivered (invoice.email_sent, tos.confirm_email_sent, ...) so nothing would
+    ever retry it. Categories in PUSH_ONLY_CATEGORIES have no email form and are dropped instead.
     """
     from django.contrib.auth.models import User
 
@@ -323,7 +329,27 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
                 invoice_id=invoice_pk,
             )
             sent_count += 1
+    if not sent_count:
+        _email_undelivered_push(user, title=title, body=body, url=url, category=category)
     return sent_count
+
+
+def _email_undelivered_push(user, *, title, body, url, category):
+    """Last-resort email for a push that reached no device (dead token, or FCM was down).
+
+    Plain text rather than the caller's original template -- by the time we get here the caller is
+    long gone and only the notification's own title/body/url survive. An unstyled email that arrives
+    beats a silent drop.
+    """
+    from auctions import notifications
+
+    if category in notifications.PUSH_ONLY_CATEGORIES or not user.email:
+        return
+    try:
+        mail.send(user.email, subject=title, message=f"{body}\n\n{url}")
+        logger.info("Push to user %s was undeliverable (%s); emailed instead", user.pk, category)
+    except Exception:
+        logger.exception("Could not email the undelivered %s push for user %s", category, user.pk)
 
 
 def get_invoice_notification_task_name(invoice_pk):

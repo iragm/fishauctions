@@ -46,6 +46,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotImage,
+    MobileDevice,
     PayPalSeller,
     PickupLocation,
     SquareSeller,
@@ -3773,10 +3774,22 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         # device to push to — disabling keeps the stored value unchanged on save.
         if not (self.instance and self.instance.pk and self.instance.has_push_device):
             self.fields["push_notifications_instead_of_email"].disabled = True
-            self.fields["push_notifications_instead_of_email"].help_text = (
-                "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
-                "notifications in the app instead of emails, for everything except account emails."
-            )
+            # Someone whose phone has gone quiet needs a different sentence than someone who never
+            # had the app: the box stays ticked (their stored choice is untouched, so reinstalling
+            # just resumes push) and telling them to "enable this" would be nonsense. A device row
+            # outlives an uninstall -- only the token is cleared -- so it's what tells them apart.
+            had_the_app = self.instance and self.instance.pk and MobileDevice.objects.filter(user=user).exists()
+            if had_the_app:
+                self.fields["push_notifications_instead_of_email"].help_text = (
+                    "Your phone isn't receiving notifications right now -- the app was removed, signed "
+                    "out, or has notifications turned off -- so we're emailing you instead. Reinstall "
+                    "the app and sign in to pick up where you left off."
+                )
+            else:
+                self.fields["push_notifications_instead_of_email"].help_text = (
+                    "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
+                    "notifications in the app instead of emails, for everything except account emails."
+                )
         # The watched-lot "bidding is starting" alert goes to the app whenever the app can receive
         # it (see notify_watchers_lot_selling_soon), so for those users the browser-subscribe prompt
         # this field's help text carries would point at the wrong device. There's nothing to
