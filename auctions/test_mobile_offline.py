@@ -11,7 +11,7 @@ from decimal import Decimal
 from django.urls import reverse
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions.models import AuctionTOS, Invoice, Lot, MobileOfflineOp
+from auctions.models import AuctionTOS, Club, ClubMember, Invoice, Lot, MobileOfflineOp
 from auctions.tests import StandardTestCase
 
 
@@ -207,6 +207,71 @@ class MobileOfflineSyncTests(StandardTestCase):
         self.assertEqual(res["conflict"], "user_conflict")
         # Server row untouched.
         self.assertEqual(AuctionTOS.objects.get(auction=self.auction, bidder_number="71").name, "Server Person")
+
+    # -- add_user in a club-managed auction -----------------------------------
+
+    def _club_manage(self, mode="checkin"):
+        """Put the in-person auction under club management and return the club."""
+        club = Club.objects.create(name="Till Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, name="Admin", permission_admin=True)
+        self.auction.club = club
+        self.auction.manage_users_through_club = mode
+        self.auction.save()
+        return club
+
+    def _add_user(self, op_id, name, bidder_number="", email=""):
+        return self._post(
+            self.admin_user,
+            [
+                {
+                    "op_id": op_id,
+                    "type": "add_user",
+                    "bidder_number": bidder_number,
+                    "name": name,
+                    "email": email,
+                    "phone_number": "",
+                }
+            ],
+        )
+
+    def test_add_user_creates_the_club_member(self):
+        club = self._club_manage()
+        resp = self._add_user("cm1", "Walk In", bidder_number="88")
+        self.assertEqual(self._results_by_id(resp)["cm1"]["status"], "applied")
+        member = ClubMember.objects.get(club=club, name="Walk In")
+        # The number written on the card at the door becomes the club's number when it's free.
+        self.assertEqual(member.bidder_number, "88")
+        tos = AuctionTOS.objects.get(auction=self.auction, name="Walk In")
+        self.assertEqual(tos.clubmember, member)
+        self.assertEqual(tos.bidder_number, "88")
+
+    def test_add_user_adopts_the_shadow_row_instead_of_duplicating(self):
+        self._club_manage()
+        self._add_user("cm2", "One Person", bidder_number="89")
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, name="One Person").count(), 1)
+
+    def test_add_user_reuses_an_existing_member_matched_by_email(self):
+        club = self._club_manage()
+        member = ClubMember.objects.create(club=club, name="Known", email="known@example.com")
+        self._add_user("cm3", "Known", email="known@example.com")
+        self.assertEqual(ClubMember.objects.filter(club=club, email="known@example.com").count(), 1)
+        tos = AuctionTOS.objects.get(auction=self.auction, email="known@example.com")
+        member.refresh_from_db()
+        self.assertEqual(tos.clubmember, member)
+        self.assertEqual(tos.bidder_number, member.bidder_number)
+
+    def test_add_user_keeps_the_door_number_when_the_club_number_differs(self):
+        club = self._club_manage()
+        ClubMember.objects.create(club=club, name="Renamed", email="r@example.com", bidder_number="12")
+        resp = self._add_user("cm4", "Renamed", bidder_number="99", email="r@example.com")
+        # The club keeps its own number; this auction uses the card the admin handed out.
+        self.assertEqual(self._results_by_id(resp)["cm4"]["bidder_number"], "99")
+        self.assertEqual(ClubMember.objects.get(club=club, email="r@example.com").bidder_number, "12")
+
+    def test_add_user_makes_no_club_member_without_club_management(self):
+        self._add_user("cm5", "Plain Guy", bidder_number="87")
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.auction, name="Plain Guy").exists())
+        self.assertFalse(ClubMember.objects.filter(name="Plain Guy").exists())
 
     # -- add_lot --------------------------------------------------------------
 

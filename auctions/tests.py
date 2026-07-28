@@ -10969,6 +10969,46 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         assert new_lot is not None
         assert new_lot.auctiontos_seller == new_tos
 
+    def test_import_lots_csv_new_seller_gets_a_club_member(self):
+        """In a club-managed auction, an imported seller needs a ClubMember like any participant.
+
+        The club owns the bidder number there, so a seller row with no member behind it carries a
+        number the club has never heard of."""
+        club = Club.objects.create(name="Import Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, name="Admin", permission_admin=True)
+        self.in_person_auction.club = club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.in_person_auction.slug})
+        csv_content = "Name,Email,Lot Name,Quantity\nImported Seller,imported@example.com,Bag of guppies,2\n"
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
+
+        member = ClubMember.objects.get(club=club, email="imported@example.com")
+        self.assertTrue(member.bidder_number)
+        sellers = AuctionTOS.objects.filter(auction=self.in_person_auction, email="imported@example.com")
+        self.assertEqual(sellers.count(), 1)  # the member's shadow row was adopted, not duplicated
+        seller = sellers.first()
+        self.assertEqual(seller.clubmember, member)
+        self.assertEqual(seller.bidder_number, member.bidder_number)
+        lot = Lot.objects.filter(lot_name="Bag of guppies", auction=self.in_person_auction).first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(lot.auctiontos_seller, seller)
+
+    def test_import_lots_csv_new_seller_without_club_management_has_no_member(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.in_person_auction.slug})
+        csv_content = "Name,Email,Lot Name,Quantity\nPlain Seller,plain@example.com,Bag of snails,1\n"
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        self.run_csv_import(url, csv_file)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, email="plain@example.com").exists())
+        self.assertFalse(ClubMember.objects.filter(email="plain@example.com").exists())
+
     def test_import_lots_csv_boolean_fields(self):
         """CSV import handles boolean fields correctly"""
         self.client.login(username=self.admin_user.username, password="testpassword")

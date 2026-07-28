@@ -241,7 +241,7 @@ from .serializers import (
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
-from .services import map_fields
+from .services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member, map_fields
 from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -7054,13 +7054,24 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             seller = AuctionTOS.objects.filter(pk=seller_pk, auction=self.auction).first()
             if seller:
                 return seller, False
-        seller = AuctionTOS.objects.create(
+        name = fields.get("name", "")
+        email = fields.get("email", "")
+        # In a club-managed auction the club owns the bidder number, so an imported seller needs a
+        # member record like any other participant. Creating it also creates the participant row
+        # (signals), so adopt that instead of adding a second one for the same person.
+        member, _created = ensure_club_member(self.auction, name=name, email=email)
+        adopted = existing_tos_for_club_member(self.auction, member)
+        if adopted is not None:
+            return adopted, True
+        seller = AuctionTOS(
             auction=self.auction,
             pickup_location=self.auction.location_qs.first(),
             manually_added=True,
-            name=fields.get("name", ""),
-            email=fields.get("email", ""),
+            name=name,
+            email=email,
         )
+        apply_club_member_to_tos(self.auction, seller, member)
+        seller.save()
         return seller, True
 
     def _create_lot(self, fields, seller):
@@ -9409,49 +9420,18 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if not obj.address:
                 obj.address = userData.address
             if auction.is_club_managed:
-                club_member = _find_club_member(auction.club, user=self.request.user, email=obj.email)
-                club_member_is_new = False
-                if not club_member:
-                    club_member = ClubMember(
-                        club=auction.club,
-                        user=self.request.user,
-                        name=obj.name or self.request.user.get_full_name() or self.request.user.username,
-                        email=obj.email or self.request.user.email,
-                        phone_number=obj.phone_number or "",
-                        address=obj.address or "",
-                        source=str(auction.title)[:200],
-                        added_by=self.request.user,
-                    )
-                    if auction.only_approved_sellers:
-                        club_member.selling_allowed = False
-                    if auction.only_approved_bidders:
-                        club_member.bidding_allowed = False
-                    club_member.save()
-                    club_member_is_new = True
-                elif not club_member.user_id:
-                    club_member.user = self.request.user
-                    club_member.save(update_fields=["user"])
-                if not club_member.bidder_number:
-                    club_member.generate_bidder_number(save=True)
-                obj.clubmember = club_member
-                obj.bidder_number = club_member.bidder_number
-                if auction.use_check_in_mode and not obj.checked_in:
-                    # Check-in mode: joining never grants bidding on its own. The member has to
-                    # check in at the event (which sets checked_in + bidding_allowed). Mirrors the
-                    # auto-add path in signals.propagate_clubmember_to_shadow_tos.
-                    obj.bidding_allowed = False
-                else:
-                    obj.bidding_allowed = club_member.bidding_allowed
-                obj.selling_allowed = club_member.selling_allowed
-                if club_member_is_new:
-                    from .models import ClubHistory
-
-                    ClubHistory.objects.create(
-                        club=auction.club,
-                        user=self.request.user,
-                        applies_to="MEMBERS",
-                        action=f"{club_member.name} joined via auction '{auction.title}'",
-                    )
+                # The club owns the bidder number and permissions here, so joining has to create or
+                # link the member record. Shared with the app's proximity join — see
+                # auctions.services.ensure_club_member.
+                club_member, _created = ensure_club_member(
+                    auction,
+                    user=self.request.user,
+                    name=obj.name,
+                    email=obj.email,
+                    phone_number=obj.phone_number or "",
+                    address=obj.address or "",
+                )
+                apply_club_member_to_tos(auction, obj, club_member)
             obj.save()
             # also update userdata to reflect the last auction
             userData.last_auction_used = auction
