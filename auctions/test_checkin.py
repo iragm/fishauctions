@@ -225,12 +225,12 @@ class WelcomeRadiusWithoutExactLocationTests(CheckinBase):
         self.venue.save()
         self.assertEqual(self._ping(self.arrival, *NEAR).json()["actions"], [])
 
-    def test_far_offer_does_not_consume_the_at_the_door_offer(self):
-        # Dismissed the welcome from a mile away; walking in still gets one.
+    def test_exactly_one_join_offer_even_across_bands(self):
+        # One offer per person per auction, period: getting it from a mile away spends it, and
+        # arriving at the venue does not produce a second one.
         self.assertIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
-        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))  # not twice out there
-        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))
-        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *AT)))  # and not twice here
+        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
+        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *AT)))
 
 
 class SelfCheckinDisabledTests(CheckinBase):

@@ -11647,9 +11647,7 @@ class CheckinNudge(models.Model):
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
-    # join_offer | join_offer_far (the wide radius used until the location is pinned, tracked
-    # separately so it doesn't consume the at-the-door offer) | checked_in | set_location_offer
-    kind = models.CharField(max_length=20)
+    kind = models.CharField(max_length=20)  # join_offer | checked_in | set_location_offer
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
