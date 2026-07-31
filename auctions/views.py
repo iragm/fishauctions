@@ -12282,11 +12282,12 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
         return render(request, "auctions/club_google_calendar_settings.html", context)
 
     def post(self, request, slug):
-        """Save the checkboxes on the settings page."""
-        from auctions import google_calendar as gcal
+        """Save the checkboxes on the settings page.
 
+        google_calendar_is_public is the admin telling us they've shared the calendar in Google;
+        we can't set or verify that ourselves without a scope over all their calendars.
+        """
         club = self.club
-        was_public = club.google_calendar_is_public
         club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
         club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
         club.google_calendar_is_public = "google_calendar_is_public" in request.POST
@@ -12297,12 +12298,6 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
                 "google_calendar_is_public",
             ]
         )
-        if club.google_calendar_connected and was_public != club.google_calendar_is_public:
-            try:
-                gcal.ensure_calendar(club)
-            except gcal.GoogleCalendarError as exc:
-                messages.error(request, f"Saved, but Google wouldn't change the sharing setting: {exc}")
-                return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
         messages.success(request, "Calendar settings saved.")
         return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
 
@@ -12385,8 +12380,13 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
         try:
             gcal.ensure_calendar(club)
         except gcal.GoogleCalendarError as exc:
-            logger.exception("Could not create the Google calendar for club %s", club.pk)
-            messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
+            logger.exception("Could not set up the Google calendar for club %s", club.pk)
+            # The calendar id is saved before anything else can fail, so say which half worked
+            # rather than claiming nothing was created.
+            if club.google_calendar_id:
+                messages.warning(request, f"Connected and the calendar exists, but setup didn't finish: {exc}")
+            else:
+                messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
             return redirect(config_url)
 
         # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
@@ -20133,7 +20133,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return kwargs
 
     def get_context_data(self, **kwargs):
-        from django.utils import timezone
 
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -20159,39 +20158,13 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_barcode_url"] = preview_barcode_url
         context["membership_numbers_enabled"] = self.club.show_member_barcode
 
-        today = timezone.localdate()
-        next_auction = (
-            Auction.objects.filter(
-                club=self.club,
-                promote_this_auction=True,
-                is_deleted=False,
-                date_start__date__gte=today,
-            )
-            .order_by("date_start")
-            .first()
-        )
-        context["next_auction"] = next_auction
-        directions_link = ""
-        if next_auction:
-            physical = list(next_auction.physical_location_qs)
-            if len(physical) == 1 and physical[0].directions_link:
-                directions_link = physical[0].directions_link
-        context["next_auction_directions_link"] = directions_link
+        # Build the next-event HTML fragment exactly once on the server so the JS preview just
+        # toggles visibility (no client-side templating). Uses the same builder as the real
+        # emails, with as_links=False so a preview never contains working links.
+        from auctions.tasks import next_event_fragment
 
-        # Build the next-auction HTML fragment exactly once on the server so the
-        # JS preview just toggles visibility (no client-side templating).
-        next_auction_html = ""
-        if next_auction:
-            from django.utils.html import escape as _escape
-
-            date_str = next_auction.date_start.strftime("%B %-d, %Y") if next_auction.date_start else ""
-            parts = [f"Our next auction will be {_escape(next_auction.title)}"]
-            if date_str:
-                parts.append(f"on {_escape(date_str)}")
-            next_auction_html = " ".join(parts).rstrip() + "."
-            if directions_link:
-                next_auction_html += " <span class='text-info'>Get directions</span>."
-            next_auction_html += " <span class='text-info'>Read the auction's rules</span>."
+        context["next_event"] = club_events.next_member_facing_event(self.club)
+        _, next_event_html = next_event_fragment(self.club, Site.objects.get_current(), as_links=False)
 
         club_icon_url = ""
         if self.club.icon:
@@ -20208,7 +20181,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             "preview_barcode_url": preview_barcode_url,
             "membership_numbers_enabled": context["membership_numbers_enabled"],
             "payments_enabled": self.club.membership_payment_emails_enabled,
-            "next_auction_html": next_auction_html,
+            "next_event_html": next_event_html,
         }
         return context
 

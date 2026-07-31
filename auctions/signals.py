@@ -6,7 +6,7 @@ import logging
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.db import models, transaction
-from django.db.models.signals import post_delete, post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
@@ -220,23 +220,38 @@ def mirror_auction_to_club_calendar(sender, instance, **kwargs):
 
     try:
         club_events.sync_one_auction_event(instance)
+        club_events.sync_pickup_events(instance)
     except Exception:
         # Never let a calendar problem be the reason an auction can't be saved.
         logger.exception("Could not mirror auction %s onto its club calendar", instance.pk)
 
 
 @receiver(post_save, sender="auctions.PickupLocation")
-def refresh_calendar_location(sender, instance, **kwargs):
-    """Pickup locations are usually saved after the auction, so the auction's calendar entry
-    starts out with no address. Re-mirror when one is added or edited."""
+def refresh_calendar_pickups(sender, instance, **kwargs):
+    """Pickup locations are usually saved after the auction, so the auction's calendar entries
+    start out incomplete. Re-mirror whenever a location or one of its times changes."""
     if not instance.auction_id:
         return
     from auctions import club_events
 
     try:
         club_events.sync_one_auction_event(instance.auction)
+        club_events.sync_pickup_events(instance.auction)
     except Exception:
-        logger.exception("Could not refresh the calendar location for auction %s", instance.auction_id)
+        logger.exception("Could not refresh calendar pickups for auction %s", instance.auction_id)
+
+
+@receiver(pre_delete, sender="auctions.PickupLocation")
+def remove_pickup_events_from_calendars(sender, instance, **kwargs):
+    """Take a deleted pickup location's events off Google and Discord before the FK cascade
+    removes the rows — once they're gone we'd have no record of what to clean up."""
+    from auctions import club_events
+
+    for event in instance.calendar_events.all():
+        try:
+            club_events._remove_remote(event)
+        except Exception:
+            logger.exception("Could not remove calendar event %s for a deleted pickup location", event.pk)
 
 
 @receiver(pre_save, sender="auctions.ClubMember")

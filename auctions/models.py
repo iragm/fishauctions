@@ -856,7 +856,11 @@ class Club(CloudflareImageMixin, models.Model):
     send_membership_renewal_confirmation = models.BooleanField(default=False)
     send_welcome_email_to_new_members = models.BooleanField(default=False)
     membership_email_template = models.TextField(blank=True, default="")
-    include_next_auction_in_emails = models.BooleanField(default=True)
+    include_next_auction_in_emails = models.BooleanField(
+        default=True,
+        verbose_name="Include the next event in membership emails",
+        help_text="Default for email types that don't have their own setting.",
+    )
     welcome_opening = models.TextField(
         blank=True,
         default="Thanks for joining!\n\nYou can view your membership below:",
@@ -865,8 +869,12 @@ class Club(CloudflareImageMixin, models.Model):
     welcome_closing = models.TextField(
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Welcome email closing text"
     )
+    # Named *_include_auction for historical reasons; these now cover the club's next calendar
+    # event of any kind (auction, meeting, swap), not just auctions. See tasks.next_event_fragment.
     welcome_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     renewal_opening = models.TextField(
         blank=True,
@@ -877,7 +885,9 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Renewal email closing text"
     )
     renewal_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     expiring_soon_opening = models.TextField(
         blank=True,
@@ -888,7 +898,9 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Expiring soon email closing text"
     )
     expiring_soon_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
@@ -1103,11 +1115,13 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="Google's incremental sync token, so each pull only fetches what changed.",
     )
     google_calendar_is_public = models.BooleanField(
-        default=True,
-        verbose_name="Make the Google calendar public",
+        default=False,
+        verbose_name="This calendar is shared publicly",
         help_text=(
-            "Let anyone view the calendar and subscribe to it. Turn this off to keep it visible "
-            "only to people you share it with directly in Google Calendar."
+            "Whether the admin has made the calendar public in Google Calendar. We can't read or "
+            "change sharing ourselves — that needs a scope granting access to all of their "
+            "calendars — so this is their word for it, and only controls whether the club page "
+            "advertises the Google subscribe links."
         ),
     )
     google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
@@ -2353,12 +2367,16 @@ class ClubEvent(models.Model):
 
     SOURCE_MANUAL = "manual"
     SOURCE_AUCTION = "auction"
+    SOURCE_PICKUP = "pickup"
     SOURCE_GOOGLE = "google"
     SOURCE_CHOICES = (
         (SOURCE_MANUAL, "Created on this site"),
         (SOURCE_AUCTION, "From an auction"),
+        (SOURCE_PICKUP, "From an auction pickup time"),
         (SOURCE_GOOGLE, "From Google Calendar"),
     )
+    # Sources that are generated from something else and so can't be hand-edited.
+    AUTOMATIC_SOURCES = (SOURCE_AUCTION, SOURCE_PICKUP)
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="events")
     title = models.CharField(max_length=255)
@@ -2378,7 +2396,20 @@ class ClubEvent(models.Model):
         blank=True,
         on_delete=models.CASCADE,
         related_name="calendar_events",
-        help_text="Set for events mirrored from an auction.",
+        help_text="Set for the event mirroring an auction's bidding window.",
+    )
+    pickup_location = models.ForeignKey(
+        "PickupLocation",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="calendar_events",
+        help_text="Set for events mirroring an online auction's pickup times.",
+    )
+    pickup_slot = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="1 for the location's pickup time, 2 for its second pickup time.",
     )
     google_event_id = models.CharField(
         max_length=1024, blank=True, help_text="Event id in the club's Google Calendar, once pushed."
@@ -2407,26 +2438,44 @@ class ClubEvent(models.Model):
             models.Index(fields=["club", "is_deleted", "date_start"]),
         ]
         constraints = [
-            # One mirrored event per auction, so two concurrent syncs can't double up. Only
-            # auction events set `auction` at all, and MariaDB lets a unique index hold any
-            # number of NULLs, so this leaves manual and Google-sourced events alone. (A
-            # conditional constraint would have been more explicit but MariaDB drops those.)
+            # One mirrored event per auction, and one per pickup slot, so two concurrent syncs
+            # can't double up. Only the relevant source sets these columns at all, and MariaDB
+            # lets a unique index hold any number of NULLs (in a composite index, a NULL in any
+            # column exempts the row), so manual and Google-sourced events are unaffected. A
+            # conditional constraint would say this more explicitly, but MariaDB silently drops
+            # those — see models.W036.
             models.UniqueConstraint(fields=["auction"], name="unique_auction_event"),
+            models.UniqueConstraint(fields=["pickup_location", "pickup_slot"], name="unique_pickup_event"),
         ]
 
     def __str__(self):
         return self.title
 
     def get_absolute_url(self):
-        """Auction events link to the auction; everything else links to the club page."""
-        if self.auction_id and self.auction:
-            return self.auction.get_absolute_url()
+        """Auction and pickup events link to the auction; everything else to the club page."""
+        related_auction = self.related_auction
+        if related_auction:
+            return related_auction.get_absolute_url()
         return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"#event-{self.pk}"
 
     @property
+    def related_auction(self):
+        """The auction behind this event, whether it's the bidding window or a pickup time."""
+        if self.auction_id:
+            return self.auction
+        if self.pickup_location_id and self.pickup_location:
+            return self.pickup_location.auction
+        return None
+
+    @property
     def is_editable(self):
-        """Auction events are owned by the auction — edit the auction instead."""
-        return self.source != self.SOURCE_AUCTION
+        """Generated events are owned by the auction — edit the auction instead."""
+        return self.source not in self.AUTOMATIC_SOURCES
+
+    @property
+    def is_automatic(self):
+        """True when this event is generated and kept in step by the site, not typed in."""
+        return self.source in self.AUTOMATIC_SOURCES
 
     @property
     def effective_end(self):

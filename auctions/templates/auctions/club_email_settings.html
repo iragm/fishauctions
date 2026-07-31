@@ -99,7 +99,7 @@
           </div>
           {% endif %}
 
-          <div id="outgoing-email-preview-welcome-next-auction" class="mb-3"></div>
+          <div id="outgoing-email-preview-welcome-next-event" class="mb-3"></div>
 
           <div class="mb-3" data-field="welcome_closing">
             {{ form.welcome_closing }}
@@ -138,7 +138,8 @@
             {% endif %}
           </div>
 
-          <div class="mb-3 fst-italic small">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
+          {# Real letter body — render it exactly as the member will see it, not as an aside. #}
+          <div class="mb-3">Your {{ club.name }} membership has been renewed. Your membership is paid through [expiration date].</div>
 
           {% if preview_member_link %}
           <div class="mb-3">
@@ -156,7 +157,7 @@
           </div>
           {% endif %}
 
-          <div id="outgoing-email-preview-renewal-next-auction" class="mb-3"></div>
+          <div id="outgoing-email-preview-renewal-next-event" class="mb-3"></div>
 
           <div class="mb-3" data-field="renewal_closing">
             {{ form.renewal_closing }}
@@ -195,7 +196,10 @@
             {% endif %}
           </div>
 
-          <div class="mb-3 fst-italic small">Your {{ club.name }} membership expires in 30 days. <span>(Or "…expires tomorrow" for the day-before reminder.)</span></div>
+          {# Real letter body plain; only the editor's note beside it stays an aside. #}
+          <div class="mb-3">Your {{ club.name }} membership expires in 30 days.
+            <span class="fst-italic small text-muted">(Or &ldquo;&hellip;expires tomorrow&rdquo; for the day-before reminder.)</span>
+          </div>
 
           {% if preview_member_link %}
           <div class="mb-3">
@@ -213,7 +217,7 @@
           </div>
           {% endif %}
 
-          <div id="outgoing-email-preview-expiring-next-auction" class="mb-3"></div>
+          <div id="outgoing-email-preview-expiring-next-event" class="mb-3"></div>
 
           <div class="mb-3" data-field="expiring_soon_closing">
             {{ form.expiring_soon_closing }}
@@ -270,38 +274,38 @@
     }
   });
 
-  // Handle next-auction visibility for each email type
-  function setupAuctionToggle(checkboxId, elementId) {
+  // Handle next-event visibility for each email type
+  function setupNextEventToggle(checkboxId, elementId) {
     var checkbox = document.getElementById(checkboxId);
-    var nextAuctionEl = document.getElementById(elementId);
-    if (!checkbox || !nextAuctionEl) return;
+    var nextEventEl = document.getElementById(elementId);
+    if (!checkbox || !nextEventEl) return;
 
-    function refreshNextAuction() {
-      if (checkbox.checked && data.next_auction_html) {
-        nextAuctionEl.innerHTML = data.next_auction_html;
-        nextAuctionEl.style.display = 'block';
+    function refreshNextEvent() {
+      if (checkbox.checked && data.next_event_html) {
+        nextEventEl.innerHTML = data.next_event_html;
+        nextEventEl.style.display = 'block';
       } else {
-        nextAuctionEl.innerHTML = '';
-        nextAuctionEl.style.display = 'none';
+        nextEventEl.innerHTML = '';
+        nextEventEl.style.display = 'none';
       }
     }
 
     // Initialize based on current checkbox state
-    refreshNextAuction();
+    refreshNextEvent();
 
     // Update when checkbox changes
-    checkbox.addEventListener('change', refreshNextAuction);
+    checkbox.addEventListener('change', refreshNextEvent);
 
     // Also watch for tab switches to ensure display is correct
-    var tabButton = document.querySelector('[data-bs-target="#' + elementId.replace('outgoing-email-preview-', '').replace('-next-auction', '-content') + '-content"]');
+    var tabButton = document.querySelector('[data-bs-target="#' + elementId.replace('outgoing-email-preview-', '').replace('-next-event', '-content') + '-content"]');
     if (tabButton) {
-      tabButton.addEventListener('shown.bs.tab', refreshNextAuction);
+      tabButton.addEventListener('shown.bs.tab', refreshNextEvent);
     }
   }
 
-  setupAuctionToggle('id_welcome_include_auction', 'outgoing-email-preview-welcome-next-auction');
-  setupAuctionToggle('id_renewal_include_auction', 'outgoing-email-preview-renewal-next-auction');
-  setupAuctionToggle('id_expiring_soon_include_auction', 'outgoing-email-preview-expiring-next-auction');
+  setupNextEventToggle('id_welcome_include_auction', 'outgoing-email-preview-welcome-next-event');
+  setupNextEventToggle('id_renewal_include_auction', 'outgoing-email-preview-renewal-next-event');
+  setupNextEventToggle('id_expiring_soon_include_auction', 'outgoing-email-preview-expiring-next-event');
 })();
 </script>
 

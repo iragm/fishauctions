@@ -229,6 +229,17 @@
 {% endblock %}
 
 {% block extra_js %}
+<script>
+// base.html only initializes the Bootstrap 4 selector ([data-toggle]), so Bootstrap 5 tooltips
+// have to be started per page — the same thing auction_volunteers.html and htmx_table_view.html
+// do. getOrCreateInstance keeps this safe if anything else on the page initializes them too.
+document.addEventListener('DOMContentLoaded', function () {
+  if (!window.bootstrap || !bootstrap.Tooltip) { return; }
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+    bootstrap.Tooltip.getOrCreateInstance(el);
+  });
+});
+</script>
 {% if show_bap_tabs %}
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>

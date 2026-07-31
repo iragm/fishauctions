@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 # Discord auction events have always used.
 DEFAULT_AUCTION_LENGTH = datetime.timedelta(hours=2)
 
+# Pickups are a "be there at this time" slot rather than a window, so they get a short block.
+PICKUP_LENGTH = datetime.timedelta(minutes=15)
+
 
 def auction_event_window(auction):
     """(start, end) for an auction's calendar entry, or (None, None) when it can't be placed.
@@ -113,14 +116,21 @@ def sync_auction_events(club):
         for auction in auctions.select_related("club"):
             if sync_one_auction_event(auction):
                 touched += 1
+            touched += sync_pickup_events(auction)
 
     # Events whose auction is gone, unpromoted, or no longer wanted on the calendar.
     stale = ClubEvent.objects.filter(club=club, source=ClubEvent.SOURCE_AUCTION, is_deleted=False)
+    stale_pickups = ClubEvent.objects.filter(club=club, source=ClubEvent.SOURCE_PICKUP, is_deleted=False)
     if club.add_auctions_to_calendar:
-        stale = stale.filter(
-            Q(auction__isnull=True) | Q(auction__is_deleted=True) | Q(auction__promote_this_auction=False)
+        gone = Q(auction__isnull=True) | Q(auction__is_deleted=True) | Q(auction__promote_this_auction=False)
+        stale = stale.filter(gone)
+        stale_pickups = stale_pickups.filter(
+            Q(pickup_location__isnull=True)
+            | Q(pickup_location__auction__isnull=True)
+            | Q(pickup_location__auction__is_deleted=True)
+            | Q(pickup_location__auction__promote_this_auction=False)
         )
-    for event in stale:
+    for event in list(stale) + list(stale_pickups):
         retire_event(event)
         touched += 1
     return touched
@@ -174,13 +184,125 @@ def _auction_description(auction):
 
 
 def _auction_location(auction):
-    """The auction's pickup address. Only used when there's a single physical location — with
-    several, no one address is the right one to put on the calendar entry."""
-    locations = auction.physical_location_qs
-    if locations.count() != 1:
+    """Where the auction itself happens.
+
+    Online auctions have no location — the bidding happens on the website, and the addresses
+    people actually need belong on the pickup events instead. In-person auctions use their single
+    physical location; with several, no one address is the right one to advertise.
+    """
+    if auction.is_online:
         return ""
-    address = locations.first().address
-    return address[:500] if address else ""
+    # Count distinct *addresses*, not locations: switching an auction to in-person auto-creates a
+    # default location with no address, so counting rows would blank out the real one sitting
+    # next to it.
+    addresses = {
+        location.address.strip() for location in auction.physical_location_qs if (location.address or "").strip()
+    }
+    if len(addresses) != 1:
+        return ""
+    return addresses.pop()[:500]
+
+
+def pickup_slots(auction):
+    """Yield (location, slot, start) for each pickup time an online auction advertises.
+
+    Only online auctions get pickup events: for an in-person auction the "pickup" is the auction
+    itself, which already has its own event. Mail-only locations have no time or place to show.
+    """
+    if not auction.is_online:
+        return
+    for location in auction.location_qs.filter(pickup_by_mail=False):
+        for slot, start in ((1, location.pickup_time), (2, location.second_pickup_time)):
+            if start:
+                yield (location, slot, start)
+
+
+def sync_pickup_events(auction):
+    """Create, update, or retire the calendar events for an online auction's pickup times.
+
+    Each pickup time becomes its own short event at that location's address, so members can see
+    exactly when and where to collect their lots. Returns how many events changed.
+    """
+    from auctions.models import ClubEvent
+
+    club = auction.club
+    touched = 0
+    wanted = {}
+    if club and club.add_auctions_to_calendar and auction.promote_this_auction and not auction.is_deleted:
+        wanted = {(location.pk, slot): (location, start) for location, slot, start in pickup_slots(auction)}
+
+    existing = {
+        (event.pickup_location_id, event.pickup_slot): event
+        for event in ClubEvent.objects.filter(
+            pickup_location__auction=auction, source=ClubEvent.SOURCE_PICKUP
+        ).select_related("pickup_location")
+    }
+
+    for key, (location, start) in wanted.items():
+        title = _pickup_title(auction, location)
+        description = _pickup_description(auction, location)
+        address = (location.address or "")[:500]
+        event = existing.get(key)
+        if event is None:
+            ClubEvent.objects.get_or_create(
+                pickup_location=location,
+                pickup_slot=key[1],
+                defaults={
+                    "club": club,
+                    "source": ClubEvent.SOURCE_PICKUP,
+                    "title": title,
+                    "description": description,
+                    "location": address,
+                    "date_start": start,
+                    "date_end": start + PICKUP_LENGTH,
+                },
+            )
+            touched += 1
+            continue
+        changed = (
+            event.title != title
+            or event.description != description
+            or event.location != address
+            or event.date_start != start
+            or event.date_end != start + PICKUP_LENGTH
+            or event.is_deleted
+            or event.club_id != club.pk
+        )
+        if changed:
+            event.club = club
+            event.title = title
+            event.description = description
+            event.location = address
+            event.date_start = start
+            event.date_end = start + PICKUP_LENGTH
+            event.is_deleted = False
+            event.needs_google_sync = True
+            event.save()
+            touched += 1
+
+    # Pickup times that have been cleared, or that belong to an auction no longer on the calendar.
+    for key, event in existing.items():
+        if key not in wanted and not event.is_deleted:
+            retire_event(event, remote=False)
+            touched += 1
+    return touched
+
+
+def _pickup_title(auction, location):
+    """A title that stands on its own in someone's calendar, away from this site."""
+    title = f"{auction.title} pickup"
+    if location.name:
+        title = f"{title} — {location.name}"
+    return title[:255]
+
+
+def _pickup_description(auction, location):
+    parts = ["Pick up the lots you won."]
+    if location.description:
+        parts.append(location.description)
+    if location.users_must_coordinate_pickup:
+        parts.append("Coordinate the exact time with the seller.")
+    return " ".join(parts)
 
 
 def sync_club(club):
@@ -215,6 +337,26 @@ def sync_all():
             continue
         count += 1
     return count
+
+
+def next_member_facing_event(club):
+    """The club's next event worth advertising in a membership email, or None.
+
+    Pickup events are left out on purpose: they're logistics for people who already won lots, not
+    something to invite a new or renewing member to. Cancelled events are skipped too. An event
+    that's under way still counts — "our next event" shouldn't skip past today's meeting.
+    """
+    from auctions.models import ClubEvent
+
+    now = timezone.now()
+    return (
+        ClubEvent.objects.filter(club=club, is_deleted=False, cancelled=False)
+        .exclude(source=ClubEvent.SOURCE_PICKUP)
+        .filter(Q(date_end__gte=now) | Q(date_end__isnull=True, date_start__gte=now))
+        .select_related("auction")
+        .order_by("date_start")
+        .first()
+    )
 
 
 def upcoming_events(club, *, limit=None, include_past=False, past_limit=5):

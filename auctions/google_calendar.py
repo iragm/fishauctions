@@ -191,15 +191,20 @@ def _request(club, method, path, *, params=None, json=None, allow_status=()):
 
 
 def ensure_calendar(club):
-    """Get or create this club's calendar, applying the current public/private setting.
+    """Get or create this club's calendar.
 
     Safe to call repeatedly — it only creates a calendar when the club doesn't have one yet, and
     verifies an existing one still exists (an admin may have deleted it in Google Calendar).
+
+    Deliberately does *not* touch the calendar's sharing (ACL) rules. Doing that needs the
+    ``calendar.acls`` or ``calendar`` scope, both of which grant control over every calendar the
+    admin owns and put the OAuth app into Google's sensitive-scope verification track — the exact
+    trade this integration is built to avoid. Admins make the calendar public themselves, in
+    Google Calendar, in a few clicks; ``Club.google_calendar_is_public`` records that they have.
     """
     if club.google_calendar_id:
         existing = _request(club, "GET", f"/calendars/{_quote(club.google_calendar_id)}", allow_status=(404, 403))
         if existing not in (404, 403):
-            _apply_sharing(club)
             return club.google_calendar_id
         # The calendar is gone on Google's side. Drop the stale id (and sync token) and make a
         # new one, then let the events re-push.
@@ -220,24 +225,7 @@ def ensure_calendar(club):
     )
     club.google_calendar_id = created.get("id", "")
     club.save(update_fields=["google_calendar_id", "google_calendar_sync_token"])
-    _apply_sharing(club)
     return club.google_calendar_id
-
-
-def _apply_sharing(club):
-    """Make the calendar world-readable, or take that back, per google_calendar_is_public."""
-    path = f"/calendars/{_quote(club.google_calendar_id)}/acl"
-    if club.google_calendar_is_public:
-        _request(
-            club,
-            "POST",
-            path,
-            json={"role": "reader", "scope": {"type": "default"}},
-            # 409 means the public rule is already there, which is exactly what we wanted.
-            allow_status=(409,),
-        )
-    else:
-        _request(club, "DELETE", f"{path}/default", allow_status=(404,))
 
 
 def _quote(calendar_id):

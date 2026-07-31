@@ -49,46 +49,102 @@ def _greeting_name(member):
     return name or "Member"
 
 
-def _next_auction_fragment(club, current_site, include_auction=True):
-    """Return (text, html) for the 'next promoted auction' line, or ('', '')."""
-    from django.utils import timezone
+def next_event_fragment(club, current_site, *, include_event=True, as_links=True):
+    """Return (text, html) for the "our next event" line, or ('', '').
 
-    from auctions.models import Auction
+    Covers auctions and anything else on the club's calendar — meetings, swaps, talks. Shared by
+    the real emails and the settings-page preview so the two can't drift; the preview passes
+    ``as_links=False`` because a preview shouldn't contain working links.
+    """
+    from auctions import club_events
 
-    if not include_auction:
+    if not include_event:
         return "", ""
-    today = timezone.localdate()
-    auction = (
-        Auction.objects.filter(
-            club=club,
-            promote_this_auction=True,
-            is_deleted=False,
-            date_start__date__gte=today,
+    event = club_events.next_member_facing_event(club)
+    if not event:
+        return "", ""
+
+    auction = event.auction
+    when = event.date_start
+    show_time = True
+    if auction and auction.is_online:
+        # An online auction runs for days, so a start time next to the date is just noise.
+        show_time = False
+    elif auction:
+        # An in-person auction gathers at its pickup location's time, which is the time members
+        # actually need; the auction's own date_start is only "when bidding opens".
+        when = _in_person_auction_time(auction) or event.date_start
+    date_str = f"{when:%B %-d, %Y}"
+    if show_time:
+        date_str = f"{date_str} at {when:%-I:%M %p}"
+
+    details_url = f"https://{current_site.domain}{event.get_absolute_url()}"
+    details_label = "Read the auction's rules" if auction else "See the details"
+    directions_url = _event_directions_url(event)
+
+    text_parts = [f"Our next event is {event.title}", f"on {date_str}"]
+    text = " ".join(text_parts).rstrip() + "."
+    if directions_url:
+        text += f" Get directions: {directions_url}"
+    text += f" {details_label}: {details_url}"
+
+    html = " ".join(escape(part) for part in text_parts).rstrip() + "."
+    if directions_url:
+        html += (
+            f" <a href='{escape(directions_url)}'>Get directions</a>."
+            if as_links
+            else " <span class='text-info'>Get directions</span>."
         )
-        .order_by("date_start")
-        .first()
-    )
-    if not auction:
-        return "", ""
-    date_str = auction.date_start.strftime("%B %-d, %Y") if auction.date_start else ""
-    rules_url = f"https://{current_site.domain}{auction.get_absolute_url()}"
-    text_parts = [f"Our next auction will be {auction.title}"]
-    if date_str:
-        text_parts.append(f"on {date_str}")
-    location_text = ""
-    location_html = ""
-    locations = list(auction.physical_location_qs)
-    if len(locations) == 1 and locations[0].directions_link:
-        location_text = f" Get directions: {locations[0].directions_link}"
-        location_html = f" <a href='{escape(locations[0].directions_link)}'>Get directions</a>."
-    text = " ".join(text_parts).rstrip() + "." + (location_text or "") + f" Read the rules here: {rules_url}"
-    html = (
-        " ".join(escape(p) for p in text_parts).rstrip()
-        + "."
-        + location_html
-        + f" <a href='{escape(rules_url)}'>Read the auction's rules</a>."
+    html += (
+        f" <a href='{escape(details_url)}'>{escape(details_label)}</a>."
+        if as_links
+        else f" <span class='text-info'>{escape(details_label)}</span>."
     )
     return text, html
+
+
+def _real_physical_locations(auction):
+    """The auction's physical locations, ignoring placeholders.
+
+    Switching an auction to in-person auto-creates a location with no address or coordinates.
+    It isn't somewhere anyone can go, so it must not count when deciding whether an auction has
+    a single location.
+    """
+    return [
+        location
+        for location in auction.physical_location_qs
+        if (location.address or "").strip() or location.has_coordinates
+    ]
+
+
+def _in_person_auction_time(auction):
+    """When an in-person auction actually gathers, or None.
+
+    Only meaningful with a single location — with several there's no one time to advertise.
+    """
+    locations = [location for location in _real_physical_locations(auction) if location.pickup_time]
+    if len(locations) == 1:
+        return locations[0].pickup_time
+    return None
+
+
+def _event_directions_url(event):
+    """A map link for the event, falling back to the auction's single location.
+
+    Online auction events carry no location of their own — the addresses live on the pickup
+    events — but a member reading "our next event is the Spring Auction" still wants directions.
+    Only ever offered when the auction has exactly one real location: with several, a single
+    "Get directions" link would send people to the wrong one.
+    """
+    if event.location:
+        return event.map_url
+    auction = event.related_auction
+    if not auction:
+        return ""
+    locations = _real_physical_locations(auction)
+    if len(locations) == 1:
+        return locations[0].directions_link
+    return ""
 
 
 def _render_membership_email_html(
@@ -98,7 +154,7 @@ def _render_membership_email_html(
     membership_link,
     club_icon_url,
     barcode_url,
-    next_auction_html,
+    next_event_html,
     opening_text="",
     closing_text="",
 ):
@@ -116,8 +172,8 @@ def _render_membership_email_html(
             f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
             "style='max-width:320px;width:100%;height:auto;'></div><br>"
         )
-    if next_auction_html:
-        html_parts.append(f"{next_auction_html}<br><br>")
+    if next_event_html:
+        html_parts.append(f"{next_event_html}<br><br>")
     if closing_text:
         html_parts.append(escape(closing_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
@@ -142,24 +198,24 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
 
     opening_text = ""
     closing_text = ""
-    include_auction = member.club.include_next_auction_in_emails
+    include_event = member.club.include_next_auction_in_emails
 
     if email_type == "welcome":
         opening_text = member.club.welcome_opening
         closing_text = member.club.welcome_closing
-        include_auction = member.club.welcome_include_auction
+        include_event = member.club.welcome_include_auction
     elif email_type == "renewal":
         opening_text = member.club.renewal_opening
         closing_text = member.club.renewal_closing
-        include_auction = member.club.renewal_include_auction
+        include_event = member.club.renewal_include_auction
     elif email_type == "expiring_soon":
         opening_text = member.club.expiring_soon_opening
         closing_text = member.club.expiring_soon_closing
-        include_auction = member.club.expiring_soon_include_auction
+        include_event = member.club.expiring_soon_include_auction
 
     next_text, next_html = "", ""
-    if include_auction:
-        next_text, next_html = _next_auction_fragment(member.club, current_site, include_auction=include_auction)
+    if include_event:
+        next_text, next_html = next_event_fragment(member.club, current_site, include_event=include_event)
 
     text_parts = [f"Dear {_greeting_name(member)},", ""]
     if opening_text:
@@ -183,7 +239,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
         membership_link=membership_link,
         club_icon_url=club_icon_url,
         barcode_url=barcode_url,
-        next_auction_html=next_html,
+        next_event_html=next_html,
         opening_text=opening_text,
         closing_text=closing_text,
     )

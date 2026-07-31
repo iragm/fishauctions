@@ -31,6 +31,19 @@
 
 {% else %}
   {# Connected #}
+  {% if not club.google_calendar_is_public %}
+  {# Setup guidance, not an error — the site's own iCal feed already works, so this uses the
+     documented "do this first" bg-primary banner rather than alert-warning. #}
+  <div class="mt-2 mb-4 p-3 bg-primary text-white rounded bg-gradient bg-opacity-50">
+    <h5><i class="bi bi-people"></i> One more step to let members subscribe</h5>
+    <p class="mb-2">
+      Your calendar is syncing, but it's still private, so members can't add it to their own
+      Google Calendar yet. We can't make it public for you &mdash; that would mean asking for
+      access to all of your calendars instead of just this one.
+    </p>
+    <a href="#share-with-members" class="btn btn-sm btn-light">Show me how &mdash; takes a minute</a>
+  </div>
+  {% endif %}
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Google Calendar connection</span>
@@ -79,24 +92,44 @@
     </div>
   </div>
 
-  {% if club.google_calendar_ical_url %}
-  <div class="card mb-4">
-    <div class="card-header">Share it with your members</div>
+  <div class="card mb-4" id="share-with-members">
+    <div class="card-header">
+      Share it with your members
+      {% if club.google_calendar_is_public %}
+      <span class="badge bg-success text-dark ms-1"><i class="bi bi-check-circle-fill"></i> Public</span>
+      {% else %}
+      <span class="badge bg-secondary ms-1">Private</span>
+      {% endif %}
+    </div>
     <div class="card-body">
-      <p class="text-muted mb-2">
-        Anyone can subscribe to this calendar and see your events in their own. Send them either link:
+      <p class="text-muted">
+        Your club page already offers a
+        <a href="{% url 'club_events_ical' club.slug %}">subscribe link</a> that works in Google
+        Calendar, Apple Calendar and Outlook. You don't have to do anything else.
       </p>
+      <p class="text-muted mb-2">
+        If you'd also like members to subscribe to the Google calendar itself, make it public in
+        Google Calendar &mdash; we can't do it for you, because that would mean asking for access
+        to <em>all</em> of your calendars rather than just this one:
+      </p>
+      <ol class="text-muted small">
+        <li>Open <a href="https://calendar.google.com/calendar/r/settings" target="_blank" rel="noopener">Google Calendar settings</a>.</li>
+        <li>Pick <strong>{{ club.name }} events</strong> from the list on the left.</li>
+        <li>Under <strong>Access permissions for events</strong>, tick <strong>Make available to public</strong>.</li>
+        <li>Come back here and tick the box below.</li>
+      </ol>
+      {% if club.google_calendar_is_public %}
       <div class="d-flex flex-wrap gap-2">
         <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-          <i class="bi bi-google"></i> Google Calendar
+          <i class="bi bi-google"></i> Google Calendar link
         </a>
         <a href="{{ club.google_calendar_ical_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-          <i class="bi bi-calendar-week"></i> iCal feed (Apple, Outlook)
+          <i class="bi bi-calendar-week"></i> Google iCal feed
         </a>
       </div>
+      {% endif %}
     </div>
   </div>
-  {% endif %}
 {% endif %}
 
 <div class="card mb-4">
@@ -127,14 +160,19 @@
           </small>
         </label>
       </div>
+      {% if club.google_calendar_connected %}
       <div class="form-check form-switch mb-3">
         <input class="form-check-input" type="checkbox" role="switch" id="google_calendar_is_public"
                name="google_calendar_is_public" {% if club.google_calendar_is_public %}checked{% endif %}>
         <label class="form-check-label" for="google_calendar_is_public">
-          <strong>Make the Google calendar public</strong><br>
-          <small class="text-muted">Lets members subscribe to it. Turn this off to share it only with specific people in Google Calendar.</small>
+          <strong>I've shared this calendar publicly in Google Calendar</strong><br>
+          <small class="text-muted">
+            Shows the Google subscribe links on your club page. Tick this only after doing the four
+            steps below &mdash; we can't check it for you.
+          </small>
         </label>
       </div>
+      {% endif %}
       <button type="submit" class="btn btn-primary">Save settings</button>
     </form>
   </div>

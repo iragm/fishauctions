@@ -4,6 +4,7 @@ import datetime
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.contrib.sites.models import Site
 from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
@@ -146,15 +147,27 @@ class AuctionMirroringTests(TestCase):
         start, end = club_events.auction_event_window(auction)
         self.assertEqual(end - start, club_events.DEFAULT_AUCTION_LENGTH)
 
-    def test_a_single_pickup_location_becomes_the_event_location(self):
-        auction = self._auction()
+    def test_a_single_address_becomes_an_in_person_events_location(self):
+        """Only in-person auctions carry a location — see PickupEventTests for the online case."""
+        auction = self._auction(is_online=False, date_end=None)
         PickupLocation.objects.create(name="Clubhouse", auction=auction, address="1 Fish Lane", pickup_time=self.start)
         auction.save()
         self.assertEqual(ClubEvent.objects.get(auction=auction).location, "1 Fish Lane")
 
-    def test_multiple_pickup_locations_leave_the_location_blank(self):
-        """With several locations no single address is the right one to advertise."""
+    def test_an_address_less_default_location_does_not_blank_the_real_one(self):
+        """Switching an auction to in-person auto-creates a location with no address; counting
+        rows rather than addresses would wrongly treat that as 'several locations'."""
         auction = self._auction()
+        auction.is_online = False
+        auction.save()
+        PickupLocation.objects.create(name="Clubhouse", auction=auction, address="1 Fish Lane", pickup_time=self.start)
+        auction.save()
+        self.assertGreater(auction.physical_location_qs.count(), 1)
+        self.assertEqual(ClubEvent.objects.get(auction=auction).location, "1 Fish Lane")
+
+    def test_multiple_addresses_leave_the_location_blank(self):
+        """With several real addresses no single one is the right one to advertise."""
+        auction = self._auction(is_online=False, date_end=None)
         for name in ("North", "South"):
             PickupLocation.objects.create(name=name, auction=auction, address=f"{name} St", pickup_time=self.start)
         auction.save()
@@ -165,6 +178,144 @@ class AuctionMirroringTests(TestCase):
         club_events.sync_auction_events(self.club)
         club_events.sync_auction_events(self.club)
         self.assertEqual(ClubEvent.objects.filter(club=self.club, is_deleted=False).count(), 1)
+
+
+class PickupEventTests(TestCase):
+    """Online auctions get a short event for each pickup time, so members know when to collect."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Pickup Club")
+        self.start = timezone.now() + datetime.timedelta(days=5)
+        self.auction = Auction.objects.create(
+            title="Spring Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+
+    def _location(self, name, **kwargs):
+        defaults = {"auction": self.auction, "name": name, "address": f"{name} St"}
+        defaults.update(kwargs)
+        return PickupLocation.objects.create(**defaults)
+
+    def _pickups(self):
+        return ClubEvent.objects.filter(club=self.club, source=ClubEvent.SOURCE_PICKUP, is_deleted=False).order_by(
+            "date_start"
+        )
+
+    def test_one_pickup_time_makes_one_fifteen_minute_event(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("Clubhouse", pickup_time=when)
+        events = self._pickups()
+        self.assertEqual(events.count(), 1)
+        event = events.first()
+        self.assertEqual(event.date_start, when)
+        self.assertEqual(event.date_end - event.date_start, datetime.timedelta(minutes=15))
+        self.assertEqual(event.location, "Clubhouse St")
+        self.assertIn("Spring Auction pickup", event.title)
+
+    def test_two_pickup_times_on_one_location_make_two_events(self):
+        first = self.start + datetime.timedelta(days=3)
+        second = self.start + datetime.timedelta(days=4)
+        self._location("Clubhouse", pickup_time=first, second_pickup_time=second)
+        events = self._pickups()
+        self.assertEqual(events.count(), 2)
+        self.assertEqual([e.date_start for e in events], [first, second])
+        for event in events:
+            self.assertEqual(event.date_end - event.date_start, datetime.timedelta(minutes=15))
+
+    def test_two_locations_make_two_events(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("North", pickup_time=when)
+        self._location("South", pickup_time=when + datetime.timedelta(hours=2))
+        self.assertEqual(self._pickups().count(), 2)
+        self.assertEqual({e.location for e in self._pickups()}, {"North St", "South St"})
+
+    def test_in_person_auctions_get_no_pickup_events(self):
+        """For an in-person auction the pickup is the auction, which already has its own event."""
+        self.auction.is_online = False
+        self.auction.save()
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_mail_locations_get_no_pickup_event(self):
+        self._location("By mail", pickup_by_mail=True, pickup_time=self.start + datetime.timedelta(days=3))
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_a_location_with_no_time_makes_no_event(self):
+        self._location("Undecided")
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_online_auction_events_have_no_location(self):
+        """The address belongs on the pickup event — the auction itself happens on the website."""
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        auction_event = ClubEvent.objects.get(auction=self.auction)
+        self.assertEqual(auction_event.location, "")
+
+    def test_in_person_auction_events_keep_their_location(self):
+        self.auction.is_online = False
+        self.auction.save()
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        self.auction.save()
+        self.assertEqual(ClubEvent.objects.get(auction=self.auction).location, "Clubhouse St")
+
+    def test_changing_a_pickup_time_moves_the_event(self):
+        location = self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        moved = self.start + datetime.timedelta(days=4)
+        location.pickup_time = moved
+        location.save()
+        event = self._pickups().first()
+        self.assertEqual(event.date_start, moved)
+        self.assertTrue(event.needs_google_sync)
+
+    def test_clearing_a_pickup_time_retires_its_event(self):
+        location = self._location(
+            "Clubhouse",
+            pickup_time=self.start + datetime.timedelta(days=3),
+            second_pickup_time=self.start + datetime.timedelta(days=4),
+        )
+        self.assertEqual(self._pickups().count(), 2)
+        location.second_pickup_time = None
+        location.save()
+        self.assertEqual(self._pickups().count(), 1)
+
+    def test_unpromoting_the_auction_retires_its_pickup_events(self):
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        self.auction.promote_this_auction = False
+        self.auction.save()
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_syncing_repeatedly_does_not_duplicate(self):
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        club_events.sync_pickup_events(self.auction)
+        club_events.sync_auction_events(self.club)
+        self.assertEqual(self._pickups().count(), 1)
+
+    def test_pickup_events_are_not_editable_and_link_to_the_auction(self):
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        event = self._pickups().first()
+        self.assertFalse(event.is_editable)
+        self.assertTrue(event.is_automatic)
+        self.assertEqual(event.related_auction, self.auction)
+        self.assertEqual(event.get_absolute_url(), self.auction.get_absolute_url())
+
+    def test_deleting_a_location_removes_its_events_from_google(self):
+        """The rows cascade away, so the remote copies have to go first or they're orphaned."""
+        location = self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        event = self._pickups().first()
+        event.google_event_id = "g-1"
+        event.save()
+        with patch.object(club_events, "_remove_remote") as remove:
+            location.delete()
+        remove.assert_called_once()
+        self.assertEqual(ClubEvent.objects.filter(pk=event.pk).count(), 0)
+
+    def test_pickup_events_show_up_on_the_club_page(self):
+        self._location("Clubhouse", pickup_time=self.start + datetime.timedelta(days=3))
+        upcoming, _ = club_events.upcoming_events(self.club)
+        titles = [e.title for e in upcoming]
+        self.assertTrue([t for t in titles if "pickup" in t], titles)
 
 
 class UpcomingEventsTests(TestCase):
@@ -349,6 +500,31 @@ class GoogleCalendarSyncTests(TestCase):
         self.club.google_calendar_id = "cal-1"
         self.club.save()
         self.start = timezone.now() + datetime.timedelta(days=3)
+
+    def test_ensure_calendar_never_touches_sharing(self):
+        """Regression guard. Writing an ACL rule needs calendar.acls or calendar — both sensitive,
+        both granting control over every calendar the admin owns. We deliberately ask for neither,
+        so any /acl call here is a bug that breaks the club's syncing outright with
+        'Request had insufficient authentication scopes'."""
+        with patch.object(gcal, "_request", return_value={"id": "cal-1"}) as request:
+            gcal.ensure_calendar(self.club)
+        called = [f"{call[0][1]} {call[0][2]}" for call in request.call_args_list]
+        self.assertFalse([path for path in called if "/acl" in path], f"ensure_calendar hit the ACL API: {called}")
+
+    def test_ensure_calendar_reuses_an_existing_calendar(self):
+        with patch.object(gcal, "_request", return_value={"id": "cal-1"}) as request:
+            self.assertEqual(gcal.ensure_calendar(self.club), "cal-1")
+        # One GET to confirm it's still there, and no POST creating a second one.
+        self.assertEqual(len(request.call_args_list), 1)
+        self.assertEqual(request.call_args_list[0][0][1], "GET")
+
+    def test_a_calendar_deleted_in_google_is_recreated_and_events_requeued(self):
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
+        with patch.object(gcal, "_request", side_effect=[404, {"id": "cal-new"}]):
+            self.assertEqual(gcal.ensure_calendar(self.club), "cal-new")
+        event.refresh_from_db()
+        self.assertEqual(event.google_event_id, "")
+        self.assertTrue(event.needs_google_sync)
 
     def test_is_configured_needs_both_halves_of_the_oauth_app(self):
         self.assertTrue(gcal.is_configured())
@@ -645,6 +821,16 @@ class GoogleCalendarConfigViewTests(TestCase):
         self.assertFalse(self.club.create_discord_events_for_club_events)
         self.assertFalse(self.club.google_calendar_is_public)
 
+    def test_toggling_public_makes_no_google_call(self):
+        """google_calendar_is_public is the admin telling us what they did in Google Calendar —
+        it's a display flag, not something we can act on."""
+        self.client.force_login(self.admin)
+        with patch.object(gcal, "_request") as request:
+            self.client.post(self.url, {"google_calendar_is_public": "on"})
+        request.assert_not_called()
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.google_calendar_is_public)
+
     def test_connect_redirects_to_google(self):
         self.client.force_login(self.admin)
         response = self.client.get(reverse("google_calendar_connect", kwargs={"slug": self.club.slug}))
@@ -795,6 +981,241 @@ class AuctionDiscordEventTests(TestCase):
         with patch.object(discord_events.requests, "post", return_value=FakeResponse()) as post:
             discord_events.create_scheduled_event("guild-1", "x" * 250, start, start, "somewhere")
         self.assertEqual(len(post.call_args.kwargs["json"]["name"]), 100)
+
+
+class NextEventInMemberEmailTests(TestCase):
+    """Welcome/renewal/expiration emails advertise the club's next calendar event, not just
+    its next auction."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Email Club")
+        self.site = Site.objects.get_current()
+        self.start = timezone.now() + datetime.timedelta(days=5)
+
+    def _fragment(self, **kwargs):
+        from auctions.tasks import next_event_fragment
+
+        return next_event_fragment(self.club, self.site, **kwargs)
+
+    def test_no_events_produces_nothing(self):
+        self.assertEqual(self._fragment(), ("", ""))
+
+    def test_a_meeting_is_advertised(self):
+        """The whole point of the change — a club with no auction still has something to say."""
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        text, html = self._fragment()
+        self.assertIn("Our next event is Monthly Meeting", text)
+        self.assertIn("Monthly Meeting", html)
+        self.assertIn("See the details", text)
+
+    def test_a_meeting_includes_its_start_time(self):
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        text, _ = self._fragment()
+        self.assertIn(f"{self.start:%-I:%M %p}", text)
+
+    def test_an_auction_shows_the_date_without_a_time(self):
+        """An online auction spans days, so a start time next to the date is just noise."""
+        Auction.objects.create(
+            title="Spring Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+        text, _ = self._fragment()
+        self.assertIn("Our next event is Spring Auction", text)
+        self.assertIn(f"{self.start:%B %-d, %Y}", text)
+        self.assertNotIn(f"{self.start:%-I:%M %p}", text)
+        self.assertIn("Read the auction's rules", text)
+
+    def test_the_soonest_event_wins(self):
+        ClubEvent.objects.create(
+            club=self.club, title="Later Meeting", date_start=self.start + datetime.timedelta(days=10)
+        )
+        ClubEvent.objects.create(club=self.club, title="Sooner Meeting", date_start=self.start)
+        text, _ = self._fragment()
+        self.assertIn("Sooner Meeting", text)
+        self.assertNotIn("Later Meeting", text)
+
+    def test_pickup_events_are_never_advertised(self):
+        """A pickup is logistics for people who already won lots, not an invitation."""
+        auction = Auction.objects.create(
+            title="Spring Auction",
+            date_start=self.start + datetime.timedelta(days=10),
+            date_end=self.start + datetime.timedelta(days=12),
+            club=self.club,
+            is_online=True,
+        )
+        PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=self.start)
+        text, _ = self._fragment()
+        self.assertNotIn("pickup", text.lower())
+        self.assertIn("Spring Auction", text)
+
+    def test_cancelled_and_deleted_events_are_skipped(self):
+        ClubEvent.objects.create(club=self.club, title="Called Off", date_start=self.start, cancelled=True)
+        ClubEvent.objects.create(
+            club=self.club, title="Removed", date_start=self.start + datetime.timedelta(hours=1), is_deleted=True
+        )
+        ClubEvent.objects.create(club=self.club, title="Real One", date_start=self.start + datetime.timedelta(days=1))
+        text, _ = self._fragment()
+        self.assertIn("Real One", text)
+
+    def test_past_events_are_skipped(self):
+        ClubEvent.objects.create(
+            club=self.club,
+            title="Last Month",
+            date_start=timezone.now() - datetime.timedelta(days=30),
+            date_end=timezone.now() - datetime.timedelta(days=30) + datetime.timedelta(hours=1),
+        )
+        self.assertEqual(self._fragment(), ("", ""))
+
+    def test_another_clubs_events_are_not_used(self):
+        other = Club.objects.create(name="Other Email Club")
+        ClubEvent.objects.create(club=other, title="Their Meeting", date_start=self.start)
+        self.assertEqual(self._fragment(), ("", ""))
+
+    def test_turning_it_off_produces_nothing(self):
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        self.assertEqual(self._fragment(include_event=False), ("", ""))
+
+    def test_a_location_becomes_a_directions_link(self):
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start, location="1 Fish Lane")
+        text, html = self._fragment()
+        self.assertIn("Get directions", text)
+        self.assertIn("google.com/maps", html)
+
+    def test_an_online_auction_falls_back_to_its_single_pickup_address(self):
+        """The auction event carries no location of its own, but members still want directions."""
+        auction = Auction.objects.create(
+            title="Spring Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+        PickupLocation.objects.create(
+            auction=auction,
+            name="Clubhouse",
+            address="1 Fish Lane",
+            latitude=42.0,
+            longitude=-71.0,
+            pickup_time=self.start + datetime.timedelta(days=3),
+        )
+        text, _ = self._fragment()
+        self.assertIn("Get directions", text)
+
+    def test_no_directions_when_an_auction_has_several_locations(self):
+        """One 'Get directions' link across two locations would send half the club to the wrong
+        place. Only offer it when there is exactly one."""
+        auction = Auction.objects.create(
+            title="Spring Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+        PickupLocation.objects.create(
+            auction=auction, name="North", address="1 North St", latitude=42.0, longitude=-71.0,
+            pickup_time=self.start + datetime.timedelta(days=3),
+        )
+        # Second location has an address but no coordinates, so no directions_link of its own.
+        PickupLocation.objects.create(
+            auction=auction, name="South", address="2 South St",
+            pickup_time=self.start + datetime.timedelta(days=3),
+        )
+        text, _ = self._fragment()
+        self.assertNotIn("Get directions", text)
+
+    def test_an_in_person_auction_shows_its_pickup_time(self):
+        """date_start is only 'when bidding opens'; the pickup location's time is when members
+        are actually expected to turn up."""
+        auction = Auction.objects.create(
+            title="Fall Auction",
+            date_start=self.start,
+            date_end=None,
+            club=self.club,
+            is_online=False,
+        )
+        gather = (self.start + datetime.timedelta(days=1)).replace(hour=19, minute=30)
+        PickupLocation.objects.create(
+            auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=gather
+        )
+        text, _ = self._fragment()
+        self.assertIn("Fall Auction", text)
+        self.assertIn(f"{gather:%-I:%M %p}", text)
+        self.assertIn(f"{gather:%B %-d, %Y}", text)
+
+    def test_an_in_person_auction_with_several_locations_falls_back_to_its_own_time(self):
+        auction = Auction.objects.create(
+            title="Fall Auction", date_start=self.start, date_end=None, club=self.club, is_online=False
+        )
+        for name in ("North", "South"):
+            PickupLocation.objects.create(
+                auction=auction, name=name, address=f"{name} St", pickup_time=self.start + datetime.timedelta(days=1)
+            )
+        text, _ = self._fragment()
+        self.assertIn(f"{self.start:%-I:%M %p}", text)
+
+    def test_a_placeholder_location_does_not_suppress_directions(self):
+        """Switching an auction to in-person auto-creates an address-less location; counting it
+        would wrongly look like 'several locations'."""
+        auction = Auction.objects.create(
+            title="Fall Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+        auction.is_online = False
+        auction.save()
+        PickupLocation.objects.create(
+            auction=auction,
+            name="Clubhouse",
+            address="1 Fish Lane",
+            latitude=42.0,
+            longitude=-71.0,
+            pickup_time=self.start + datetime.timedelta(days=1),
+        )
+        self.assertGreater(auction.physical_location_qs.count(), 1)
+        text, _ = self._fragment()
+        self.assertIn("Get directions", text)
+
+    def test_the_preview_renders_spans_instead_of_working_links(self):
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start, location="1 Fish Lane")
+        _, html = self._fragment(as_links=False)
+        self.assertNotIn("<a href", html)
+        self.assertIn("<span class='text-info'>", html)
+
+    def test_titles_are_escaped_in_the_html(self):
+        ClubEvent.objects.create(club=self.club, title="Fish <script>alert(1)</script>", date_start=self.start)
+        _, html = self._fragment()
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_the_member_email_includes_the_event(self):
+        from auctions.tasks import send_club_member_email
+
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        self.club.welcome_include_auction = True
+        self.club.save()
+        member = ClubMember.objects.create(club=self.club, name="Pat", email="pat@example.com")
+        with patch("auctions.tasks.mail.send") as send:
+            send_club_member_email(member, "Welcome", "You're in.", email_type="welcome")
+        self.assertTrue(send.called)
+        body = send.call_args.kwargs.get("message", "") + send.call_args.kwargs.get("html_message", "")
+        self.assertIn("Monthly Meeting", body)
+
+    def test_the_member_email_omits_the_event_when_turned_off(self):
+        from auctions.tasks import send_club_member_email
+
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        self.club.welcome_include_auction = False
+        self.club.save()
+        member = ClubMember.objects.create(club=self.club, name="Pat", email="pat@example.com")
+        with patch("auctions.tasks.mail.send") as send:
+            send_club_member_email(member, "Welcome", "You're in.", email_type="welcome")
+        body = send.call_args.kwargs.get("message", "") + send.call_args.kwargs.get("html_message", "")
+        self.assertNotIn("Monthly Meeting", body)
 
 
 class SyncAllTests(TestCase):

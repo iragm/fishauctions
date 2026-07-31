@@ -10,6 +10,10 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
     <a href="{% url 'club_event_add' club.slug %}" class="btn btn-sm btn-primary">
       <i class="bi bi-calendar-plus"></i> Add event
     </a>
+    <span class="align-self-center text-muted small" data-bs-toggle="tooltip"
+          title="Promoted auctions are added here on their own, along with a short event for each of an online auction's pickup times. You only need this button for meetings, swaps, talks and the like.">
+      <i class="bi bi-info-circle"></i> Auctions are added automatically
+    </span>
     {% endif %}
   </div>
   <div class="d-flex flex-wrap gap-2">
@@ -33,14 +37,21 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
     <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
       <div>
         <div>
-          {% if event.auction %}
-          <a href="{{ event.auction.get_absolute_url }}"><strong>{{ event.title }}</strong></a>
+          {% if event.related_auction %}
+          <a href="{{ event.related_auction.get_absolute_url }}"><strong>{{ event.title }}</strong></a>
           {% else %}
           <strong>{{ event.title }}</strong>
           {% endif %}
           {% if event.cancelled %}<span class="badge bg-danger rounded-pill ms-1">Cancelled</span>{% endif %}
           {% if event.auction and event.auction.pk == current_auction_id %}
           <span class="badge bg-success text-dark rounded-pill ms-1">Current auction</span>
+          {% endif %}
+          {% if can_manage_auctions and event.is_automatic %}
+          {# Visible label, not just a tooltip — the tooltip only adds detail (style_reference.md). #}
+          <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
+                title="{% if event.source == 'pickup' %}Added automatically from this auction's pickup time. Change the pickup time on the auction and this updates itself.{% else %}Added automatically because this auction is promoted. Edit the auction and this updates itself.{% endif %}">
+            <i class="bi bi-arrow-repeat"></i> Automatic
+          </span>
           {% endif %}
         </div>
         <div class="text-muted small">
@@ -65,6 +76,10 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
         </a>
         {% if can_manage_auctions and event.is_editable %}
         <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-outline-secondary py-0">Edit</a>
+        {% endif %}
+        {% if can_manage_auctions and event.is_automatic %}
+        <a href="{{ event.related_auction.get_edit_url }}" class="btn btn-sm btn-outline-secondary py-0"
+           title="These events are generated from the auction — edit it there">Edit auction</a>
         {% endif %}
         {% if can_manage_auctions and event.auction and event.auction.pk != current_auction_id and not event.is_over %}
         <form method="post" class="d-inline">
@@ -92,8 +107,8 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
   {% for event in past_events %}
   <li class="list-group-item d-flex justify-content-between align-items-center">
     <span>
-      {% if event.auction %}
-      <a href="{{ event.auction.get_absolute_url }}">{{ event.title }}</a>
+      {% if event.related_auction %}
+      <a href="{{ event.related_auction.get_absolute_url }}">{{ event.title }}</a>
       {% else %}
       {{ event.title }}
       {% endif %}
