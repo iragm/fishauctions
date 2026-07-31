@@ -86,6 +86,16 @@ class AccountDeletionRequestTests(TestCase):
         send.assert_called_once()
         self.assertEqual(send.call_args[0][0], "leaver@example.com")
 
+    def test_the_confirmation_page_says_we_emailed_them(self):
+        response = self.client.post(reverse("account_delete"), {"confirm_username": "leaver"}, follow=True)
+        self.assertContains(response, "emailed you the date")
+
+    def test_an_account_with_no_address_is_not_told_to_check_their_inbox(self):
+        User.objects.filter(pk=self.user.pk).update(email="")
+        response = self.client.post(reverse("account_delete"), {"confirm_username": "leaver"}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "emailed you the date")
+
     def test_asking_twice_does_not_extend_the_grace_period(self):
         first = request_deletion(self.user)
         self.user.userdata.refresh_from_db()
@@ -139,6 +149,25 @@ class AccountDeletionScheduleTests(TestCase):
         self.assertEqual(process_due_deletions(), 1)
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_active)
+
+    def test_a_deactivated_account_is_still_deleted(self):
+        """account_deletion_requested is the "not done yet" marker; is_active is not, and an admin
+        deactivating someone in between must not strand their request forever."""
+        request_deletion(self.user)
+        UserData.objects.filter(user=self.user).update(
+            account_deletion_requested=timezone.now() - datetime.timedelta(days=GRACE_PERIOD_DAYS + 1)
+        )
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        self.assertEqual(process_due_deletions(), 1)
+        self.assertIsNone(UserData.objects.get(user=self.user).account_deletion_requested)
+
+    def test_an_already_deleted_account_is_not_processed_again(self):
+        request_deletion(self.user)
+        UserData.objects.filter(user=self.user).update(
+            account_deletion_requested=timezone.now() - datetime.timedelta(days=GRACE_PERIOD_DAYS + 1)
+        )
+        self.assertEqual(process_due_deletions(), 1)
+        self.assertEqual(process_due_deletions(), 0)
 
     def test_cancelled_requests_are_left_alone(self):
         request_deletion(self.user)
@@ -298,12 +327,21 @@ class ClubRecordsSurviveTests(TestCase):
         self.own_record.refresh_from_db()
         self.assertTrue(self.own_record.admin_edited)
 
-    def test_a_kept_record_is_marked_do_not_contact(self):
-        """The club keeps the record, but the person asked to be gone -- and the next admin edit
-        would otherwise sync them back onto the mailing list we just removed them from."""
+    def test_a_kept_record_keeps_its_contact_status(self):
+        """do_not_contact would archive the club's Mailchimp contact and delete its Brevo one on the
+        next sync -- the club-owned data this branch exists to leave alone."""
         delete_account(self.user)
         self.admin_record.refresh_from_db()
-        self.assertEqual(self.admin_record.contact_status, "do_not_contact")
+        self.assertEqual(self.admin_record.contact_status, "contact")
+
+    def test_the_club_history_line_does_not_quote_the_email(self):
+        """ClubMember.__str__ falls back to the email address, and this line is kept forever."""
+        from auctions.models import ClubHistory
+
+        ClubMember.objects.filter(pk=self.admin_record.pk).update(name="")
+        delete_account(self.user)
+        actions = " ".join(ClubHistory.objects.filter(club=self.club).values_list("action", flat=True))
+        self.assertNotIn("member@example.com", actions)
 
     def test_the_page_says_which_is_which(self):
         self.client.login(username="member", password="x")
@@ -311,18 +349,31 @@ class ClubRecordsSurviveTests(TestCase):
         self.assertContains(response, "stay")
         self.assertContains(response, "the club's own record of a member")
 
+    def _connect_mailchimp(self, club):
+        club.mailchimp_access_token = "token"
+        club.mailchimp_audience_id = "list"
+        club.mailchimp_server_prefix = "us1"
+        club.save()
+
     def test_marketing_contacts_are_deleted_not_just_unsubscribed(self):
         """An unsubscribe archives the contact, and the archive still holds the address."""
-        self.club.mailchimp_access_token = "token"
-        self.club.mailchimp_audience_id = "list"
-        self.club.mailchimp_server_prefix = "us1"
-        self.club.save()
+        self._connect_mailchimp(self.own_record.club)
         with (
             patch("auctions.tasks.delete_marketing_contact.delay") as delay,
             self.captureOnCommitCallbacks(execute=True),
         ):
             delete_account(self.user)
-        delay.assert_called_once_with(self.club.pk, "member@example.com")
+        delay.assert_called_once_with(self.own_record.club_id, "member@example.com")
+
+    def test_a_kept_records_mailing_list_contact_is_left_to_the_club(self):
+        """The club collected that address and answers for it; the page says to ask the club."""
+        self._connect_mailchimp(self.club)
+        with (
+            patch("auctions.tasks.delete_marketing_contact.delay") as delay,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            delete_account(self.user)
+        self.assertNotIn(self.club.pk, [call.args[0] for call in delay.call_args_list])
 
 
 class AuctionRecordsSurviveTests(StandardTestCase):
@@ -346,21 +397,47 @@ class AuctionRecordsSurviveTests(StandardTestCase):
         self.assertIsNone(self.tos.email)
         self.assertIsNone(self.tos.phone_number)
 
-    def test_a_club_managed_auction_keeps_what_the_club_keeps(self):
-        """Blanking the auction row would only leave the club's own records disagreeing."""
-        club = Club.objects.create(name="Managed club")
-        self.in_person_auction.club = club
-        self.in_person_auction.save()
-        member = ClubMember.objects.create(
-            club=club, user=self.leaver, name="Real Name", email="real@example.com", admin_edited=True
-        )
-        self.tos.clubmember = member
+    def test_a_record_an_admin_wrote_at_the_door_is_the_auctions_own(self):
+        """Taken down from what the person said in person, so it keeps its contents."""
+        self.tos.manually_added = True
         self.tos.name = "Real Name"
+        self.tos.email = "real@example.com"
         self.tos.save()
         delete_account(self.leaver)
         self.tos.refresh_from_db()
         self.assertIsNone(self.tos.user)
         self.assertEqual(self.tos.name, "Real Name")
+        self.assertEqual(self.tos.email, "real@example.com")
+
+    def test_the_auction_history_says_what_happened(self):
+        from auctions.models import AuctionHistory
+
+        delete_account(self.leaver)
+        actions = " ".join(
+            AuctionHistory.objects.filter(auction=self.in_person_auction).values_list("action", flat=True)
+        )
+        self.assertIn("deleted their site account", actions)
+        self.assertIn("555", actions)
+
+    def test_the_email_is_taken_out_of_the_auction_history(self):
+        """History is free text an admin reads back later, and some of it quotes the address."""
+        from auctions.models import AuctionHistory
+
+        AuctionHistory.objects.create(
+            auction=self.in_person_auction,
+            user=self.leaver,
+            action="Changed email from Real@Example.com to new@example.com",
+        )
+        self.tos.email = "real@example.com"
+        self.tos.save()
+        delete_account(self.leaver)
+        actions = " ".join(
+            AuctionHistory.objects.filter(auction=self.in_person_auction).values_list("action", flat=True)
+        )
+        # Matched without regard to case: an admin types an address however the person wrote it.
+        self.assertNotIn("Real@Example.com", actions)
+        self.assertIn("[deleted]", actions)
+        self.assertIn("new@example.com", actions)
 
     def test_sold_lots_stay_in_their_auction(self):
         lot = Lot.objects.create(
@@ -419,6 +496,102 @@ class AuctionRecordsSurviveTests(StandardTestCase):
         self.assertIsNone(view.ip_address)
 
 
+class SingleClubModeTests(TestCase):
+    """The membership every account gets in single-club mode is the member's own record.
+
+    SINGLE_CLUB_MODE is on by default and entrypoint.sh creates the club, so this is the ordinary
+    deployment, not an edge case: a row created for the person out of their signup form must not
+    keep their name and address in the club's roster after they've deleted their account.
+    """
+
+    def setUp(self):
+        from auctions.site_setup import get_single_club
+
+        self.club = get_single_club(create=True)
+        self.user = User.objects.create_user(username="solo", password="x", email="solo@example.com")
+
+    def test_the_auto_created_membership_belongs_to_the_member(self):
+        member = ClubMember.objects.get(club=self.club, user=self.user)
+        self.assertFalse(member.admin_edited)
+
+    def test_deleting_the_account_scrubs_it(self):
+        member = ClubMember.objects.get(club=self.club, user=self.user)
+        delete_account(self.user)
+        member.refresh_from_db()
+        self.assertIsNone(member.user)
+        self.assertNotEqual(member.name, "solo")
+        self.assertIsNone(member.email)
+
+    def test_deletion_does_not_hand_the_account_a_fresh_membership(self):
+        """The last thing delete_account does is save the User, which lands in the signal that
+        creates this membership -- and would link a brand new one straight back to the account."""
+        delete_account(self.user)
+        self.assertFalse(ClubMember.objects.filter(user=self.user).exists())
+        self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 1)
+
+
+class EverythingPersonalGoesTests(TestCase):
+    """Rows that are a profile of one person and nobody else's record."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="tracked", password="x", email="tracked@example.com")
+        self.other = User.objects.create_user(username="stranger", password="x")
+
+    def test_command_palette_searches_go(self):
+        """The page promises search history, and this is where the typed queries live."""
+        from auctions.models import CommandPaletteSearch
+
+        CommandPaletteSearch.objects.create(user=self.user, search="something private")
+        delete_account(self.user)
+        self.assertFalse(CommandPaletteSearch.objects.filter(user=self.user).exists())
+
+    def test_paired_printers_go_with_the_devices(self):
+        from auctions.models import ObservedPrinter
+
+        ObservedPrinter.objects.create(user=self.user, ble_name="MY-PRINTER-1234")
+        delete_account(self.user)
+        self.assertFalse(ObservedPrinter.objects.filter(user=self.user).exists())
+
+    def test_their_own_ban_list_goes_but_other_peoples_stay(self):
+        from auctions.models import UserBan
+
+        UserBan.objects.create(user=self.user, banned_user=self.other)
+        UserBan.objects.create(user=self.other, banned_user=self.user)
+        delete_account(self.user)
+        self.assertFalse(UserBan.objects.filter(user=self.user).exists())
+        self.assertTrue(UserBan.objects.filter(banned_user=self.user).exists())
+
+
+class AppSessionsEndWithTheRequestTests(TestCase):
+    """The app's tokens outlive the web session by months, so the request has to end them too."""
+
+    def setUp(self):
+        from allauth.account.models import EmailAddress
+
+        self.user = User.objects.create_user(username="phone", password="testpassword", email="phone@example.com")
+        EmailAddress.objects.create(user=self.user, email=self.user.email, verified=True, primary=True)
+
+    def test_refresh_tokens_are_blacklisted_when_deletion_is_requested(self):
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        RefreshToken.for_user(self.user)
+        request_deletion(self.user)
+        outstanding = OutstandingToken.objects.filter(user=self.user)
+        self.assertTrue(outstanding.exists())
+        self.assertEqual(BlacklistedToken.objects.filter(token__in=outstanding).count(), outstanding.count())
+
+    def test_signing_in_again_gets_a_working_token(self):
+        request_deletion(self.user)
+        response = self.client.post(
+            reverse("mobile-auth-login"),
+            data={"credential": "phone", "password": "testpassword"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(UserData.objects.get(user=self.user).account_deletion_requested)
+
+
 class DeletionSummaryTests(StandardTestCase):
     """The page counts this account's own records, so the warning isn't generic."""
 
@@ -435,6 +608,46 @@ class DeletionSummaryTests(StandardTestCase):
         self.assertEqual(summary["auctions_created"], 0)
         self.assertEqual(summary["club_memberships_deleted"], 1)
         self.assertEqual(summary["auctions"], AuctionTOS.objects.filter(user=self.user_with_no_lots).count())
+
+    def test_it_counts_the_auction_records_an_admin_wrote(self):
+        from auctions.account_deletion import deletion_summary
+
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(manually_added=True)
+        summary = deletion_summary(self.user_with_no_lots)
+        self.assertEqual(summary["auctions_added_by_admins"], 1)
+
+
+class MarketingContactTaskTests(TestCase):
+    """One provider being down must not leave the address sitting in the other."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Listed club")
+
+    def _run(self, mailchimp_side_effect=None):
+        from auctions.tasks import delete_marketing_contact
+
+        with (
+            patch("auctions.mailchimp.delete_contact_by_email", side_effect=mailchimp_side_effect) as mc,
+            patch("auctions.brevo.delete_contact_by_email") as brevo,
+        ):
+            try:
+                delete_marketing_contact(self.club.pk, "gone@example.com")
+            except Exception as e:  # the retry, when there was a failure
+                return mc, brevo, e
+        return mc, brevo, None
+
+    def test_both_providers_are_called(self):
+        mc, brevo, error = self._run()
+        mc.assert_called_once_with(self.club, "gone@example.com")
+        brevo.assert_called_once_with(self.club, "gone@example.com")
+        self.assertIsNone(error)
+
+    def test_brevo_still_runs_when_mailchimp_fails(self):
+        """Neither provider's API error descends from requests.RequestException, so a shared
+        try/except (or an autoretry_for list) drops the second call and never retries."""
+        mc, brevo, error = self._run(mailchimp_side_effect=RuntimeError("mailchimp is down"))
+        brevo.assert_called_once_with(self.club, "gone@example.com")
+        self.assertIsNotNone(error)
 
 
 class PickupLocationSanityTests(TestCase):

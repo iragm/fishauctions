@@ -500,6 +500,11 @@ POST_OFFICE = {
     },
     "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
+# How long post_office keeps a sent message. It stores the body and the recipient address, so this is
+# also a privacy setting: it's the one place a deleted user's address would outlive their deletion.
+# Long enough to answer "did the site email me?" and to investigate a bounce; see
+# auctions.tasks.cleanup_mail, which runs daily.
+MAIL_RETENTION_DAYS = int(os.environ.get("MAIL_RETENTION_DAYS", "30"))
 # django-ses configuration
 AWS_SES_AUTO_THROTTLE = 0.5
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")

@@ -9711,6 +9711,13 @@ class UserData(models.Model):
     last_promo_email_sent_at = models.DateTimeField(null=True, blank=True)
 
     @property
+    def account_deletion_due(self):
+        """The day this account's pending deletion runs, or None. Drives the site-wide warning."""
+        from auctions.account_deletion import deletion_due_date
+
+        return deletion_due_date(self)
+
+    @property
     def last_auction_created(self):
         return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 

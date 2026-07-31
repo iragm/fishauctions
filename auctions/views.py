@@ -15,7 +15,7 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import randint, sample, uniform
 from time import time
-from urllib.parse import quote_plus, unquote, urlencode, urlparse
+from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
 import qr_code
@@ -9445,6 +9445,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     email=obj.email,
                     phone_number=obj.phone_number or "",
                     address=obj.address or "",
+                    # The user is signing themselves up, same as the app's proximity join: until an
+                    # admin edits it, this row goes with their account.
+                    admin_edited=False,
                 )
                 apply_club_member_to_tos(auction, obj, club_member)
             obj.save()
@@ -12932,9 +12935,13 @@ class AccountDeleteView(TemplateView):
                 ),
             )
         logout(request)
+        # The confirmation page is public and the session is gone by the time it loads, so whether we
+        # managed to email anyone has to travel in the URL — an account with no address on it must
+        # not be told to go and check their inbox.
+        target = f"{reverse('account_deleted')}?emailed=1" if email else reverse("account_deleted")
         # End at /logout/ so the app turns this into a full native sign-out; it redirects an already
         # signed-out visitor straight on to the confirmation page.
-        return redirect(f"{reverse('account_logout')}?next={reverse('account_deleted')}")
+        return redirect(f"{reverse('account_logout')}?next={quote(target)}")
 
 
 class AccountDeletedView(TemplateView):
@@ -12947,6 +12954,7 @@ class AccountDeletedView(TemplateView):
 
         context = super().get_context_data(**kwargs)
         context["grace_period_days"] = GRACE_PERIOD_DAYS
+        context["emailed"] = self.request.GET.get("emailed") == "1"
         return context
 
 

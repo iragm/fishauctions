@@ -27662,6 +27662,10 @@ class MobileConfigTests(TestCase):
         SQUARE_ENVIRONMENT="sandbox",
         GOOGLE_OAUTH_CLIENT_ID="123.apps.googleusercontent.com",
         NAVBAR_BRAND="Test Auctions",
+        # Pinned empty so the exact-response assertion doesn't depend on whether the .env of the
+        # machine running the tests happens to have the Firebase config files; the firebase block
+        # has its own tests below.
+        FIREBASE_CLIENT_CONFIG={},
     )
     def test_returns_public_config_without_auth(self):
         resp = self.client.get(self.url)
@@ -27686,6 +27690,7 @@ class MobileConfigTests(TestCase):
         with override_settings(
             SQUARE_CLIENT_SECRET="sq0csp-supersecret",
             SECRET_KEY="django-secret-key-value",
+            FIREBASE_CLIENT_CONFIG={},  # same reason as above: keep the key allowlist exact
         ):
             resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)

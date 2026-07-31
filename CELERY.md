@@ -51,6 +51,7 @@ Celery handles:
 | `update_auction_stats` | Self-scheduling | Update cached auction statistics |
 | `cleanup_old_invoice_notification_tasks` | Daily at 3:00 AM | Clean up old invoice notification tasks |
 | `delete_pending_accounts` | Every 24 hours | Delete accounts whose deletion grace period is up (see `auctions/account_deletion.py`) |
+| `cleanup_mail` | Every 24 hours | Delete sent mail older than `MAIL_RETENTION_DAYS` (default 30) — post_office stores bodies and recipient addresses |
 
 ### Self-Scheduling Tasks
 

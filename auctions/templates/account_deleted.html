@@ -6,7 +6,7 @@
     <h3>Your account will be deleted</h3>
     <p>
       You've been signed out.  Your account and personal details will be deleted in
-      {{ grace_period_days }} days, and we've emailed you the date.
+      {{ grace_period_days }} days{% if emailed %}, and we've emailed you the date{% endif %}.
     </p>
     <p>
       Changed your mind?  <a href="{% url 'account_login' %}">Sign in</a> any time before then and the

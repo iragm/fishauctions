@@ -290,20 +290,20 @@ def delete_pending_accounts(self):
     call_command("delete_pending_accounts")
 
 
-@shared_task(
-    bind=True,
-    ignore_result=True,
-    autoretry_for=(requests.RequestException,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=5,
-)
+@shared_task(bind=True, ignore_result=True, retry_backoff=True, retry_backoff_max=600, max_retries=5)
 def delete_marketing_contact(self, club_pk, email):
     """Remove one address from a club's Mailchimp audience and Brevo list.
 
     Account deletion only: an ordinary unsubscribe archives the contact (which still holds the
     address), so it can't be reused here. Takes the address rather than a member pk because by the
     time this runs the member row has been emptied or unlinked.
+
+    Each provider gets its own attempt and the retry is driven by hand rather than by
+    ``autoretry_for``. Both of them raise their own exception type for an API error (mailchimp's
+    ApiClientError, brevo's BrevoApiError) and neither descends from requests.RequestException, so a
+    provider-class list is the thing most likely to quietly stop matching. Whatever goes wrong, the
+    other provider still gets called and the whole task is retried — deleting an already-deleted
+    contact is a 404 both helpers swallow.
     """
     from auctions import brevo
     from auctions import mailchimp as mc
@@ -312,8 +312,31 @@ def delete_marketing_contact(self, club_pk, email):
     club = Club.objects.filter(pk=club_pk).first()
     if not club or not email:
         return
-    mc.delete_contact_by_email(club, email)
-    brevo.delete_contact_by_email(club, email)
+    failures = []
+    for provider, delete_contact in (
+        ("Mailchimp", mc.delete_contact_by_email),
+        ("Brevo", brevo.delete_contact_by_email),
+    ):
+        try:
+            delete_contact(club, email)
+        except Exception as e:
+            logger.exception("Could not delete a deleted user's contact from %s for club %s", provider, club_pk)
+            failures.append(f"{provider}: {e}")
+    if failures:
+        raise self.retry(exc=RuntimeError("; ".join(failures)))
+
+
+@shared_task(bind=True, ignore_result=True)
+def cleanup_mail(self):
+    """
+    Delete sent mail (and its attachments) older than MAIL_RETENTION_DAYS.
+
+    post_office keeps every message it has ever sent, body and recipient address included, which
+    makes it the one place a deleted user's address would otherwise survive their deletion — and an
+    ever-growing table nobody reads. Recent mail is worth keeping: it's how a bounce, a missing
+    invoice or a "did the site email me?" question gets answered.
+    """
+    call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
 
 
 @shared_task

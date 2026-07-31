@@ -36,11 +36,12 @@
       <li>Your watched lots, saved searches, browsing history, and category interests.</li>
       <li>{% if summary.devices %}The {{ summary.devices }} device{{ summary.devices|pluralize }} you've used the app on, and their{% else %}Any app devices and their{% endif %} notification tokens &mdash; your phone stops receiving notifications.</li>
       <li>Any PayPal or Square account you connected to receive payments.</li>
-      <li>Your contact details in the mailing lists of clubs that use Mailchimp or Brevo.</li>
       {% if summary.club_memberships_deleted %}
       <li>
         {{ summary.club_memberships_deleted }} club membership{{ summary.club_memberships_deleted|pluralize }}
-        you signed yourself up for and that no club admin has edited since.
+        you signed yourself up for and that no club admin has edited since &mdash; including your place on
+        {{ summary.club_memberships_deleted|pluralize:"that club's,those clubs'" }} mailing list, if they use
+        Mailchimp or Brevo.
       </li>
       {% endif %}
     </ul>
@@ -59,6 +60,14 @@
         with your name and contact details removed.
       </li>
       {% endif %}
+      {% if summary.auctions_added_by_admins %}
+      <li>
+        {{ summary.auctions_added_by_admins }} of those record{{ summary.auctions_added_by_admins|pluralize }}
+        {{ summary.auctions_added_by_admins|pluralize:"was,were" }} written down by an auction admin when you turned
+        up in person, from what you told them at the door.  That is the auction's own note of who was there, so it
+        stays as it is &mdash; only the link to your account is removed.
+      </li>
+      {% endif %}
       {% if summary.lots %}
       <li>
         Your {{ summary.lots }} lot{{ summary.lots|pluralize }} stay in the auctions they were sold in, listed without a
@@ -70,12 +79,16 @@
         {{ summary.club_memberships_kept }} club membership record{{ summary.club_memberships_kept|pluralize }}
         stay{{ summary.club_memberships_kept|pluralize:"s," }} with the club.  A club admin created or edited
         {{ summary.club_memberships_kept|pluralize:"it,them" }}, so {{ summary.club_memberships_kept|pluralize:"it is,they are" }}
-        the club's own record of a member &mdash; including dues paid and award points.  We remove the link to your
-        account and mark you as do-not-contact, so the club stops emailing you; ask the club directly if you want
-        the record itself removed.
+        the club's own record of a member &mdash; including dues paid, award points, and your place on the club's
+        mailing list.  We remove the link to your account and nothing else.  To have the record itself deleted, or to
+        stop the club emailing you, ask the club directly.
       </li>
       {% endif %}
       <li>Chat messages and lot comments you posted stay on the lots they belong to, with no name attached.</li>
+      <li>
+        Auction and club history keeps a record of what happened, with no account attached.  Where those notes
+        mention your email address, the address is replaced with <em>[deleted]</em>.
+      </li>
     </ul>
 
     {% if summary.auctions_created or summary.clubs_administered %}
