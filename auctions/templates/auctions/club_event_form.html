@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}{% if is_edit %}Edit event{% else %}Add event{% endif %} &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+<h3 class="mb-3">{% if is_edit %}Edit event{% else %}Add an event{% endif %}</h3>
+
+<div class="card mb-3">
+  <div class="card-body">
+    {% crispy form %}
+  </div>
+</div>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <a href="{% url 'club_detail' club.slug %}" class="btn btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to {{ club.name }}
+  </a>
+  {% if is_edit %}
+  <form method="post" onsubmit="return confirm('Delete this event? It will also be removed from Google Calendar and Discord.');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete">
+    <button type="submit" class="btn btn-danger">
+      <i class="bi bi-trash"></i> Delete event
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+<p class="text-muted small mt-3">
+  <i class="bi bi-info-circle"></i>
+  This event shows up on your club page right away.
+  {% if club.google_calendar_connected %}It's added to your Google Calendar too.{% endif %}
+  {% if club.discord_server_id and club.create_discord_events_for_club_events %}
+  A Discord event is created for it as long as it's in the future.
+  {% endif %}
+  {% if not club.google_calendar_connected %}
+  <a href="{% url 'club_google_calendar_config' club.slug %}">Connect Google Calendar</a> to sync it there as well.
+  {% endif %}
+</p>
+{% endblock %}

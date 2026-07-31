@@ -940,6 +940,21 @@ MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 
 # Brevo integration: each club connects with its own API key (no site-level config needed).
 
+# Google Calendar integration (one global OAuth app; each club authorizes it and gets its own
+# secondary calendar). Create an OAuth 2.0 "Web application" client in the Google Cloud console
+# and add https://<your-domain>/clubs/google-calendar/callback/ as an authorized redirect URI.
+#
+# The default scope is calendar.app.created, which only lets us touch calendars this app itself
+# created. That is all the integration needs, and it keeps the app out of Google's "sensitive
+# scope" verification track. Override GOOGLE_CALENDAR_SCOPE only if you know you need broader
+# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar).
+GOOGLE_CALENDAR_CLIENT_ID = os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "")
+GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "")
+GOOGLE_CALENDAR_SCOPE = (
+    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip()
+    or "https://www.googleapis.com/auth/calendar.app.created https://www.googleapis.com/auth/userinfo.email"
+)
+
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")

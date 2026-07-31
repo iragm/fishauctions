@@ -751,6 +751,20 @@ def update_expired_membership_discord_roles(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def sync_club_calendars(self):
+    """Keep every club's events, Google Calendar, and Discord scheduled events in step.
+
+    Does three things per club: mirror promoted auctions into events, exchange changes with
+    Google Calendar (push ours, pull theirs), and create Discord events for anything new. Each
+    club is isolated, so one broken connection doesn't stop the rest.
+    """
+    from auctions import club_events
+
+    count = club_events.sync_all()
+    logger.info("Synced calendars for %s club(s)", count)
+
+
+@shared_task(bind=True, ignore_result=True)
 def auction_emails(self):
     """
     Send auction-related drip marketing emails.

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Google Calendar &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{% include "club_ribbon.html" %}
+
+{% if not google_calendar_configured %}
+  <div class="alert alert-warning text-dark">
+    <i class="bi bi-exclamation-triangle"></i>
+    Google Calendar is not configured on this site. Contact your site administrator.
+  </div>
+
+{% elif not club.google_calendar_connected %}
+  {# Not connected yet #}
+  <div class="card mb-4">
+    <div class="card-header">Connect Google Calendar</div>
+    <div class="card-body">
+      <p class="text-muted">
+        Connect your club's Google account and we'll make a calendar called
+        &ldquo;{{ club.name }} events&rdquo; in it. From then on your auctions and events appear
+        there automatically, and anything you add in Google Calendar shows up on your club page.
+      </p>
+      <p class="text-muted small">
+        We can only see and change the calendar we create &mdash; not the rest of your Google account.
+      </p>
+      <a href="{% url 'google_calendar_connect' club.slug %}" class="btn btn-primary">
+        <i class="bi bi-google"></i> Connect Google Calendar
+      </a>
+    </div>
+  </div>
+
+{% else %}
+  {# Connected #}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Google Calendar connection</span>
+      <span class="badge bg-success text-dark"><i class="bi bi-check-circle-fill"></i> Connected</span>
+    </div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-4">Google account</dt>
+        <dd class="col-sm-8">{{ club.google_calendar_account_email|default:"—" }}</dd>
+        <dt class="col-sm-4">Calendar</dt>
+        <dd class="col-sm-8">
+          {{ club.name }} events
+          {% if club.google_calendar_public_url %}
+          &mdash; <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener">open in Google Calendar</a>
+          {% endif %}
+        </dd>
+        <dt class="col-sm-4">Upcoming events</dt>
+        <dd class="col-sm-8">{{ upcoming_count }}{% if auction_event_count %} ({{ auction_event_count }} from auctions){% endif %}</dd>
+        <dt class="col-sm-4">Last sync</dt>
+        <dd class="col-sm-8">{{ club.google_calendar_last_sync|default:"—" }}</dd>
+      </dl>
+      <p class="text-muted small mt-3 mb-0">
+        <i class="bi bi-info-circle"></i>
+        Changes sync both ways every 15 minutes, and immediately when you add an event here.
+      </p>
+      {% if club.google_calendar_last_error %}
+        <div class="alert alert-danger mt-3 mb-0 small">
+          <i class="bi bi-exclamation-triangle-fill"></i> Last error: {{ club.google_calendar_last_error }}
+        </div>
+      {% endif %}
+    </div>
+    <div class="card-footer">
+      <form method="post" action="{% url 'google_calendar_sync_now' club.slug %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm">
+          <i class="bi bi-arrow-clockwise"></i> Sync now
+        </button>
+      </form>
+      <form method="post" action="{% url 'google_calendar_disconnect' club.slug %}" class="d-inline"
+            onsubmit="return confirm('Disconnect Google Calendar? The calendar stays in your Google account, but syncing will stop.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger btn-sm">
+          <i class="bi bi-x-circle"></i> Disconnect
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% if club.google_calendar_ical_url %}
+  <div class="card mb-4">
+    <div class="card-header">Share it with your members</div>
+    <div class="card-body">
+      <p class="text-muted mb-2">
+        Anyone can subscribe to this calendar and see your events in their own. Send them either link:
+      </p>
+      <div class="d-flex flex-wrap gap-2">
+        <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+          <i class="bi bi-google"></i> Google Calendar
+        </a>
+        <a href="{{ club.google_calendar_ical_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+          <i class="bi bi-calendar-week"></i> iCal feed (Apple, Outlook)
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header">Event settings</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="add_auctions_to_calendar"
+               name="add_auctions_to_calendar" {% if club.add_auctions_to_calendar %}checked{% endif %}>
+        <label class="form-check-label" for="add_auctions_to_calendar">
+          <strong>Add auctions to the calendar</strong><br>
+          <small class="text-muted">Every promoted auction becomes an event on your club page{% if club.google_calendar_connected %} and in Google Calendar{% endif %}.</small>
+        </label>
+      </div>
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="create_discord_events_for_club_events"
+               name="create_discord_events_for_club_events" {% if club.create_discord_events_for_club_events %}checked{% endif %}>
+        <label class="form-check-label" for="create_discord_events_for_club_events">
+          <strong>Create Discord events for calendar events</strong><br>
+          <small class="text-muted">
+            {% if discord_connected %}
+            Meetings and other events get a Discord scheduled event. Auctions are handled by the
+            <a href="{% url 'club_discord_config' club.slug %}">Discord settings</a>, so they're never doubled up.
+            {% else %}
+            <a href="{% url 'club_discord_config' club.slug %}">Connect a Discord server</a> to use this.
+            {% endif %}
+          </small>
+        </label>
+      </div>
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="google_calendar_is_public"
+               name="google_calendar_is_public" {% if club.google_calendar_is_public %}checked{% endif %}>
+        <label class="form-check-label" for="google_calendar_is_public">
+          <strong>Make the Google calendar public</strong><br>
+          <small class="text-muted">Lets members subscribe to it. Turn this off to share it only with specific people in Google Calendar.</small>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary">Save settings</button>
+    </form>
+  </div>
+</div>
+
+<p class="text-muted small">
+  <i class="bi bi-info-circle"></i>
+  Your club page always offers an
+  <a href="{% url 'club_events_ical' club.slug %}">iCal feed</a> of your events, whether or not
+  Google Calendar is connected.
+</p>
+{% endblock %}

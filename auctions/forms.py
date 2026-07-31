@@ -40,6 +40,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubBapCategoryOverride,
+    ClubEvent,
     ClubMember,
     ClubMoney,
     Invoice,
@@ -4108,6 +4109,54 @@ class ClubMemberSelfServiceForm(forms.ModelForm):
     class Meta:
         model = ClubMember
         fields = ["name", "phone_number", "address"]
+
+
+class ClubEventForm(forms.ModelForm):
+    """Add or edit an event on a club's calendar.
+
+    Kept deliberately short — title and a start time are the only things required, everything
+    else is optional, so posting a meeting takes a few seconds.
+    """
+
+    class Meta:
+        model = ClubEvent
+        fields = ["title", "date_start", "date_end", "location", "description"]
+        widgets = {
+            "date_start": DateTimePickerInput(),
+            "date_end": DateTimePickerInput(),
+            "location": forms.TextInput(attrs={"placeholder": "123 Main St, Springfield"}),
+            "description": forms.Textarea(attrs={"rows": 4}),
+        }
+        help_texts = {
+            "title": "For example: Monthly meeting, or Spring swap meet.",
+            "date_end": "Optional. Left blank, the event is assumed to run two hours.",
+            "description": "Optional. Shown on your club page, in Google Calendar, and in Discord.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["date_end"].required = False
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "title",
+            Div(
+                Div("date_start", css_class="col-md-6"),
+                Div("date_end", css_class="col-md-6"),
+                css_class="row",
+            ),
+            "location",
+            "description",
+        )
+        self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        start = cleaned_data.get("date_start")
+        end = cleaned_data.get("date_end")
+        if start and end and end <= start:
+            self.add_error("date_end", "The end time has to be after the start time.")
+        return cleaned_data
 
 
 class ClubEditForm(forms.ModelForm):

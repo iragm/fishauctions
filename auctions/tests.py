@@ -19211,7 +19211,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertIsNone(auction.club)
 
     def test_club_detail_shows_promoted_auctions(self):
-        """Club detail page lists promoted auctions belonging to that club"""
+        """The club page's event list includes promoted auctions belonging to that club"""
         auction = Auction.objects.create(
             title="Club Promoted Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -19223,10 +19223,10 @@ class ClubAuctionIntegrationTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(auction, response.context["club_auctions"])
+        self.assertIn(auction, [event.auction for event in response.context["upcoming_events"]])
 
     def test_club_detail_does_not_show_unpromoted_auctions(self):
-        """Club detail page does not list unpromoted auctions"""
+        """Unpromoted auctions are never mirrored onto the calendar"""
         Auction.objects.create(
             title="Unpromoted Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -19238,19 +19238,20 @@ class ClubAuctionIntegrationTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(list(response.context["club_auctions"])), 0)
+        self.assertEqual(len(list(response.context["upcoming_events"])), 0)
 
-    def test_club_detail_lists_newest_auctions_first(self):
-        older = Auction.objects.create(
-            title="Older Auction",
+    def test_club_detail_lists_soonest_events_first(self):
+        """The list is a calendar now, so it reads forward in time rather than newest-first."""
+        sooner = Auction.objects.create(
+            title="Sooner Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
             date_end=timezone.now() + timezone.timedelta(days=14),
             created_by=self.owner,
             club=self.club,
             promote_this_auction=True,
         )
-        newer = Auction.objects.create(
-            title="Newer Auction",
+        later = Auction.objects.create(
+            title="Later Auction",
             date_start=timezone.now() + timezone.timedelta(days=21),
             date_end=timezone.now() + timezone.timedelta(days=28),
             created_by=self.owner,
@@ -19259,8 +19260,8 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
-        auctions = list(response.context["club_auctions"])
-        self.assertEqual([auction.pk for auction in auctions[:2]], [newer.pk, older.pk])
+        events = list(response.context["upcoming_events"])
+        self.assertEqual([event.auction_id for event in events[:2]], [sooner.pk, later.pk])
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
         """When a member gains manage_auctions permission, existing auctions get club filled in"""

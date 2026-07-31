@@ -5,7 +5,7 @@ import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import channels.layers
 import pytz
@@ -1064,6 +1064,68 @@ class Club(CloudflareImageMixin, models.Model):
     brevo_last_sync = models.DateTimeField(null=True, blank=True)
     brevo_last_error = models.TextField(blank=True)
 
+    # Google Calendar integration (two-way sync with a secondary calendar this site creates in
+    # the club's own Google account). Connected per-club via OAuth; see auctions/google_calendar.py
+    # and the GoogleCalendar*View classes. Tokens are stored encrypted at rest.
+    google_calendar_refresh_token = EncryptedCharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="OAuth refresh token for the club's Google account (stored encrypted).",
+    )
+    google_calendar_access_token = EncryptedCharField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        help_text="Short-lived OAuth access token, cached until google_calendar_token_expires.",
+    )
+    google_calendar_token_expires = models.DateTimeField(null=True, blank=True)
+    google_calendar_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Calendar id of the secondary calendar we created for this club.",
+    )
+    google_calendar_account_email = models.CharField(
+        max_length=255, blank=True, help_text="The Google account that authorized us, shown on the settings page."
+    )
+    google_calendar_connected_on = models.DateTimeField(null=True, blank=True)
+    google_calendar_connected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The club admin who connected Google Calendar.",
+    )
+    google_calendar_sync_token = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Google's incremental sync token, so each pull only fetches what changed.",
+    )
+    google_calendar_is_public = models.BooleanField(
+        default=True,
+        verbose_name="Make the Google calendar public",
+        help_text=(
+            "Let anyone view the calendar and subscribe to it. Turn this off to keep it visible "
+            "only to people you share it with directly in Google Calendar."
+        ),
+    )
+    google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
+    google_calendar_last_error = models.TextField(blank=True)
+    add_auctions_to_calendar = models.BooleanField(
+        default=True,
+        verbose_name="Add auctions to the calendar",
+        help_text="Automatically add each promoted auction to this club's events and Google Calendar.",
+    )
+    create_discord_events_for_club_events = models.BooleanField(
+        default=True,
+        verbose_name="Create Discord events for calendar events",
+        help_text=(
+            "Create a Discord scheduled event for each club event. Auctions are handled by the "
+            "Discord auction event setting instead, so they are never doubled up."
+        ),
+    )
+
     class Meta:
         ordering = ["name"]
 
@@ -1106,6 +1168,25 @@ class Club(CloudflareImageMixin, models.Model):
     def brevo_connected(self):
         """True when this club has an active Brevo connection (API key) with a list selected."""
         return bool(self.brevo_api_key and self.brevo_list_id)
+
+    @property
+    def google_calendar_connected(self):
+        """True when this club has authorized Google Calendar and we've provisioned its calendar."""
+        return bool(self.google_calendar_refresh_token and self.google_calendar_id)
+
+    @property
+    def google_calendar_public_url(self):
+        """Google's public 'add this calendar' link, or empty when not shareable."""
+        if not (self.google_calendar_connected and self.google_calendar_is_public):
+            return ""
+        return "https://calendar.google.com/calendar/render?cid=" + quote_plus(self.google_calendar_id)
+
+    @property
+    def google_calendar_ical_url(self):
+        """Google's public iCal feed for this club's calendar, or empty when not shareable."""
+        if not (self.google_calendar_connected and self.google_calendar_is_public):
+            return ""
+        return f"https://calendar.google.com/calendar/ical/{quote_plus(self.google_calendar_id)}/public/basic.ics"
 
     @property
     def icon_display_url(self):
@@ -2252,6 +2333,136 @@ class ClubHistory(models.Model):
     class Meta:
         ordering = ["-timestamp"]
         verbose_name_plural = "Club history"
+
+
+class ClubEvent(models.Model):
+    """Something on a club's calendar: a meeting, a swap, a talk, or an auction.
+
+    This is the single source of truth behind the club page's event list, the club's Google
+    Calendar, and Discord scheduled events. Events reach it three ways:
+
+    * ``manual``  — an admin filled in the "Add event" form on the club page.
+    * ``auction`` — mirrored from a promoted Auction (see ``sync_auction_events``). These stay
+      in step with the auction's dates and are never editable by hand.
+    * ``google``  — pulled in from the club's Google Calendar, so an admin who adds a meeting
+      in Google Calendar gets it on the club page (and in Discord) for free.
+
+    Pushing to Google and Discord is idempotent: ``google_event_id`` / ``discord_event_id``
+    record what we already created, so a retry updates instead of duplicating.
+    """
+
+    SOURCE_MANUAL = "manual"
+    SOURCE_AUCTION = "auction"
+    SOURCE_GOOGLE = "google"
+    SOURCE_CHOICES = (
+        (SOURCE_MANUAL, "Created on this site"),
+        (SOURCE_AUCTION, "From an auction"),
+        (SOURCE_GOOGLE, "From Google Calendar"),
+    )
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="events")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+    location = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Where is it? A street address works best — it turns into a map link.",
+    )
+    date_start = models.DateTimeField("Starts")
+    date_end = models.DateTimeField("Ends", null=True, blank=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    auction = models.ForeignKey(
+        "Auction",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="calendar_events",
+        help_text="Set for events mirrored from an auction.",
+    )
+    google_event_id = models.CharField(
+        max_length=1024, blank=True, help_text="Event id in the club's Google Calendar, once pushed."
+    )
+    discord_event_id = models.CharField(
+        max_length=100, blank=True, help_text="Discord scheduled event id, once created."
+    )
+    discord_event_attempted = models.BooleanField(
+        default=False,
+        help_text="Set once we've tried to create a Discord event, so a failure isn't retried forever.",
+    )
+    needs_google_sync = models.BooleanField(
+        default=True,
+        help_text="Set when the event changes on our side and is waiting to be pushed to Google.",
+    )
+    cancelled = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["date_start"]
+        indexes = [
+            models.Index(fields=["club", "is_deleted", "date_start"]),
+        ]
+        constraints = [
+            # One mirrored event per auction, so two concurrent syncs can't double up. Only
+            # auction events set `auction` at all, and MariaDB lets a unique index hold any
+            # number of NULLs, so this leaves manual and Google-sourced events alone. (A
+            # conditional constraint would have been more explicit but MariaDB drops those.)
+            models.UniqueConstraint(fields=["auction"], name="unique_auction_event"),
+        ]
+
+    def __str__(self):
+        return self.title
+
+    def get_absolute_url(self):
+        """Auction events link to the auction; everything else links to the club page."""
+        if self.auction_id and self.auction:
+            return self.auction.get_absolute_url()
+        return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"#event-{self.pk}"
+
+    @property
+    def is_editable(self):
+        """Auction events are owned by the auction — edit the auction instead."""
+        return self.source != self.SOURCE_AUCTION
+
+    @property
+    def effective_end(self):
+        """A usable end time. Google and Discord both require one, and admins often leave it blank."""
+        if self.date_end and self.date_end > self.date_start:
+            return self.date_end
+        return self.date_start + datetime.timedelta(hours=2)
+
+    @property
+    def is_over(self):
+        return self.effective_end < timezone.now()
+
+    @property
+    def map_url(self):
+        """Google Maps search link for the location, or empty when there's no location."""
+        if not self.location:
+            return ""
+        return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(self.location)
+
+    @property
+    def add_to_calendar_url(self):
+        """A 'save this to my calendar' link that works for anyone, with or without the club
+        having connected Google Calendar."""
+        params = {
+            "action": "TEMPLATE",
+            "text": self.title,
+            "dates": (
+                f"{self.date_start.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}/"
+                f"{self.effective_end.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
+            ),
+        }
+        if self.description:
+            params["details"] = self.description
+        if self.location:
+            params["location"] = self.location
+        return "https://calendar.google.com/calendar/render?" + urlencode(params)
 
 
 class ClubAPIKey(models.Model):

@@ -109,6 +109,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
+from . import club_events, discord_events
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -145,6 +146,7 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
+    ClubEventForm,
     ClubMemberAdminForm,
     ClubMemberDiscordForm,
     ClubMemberMergeReviewForm,
@@ -202,6 +204,7 @@ from .models import (
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
     ClubDiscordRole,
+    ClubEvent,
     ClubHistory,
     ClubMember,
     ClubMoney,
@@ -1027,6 +1030,8 @@ def _club_points_chart_data(club, member):
 
 
 CLUB_DETAIL_AUCTION_LIMIT = 10
+CLUB_DETAIL_EVENT_LIMIT = 20
+CLUB_DETAIL_PAST_EVENT_LIMIT = 5
 
 
 class ClubViewMixin:
@@ -12247,6 +12252,379 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
         return render(request, "auctions/club_mailchimp_settings.html", context)
 
 
+GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY = "google_calendar_oauth_club_slug"
+
+
+class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """Full-page Google Calendar settings/status panel for a club."""
+
+    active_tab = "google_calendar"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        upcoming, _ = club_events.upcoming_events(club)
+        context = {
+            "club": club,
+            "view": self,
+            "google_calendar_configured": gcal.is_configured(),
+            "upcoming_count": upcoming.count(),
+            "auction_event_count": club.events.filter(is_deleted=False, source=ClubEvent.SOURCE_AUCTION).count(),
+            "discord_connected": bool(club.discord_server_id),
+        }
+        return render(request, "auctions/club_google_calendar_settings.html", context)
+
+    def post(self, request, slug):
+        """Save the checkboxes on the settings page."""
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        was_public = club.google_calendar_is_public
+        club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
+        club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
+        club.google_calendar_is_public = "google_calendar_is_public" in request.POST
+        club.save(
+            update_fields=[
+                "add_auctions_to_calendar",
+                "create_discord_events_for_club_events",
+                "google_calendar_is_public",
+            ]
+        )
+        if club.google_calendar_connected and was_public != club.google_calendar_is_public:
+            try:
+                gcal.ensure_calendar(club)
+            except gcal.GoogleCalendarError as exc:
+                messages.error(request, f"Saved, but Google wouldn't change the sharing setting: {exc}")
+                return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
+        messages.success(request, "Calendar settings saved.")
+        return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
+
+
+class GoogleCalendarConnectView(LoginRequiredMixin, View):
+    """Start the Google Calendar OAuth flow for a club (requires permission_edit_club)."""
+
+    def get(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_edit_club"):
+            raise PermissionDenied()
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        if not gcal.is_configured():
+            messages.error(request, "Google Calendar is not configured on this site. Contact your site administrator.")
+            return redirect(config_url)
+        # Stash the club so the callback (which has no slug) knows what we're connecting.
+        request.session[GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY] = club.slug
+        redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
+        # Reuse the per-user unsubscribe UUID as the anti-CSRF state, same as Mailchimp/Square.
+        return redirect(gcal.authorize_url(redirect_uri, request.user.userdata.unsubscribe_link))
+
+
+class GoogleCalendarCallbackView(LoginRequiredMixin, View):
+    """Google redirects here after the admin authorizes. Stores the tokens, provisions the
+    calendar, and pushes whatever the club already has on its event list."""
+
+    def get(self, request):
+        from auctions import google_calendar as gcal
+
+        slug = request.session.get(GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY)
+        club = Club.objects.filter(slug=slug).first() if slug else None
+        if not club or not check_club_permission(request.user, club, "permission_edit_club"):
+            messages.error(request, "Your Google Calendar connection session expired. Please try again.")
+            return redirect(reverse("home"))
+
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        error = request.GET.get("error")
+        if error:
+            messages.error(request, f"Google authorization failed: {error}")
+            return redirect(config_url)
+
+        code = request.GET.get("code")
+        state = request.GET.get("state")
+        if not code or state != request.user.userdata.unsubscribe_link:
+            messages.error(request, "Invalid Google authorization response. Please try again.")
+            return redirect(config_url)
+
+        redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
+        try:
+            refresh_token, access_token, expires_in, account_email = gcal.exchange_code(code, redirect_uri)
+        except gcal.GoogleCalendarError as exc:
+            logger.exception("Google Calendar token exchange failed for club %s", club.pk)
+            messages.error(request, str(exc))
+            return redirect(config_url)
+
+        club.google_calendar_refresh_token = refresh_token
+        club.google_calendar_access_token = access_token
+        club.google_calendar_token_expires = timezone.now() + timedelta(seconds=int(expires_in))
+        club.google_calendar_account_email = account_email
+        club.google_calendar_connected_on = timezone.now()
+        club.google_calendar_connected_by = request.user
+        club.google_calendar_sync_token = ""
+        club.google_calendar_last_error = ""
+        club.save(
+            update_fields=[
+                "google_calendar_refresh_token",
+                "google_calendar_access_token",
+                "google_calendar_token_expires",
+                "google_calendar_account_email",
+                "google_calendar_connected_on",
+                "google_calendar_connected_by",
+                "google_calendar_sync_token",
+                "google_calendar_last_error",
+            ]
+        )
+        request.session.pop(GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY, None)
+
+        try:
+            gcal.ensure_calendar(club)
+        except gcal.GoogleCalendarError as exc:
+            logger.exception("Could not create the Google calendar for club %s", club.pk)
+            messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
+            return redirect(config_url)
+
+        # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
+        club_events.sync_auction_events(club)
+        gcal.sync_club(club)
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Connected Google Calendar ({account_email or 'account'})",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, "Google Calendar connected! Your events are syncing now.")
+        return redirect(config_url)
+
+
+class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
+    """Run a full sync right now, so an admin doesn't have to wait for the periodic task."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        club = self.club
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        if not club.google_calendar_connected:
+            messages.error(request, "Google Calendar is not connected.")
+            return redirect(config_url)
+        club_events.sync_club(club)
+        club.refresh_from_db()
+        if club.google_calendar_last_error:
+            messages.error(request, f"Sync failed: {club.google_calendar_last_error}")
+        else:
+            messages.success(request, "Calendar synced.")
+        return redirect(config_url)
+
+
+class GoogleCalendarDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Forget the Google connection. The calendar itself stays in the club's Google account."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        gcal.disconnect(club)
+        ClubHistory.objects.create(
+            club=club, user=request.user, action="Disconnected Google Calendar", applies_to="SETTINGS"
+        )
+        messages.success(
+            request,
+            "Google Calendar disconnected. The calendar itself is still in your Google account — "
+            "delete it there if you no longer want it.",
+        )
+        return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
+
+
+class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
+    """The 'Add event' button on the club page."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self._can_manage():
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _can_manage(self):
+        return (
+            self.user_has_club_permission("permission_admin")
+            or self.user_has_club_permission("permission_manage_auctions")
+            or self.user_has_club_permission("permission_edit_club")
+        )
+
+    def get(self, request, slug):
+        form = ClubEventForm()
+        return render(request, "auctions/club_event_form.html", self._context(form))
+
+    def post(self, request, slug):
+        form = ClubEventForm(request.POST)
+        if not form.is_valid():
+            return render(request, "auctions/club_event_form.html", self._context(form))
+        event = form.save(commit=False)
+        event.club = self.club
+        event.created_by = request.user
+        event.source = ClubEvent.SOURCE_MANUAL
+        event.save()
+        _push_event_to_integrations(request, event)
+        messages.success(request, f"Added {event.title}.")
+        return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+
+    def _context(self, form):
+        return {"club": self.club, "view": self, "form": form, "is_edit": False}
+
+
+class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
+    """Edit or delete one club event."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self._can_manage():
+            raise PermissionDenied()
+        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
+        if not self.event.is_editable:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def _can_manage(self):
+        return (
+            self.user_has_club_permission("permission_admin")
+            or self.user_has_club_permission("permission_manage_auctions")
+            or self.user_has_club_permission("permission_edit_club")
+        )
+
+    def get(self, request, slug, pk):
+        form = ClubEventForm(instance=self.event)
+        return render(request, "auctions/club_event_form.html", self._context(form))
+
+    def post(self, request, slug, pk):
+        club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        if request.POST.get("action") == "delete":
+            title = self.event.title
+            club_events.retire_event(self.event)
+            messages.success(request, f"Deleted {title}.")
+            return redirect(club_url)
+        form = ClubEventForm(request.POST, instance=self.event)
+        if not form.is_valid():
+            return render(request, "auctions/club_event_form.html", self._context(form))
+        event = form.save(commit=False)
+        event.needs_google_sync = True
+        event.save()
+        _push_event_to_integrations(request, event)
+        messages.success(request, f"Updated {event.title}.")
+        return redirect(club_url)
+
+    def _context(self, form):
+        return {"club": self.club, "view": self, "form": form, "is_edit": True, "event": self.event}
+
+
+def _push_event_to_integrations(request, event):
+    """Send a just-saved event to Google Calendar and Discord.
+
+    Done inline so an admin sees the result immediately rather than waiting for the periodic
+    task. Failures are reported but never block the save — the event is already on the club page,
+    and the periodic task retries the push.
+    """
+    from auctions import google_calendar as gcal
+
+    club = event.club
+    if club.google_calendar_connected:
+        try:
+            gcal.push_event(event)
+        except gcal.GoogleCalendarError as exc:
+            logger.warning("Could not push event %s to Google Calendar: %s", event.pk, exc)
+            messages.warning(request, f"Saved, but Google Calendar didn't accept it yet: {exc}")
+    if club.discord_server_id and club.create_discord_events_for_club_events:
+        if event.discord_event_id:
+            discord_events.update_scheduled_event(
+                club.discord_server_id,
+                event.discord_event_id,
+                event.title,
+                event.date_start,
+                event.effective_end,
+                event.location,
+                event.description,
+            )
+        elif not event.discord_event_attempted and event.date_start > timezone.now():
+            discord_events.sync_club_events(club)
+
+
+class ClubEventsICalView(View):
+    """A public iCal feed of a club's events, at /clubs/<slug>/events.ics.
+
+    Works whether or not the club has connected Google Calendar, so any club can hand members a
+    subscribe link. Anyone with the URL can read it — the same events are already on the public
+    club page.
+    """
+
+    def get(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not club.enable_club_page:
+            raise Http404
+        upcoming, past = club_events.upcoming_events(club, include_past=True, past_limit=25)
+        domain = Site.objects.get_current().domain
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            f"PRODID:-//{domain}//Club events//EN",
+            "CALSCALE:GREGORIAN",
+            "METHOD:PUBLISH",
+            f"X-WR-CALNAME:{_ical_escape(club.name)} events",
+        ]
+        for event in list(past) + list(upcoming):
+            lines += [
+                "BEGIN:VEVENT",
+                f"UID:{event.uuid}@{domain}",
+                f"DTSTAMP:{_ical_datetime(event.updated_at)}",
+                f"DTSTART:{_ical_datetime(event.date_start)}",
+                f"DTEND:{_ical_datetime(event.effective_end)}",
+                f"SUMMARY:{_ical_escape(event.title)}",
+                f"URL:https://{domain}{event.get_absolute_url()}",
+            ]
+            if event.description:
+                lines.append(f"DESCRIPTION:{_ical_escape(event.description)}")
+            if event.location:
+                lines.append(f"LOCATION:{_ical_escape(event.location)}")
+            if event.cancelled:
+                lines.append("STATUS:CANCELLED")
+            lines.append("END:VEVENT")
+        lines.append("END:VCALENDAR")
+        response = HttpResponse("\r\n".join(lines), content_type="text/calendar; charset=utf-8")
+        response["Content-Disposition"] = f'inline; filename="{club.slug}-events.ics"'
+        return response
+
+
+def _ical_datetime(value):
+    return f"{value.astimezone(date_tz.utc):%Y%m%dT%H%M%SZ}"
+
+
+def _ical_escape(value):
+    """Escape the characters iCal treats as structure. Long-line folding is not needed here —
+    every consumer we care about handles long lines, and folding is easy to get wrong."""
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+    )
+
+
 class MailchimpWebhookView(View):
     """Receive Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
 
@@ -13694,6 +14072,52 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 ],
                 "links": [
                     {"label": "Register a Mailchimp OAuth app", "url": "https://admin.mailchimp.com/account/oauth2/"},
+                ],
+            },
+            # -- Google Calendar --------------------------------------------------
+            {
+                "section": "Google Calendar",
+                "name": "Google Calendar",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_CALENDAR_CLIENT_ID)
+                and env_has_real_value(settings.GOOGLE_CALENDAR_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets clubs connect a Google account so their auctions and events sync to a shared "
+                    "Google calendar, both ways. Each club connects its own account from its club settings "
+                    "page once these keys are set. Club event lists and the iCal feed work without this."
+                ),
+                "where_to_get_it": (
+                    "Enable the Google Calendar API, then create an OAuth 2.0 <strong>Web application</strong> "
+                    "client and copy its client ID and secret."
+                ),
+                "setup_steps": [
+                    "In the Google Cloud console, enable the <strong>Google Calendar API</strong> for your project.",
+                    "Create an OAuth 2.0 Client ID of type <strong>Web application</strong>.",
+                    (
+                        "Add <code>"
+                        f"{base_url}/google-calendar/callback/</code> as an "
+                        "<strong>Authorized redirect URI</strong>."
+                    ),
+                    (
+                        "The default scope is <code>calendar.app.created</code>, which only grants access to "
+                        "calendars this site creates — so the app avoids Google's sensitive-scope verification "
+                        "review. Leave <code>GOOGLE_CALENDAR_SCOPE</code> blank unless you need more."
+                    ),
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'GOOGLE_CALENDAR_CLIENT_ID="your-client-id.apps.googleusercontent.com"\n'
+                            'GOOGLE_CALENDAR_CLIENT_SECRET="your-client-secret"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Google Cloud credentials", "url": "https://console.cloud.google.com/apis/credentials"},
+                    {
+                        "label": "Enable the Calendar API",
+                        "url": "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com",
+                    },
                 ],
             },
             # -- Discord ----------------------------------------------------------
@@ -17440,14 +17864,21 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["club_map_directions_url"] = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(
                 directions_query
             )
+        # The club page shows a calendar, not a bare auction list: auctions are mirrored into
+        # ClubEvents (by signal, and by the periodic task) alongside meetings, swaps, and
+        # anything pulled in from the club's Google Calendar.
+        upcoming, past = club_events.upcoming_events(
+            self.club, limit=CLUB_DETAIL_EVENT_LIMIT, include_past=True, past_limit=CLUB_DETAIL_PAST_EVENT_LIMIT
+        )
+        context["upcoming_events"] = upcoming
+        context["past_events"] = past
+        context["has_any_events"] = bool(upcoming or past)
+        context["club_ical_url"] = reverse("club_events_ical", kwargs={"slug": self.club.slug})
         if can_manage_auctions:
-            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[
-                :CLUB_DETAIL_AUCTION_LIMIT
-            ]
-        else:
-            context["club_auctions"] = Auction.objects.filter(
-                club=self.club, promote_this_auction=True, is_deleted=False
-            ).order_by("-date_start")[:CLUB_DETAIL_AUCTION_LIMIT]
+            # Admins still get the unpromoted auctions, which never become calendar events.
+            context["unpromoted_auctions"] = Auction.objects.filter(
+                club=self.club, is_deleted=False, promote_this_auction=False
+            ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 

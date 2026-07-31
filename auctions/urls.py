@@ -229,6 +229,16 @@ urlpatterns = [
     path("mailchimp/connect/<slug:slug>/", views.MailchimpConnectView.as_view(), name="mailchimp_connect"),
     path("mailchimp/callback/", views.MailchimpCallbackView.as_view(), name="mailchimp_callback"),
     path(
+        "google-calendar/connect/<slug:slug>/",
+        views.GoogleCalendarConnectView.as_view(),
+        name="google_calendar_connect",
+    ),
+    path(
+        "google-calendar/callback/",
+        views.GoogleCalendarCallbackView.as_view(),
+        name="google_calendar_callback",
+    ),
+    path(
         "mailchimp/webhook/<slug:slug>/<str:secret>/",
         views.MailchimpWebhookView.as_view(),
         name="mailchimp_webhook",
@@ -726,6 +736,24 @@ urlpatterns = [
         views.MailchimpDisconnectView.as_view(),
         name="mailchimp_disconnect",
     ),
+    path(
+        "clubs/<slug:slug>/google-calendar/",
+        views.ClubGoogleCalendarConfigView.as_view(),
+        name="club_google_calendar_config",
+    ),
+    path(
+        "clubs/<slug:slug>/google-calendar/sync/",
+        views.GoogleCalendarSyncNowView.as_view(),
+        name="google_calendar_sync_now",
+    ),
+    path(
+        "clubs/<slug:slug>/google-calendar/disconnect/",
+        views.GoogleCalendarDisconnectView.as_view(),
+        name="google_calendar_disconnect",
+    ),
+    path("clubs/<slug:slug>/events/add/", views.ClubEventCreateView.as_view(), name="club_event_add"),
+    path("clubs/<slug:slug>/events/<int:pk>/", views.ClubEventUpdateView.as_view(), name="club_event_edit"),
+    path("clubs/<slug:slug>/events.ics", views.ClubEventsICalView.as_view(), name="club_events_ical"),
     path("clubs/<slug:slug>/brevo/", views.ClubBrevoConfigView.as_view(), name="club_brevo_config"),
     path("clubs/<slug:slug>/brevo/connect/", views.BrevoConnectView.as_view(), name="brevo_connect"),
     path(

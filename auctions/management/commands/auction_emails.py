@@ -9,6 +9,7 @@ from django.db.models import Q
 from django.utils import timezone
 from post_office import mail
 
+from auctions import discord_events
 from auctions.models import Auction, AuctionHistory
 from auctions.notifications import notify_user
 
@@ -31,32 +32,15 @@ def _send_discord_channel_message(channel_id, content):
 
 def _create_discord_scheduled_event(guild_id, name, start_time, end_time, location_url):
     """Create a Discord Guild Scheduled Event (external type). Returns True on success."""
-    bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
-    if not bot_token or not guild_id:
-        return False
-    url = f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events"
-    headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
-    payload = {
-        "name": name,
-        "scheduled_start_time": start_time.isoformat(),
-        "scheduled_end_time": end_time.isoformat(),
-        "privacy_level": 2,  # GUILD_ONLY
-        "entity_type": 3,  # EXTERNAL
-        "entity_metadata": {"location": location_url},
-    }
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=10)
-        if resp.status_code not in (200, 201):
-            logger.warning(
-                "Discord scheduled event creation failed: status=%s body=%s",
-                resp.status_code,
-                resp.text,
-            )
-            return False
-        return True
-    except Exception as exc:
-        logger.exception("Discord scheduled event creation error: %s", exc)
-        return False
+    return bool(
+        discord_events.create_scheduled_event(
+            guild_id=guild_id,
+            name=name,
+            start_time=start_time,
+            end_time=end_time,
+            location=location_url,
+        )
+    )
 
 
 class Command(BaseCommand):

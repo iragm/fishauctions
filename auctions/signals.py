@@ -206,6 +206,39 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
     transaction.on_commit(lambda: notify_apple_wallet_devices_for_club.delay(instance.pk))
 
 
+@receiver(post_save, sender="auctions.Auction")
+def mirror_auction_to_club_calendar(sender, instance, **kwargs):
+    """Keep the auction's entry on its club's calendar in step with the auction itself.
+
+    Deliberately a plain DB write in the same transaction: if the auction save rolls back, so
+    does its calendar entry. Pushing the result on to Google Calendar and Discord is the periodic
+    sync task's job, so no network call happens here.
+    """
+    if not instance.club_id:
+        return
+    from auctions import club_events
+
+    try:
+        club_events.sync_one_auction_event(instance)
+    except Exception:
+        # Never let a calendar problem be the reason an auction can't be saved.
+        logger.exception("Could not mirror auction %s onto its club calendar", instance.pk)
+
+
+@receiver(post_save, sender="auctions.PickupLocation")
+def refresh_calendar_location(sender, instance, **kwargs):
+    """Pickup locations are usually saved after the auction, so the auction's calendar entry
+    starts out with no address. Re-mirror when one is added or edited."""
+    if not instance.auction_id:
+        return
+    from auctions import club_events
+
+    try:
+        club_events.sync_one_auction_event(instance.auction)
+    except Exception:
+        logger.exception("Could not refresh the calendar location for auction %s", instance.auction_id)
+
+
 @receiver(pre_save, sender="auctions.ClubMember")
 def stash_previous_clubmember_state(sender, instance, **kwargs):
     """Snapshot per-club auction-permission fields so post_save can detect changes

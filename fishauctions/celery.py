@@ -53,6 +53,11 @@ app.conf.beat_schedule = {
         "task": "post_office.tasks.send_queued_mail",
         "schedule": 600.0,  # Run every 10 minutes
     },
+    # Two-way Google Calendar sync + Discord events for club events - every 15 minutes
+    "sync_club_calendars": {
+        "task": "auctions.tasks.sync_club_calendars",
+        "schedule": 900.0,  # Run every 15 minutes
+    },
     # Send auction emails - every 4 minutes
     "auction_emails": {
         "task": "auctions.tasks.auction_emails",
