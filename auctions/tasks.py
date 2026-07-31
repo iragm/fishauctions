@@ -279,6 +279,43 @@ def flush_expired_tokens(self):
     call_command("flushexpiredtokens")
 
 
+@shared_task(bind=True, ignore_result=True)
+def delete_pending_accounts(self):
+    """
+    Delete accounts whose deletion grace period has expired.
+
+    Daily. Nothing happens on the day someone asks (see auctions.account_deletion); this is the task
+    that makes it real, so it must keep running for the site to keep its promise.
+    """
+    call_command("delete_pending_accounts")
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
+def delete_marketing_contact(self, club_pk, email):
+    """Remove one address from a club's Mailchimp audience and Brevo list.
+
+    Account deletion only: an ordinary unsubscribe archives the contact (which still holds the
+    address), so it can't be reused here. Takes the address rather than a member pk because by the
+    time this runs the member row has been emptied or unlinked.
+    """
+    from auctions import brevo
+    from auctions import mailchimp as mc
+    from auctions.models import Club
+
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club or not email:
+        return
+    mc.delete_contact_by_email(club, email)
+    brevo.delete_contact_by_email(club, email)
+
+
 @shared_task
 def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
     """Send a push notification to every push-enabled device of a user; prune dead tokens.

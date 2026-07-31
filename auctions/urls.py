@@ -507,6 +507,13 @@ urlpatterns = [
         login_required(views.UserPreferencesUpdate.as_view()),
         name="preferences",
     ),
+    path(
+        "account/delete/",
+        login_required(views.AccountDeleteView.as_view()),
+        name="account_delete",
+    ),
+    # Public: the user is signed out by the time they land here.
+    path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
     path("faq/", views.FAQ.as_view(), name="faq"),
@@ -542,7 +549,8 @@ urlpatterns = [
         views.PickupLocationsDelete.as_view(),
         name="delete_pickup",
     ),
-    path("blog/<slug:slug>/", views.BlogPostView.as_view()),
+    path("blog/<slug:slug>/", views.BlogPostView.as_view(), name="blog_post"),
+    path("privacy/", views.PrivacyPolicyView.as_view(), name="privacy_policy"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(

@@ -6,7 +6,7 @@
 
   <h4 class="mt-3"><i class="bi bi-geo-alt"></i> Lot map</h4>
   <p class="text-muted small">
-    A relative map of where unsold lots are, built from AR scans by app users. Lots drop off the
+    A relative map of where unsold lots are, built from lot scans by app users. Lots drop off the
     moment they're marked sold. The layout is accurate; the absolute scale is a rough estimate
     (±30%), so treat distances as approximate.
   </p>
@@ -16,7 +16,7 @@
     <span id="ar-islands" class="badge bg-secondary" style="display:none;"></span>
     <div class="flex-grow-1"></div>
     <form method="post" action="{% url 'auction_lot_map_clear' slug=auction.slug %}"
-          onsubmit="return confirm('Clear ALL AR lot locations for this auction? Every scan will need to be redone.');">
+          onsubmit="return confirm('Clear ALL scanned lot locations for this auction? Every scan will need to be redone.');">
       {% csrf_token %}
       <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
     </form>
@@ -36,20 +36,20 @@
     <div id="ar-popover" class="card shadow-sm" style="display:none; position:absolute; z-index:5; max-width:240px;"></div>
   </div>
   <div id="ar-empty" class="text-muted text-center py-5" style="display:none;">
-    No lot locations yet. Ask attendees to scan lots in the app's AR mode — locations appear here within a minute.
+    No lot locations yet. Ask attendees to scan lots in the app — locations appear here within a minute.
   </div>
 </div>
 
 <script>
 (function(){
   const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
-  // "Locate with AR" jumps the app straight into AR mode beaconing this lot, via the same custom
-  // scheme as the lot page's "Back to AR" bar. A desktop browser has no handler for the scheme, but
+  // "Find this lot" jumps the app straight into lot scanning beaconing this lot, via the same custom
+  // scheme as the lot page's "Back to scanning" bar. A desktop browser has no handler for the scheme, but
   // per style_reference.md an unavailable action stays clickable and says why: outside the app the
   // button toasts "open this in the app" instead of vanishing (this page is used on desktop, where a
   // missing button just looks like the feature doesn't exist).
   const inApp = {{ request.is_mobile_app|yesno:"true,false" }};
-  const AR_APP_ONLY_MSG = "AR mode lives in the {{ navbar_brand|escapejs }} app — open this lot map there to be walked to the lot.";
+  const AR_APP_ONLY_MSG = "Lot scanning lives in the {{ navbar_brand|escapejs }} app — open this lot map there to be walked to the lot.";
   const auctionSlug = "{{ auction.slug|escapejs }}";
   const SVGNS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById('ar-map');
@@ -129,12 +129,12 @@
   }
 
   function showPopover(p, ev){
-    // "Locate with AR" sits right next to "Open lot" — it's the action an admin on the floor
-    // actually wants — and hands off to the native AR screen, which walks them to the lot.
+    // "Find this lot" sits right next to "Open lot" — it's the action an admin on the floor
+    // actually wants — and hands off to the native scanning screen, which walks them to the lot.
     // "Locate" just re-centres/pulses the dot on this web map.
     const arButton = inApp
-      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-badge-ar"></i> Locate with AR</a>`
-      : `<button type="button" class="btn btn-sm btn-outline-secondary" id="ar-pop-ar"><i class="bi bi-badge-ar"></i> Locate with AR</button>`;
+      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-geo-alt"></i> Find this lot</a>`
+      : `<button type="button" class="btn btn-sm btn-outline-secondary" id="ar-pop-ar"><i class="bi bi-geo-alt"></i> Find this lot</button>`;
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
@@ -156,7 +156,7 @@
     const arBtn = document.getElementById('ar-pop-ar');
     if(arBtn){
       arBtn.addEventListener('click', ()=>{
-        window.jQuery.toast({title: 'AR mode is in the app', content: AR_APP_ONLY_MSG, type: 'info', delay: 8000});
+        window.jQuery.toast({title: 'Lot scanning is in the app', content: AR_APP_ONLY_MSG, type: 'info', delay: 8000});
       });
     }
   }
@@ -182,7 +182,7 @@
     if(!lot){ locateMsg.textContent = 'No matching lot.'; return; }
     if(!focusLot(lot.pk)){ locateMsg.className='form-text text-warning'; locateMsg.textContent = `Lot ${lot.lot_number} has no location known yet.`; return; }
     locateMsg.className='form-text'; locateMsg.textContent = `Showing lot ${lot.lot_number}.`;
-    // Open the dot's popover too, so a search lands on the same "Open lot" / "Locate with AR"
+    // Open the dot's popover too, so a search lands on the same "Open lot" / "Find this lot"
     // buttons as clicking the dot does — searching for a lot is exactly when you want to walk to it.
     showPopover(dotByLot[lot.pk].p, null);
   }

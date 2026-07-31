@@ -17,6 +17,16 @@
       {% endif %}
       <button class="btn btn-primary" type="submit">{% trans "Sign Up" %}</button>
     </form>
+    {% comment %}
+    Terms and privacy at the point of sign-up. Apple requires both to be reachable from inside the
+    app (App Store Review 5.1.1), and the app's WebView allow-lists exactly these two paths so they
+    open in place instead of kicking a half-filled form out to the system browser. The app draws its
+    own copy of these links natively on this screen; these are for the web page.
+    {% endcomment %}
+    <p class="text-muted small mt-3 mb-0">
+      By signing up you agree to our <a href="{% url 'tos' %}">terms of service</a>
+      and <a href="{% url 'privacy_policy' %}">privacy policy</a>.
+    </p>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     {% if not recaptcha_enabled %}

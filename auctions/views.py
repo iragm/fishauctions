@@ -182,6 +182,7 @@ from .helper_functions import bin_data, get_currency_symbol
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
+    PRIVACY_POLICY_SLUG,
     SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
@@ -3810,7 +3811,7 @@ class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
         from auctions.mobile.services import ar as ar_service
 
         ar_service.clear_positions(self.auction)
-        messages.success(request, "Cleared all AR lot locations for this auction.")
+        messages.success(request, "Cleared all scanned lot locations for this auction.")
         return redirect(reverse("auction_lot_map", kwargs={"slug": self.auction.slug}))
 
 
@@ -7324,6 +7325,20 @@ class ViewLot(DetailView):
                 )
             if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
                 context["push_notifications_possible"] = True
+                # Ask the app to offer notifications here, where the offer means something: this is
+                # an in-person auction that pushes "your lot is selling now", the user is looking at
+                # a lot in it, and the auction is still running. The app owns the "at most once per
+                # device" part and simply ignores the call when it has already asked. Deciding it
+                # here is the point -- the app can't tell an in-person lot page from any other, and
+                # won't spend a round trip per lot page guessing.
+                context["offer_push_prompt"] = (
+                    getattr(self.request, "is_mobile_app", False)
+                    and not lot.auction.pretty_much_over
+                    and not (
+                        self.request.user.userdata.push_notifications_when_lots_sell
+                        and self.request.user.userdata.has_push_device
+                    )
+                )
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(
                 self.request,
@@ -12858,6 +12873,83 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         return context
 
 
+class AccountDeleteView(TemplateView):
+    """Delete your account, from inside the app or the website.
+
+    Required by both app stores for an app that offers sign-up (App Store Review 5.1.1(v)), and it
+    has to be doable without emailing support. It's a web page rather than anything native because
+    account lifecycle is server business logic — the app already renders /preferences/, which links
+    here, so no app release is involved.
+
+    Confirmation is typing the username: it works for accounts that signed up with Google and have
+    no password, and it can't be done by accident. The request is then reversible for
+    ``GRACE_PERIOD_DAYS`` by signing in again, and the session ends at /logout/, which the app
+    intercepts to clear its own JWT, cached profile, cookies and push token — without that the app
+    would sit on a signed-in shell for an account on its way out.
+    """
+
+    template_name = "account_delete.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions.account_deletion import GRACE_PERIOD_DAYS, deletion_due_date, deletion_summary
+
+        context = super().get_context_data(**kwargs)
+        context["active_tab"] = "delete"
+        context["grace_period_days"] = GRACE_PERIOD_DAYS
+        context["deletion_due"] = deletion_due_date(self.request.user.userdata)
+        context["summary"] = deletion_summary(self.request.user)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        from django.contrib.auth import logout
+        from post_office import mail
+
+        from auctions.account_deletion import cancel_deletion, request_deletion
+
+        if request.POST.get("action") == "cancel":
+            if cancel_deletion(request.user):
+                messages.success(request, "Your account will not be deleted.")
+            return redirect(reverse("preferences"))
+
+        typed = (request.POST.get("confirm_username") or "").strip()
+        if typed.casefold() != request.user.username.casefold():
+            messages.error(request, "Type your username exactly as it's shown to confirm.")
+            return redirect(reverse("account_delete"))
+
+        email = request.user.email
+        due = request_deletion(request.user)
+        if email:
+            # Always email, never push: this is account correspondence, and the phone it would go to
+            # is about to stop being signed in.
+            mail.send(
+                email,
+                subject="Your account is scheduled to be deleted",
+                message=(
+                    f"You asked us to delete your {Site.objects.get_current().domain} account.\n\n"
+                    f"It will be deleted on {due:%B %d, %Y}. If you change your mind before then, "
+                    "just sign in again and the deletion is cancelled.\n\n"
+                    "If this wasn't you, sign in now to cancel it and change your password."
+                ),
+            )
+        logout(request)
+        # End at /logout/ so the app turns this into a full native sign-out; it redirects an already
+        # signed-out visitor straight on to the confirmation page.
+        return redirect(f"{reverse('account_logout')}?next={reverse('account_deleted')}")
+
+
+class AccountDeletedView(TemplateView):
+    """Shown after requesting deletion — public, because the session is gone by the time it loads."""
+
+    template_name = "account_deleted.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions.account_deletion import GRACE_PERIOD_DAYS
+
+        context = super().get_context_data(**kwargs)
+        context["grace_period_days"] = GRACE_PERIOD_DAYS
+        return context
+
+
 class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     template_name = "user_preferences.html"
     model = UserData
@@ -14484,6 +14576,20 @@ class BlogPostView(DetailView):
         # this is to allow the chart# syntax
         context["formatted_contents"] = re.sub(r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered)
         return context
+
+
+class PrivacyPolicyView(BlogPostView):
+    """The privacy policy at a stable, obvious path.
+
+    Same content as /blog/privacy/ (one BlogPost, seeded by migration), rendered here rather than
+    redirected: the app opens this URL inside the signed-out signup WebView against an allow-list of
+    exactly the paths /api/mobile/config/ hands it, so a redirect elsewhere would bounce the user out
+    to the system browser mid-signup. Apple requires a privacy policy linked from inside the app, and
+    Google Play's data-deletion policy wants a URL — both point here.
+    """
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(BlogPost, slug=PRIVACY_POLICY_SLUG)
 
 
 class UnsubscribeView(TemplateView):
@@ -17389,6 +17495,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 name=f"{request.user.first_name} {request.user.last_name}".strip(),
                 email=request.user.email,
                 source="joined",
+                # The member made this row about themselves: until an admin edits it, it goes away
+                # with their account rather than staying in the club's records.
+                admin_edited=False,
             )
             ClubHistory.objects.create(
                 club=self.club,
@@ -21077,6 +21186,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
     def _update_member(self, member, fields):
         """Apply CSV fields onto an existing member. Only overwrites with non-empty values so a merge of a
         sparse walk-in row never blanks existing contact details."""
+        # An admin importing their roster owns these rows now; the account-deletion rules follow.
+        member.admin_edited = True
         if fields.get("name"):
             member.name = fields["name"]
         if fields.get("phone"):

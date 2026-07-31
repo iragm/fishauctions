@@ -50,6 +50,7 @@ Celery handles:
 | `webpush_notifications_deduplicate` | Daily at 10:00 | Remove duplicate push subscriptions |
 | `update_auction_stats` | Self-scheduling | Update cached auction statistics |
 | `cleanup_old_invoice_notification_tasks` | Daily at 3:00 AM | Clean up old invoice notification tasks |
+| `delete_pending_accounts` | Every 24 hours | Delete accounts whose deletion grace period is up (see `auctions/account_deletion.py`) |
 
 ### Self-Scheduling Tasks
 

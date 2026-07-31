@@ -9,13 +9,27 @@ class MobileAppMiddleware:
     The app sets a ``FishAuctionsApp`` token in its User-Agent; templates read
     ``request.is_mobile_app`` to drop web chrome (navbar, footer, install banners) that the
     app renders natively. Cheap and unconditional, so it stays near the top of the stack.
+
+    ``request.mobile_app_platform`` ("ios", "android" or "") comes from the same header
+    (``FishAuctionsApp/1.0 (Flutter; iOS)``), for the few places where the two phones genuinely
+    differ — a Google Wallet button on an iPhone opens the system browser to do nothing useful.
+    Empty outside the app, so a plain ``{% if %}`` on it is false for every web visitor.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        request.is_mobile_app = "FishAuctionsApp" in request.META.get("HTTP_USER_AGENT", "")
+        user_agent = request.META.get("HTTP_USER_AGENT", "")
+        request.is_mobile_app = "FishAuctionsApp" in user_agent
+        platform = ""
+        if request.is_mobile_app:
+            lowered = user_agent.lower()
+            if "ios" in lowered:
+                platform = "ios"
+            elif "android" in lowered:
+                platform = "android"
+        request.mobile_app_platform = platform
         return self.get_response(request)
 
 

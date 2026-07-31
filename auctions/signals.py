@@ -574,7 +574,23 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
 
 @receiver(user_logged_in)
 def user_logged_in_callback(sender, user, request, **kwargs):
-    """When a user signs in, link unattached AuctionTOS and ClubMember records to their account."""
+    """When a user signs in: cancel a pending account deletion, and link unattached AuctionTOS and
+    ClubMember records to their account."""
+    # Signing in is how a pending account deletion is called off -- coming back is the clearest
+    # statement that they didn't mean it, and it's the only undo there is once the grace period ends.
+    from auctions.account_deletion import cancel_deletion
+
+    if cancel_deletion(user) and request is not None and hasattr(request, "_messages"):
+        # Not every sign-in comes through the message middleware -- the mobile API issues JWTs, and
+        # the WebView handoff logs in on a bare request -- and the cancellation matters more than
+        # telling them about it here (the confirmation email says so too).
+        from django.contrib import messages
+
+        messages.info(
+            request,
+            "Welcome back!  Your account was scheduled to be deleted, and signing in has cancelled that.",
+        )
+
     link_unattached_tos_for_user(user)
 
     from auctions.models import ClubMember

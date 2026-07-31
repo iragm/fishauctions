@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Account scheduled for deletion{% endblock %}
+{% block content %}
+<div class="row">
+  <div class="col-lg-8">
+    <h3>Your account will be deleted</h3>
+    <p>
+      You've been signed out.  Your account and personal details will be deleted in
+      {{ grace_period_days }} days, and we've emailed you the date.
+    </p>
+    <p>
+      Changed your mind?  <a href="{% url 'account_login' %}">Sign in</a> any time before then and the
+      deletion is cancelled &mdash; nothing has been removed yet.
+    </p>
+    <p class="text-muted">
+      Past auction results stay in each auction's records without your name attached, so other people's
+      invoices and payouts still add up.
+    </p>
+  </div>
+</div>
+{% endblock %}

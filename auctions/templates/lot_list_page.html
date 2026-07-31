@@ -62,11 +62,11 @@
       <td>{% if lot.donation %}Donation{% else %}{{ lot.seller_as_str }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
       <td><a href="{{ lot.lot_link }}?src=lot_list">{{ lot.lot_name }}</a>
-        {% comment %} App-only: walk the user to this lot in AR. The annotation (LotFilter.qs) is only
+        {% comment %} App-only: walk the user to this lot with lot scanning. The annotation (LotFilter.qs) is only
         present in the app, for a located lot in an in-person auction that's happening now. {% endcomment %}
         {% if lot.ar_locate_available %}
         <a href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}" class="btn btn-sm btn-outline-secondary ms-1">
-          <i class="bi bi-geo-alt"></i> Locate with AR
+          <i class="bi bi-geo-alt"></i> Find this lot
         </a>
         {% endif %}
       </td>

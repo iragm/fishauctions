@@ -394,11 +394,31 @@ def _fetch_contact_id(client, email):
 
 def _delete_contact(client, member):
     """Remove the contact from Brevo; ignore 404 if they were never synced."""
+    _delete_contact_by_email(client, member.email)
+
+
+def _delete_contact_by_email(client, email):
     try:
-        client.request("DELETE", f"/contacts/{quote(member.email)}")
+        client.request("DELETE", f"/contacts/{quote(email)}")
     except BrevoApiError as e:
         if e.status_code != 404:
             raise
+
+
+def delete_contact_by_email(club, email):
+    """Delete a contact from *club*'s Brevo list by address, with no member row needed.
+
+    Used by account deletion, which has to remove the contact after the member record it came from
+    has already been emptied (or is being kept by the club without the person's account). Returns
+    True when a call was made.
+    """
+    if not email or not club.brevo_connected:
+        return False
+    client = get_client(club)
+    if not client:
+        return False
+    _delete_contact_by_email(client, email)
+    return True
 
 
 def change_member_email(member, old_email):

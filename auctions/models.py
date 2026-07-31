@@ -60,6 +60,11 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
 
+# The privacy policy is a BlogPost (seeded and kept current by migrations) rather than a template,
+# so it can be edited without a deploy. Both /privacy/ and /blog/privacy/ render this slug, and
+# /api/mobile/config/ hands its path to the app, which is required to link it from sign-up.
+PRIVACY_POLICY_SLUG = "privacy"
+
 
 def nearby_auctions(
     latitude,
@@ -1432,6 +1437,15 @@ class ClubMember(ContactRecord):
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     source = models.CharField(max_length=200, default="manually_added")
+    admin_edited = models.BooleanField(
+        default=True,
+        help_text=(
+            "A club admin created or has edited this record, so the club owns it: deleting the "
+            "person's site account only removes the account link and leaves the club's copy of "
+            "their details alone.  Unchecked only for rows a member made about themselves and no "
+            "admin has touched since — those are deleted with the account."
+        ),
+    )
     permission_admin = models.BooleanField(
         default=False, help_text="Full admin access — grants all other permissions.  Use only if absolutely necessary."
     )
@@ -7538,10 +7552,10 @@ class Lot(models.Model):
     # raw src, which is still the most useful thing we can say about it.
     PAGE_VIEW_SOURCE_LABELS = {
         "": "Opened the lot page directly",
-        "ar": '"Open lot page" from AR',
-        "ar_scan": "Scanned this lot's label in AR",
-        "ar_zoom": "Aimed at this label up close in AR",
-        "ar_zoom_full": "Held on the label until the AR card opened",
+        "ar": '"Open lot page" from lot scanning',
+        "ar_scan": "Scanned this lot's label",
+        "ar_zoom": "Aimed at this label up close while scanning",
+        "ar_zoom_full": "Held on the label until the lot card opened",
         "qr": "Scanned the printed QR code",
         "lot_list": "From a lot list",
         "recommended": "From recommended lots",
@@ -9603,6 +9617,11 @@ class UserData(models.Model):
     paypal_email_address.help_text = "If different from your email address"
     unsubscribe_link = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     has_unsubscribed = models.BooleanField(default=False, blank=True)
+    account_deletion_requested = models.DateTimeField(null=True, blank=True)
+    account_deletion_requested.help_text = (
+        "When the user asked us to delete their account.  The account keeps working until the grace "
+        "period is up (see auctions.account_deletion); signing in again cancels the request."
+    )
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"

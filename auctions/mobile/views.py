@@ -20,6 +20,10 @@ GET /api/mobile/config/
           "square_environment":      "sandbox",   // or "production"
           "google_server_client_id": "xxxx.apps.googleusercontent.com",
           "brand_name":              "auction.fish",
+          "terms_url":               "/tos/",
+          // Omitted when this deployment has no privacy policy page; the app then draws no
+          // privacy link rather than a dead one.
+          "privacy_policy_url":      "/privacy/",
           // Optional; present only for platforms whose Firebase config file is set. Public values.
           "firebase": {
             "android": {"package_name": "...", "api_key": "...", "app_id": "...",
@@ -136,6 +140,28 @@ POST /api/mobile/devices/register/
           "created_at": "2024-01-01T00:00:00Z",
           "last_seen":  "2024-06-01T12:00:00Z"
         }
+
+Notifications
+-------------
+GET /api/mobile/notifications/prefs/
+    The caller's two push toggles.
+
+    Response 200::
+
+        { "push_instead_of_email": false, "push_when_lots_sell": false }
+
+PATCH /api/mobile/notifications/prefs/
+    Partial update — only the keys sent are written; the response is the stored state.
+
+    Request::
+
+        { "push_instead_of_email": true, "push_when_lots_sell": true }
+
+    The write is never refused because push isn't configured or the account has no live device
+    token: the preference is intent, exactly as on the web form. The app calls this as the last
+    step of its opt-in gesture (OS permission → ``devices/register/`` → this PATCH), so a 404 here
+    means a backend older than the endpoint and the app falls back to sending the user to
+    /preferences/.
 
 Clubs
 -----
@@ -423,7 +449,19 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs, Watch
+from auctions.account_deletion import cancel_deletion
+from auctions.models import (
+    PRIVACY_POLICY_SLUG,
+    Auction,
+    BlogPost,
+    Club,
+    ClubMember,
+    Lot,
+    ThermalPrinterProfile,
+    UserData,
+    UserLabelPrefs,
+    Watch,
+)
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
@@ -442,6 +480,7 @@ from .serializers import (
     MobileLabelPrefsSerializer,
     MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
+    MobileNotificationPrefsSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
     MobileUserSerializer,
@@ -497,6 +536,10 @@ class MobileLoginView(APIView):
         if user is None:
             return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # Signing in calls off a pending account deletion, exactly as it does on the web (where the
+        # user_logged_in signal does it) -- the deletion page tells people that, and someone who
+        # deleted from inside the app is most likely to come back through this endpoint.
+        cancel_deletion(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -551,6 +594,8 @@ class MobileGoogleAuthView(APIView):
         if user is None:
             return Response({"detail": "Unable to authenticate."}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # As in MobileLoginView: coming back cancels a pending deletion.
+        cancel_deletion(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {"access": str(refresh.access_token), "refresh": str(refresh)},
@@ -692,8 +737,9 @@ class MobileConfigView(APIView):
     PUBLIC VALUES ONLY. Everything returned here is shipped to every device and is safe to expose
     publicly — these same values already appear in the web app's client-side code: the Square
     *application* id (NOT the secret), the Square environment name, the Google OAuth *client* id
-    (NOT a client secret), and the navbar brand. NEVER add secrets here: no OAuth access tokens,
-    client secrets, API keys, signing keys, or anything else that must stay server-side.
+    (NOT a client secret), the navbar brand, and the paths of the public terms and privacy pages.
+    NEVER add secrets here: no OAuth access tokens, client secrets, API keys, signing keys, or
+    anything else that must stay server-side.
     """
 
     authentication_classes = []
@@ -711,7 +757,15 @@ class MobileConfigView(APIView):
             "brand_name": settings.NAVBAR_BRAND,
             # Absolute URL so the app can load the site icon without knowing the static layout.
             "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
+            # Legal pages the app links natively from its login and sign-up screens (Apple requires
+            # both to be reachable from inside the app at the point of sign-up). Server-relative:
+            # the app rejects an off-host URL, since these open inside the signed-out login trap.
+            "terms_url": reverse("tos"),
         }
+        # Omitted rather than pointing at a 404 if the page is missing on this deployment — the app
+        # then draws no privacy link at all, which is the honest state.
+        if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
+            data["privacy_policy_url"] = reverse("privacy_policy")
         # Public Firebase client config per platform, parsed from the mobile config files. Only the
         # platforms whose file is configured appear; the whole key is omitted when neither is set.
         # Public values only (api key, app id, sender id, project id, package/bundle id) — no secrets.
@@ -1010,6 +1064,45 @@ class MobileLabelPrefsView(APIView):
     def patch(self, request):
         prefs, _ = UserLabelPrefs.objects.get_or_create(user=request.user)
         serializer = MobileLabelPrefsSerializer(prefs, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+
+class MobileNotificationPrefsView(APIView):
+    """GET/PATCH /api/mobile/notifications/prefs/ — the two push toggles, for the app's opt-in flow.
+
+    The app raises the OS notification permission only where the answer means something, and
+    "Enable" is one gesture: permission, then ``devices/register/``, then this PATCH. Without it the
+    app could only get the permission and send the user to /preferences/ to finish — where the
+    checkbox is greyed out until the page is reloaded with a live device.
+
+    Stores intent, deliberately: a write is never refused because push isn't configured or the
+    account has no device yet. That matches the web form, which keeps a stored value it can't honour
+    right now, and it's the ordering the app relies on (registration is awaited before this PATCH,
+    but a token can still be rejected later).
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    @staticmethod
+    def _userdata(request):
+        userdata, _ = UserData.objects.get_or_create(user=request.user)
+        return userdata
+
+    def get(self, request):
+        return Response(MobileNotificationPrefsSerializer(self._userdata(request)).data)
+
+    def patch(self, request):
+        serializer = MobileNotificationPrefsSerializer(self._userdata(request), data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()

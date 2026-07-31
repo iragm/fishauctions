@@ -20,4 +20,9 @@ If you are signing up for the first time and seeing this page, please enter the 
   {% endif %}
   <button class="btn btn-primary" type="submit">{% trans "Sign Up" %}</button>
 </form>
+{% comment %} Same terms/privacy links as account/signup.html -- this is the other way to create an account. {% endcomment %}
+<p class="text-muted small mt-3 mb-0">
+  By signing up you agree to our <a href="{% url 'tos' %}">terms of service</a>
+  and <a href="{% url 'privacy_policy' %}">privacy policy</a>.
+</p>
 {% endblock %}

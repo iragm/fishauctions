@@ -34,6 +34,12 @@
         </li>
         {% endif %}
         <li><a class="dropdown-item" href="{% url 'account' %}"><i class="bi bi-person-fill"></i> My account</a></li>
+        <li><hr class="dropdown-divider"></li>
+        {% comment %}
+        Deleting your account has to be reachable from inside the app (App Store Review 5.1.1(v)).
+        The app renders /preferences/, so this link is the whole of the app-side requirement.
+        {% endcomment %}
+        <li><a class="dropdown-item text-danger" href="{% url 'account_delete' %}"><i class="bi bi-trash"></i> Delete account</a></li>
       </ul>
   </li>
 </ul>

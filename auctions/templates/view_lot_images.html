@@ -17,6 +17,18 @@
 
 <script type="text/javascript">
 
+{% if offer_push_prompt %}
+// In-person auction, still running, and this user isn't already set up for the "your lot is selling
+// now" push: ask the app to offer notifications. The app decides how (a soft banner) and shows it at
+// most once per device, so this fires on every eligible lot page and is usually a no-op. Guarded on
+// the bridge because nothing outside the app registers these handlers.
+document.addEventListener('DOMContentLoaded', function () {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('pushPromptOffer', 'lot_selling_soon');
+    }
+});
+{% endif %}
+
 {% if bids %}
 // Configure dropdown to use fixed positioning to escape overflow container
 document.addEventListener('DOMContentLoaded', function() {
@@ -183,15 +195,15 @@ function deactivate_lot() {
 
 </script> {% endblock %}
 {% block undiv_content %}
-{% comment %} Opened from the app's AR mode (?src=ar): a sticky "Back to AR" bar so the user can
-return to scanning — and re-beacon this very lot — instead of relying on the WebView back button.
+{% comment %} Opened from the app's lot scanning (?src=ar): a sticky "Back to scanning" bar so the user
+can return to it — and re-beacon this very lot — instead of relying on the WebView back button.
 App-only; the deep link is handled natively. {% endcomment %}
 {% if request.is_mobile_app and request.GET.src == 'ar' and lot.auction %}
 <a href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}"
    class="d-flex align-items-center gap-2 bg-primary bg-gradient text-white text-decoration-none px-3 py-2 shadow-sm"
    style="position: sticky; top: 0; z-index: 1080;">
   <i class="bi bi-arrow-left-circle-fill fs-5"></i>
-  <span class="fw-semibold">Back to AR</span>
+  <span class="fw-semibold">Back to scanning</span>
   <span class="ms-auto small text-white-50">Lot {{ lot.lot_number_display }}</span>
 </a>
 {% endif %}
@@ -235,10 +247,10 @@ App-only; the deep link is handled natively. {% endcomment %}
                                 </a>
                                 {% endif %}
                             {% endif %}
-                            {% comment %} App-only: open AR mode aimed at this lot and walk the user to it. Visible to every user. {% endcomment %}
+                            {% comment %} App-only: open lot scanning aimed at this lot and walk the user to it. Visible to every user. {% endcomment %}
                             {% if request.is_mobile_app and lot.auction %}
                                 <a class="btn btn-primary" href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}">
-                                    <i class="bi bi-geo-alt"></i> Locate with AR
+                                    <i class="bi bi-geo-alt"></i> Find this lot
                                 </a>
                             {% endif %}
                             {% if request.user.is_superuser %}
@@ -482,7 +494,7 @@ App-only; the deep link is handled natively. {% endcomment %}
                             <td><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}
                             {% comment %}
                             The seller of a lot in an in-person auction gets the full per-source
-                            breakdown (collapsed by default), which includes the AR rows below.
+                            breakdown (collapsed by default), which includes the lot-scanning rows below.
                             {% endcomment %}
                             {% if show_page_view_breakdown %}
                                 <button class="btn btn-sm btn-secondary text-light ms-1" type="button" data-bs-toggle="collapse" data-bs-target="#pageViewBreakdown" aria-expanded="false" aria-controls="pageViewBreakdown" aria-label="Show or hide the detailed view breakdown">Show detailed breakdown <i class="bi bi-chevron-down"></i></button>
@@ -503,21 +515,21 @@ App-only; the deep link is handled natively. {% endcomment %}
                                             {% endfor %}
                                         </tbody>
                                     </table>
-                                    <small class="text-muted">The AR rows count each person once, no matter how many times they looked. Everything else is one row per visit.</small>
+                                    <small class="text-muted">The lot-scanning rows count each person once, no matter how many times they looked. Everything else is one row per visit.</small>
                                 </div>
                             {% endif %}
                             </td>
                         </tr>
                         {% comment %}
-                        AR interactions are counted in the view total above; broken out here so it's
-                        clear how many people actually found this lot in person with the app's AR mode.
+                        Lot-scanning interactions are counted in the view total above; broken out here so it's
+                        clear how many people actually found this lot in person by scanning in the app.
                         The seller sees this in the detailed breakdown instead, so don't repeat it.
                         {% endcomment %}
                         {% if not show_page_view_breakdown %}
                         {% with ar_counts=lot.ar_interaction_counts %}
                         {% if ar_counts.total %}
                         <tr>
-                            <td><b>In AR:</b></td>
+                            <td><b>Lot scanning:</b></td>
                             <td>
                                 {% if ar_counts.scanned %}{{ ar_counts.scanned }} scanned{% endif %}
                                 {% if ar_counts.zoomed %}{% if ar_counts.scanned %}, {% endif %}{{ ar_counts.zoomed }} zoomed in{% endif %}

@@ -798,8 +798,8 @@ class MobileLotWatchEndpointTests(ArApiBaseTestCase):
 
 
 class LotPageBackToArBannerTests(ArApiBaseTestCase):
-    """The web lot page shows a sticky "Back to AR" bar only when opened from AR mode inside the app
-    (``?src=ar`` + FishAuctionsApp UA)."""
+    """The web lot page shows a sticky "Back to scanning" bar only when opened from lot scanning
+    inside the app (``?src=ar`` + FishAuctionsApp UA)."""
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
 
@@ -809,18 +809,18 @@ class LotPageBackToArBannerTests(ArApiBaseTestCase):
     def test_banner_shown_in_app_from_ar(self):
         self.client.force_login(self.user)
         html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
-        self.assertIn("Back to AR", html)
+        self.assertIn("Back to scanning", html)
         self.assertIn(f"fishauctions://ar/{self.auction.slug}?locate={self.lot_a.pk}", html)
 
     def test_banner_absent_on_web(self):
         self.client.force_login(self.user)
         html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT="Mozilla/5.0").content.decode()
-        self.assertNotIn("Back to AR", html)
+        self.assertNotIn("Back to scanning", html)
 
     def test_banner_absent_in_app_without_src(self):
         self.client.force_login(self.user)
         html = self.client.get(self._url(self.lot_a), HTTP_USER_AGENT=self.APP_UA).content.decode()
-        self.assertNotIn("Back to AR", html)
+        self.assertNotIn("Back to scanning", html)
 
 
 class ArObservationsEndpointTests(ArApiBaseTestCase):
@@ -1253,7 +1253,7 @@ class LotPageViewSourceBreakdownTests(ArApiBaseTestCase):
         rows = self._rows(self.lot_a)
         self.assertEqual((rows["ar"]["views"], rows["ar"]["unique"]), (3, 2))
         self.assertEqual((rows["qr"]["views"], rows["qr"]["unique"]), (1, 1))
-        self.assertEqual(rows["ar"]["label"], '"Open lot page" from AR')
+        self.assertEqual(rows["ar"]["label"], '"Open lot page" from lot scanning')
         self.assertFalse(rows["ar"]["is_ar_event"])  # an ordinary visit, one row per view
 
     def test_no_src_rows_merge_and_anonymous_sessions_count(self):
@@ -1273,7 +1273,7 @@ class LotPageViewSourceBreakdownTests(ArApiBaseTestCase):
         self._ar_events(self.user_with_no_lots, [{"lot": self.lot_a.pk, "event": "zoomed_full"}])
         rows = self._rows(self.lot_a)
         self.assertEqual((rows["ar_scan"]["views"], rows["ar_scan"]["unique"]), (1, 1))
-        self.assertEqual(rows["ar_zoom"]["label"], "Aimed at this label up close in AR")
+        self.assertEqual(rows["ar_zoom"]["label"], "Aimed at this label up close while scanning")
         self.assertTrue(rows["ar_zoom_full"]["is_ar_event"])
 
     def test_unknown_source_shown_as_is(self):
@@ -1316,7 +1316,7 @@ class LotPageViewSourceBreakdownTests(ArApiBaseTestCase):
         )
         self.client.force_login(self.user_with_no_lots)
         response = self.client.get(f"/lots/{self.in_person_lot.pk}/")
-        self.assertContains(response, "In AR:")
+        self.assertContains(response, "Lot scanning:")
 
 
 class ArPositionsEndpointTests(ArApiBaseTestCase):
@@ -1588,7 +1588,7 @@ class ArLocatableAuctionsTests(ArApiBaseTestCase):
 
 
 class ArLocateOnLotListTests(ArApiBaseTestCase):
-    """The lot list offers "Locate with AR" only in the app, and only for a located lot in an
+    """The lot list offers "Find this lot" only in the app, and only for a located lot in an
     in-person auction that's happening now (LotFilter.qs annotation + the two page templates)."""
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
@@ -1617,7 +1617,7 @@ class ArLocateOnLotListTests(ArApiBaseTestCase):
 
     def test_button_shown_in_app_for_located_lot(self):
         html = self._lot_list(self.in_person_auction, self.APP_UA)
-        self.assertIn("Locate with AR", html)
+        self.assertIn("Find this lot", html)
         self.assertIn(self.deep_link, html)
 
     def test_button_shown_in_list_view_too(self):
@@ -1628,7 +1628,7 @@ class ArLocateOnLotListTests(ArApiBaseTestCase):
     def test_button_absent_on_web(self):
         html = self._lot_list(self.in_person_auction, "Mozilla/5.0")
         self.assertIn("Stray lot", html)  # the lot is listed...
-        self.assertNotIn(self.deep_link, html)  # ...just without the AR handoff
+        self.assertNotIn(self.deep_link, html)  # ...just without the lot-scanning handoff
 
     def test_button_absent_without_a_position(self):
         self.position.delete()

@@ -227,6 +227,8 @@ def join_auction(user, auction, now=None):
             user=user,
             name=user.get_full_name() or user.username,
             email=user.email or "",
+            # The user is signing themselves up; no admin has touched this record yet.
+            admin_edited=False,
         )
         tos = _find_and_bind_tos(user, auction)
     created = False
@@ -258,6 +260,7 @@ def join_auction(user, auction, now=None):
                 email=tos.email or "",
                 phone_number=tos.phone_number or "",
                 address=tos.address or "",
+                admin_edited=False,
             )
         apply_club_member_to_tos(auction, tos, member)
         member.update_last_club_activity()

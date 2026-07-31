@@ -2059,3 +2059,338 @@ class UninstallFallbackTests(TestCase):
         # A disabled field ignores POST and keeps the stored value, so an uninstall can't quietly
         # erase what the user asked for.
         self.assertTrue(form.cleaned_data["push_notifications_instead_of_email"])
+
+
+# ---------------------------------------------------------------------------
+# Part N — the app's notification opt-in
+# ---------------------------------------------------------------------------
+
+
+class MobileNotificationPrefsApiTests(TestCase):
+    """/api/mobile/notifications/prefs/ — the third step of the app's "Enable notifications".
+
+    The app raises the OS permission, registers the device, then writes these two toggles. Without
+    this endpoint the app could only get the permission and send the user to /preferences/, where
+    the checkbox is greyed out until the page is reloaded with a live device.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="prefs_api", password="x")
+        self.url = reverse("mobile-notification-prefs")
+
+    def test_get_returns_both_toggles(self):
+        response = self.client.get(self.url, **_bearer(self.user))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"push_instead_of_email": False, "push_when_lots_sell": False})
+
+    def test_patch_writes_both(self):
+        response = self.client.patch(
+            self.url,
+            data=json.dumps({"push_instead_of_email": True, "push_when_lots_sell": True}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"push_instead_of_email": True, "push_when_lots_sell": True})
+        userdata = UserData.objects.get(user=self.user)
+        self.assertTrue(userdata.push_notifications_instead_of_email)
+        self.assertTrue(userdata.push_notifications_when_lots_sell)
+
+    def test_patch_is_partial(self):
+        """Only the keys sent are written — an app screen that owns one toggle can't clear the other."""
+        UserData.objects.filter(user=self.user).update(push_notifications_when_lots_sell=True)
+        response = self.client.patch(
+            self.url,
+            data=json.dumps({"push_instead_of_email": True}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(response.status_code, 200)
+        userdata = UserData.objects.get(user=self.user)
+        self.assertTrue(userdata.push_notifications_instead_of_email)
+        self.assertTrue(userdata.push_notifications_when_lots_sell)
+
+    def test_stores_intent_without_a_device_or_push_config(self):
+        """Refusing the write would lose the answer the user just gave; the web form stores it too."""
+        self.assertFalse(self.user.userdata.has_push_device)
+        response = self.client.patch(
+            self.url,
+            data=json.dumps({"push_instead_of_email": True}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(UserData.objects.get(user=self.user).push_notifications_instead_of_email)
+
+    def test_rejects_a_non_boolean(self):
+        response = self.client.patch(
+            self.url,
+            data=json.dumps({"push_instead_of_email": "banana"}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_a_token(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_only_touches_the_callers_own_prefs(self):
+        other = User.objects.create_user(username="prefs_other", password="x")
+        self.client.patch(
+            self.url,
+            data=json.dumps({"push_when_lots_sell": True}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertFalse(UserData.objects.get(user=other).push_notifications_when_lots_sell)
+
+
+class LotPagePushPromptOfferTests(StandardTestCase):
+    """The lot page tells the app when offering notifications would mean something.
+
+    The app can't tell an in-person lot page from any other one and won't spend a round trip per lot
+    page guessing, so the decision is made here and handed over the JS bridge.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+
+    def setUp(self):
+        super().setUp()
+        # StandardTestCase's in-person auction is long over; put it back on the calendar.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.message_users_when_lots_sell = True
+        self.in_person_auction.save()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        self.url = reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk})
+
+    def test_offered_in_the_app_on_an_in_person_lot(self):
+        response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)
+        self.assertContains(response, "pushPromptOffer")
+        self.assertContains(response, "lot_selling_soon")
+
+    def test_not_offered_on_the_web(self):
+        self.assertNotContains(self.client.get(self.url), "pushPromptOffer")
+
+    def test_not_offered_for_an_online_auction(self):
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.lot.pk}), HTTP_USER_AGENT=self.APP_UA)
+        self.assertNotContains(response, "pushPromptOffer")
+
+    def test_not_offered_once_the_auction_is_over(self):
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=5)
+        self.in_person_auction.date_end = timezone.now() - datetime.timedelta(days=4)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)
+        self.assertNotContains(response, "pushPromptOffer")
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_not_offered_to_someone_already_set_up(self):
+        MobileDevice.objects.create(
+            user=self.user_with_no_lots, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True
+        )
+        UserData.objects.filter(user=self.user_with_no_lots).update(push_notifications_when_lots_sell=True)
+        response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)
+        self.assertNotContains(response, "pushPromptOffer")
+
+    def test_the_auctions_own_setting_still_wins(self):
+        self.in_person_auction.message_users_when_lots_sell = False
+        self.in_person_auction.save()
+        response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)
+        self.assertNotContains(response, "pushPromptOffer")
+
+
+class PreferencesPushBridgeTests(TestCase):
+    """/preferences/ asks the app about this phone instead of showing an unexplained grey checkbox."""
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="prefs_bridge", password="x")
+        self.client.force_login(self.user)
+        self.url = reverse("preferences")
+
+    def test_controls_rendered_in_the_app(self):
+        response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)
+        self.assertContains(response, "app-push-controls")
+        self.assertContains(response, "pushGetState")
+        self.assertContains(response, "pushEnable")
+
+    def test_nothing_on_the_web(self):
+        response = self.client.get(self.url)
+        self.assertNotContains(response, "app-push-controls")
+        self.assertNotContains(response, "pushGetState")
+
+
+# ---------------------------------------------------------------------------
+# Part L — terms and privacy policy, linked from sign-up
+# ---------------------------------------------------------------------------
+
+
+def _ensure_privacy_post():
+    """Guarantee the privacy page exists for these tests.
+
+    Migrations seed the real post (and normally that's what these tests render), but a
+    TransactionTestCase earlier in the run truncates migration-seeded rows, so fall back to a stub
+    carrying the same account-deletion section rather than depending on test order.
+    """
+    from auctions.models import PRIVACY_POLICY_SLUG, BlogPost
+
+    BlogPost.objects.get_or_create(
+        slug=PRIVACY_POLICY_SLUG,
+        defaults={"title": "Privacy", "body_rendered": "<h3>Deleting your account</h3>"},
+    )
+
+
+class MobileConfigLegalUrlsTests(TestCase):
+    """Apple requires terms and a privacy policy from inside the app at the point of sign-up.
+
+    The app draws the links natively and gets their paths from the public config endpoint; it
+    rejects an off-host URL, since these pages open inside the signed-out login trap.
+    """
+
+    def setUp(self):
+        # Seeded by migration, but a TransactionTestCase earlier in the run truncates seed rows.
+        _ensure_privacy_post()
+
+    def test_config_carries_both(self):
+        response = self.client.get(reverse("mobile-config"))
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["terms_url"], "/tos/")
+        self.assertEqual(data["privacy_policy_url"], "/privacy/")
+
+    def test_privacy_omitted_when_the_page_is_missing(self):
+        """No link at all beats a dead one — the app draws nothing when the key is absent."""
+        from auctions.models import BlogPost
+
+        BlogPost.objects.filter(slug="privacy").delete()
+        data = self.client.get(reverse("mobile-config")).json()
+        self.assertNotIn("privacy_policy_url", data)
+
+    def test_no_secrets_leaked_alongside_them(self):
+        data = self.client.get(reverse("mobile-config")).json()
+        for key in data:
+            self.assertNotIn("secret", key.lower())
+
+
+class PrivacyPolicyPageTests(TestCase):
+    """The privacy policy needs a stable path of its own; /blog/privacy/ keeps working."""
+
+    def setUp(self):
+        _ensure_privacy_post()
+
+    def test_privacy_page_renders_in_place(self):
+        response = self.client.get(reverse("privacy_policy"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Deleting your account")
+
+    def test_no_redirect_out_of_the_signup_webview(self):
+        # A redirect would leave the app's allow-list and kick a half-filled sign-up to the browser.
+        self.assertEqual(self.client.get("/privacy/").status_code, 200)
+
+    def test_the_blog_url_still_works(self):
+        self.assertEqual(self.client.get("/blog/privacy/").status_code, 200)
+
+    def test_missing_page_is_a_404_not_a_500(self):
+        from auctions.models import BlogPost
+
+        BlogPost.objects.filter(slug="privacy").delete()
+        self.assertEqual(self.client.get(reverse("privacy_policy")).status_code, 404)
+
+
+class SignupLegalLinksTests(TestCase):
+    """Both links are on the sign-up page itself, so the web form carries them too."""
+
+    def test_signup_links_terms_and_privacy(self):
+        response = self.client.get(reverse("account_signup"))
+        self.assertContains(response, reverse("tos"))
+        self.assertContains(response, reverse("privacy_policy"))
+
+
+# ---------------------------------------------------------------------------
+# Part A — wallet buttons, one per platform
+# ---------------------------------------------------------------------------
+
+
+class MobileAppPlatformMiddlewareTests(TestCase):
+    """``request.mobile_app_platform`` — set from the app's own User-Agent, empty on the web."""
+
+    def _platform(self, user_agent):
+        from auctions.middleware import MobileAppMiddleware
+
+        request = self.client.request().wsgi_request
+        request.META["HTTP_USER_AGENT"] = user_agent
+        MobileAppMiddleware(lambda r: None)(request)
+        return request.mobile_app_platform
+
+    def test_ios(self):
+        self.assertEqual(self._platform("FishAuctionsApp/1.0 (Flutter; iOS)"), "ios")
+
+    def test_android(self):
+        self.assertEqual(self._platform("FishAuctionsApp/1.0 (Flutter; Android)"), "android")
+
+    def test_blank_for_a_browser(self):
+        # A desktop browser mentioning "Android" in some other context still isn't the app.
+        self.assertEqual(self._platform("Mozilla/5.0 (Linux; Android 13) Chrome/120"), "")
+
+
+class MembershipCardWalletButtonsTests(TestCase):
+    """Offer the wallet the phone actually has.
+
+    In the app the Google Wallet save URL opens in the system browser, so on an iPhone it's a button
+    that leaves the app to do nothing useful; an Apple Wallet download on Android is the same in
+    reverse. On the web both are offered — the browser could be on either platform.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.private_key = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
+
+    def setUp(self):
+        from auctions.models import Club, ClubMember
+
+        self.club = Club.objects.create(name="Wallet club", show_member_barcode=True)
+        self.member = ClubMember.objects.create(club=self.club, name="A Member", email="member@example.com")
+        self.url = reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+
+    def _get(self, user_agent="", apple=True):
+        settings_kwargs = {
+            "GOOGLE_WALLET_ISSUER_ID": "1234",
+            "GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL": "wallet@example.com",
+            "GOOGLE_WALLET_SERVICE_ACCOUNT_KEY": self.private_key,
+        }
+        with override_settings(**settings_kwargs), patch("auctions.apple_wallet.is_configured", return_value=apple):
+            return self.client.get(self.url, HTTP_USER_AGENT=user_agent)
+
+    def test_web_offers_both(self):
+        response = self._get()
+        self.assertContains(response, "Add to Google Wallet")
+        self.assertContains(response, "Add to Apple Wallet")
+
+    def test_ios_app_hides_google_wallet(self):
+        response = self._get("FishAuctionsApp/1.0 (Flutter; iOS)")
+        self.assertNotContains(response, "Add to Google Wallet")
+        self.assertContains(response, "Add to Apple Wallet")
+
+    def test_android_app_hides_apple_wallet(self):
+        response = self._get("FishAuctionsApp/1.0 (Flutter; Android)")
+        self.assertContains(response, "Add to Google Wallet")
+        self.assertNotContains(response, "Add to Apple Wallet")
+
+    def test_the_apple_explainer_is_web_only(self):
+        """ "Or just take a screenshot" is written for someone at a computer; in the app it's noise."""
+        web = self._get(apple=False)
+        self.assertContains(web, "apple-wallet-explainer")
+        in_app = self._get("FishAuctionsApp/1.0 (Flutter; iOS)", apple=False)
+        self.assertNotContains(in_app, "apple-wallet-explainer")
+        self.assertNotContains(in_app, "take a screenshot")

@@ -79,7 +79,9 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
 # ``AuctionTOS.save()`` merge the shadow away.
 
 
-def ensure_club_member(auction, *, user=None, name="", email="", phone_number="", address="", bidder_number=""):
+def ensure_club_member(
+    auction, *, user=None, name="", email="", phone_number="", address="", bidder_number="", admin_edited=True
+):
     """Find or create the ClubMember for a participant in *auction*; return (member, created).
 
     Matches an existing member by user link first, then by email (the same order as
@@ -89,6 +91,11 @@ def ensure_club_member(auction, *, user=None, name="", email="", phone_number=""
     number on a card at the door), otherwise a generated one. Returns ``(None, False)`` when the
     auction isn't club-managed — there is nothing to create, and no member record is wanted for a
     plain auction.
+
+    Pass ``admin_edited=False`` when the person is signing themselves up rather than an admin adding
+    them: it marks the new row as the member's own, so deleting their account deletes it instead of
+    keeping it as one of the club's records (see :mod:`auctions.account_deletion`). It only ever
+    applies to a row created here; an existing record keeps whatever it already says.
     """
     if not auction.is_club_managed:
         return None, False
@@ -112,6 +119,7 @@ def ensure_club_member(auction, *, user=None, name="", email="", phone_number=""
             address=address or "",
             source=str(auction.title)[:200],
             added_by=user,
+            admin_edited=admin_edited,
         )
         # An auction that vets its participants must not hand out permissions through the back door.
         if auction.only_approved_sellers:

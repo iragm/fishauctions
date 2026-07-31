@@ -10,7 +10,7 @@ from auctions.mobile.services.ar import (
     MAX_FRAMES_PER_BATCH,
 )
 from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
-from auctions.models import MobileDevice, ObservedPrinter, UserLabelPrefs
+from auctions.models import MobileDevice, ObservedPrinter, UserData, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -158,6 +158,27 @@ class MobileLabelsPrintedSerializer(serializers.Serializer):
     """
 
     lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=1000)
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+
+class MobileNotificationPrefsSerializer(serializers.ModelSerializer):
+    """The two push toggles the app's opt-in flow owns, for GET/PATCH /api/mobile/notifications/prefs/.
+
+    Both are optional on write so a PATCH can carry either one; the app sends both when the user
+    accepts its "enable notifications" offer. Short names rather than the model's field names: the
+    app's contract is about push, not about which of them replaces email.
+    """
+
+    push_instead_of_email = serializers.BooleanField(source="push_notifications_instead_of_email", required=False)
+    push_when_lots_sell = serializers.BooleanField(source="push_notifications_when_lots_sell", required=False)
+
+    class Meta:
+        model = UserData
+        fields = ["push_instead_of_email", "push_when_lots_sell"]
 
 
 class PrinterObservationSerializer(serializers.Serializer):

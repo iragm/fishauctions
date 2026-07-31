@@ -4087,6 +4087,21 @@ class LabelPrintFieldsForm(forms.Form):
         self.auction.save()
 
 
+class MarksClubMemberAdminEditedMixin:
+    """Saving one of the club admin's member forms hands the record to the club.
+
+    ``ClubMember.admin_edited`` decides what happens to a row when the person deletes their site
+    account: one an admin has created or edited is the club's own record and keeps its details,
+    losing only the account link (see :mod:`auctions.account_deletion`). Every form using this mixin
+    is reachable only with club admin permissions, so a save through one is exactly that event.
+    Deliberately not used by ClubMemberSelfServiceForm, which is the member editing themselves.
+    """
+
+    def save(self, commit=True):
+        self.instance.admin_edited = True
+        return super().save(commit=commit)
+
+
 class ClubMemberSelfServiceForm(forms.ModelForm):
     """Form for club members to update their own contact info."""
 
@@ -4640,7 +4655,7 @@ class BapAwardForm(forms.ModelForm):
         self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
 
 
-class ClubMemberAdminForm(forms.ModelForm):
+class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Form for club admins to edit a club member's details.
 
     When ``auctiontos`` is passed the form is rendered in the context of a
@@ -4853,7 +4868,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         return bidder_number
 
 
-class ClubMemberDiscordForm(forms.ModelForm):
+class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Form for managing a club member's Discord integration settings."""
 
     class Meta:
@@ -4948,7 +4963,7 @@ class ClubMemberDiscordForm(forms.ModelForm):
         return role
 
 
-class ClubMemberPermissionsForm(forms.ModelForm):
+class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Admin-only form to set permission bool fields on a ClubMember."""
 
     class Meta:
@@ -5079,7 +5094,7 @@ class ClubMemberMergeTargetForm(forms.Form):
         return target
 
 
-class ClubMemberMergeReviewForm(forms.ModelForm):
+class ClubMemberMergeReviewForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     class Meta:
         model = ClubMember
         fields = ["name", "email", "phone_number", "address"]

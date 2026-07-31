@@ -38,6 +38,7 @@ from .forms import (
     CustomSignupForm,
 )
 from .models import (
+    PRIVACY_POLICY_SLUG,
     Auction,
     AuctionCampaign,
     AuctionDropdown,
@@ -46,6 +47,7 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
+    BlogPost,
     Category,
     ChatSubscription,
     Club,
@@ -27651,6 +27653,9 @@ class MobileConfigTests(TestCase):
 
     def setUp(self):
         self.url = reverse("mobile-config")
+        # privacy_policy_url is only offered when the page exists. The post is seeded by migration,
+        # but a TransactionTestCase earlier in the run can truncate it away, so make it explicit.
+        BlogPost.objects.get_or_create(slug=PRIVACY_POLICY_SLUG, defaults={"title": "Privacy"})
 
     @override_settings(
         SQUARE_APPLICATION_ID="sq0idp-test",
@@ -27669,6 +27674,9 @@ class MobileConfigTests(TestCase):
                 "google_server_client_id": "123.apps.googleusercontent.com",
                 "brand_name": "Test Auctions",
                 "icon_url": "http://testserver/static/android-chrome-512x512.png",
+                # Apple requires both to be linkable from inside the app at sign-up.
+                "terms_url": "/tos/",
+                "privacy_policy_url": "/privacy/",
             },
         )
 
@@ -27683,7 +27691,15 @@ class MobileConfigTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             set(resp.json().keys()),
-            {"square_application_id", "square_environment", "google_server_client_id", "brand_name", "icon_url"},
+            {
+                "square_application_id",
+                "square_environment",
+                "google_server_client_id",
+                "brand_name",
+                "icon_url",
+                "terms_url",
+                "privacy_policy_url",
+            },
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)
