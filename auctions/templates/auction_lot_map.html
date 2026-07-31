@@ -16,7 +16,10 @@
     <span id="ar-islands" class="badge bg-secondary" style="display:none;"></span>
     <div class="flex-grow-1"></div>
     <form method="post" action="{% url 'auction_lot_map_clear' slug=auction.slug %}"
-          onsubmit="return confirm('Clear ALL scanned lot locations for this auction? Every scan will need to be redone.');">
+          data-confirm="Every lot location scanned for this auction will be erased, and every lot will need to be scanned again. This can't be undone."
+          data-confirm-title="Clear all scanned locations?"
+          data-confirm-ok="Clear all locations"
+          data-confirm-variant="danger">
       {% csrf_token %}
       <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
     </form>

@@ -18,7 +18,11 @@
     <i class="bi bi-arrow-left"></i> Back to {{ club.name }}
   </a>
   {% if is_edit %}
-  <form method="post" onsubmit="return confirm('Delete this event? It will also be removed from Google Calendar and Discord.');">
+  <form method="post"
+        data-confirm="This event will be removed from your club page, your Google Calendar, and Discord. This can't be undone."
+        data-confirm-title="Delete {{ event.title }}?"
+        data-confirm-ok="Delete event"
+        data-confirm-variant="danger">
     {% csrf_token %}
     <input type="hidden" name="action" value="delete">
     <button type="submit" class="btn btn-danger">

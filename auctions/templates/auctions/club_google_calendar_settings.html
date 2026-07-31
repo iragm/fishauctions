@@ -83,7 +83,10 @@
         </button>
       </form>
       <form method="post" action="{% url 'google_calendar_disconnect' club.slug %}" class="d-inline"
-            onsubmit="return confirm('Disconnect Google Calendar? The calendar stays in your Google account, but syncing will stop.');">
+            data-confirm="The calendar itself stays in your Google account, but events will stop syncing to it."
+            data-confirm-title="Disconnect Google Calendar?"
+            data-confirm-ok="Disconnect"
+            data-confirm-variant="danger">
         {% csrf_token %}
         <button type="submit" class="btn btn-outline-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect

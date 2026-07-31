@@ -1115,12 +1115,18 @@ class NextEventInMemberEmailTests(TestCase):
             is_online=True,
         )
         PickupLocation.objects.create(
-            auction=auction, name="North", address="1 North St", latitude=42.0, longitude=-71.0,
+            auction=auction,
+            name="North",
+            address="1 North St",
+            latitude=42.0,
+            longitude=-71.0,
             pickup_time=self.start + datetime.timedelta(days=3),
         )
         # Second location has an address but no coordinates, so no directions_link of its own.
         PickupLocation.objects.create(
-            auction=auction, name="South", address="2 South St",
+            auction=auction,
+            name="South",
+            address="2 South St",
             pickup_time=self.start + datetime.timedelta(days=3),
         )
         text, _ = self._fragment()
@@ -1137,9 +1143,7 @@ class NextEventInMemberEmailTests(TestCase):
             is_online=False,
         )
         gather = (self.start + datetime.timedelta(days=1)).replace(hour=19, minute=30)
-        PickupLocation.objects.create(
-            auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=gather
-        )
+        PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=gather)
         text, _ = self._fragment()
         self.assertIn("Fall Auction", text)
         self.assertIn(f"{gather:%-I:%M %p}", text)

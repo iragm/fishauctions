@@ -163,6 +163,55 @@ click.
 This is the documented standard; apply it to obvious cases as you touch pages,
 rather than refactoring every page at once.
 
+## Confirmation dialogs
+
+**Never use the browser's `confirm()` (or `alert()` / `prompt()`) to confirm an
+action.** Use a styled modal with explicit yes/no buttons.
+
+A native `confirm()` is unstyleable, is prefixed with the bare origin
+("127.0.0.1 says…"), carries no product voice, is silently suppressed once the
+user ticks *prevent this page from creating additional dialogs* — which
+**fires the action as if cancelled, or blocks it entirely, with no feedback** —
+and inside the mobile app's webview it reads like a phishing prompt.
+
+Use the declarative helper (`auctions/static/js/confirm_modal.js`, loaded
+site-wide from `base.html`). No per-page JavaScript:
+
+```html
+<form method="post" action="{% url 'google_calendar_disconnect' club.slug %}"
+      data-confirm="Disconnect Google Calendar? The calendar stays in your Google account, but syncing will stop."
+      data-confirm-title="Disconnect Google Calendar?"
+      data-confirm-ok="Disconnect"
+      data-confirm-variant="danger">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline-danger btn-sm">Disconnect</button>
+</form>
+```
+
+| Attribute | Purpose |
+|---|---|
+| `data-confirm` | **Required.** The question. Say what will happen, including what *won't* be undone. |
+| `data-confirm-title` | Dialog heading. Default "Are you sure?" |
+| `data-confirm-ok` | Confirm button label. Default "Yes". |
+| `data-confirm-cancel` | Cancel button label. Default "Cancel". |
+| `data-confirm-variant` | `danger` / `success` / `primary` — picks the confirm button style per the Actions table below. Default `primary`. |
+
+Works on a `<form>` (intercepts submit, then re-submits via `requestSubmit()` so
+HTMX and native validation still run) or on an `<a>`/`<button>`. For flows that
+need to confirm from inside your own JavaScript, call
+`confirmAction({message, title, okLabel, variant}, onConfirm)` directly.
+
+Rules:
+
+- **Name the verb on the confirm button** — "Delete event", "Disconnect", not
+  "OK". The button should read as the thing about to happen.
+- **`danger` variant for anything destructive or irreversible**, and say so in
+  the message.
+- The message is rendered with `textContent`, so it can never inject markup —
+  but that also means **no HTML in `data-confirm`**.
+- Confirmation is not a substitute for reversibility. Prefer a soft delete plus
+  an undo where the data is worth keeping.
+
 ## Message-type standard
 
 Use the right channel for the right kind of message, consistently.

@@ -70,7 +70,11 @@
                 <td>{{ job.created_at|date:"M j, g:i a" }}</td>
                 <td>
                   {% if not job.canceled and not job.is_full %}
-                    <form method="post" class="d-inline" onsubmit="return confirm('Cancel this job?');">
+                    <form method="post" class="d-inline"
+                          data-confirm="Anyone signed up for this job will no longer be expected."
+                          data-confirm-title="Cancel {{ job.job_title }}?"
+                          data-confirm-ok="Cancel job"
+                          data-confirm-variant="danger">
                       {% csrf_token %}
                       <input type="hidden" name="action" value="cancel">
                       <input type="hidden" name="job_pk" value="{{ job.pk }}">

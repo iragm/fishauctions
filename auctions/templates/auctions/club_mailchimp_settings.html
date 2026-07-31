@@ -112,7 +112,10 @@
         </button>
       </form>
       <form method="post" action="{% url 'mailchimp_disconnect' club.slug %}" class="d-inline"
-            onsubmit="return confirm('Disconnect Mailchimp? Your audience stays in Mailchimp, but syncing will stop.');">
+            data-confirm="Your audience stays in Mailchimp, but members will stop syncing to it."
+            data-confirm-title="Disconnect Mailchimp?"
+            data-confirm-ok="Disconnect"
+            data-confirm-variant="danger">
         {% csrf_token %}
         <button type="submit" class="btn btn-outline-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect

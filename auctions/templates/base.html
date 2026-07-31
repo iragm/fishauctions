@@ -78,6 +78,8 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
+        {# Styled yes/no dialogs for data-confirm actions, in place of the browser's confirm() #}
+        <script type="text/javascript" src="{% static 'js/confirm_modal.js' %}"></script>
         {% if request.user.is_authenticated %}
         <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
         {% endif %}
