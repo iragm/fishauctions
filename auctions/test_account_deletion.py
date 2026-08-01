@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -496,12 +496,17 @@ class AuctionRecordsSurviveTests(StandardTestCase):
         self.assertIsNone(view.ip_address)
 
 
+@override_settings(SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Single Club")
 class SingleClubModeTests(TestCase):
     """The membership every account gets in single-club mode is the member's own record.
 
     SINGLE_CLUB_MODE is on by default and entrypoint.sh creates the club, so this is the ordinary
     deployment, not an edge case: a row created for the person out of their signup form must not
     keep their name and address in the club's roster after they've deleted their account.
+
+    The mode is pinned here rather than inherited from the environment: it is a .env setting, and
+    CI runs with it off (.github/scripts/prepare-ci.sh), which left the club uncreated and every
+    assertion below looking for a membership that was never made.
     """
 
     def setUp(self):
