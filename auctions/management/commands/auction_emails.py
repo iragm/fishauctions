@@ -9,7 +9,7 @@ from django.db.models import Q
 from django.utils import timezone
 from post_office import mail
 
-from auctions import discord_events
+from auctions import club_events, discord_events
 from auctions.models import Auction, AuctionHistory
 from auctions.notifications import notify_user
 
@@ -31,15 +31,13 @@ def _send_discord_channel_message(channel_id, content):
 
 
 def _create_discord_scheduled_event(guild_id, name, start_time, end_time, location_url):
-    """Create a Discord Guild Scheduled Event (external type). Returns True on success."""
-    return bool(
-        discord_events.create_scheduled_event(
-            guild_id=guild_id,
-            name=name,
-            start_time=start_time,
-            end_time=end_time,
-            location=location_url,
-        )
+    """Create a Discord Guild Scheduled Event (external type). Returns its id, or None."""
+    return discord_events.create_scheduled_event(
+        guild_id=guild_id,
+        name=name,
+        start_time=start_time,
+        end_time=end_time,
+        location=location_url,
     )
 
 
@@ -306,12 +304,9 @@ class Command(BaseCommand):
 
             auction_url = f"https://{domain}/?{auction.slug}"
 
-            if auction.is_online:
-                start_time = auction.date_start
-                end_time = auction.date_end
-            else:
-                start_time = auction.date_start
-                end_time = auction.date_start + timedelta(hours=2) if auction.date_start else None
+            # The same window the club calendar uses, so an update later can't disagree with
+            # what was created here.
+            start_time, end_time = club_events.auction_event_window(auction)
 
             if not start_time or not end_time:
                 logger.info("Discord event skipped for auction %s — missing start/end times", auction.slug)
@@ -324,7 +319,7 @@ class Command(BaseCommand):
                 logger.info("Discord event skipped for auction %s — start time is in the past", auction.slug)
                 continue
 
-            ok = _create_discord_scheduled_event(
+            event_id = _create_discord_scheduled_event(
                 guild_id=club.discord_server_id,
                 name=auction.title,
                 start_time=start_time,
@@ -332,7 +327,12 @@ class Command(BaseCommand):
                 location_url=auction_url,
             )
             auction.discord_event_created = True
-            auction.save(update_fields=["discord_event_created"])
+            # Keeping the id is what lets the event be moved or called off later, instead of
+            # sitting in the server at its original time no matter what happens to the auction.
+            auction.discord_event_id = event_id or ""
+            auction.discord_event_needs_update = False
+            auction.save(update_fields=["discord_event_created", "discord_event_id", "discord_event_needs_update"])
+            ok = bool(event_id)
             status = "created" if ok else "failed (marked done to prevent retry)"
             AuctionHistory.objects.create(
                 auction=auction,

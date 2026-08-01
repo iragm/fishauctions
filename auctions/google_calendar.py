@@ -38,6 +38,16 @@ SYNC_TOKEN_GONE = 410
 
 TIMEOUT = 15
 
+# A first pull asks for a bounded window rather than everything. Without an upper bound a single
+# never-ending weekly meeting expands (singleEvents=true) into an instance per week forever, and
+# each one would become a club event, a club-page row and a Discord event.
+PULL_WINDOW_BEFORE = datetime.timedelta(days=30)
+PULL_WINDOW_AHEAD = datetime.timedelta(days=400)
+
+# Hard stop on pagination, so a response that keeps handing back the same page token can't spin.
+# At 250 events a page this is far more than a club calendar holds in the window above.
+MAX_PULL_PAGES = 20
+
 
 class GoogleCalendarError(Exception):
     """Raised for Google problems the caller should surface to the admin and log."""
@@ -238,15 +248,41 @@ def _event_body(event):
         "summary": event.title,
         "description": event.description or "",
         "location": event.location or "",
-        "start": {"dateTime": event.date_start.isoformat(), "timeZone": settings.TIME_ZONE},
-        "end": {"dateTime": event.effective_end.isoformat(), "timeZone": settings.TIME_ZONE},
         "status": "cancelled" if event.cancelled else "confirmed",
         # Lets pull_events() recognize our own writes and skip them.
         "extendedProperties": {"private": {"auctionSiteEventUuid": str(event.uuid)}},
     }
+    body.update(_event_times(event))
+    if event.is_recurring:
+        body["recurrence"] = event.recurrence_lines
     if event.source == event.SOURCE_AUCTION and event.auction_id:
         body["source"] = {"title": event.title, "url": _absolute_auction_url(event)}
     return body
+
+
+def _event_times(event):
+    """The start/end half of the payload, written the way Google writes it.
+
+    A repeating event goes back anchored where its series is anchored, not at whichever occurrence
+    we happen to be showing — Google generates the rest from there, and sending the next occurrence
+    instead would walk the whole series forward a step on every push.
+
+    An all-day event has to go back as ``date``, not ``dateTime``: sending a datetime would quietly
+    turn the club's all-day event into a timed one the first time anyone edits it here. Google's
+    all-day end date is exclusive, which is exactly what ``date_end`` holds for these.
+    """
+    start = event.recurrence_start if event.is_recurring else event.date_start
+    end = start + event.occurrence_length
+    if not event.all_day:
+        return {
+            "start": {"dateTime": start.isoformat(), "timeZone": settings.TIME_ZONE},
+            "end": {"dateTime": end.isoformat(), "timeZone": settings.TIME_ZONE},
+        }
+    start_day = timezone.localtime(start).date()
+    end_day = timezone.localtime(end).date()
+    if end_day <= start_day:
+        end_day = start_day + datetime.timedelta(days=1)
+    return {"start": {"date": start_day.isoformat()}, "end": {"date": end_day.isoformat()}}
 
 
 def _absolute_auction_url(event):
@@ -258,6 +294,12 @@ def push_event(event):
     """Create or update one ClubEvent in the club's Google Calendar. Returns True on success."""
     club = event.club
     if not club.google_calendar_connected:
+        return False
+    if event.cancelled and not event.google_event_id:
+        # Nothing to call off over there, and Google has no use for an event that arrives
+        # already cancelled.
+        event.needs_google_sync = False
+        event.save(update_fields=["needs_google_sync"])
         return False
     body = _event_body(event)
     calendar_id = _quote(club.google_calendar_id)
@@ -345,24 +387,28 @@ def pull_events(club):
 
     Uses Google's syncToken so each run only fetches what changed. Events that originated on
     this site are recognized by their extendedProperties and only have their *content* updated
-    — we never let a pull resurrect something we deleted, or flip an auction event's identity.
+    — we never let a pull resurrect something we deleted, or flip a generated event's identity.
     """
-    from auctions.models import ClubEvent
-
     if not club.google_calendar_connected:
         return (0, 0, 0)
 
     calendar_id = _quote(club.google_calendar_id)
-    params = {"showDeleted": "true", "maxResults": 250, "singleEvents": "true"}
+    # Deliberately *not* singleEvents: a repeating event comes back once, as itself, with its
+    # rule attached. Asking Google to expand it instead turned one weekly meeting into an event
+    # per week here — see auctions/recurrence.py.
+    base_params = {"showDeleted": "true", "maxResults": 250}
     if club.google_calendar_sync_token:
-        params["syncToken"] = club.google_calendar_sync_token
+        base_params["syncToken"] = club.google_calendar_sync_token
     else:
-        # First run: don't drag in years of history, just what's current and upcoming.
-        params["timeMin"] = (timezone.now() - datetime.timedelta(days=30)).isoformat()
+        # First run: a bounded window, not years of history or an endless recurrence.
+        now = timezone.now()
+        base_params["timeMin"] = (now - PULL_WINDOW_BEFORE).isoformat()
+        base_params["timeMax"] = (now + PULL_WINDOW_AHEAD).isoformat()
 
     created = updated = deleted = 0
     next_sync_token = ""
-    while True:
+    params = dict(base_params)
+    for page_number in range(1, MAX_PULL_PAGES + 1):
         page = _request(club, "GET", f"/calendars/{calendar_id}/events", params=params, allow_status=(SYNC_TOKEN_GONE,))
         if page == SYNC_TOKEN_GONE:
             # Token expired. Start over from scratch on the next run rather than looping here.
@@ -371,92 +417,210 @@ def pull_events(club):
             club.save(update_fields=["google_calendar_sync_token"])
             return (created, updated, deleted)
 
-        for item in page.get("items", []):
-            google_id = item.get("id", "")
-            if not google_id:
-                continue
-            existing = ClubEvent.objects.filter(club=club, google_event_id=google_id).first()
-            if item.get("status") == "cancelled":
-                if existing and not existing.is_deleted:
-                    if existing.source == ClubEvent.SOURCE_AUCTION:
-                        # The auction is still real — someone deleted its calendar entry. Put it
-                        # back on the next push rather than dropping it from the club page.
-                        existing.google_event_id = ""
-                        existing.needs_google_sync = True
-                        existing.save(update_fields=["google_event_id", "needs_google_sync"])
-                    else:
-                        existing.is_deleted = True
-                        existing.save(update_fields=["is_deleted"])
-                        deleted += 1
-                continue
-
-            start = _parse_google_datetime(item.get("start"))
-            if not start:
-                continue
-            end = _parse_google_datetime(item.get("end"))
-            title = item.get("summary") or "(untitled event)"
-            description = item.get("description") or ""
-            location = item.get("location") or ""
-
-            if existing:
-                if existing.source == ClubEvent.SOURCE_AUCTION:
-                    # Auction events are owned by the auction; a Google-side edit doesn't win.
-                    continue
-                changed = (
-                    existing.title != title
-                    or existing.description != description
-                    or existing.location != location
-                    or existing.date_start != start
-                    or existing.date_end != end
-                )
-                if changed:
-                    existing.title = title
-                    existing.description = description
-                    existing.location = location
-                    existing.date_start = start
-                    existing.date_end = end
-                    existing.is_deleted = False
-                    # Content came *from* Google, so don't bounce it straight back.
-                    existing.needs_google_sync = False
-                    existing.save()
-                    updated += 1
-                continue
-
-            # An event we've never seen. It might still be one of ours if a push succeeded but
-            # we failed to record the id — match on the uuid we stamp into extendedProperties.
-            private = (item.get("extendedProperties") or {}).get("private") or {}
-            our_uuid = private.get("auctionSiteEventUuid")
-            if our_uuid:
-                claimed = ClubEvent.objects.filter(club=club, uuid=our_uuid).first()
-                if claimed:
-                    claimed.google_event_id = google_id
-                    claimed.needs_google_sync = False
-                    claimed.save(update_fields=["google_event_id", "needs_google_sync"])
-                    continue
-
-            ClubEvent.objects.create(
-                club=club,
-                title=title,
-                description=description,
-                location=location,
-                date_start=start,
-                date_end=end,
-                source=ClubEvent.SOURCE_GOOGLE,
-                google_event_id=google_id,
-                needs_google_sync=False,
-            )
-            created += 1
+        # Series before their own exceptions, so "this one occurrence moved" always has the
+        # series it belongs to to attach itself to.
+        for item in sorted(page.get("items", []), key=lambda item: bool(item.get("recurringEventId"))):
+            outcome = _apply_pulled_event(club, item)
+            if outcome == "created":
+                created += 1
+            elif outcome == "updated":
+                updated += 1
+            elif outcome == "deleted":
+                deleted += 1
 
         next_sync_token = page.get("nextSyncToken", "") or next_sync_token
         page_token = page.get("nextPageToken")
         if not page_token:
             break
-        params = {"pageToken": page_token}
+        if page_number == MAX_PULL_PAGES:
+            # Give up rather than spin. Leaving the token empty means the next run starts the
+            # window again, which is the right thing if this was a one-off flood.
+            logger.warning("Stopped pulling club %s's calendar after %s pages.", club.pk, MAX_PULL_PAGES)
+            next_sync_token = ""
+            break
+        # Every page of a listing has to carry the same query, or page two quietly reverts to
+        # Google's defaults: deletions hidden and recurring events unexpanded.
+        params = dict(base_params, pageToken=page_token)
 
     club.google_calendar_sync_token = next_sync_token
-    club.google_calendar_last_sync = timezone.now()
-    club.save(update_fields=["google_calendar_sync_token", "google_calendar_last_sync"])
+    club.save(update_fields=["google_calendar_sync_token"])
     return (created, updated, deleted)
+
+
+def _apply_pulled_event(club, item):
+    """Apply one event from a Google listing. Returns what happened, for the caller's counts."""
+    google_id = item.get("id", "")
+    if not google_id:
+        return ""
+    if item.get("recurringEventId"):
+        return _apply_pulled_instance(club, item, google_id)
+    return _apply_event_item(club, item, google_id)
+
+
+def _apply_pulled_instance(club, item, google_id):
+    """One occurrence of a series that Google keeps its own record of — moved, or called off.
+
+    Either way that occurrence stops being generated from the rule (an EXDATE), so the series and
+    the changed occurrence can't both claim the same slot. A moved one then lives on as an
+    ordinary event of its own; a cancelled one simply doesn't happen.
+    """
+    from auctions.models import ClubEvent
+
+    master = ClubEvent.objects.filter(club=club, google_event_id=item["recurringEventId"]).first()
+    original_start = _parse_google_datetime(item.get("originalStartTime"))
+    if master and original_start and master.is_recurring:
+        _exclude_occurrence(master, original_start)
+
+    if item.get("status") == "cancelled":
+        # Excluding it from the rule is the whole story, unless we'd already made a row for a
+        # moved copy of this occurrence.
+        moved_copy = ClubEvent.objects.filter(club=club, google_event_id=google_id, is_deleted=False).first()
+        if not moved_copy:
+            return ""
+        moved_copy.is_deleted = True
+        moved_copy.save(update_fields=["is_deleted"])
+        return "deleted"
+
+    return _apply_event_item(club, item, google_id)
+
+
+def _exclude_occurrence(master, moment):
+    """Take one occurrence out of a series' rule."""
+    from auctions import recurrence
+
+    lines = recurrence.with_exdate(master.recurrence_lines, moment)
+    text = recurrence.to_text(lines)
+    if text == master.recurrence:
+        return
+    master.recurrence = text
+    master.save(update_fields=["recurrence"])
+    master.refresh_occurrence()
+
+
+def _series_times(item, start, end, existing):
+    """(anchor, rule, start, end) for one pulled item.
+
+    A plain event is its own start and end and has no rule. A series keeps Google's start as the
+    anchor the rule is measured from, and takes ``date_start``/``date_end`` from the occurrence
+    that's on now or next, so the club page, the membership emails and Discord all see a date
+    that means something without knowing anything about recurrence.
+    """
+    from auctions import recurrence
+
+    lines = recurrence.clean_lines(item.get("recurrence"))
+    if not lines:
+        return (None, "", start, end)
+    # Occurrences called off here (Google records those separately, as instances) would come back
+    # every time the series itself is edited, so they're carried across.
+    if existing and existing.recurrence:
+        kept = [line for line in existing.recurrence_lines if line.upper().startswith("EXDATE") and line not in lines]
+        lines = lines + kept
+    length = (end - start) if (end and end > start) else datetime.timedelta(hours=2)
+    occurrence = recurrence.current_or_next(start, lines, length, timezone.now())
+    if not occurrence:
+        # An unreadable rule: keep the event, treat it as the one-off Google says it starts as.
+        return (None, "", start, end)
+    return (start, recurrence.to_text(lines), occurrence, occurrence + length)
+
+
+def _apply_event_item(club, item, google_id):
+    """Apply one plain event — or one series, taken as a whole."""
+    from auctions.models import ClubEvent
+
+    existing = ClubEvent.objects.filter(club=club, google_event_id=google_id).first()
+
+    if item.get("status") == "cancelled":
+        if not existing or existing.is_deleted:
+            return ""
+        if existing.is_automatic:
+            # The auction or pickup time is still real — someone deleted its calendar entry.
+            # Put it back on the next push rather than dropping it from the club page.
+            existing.google_event_id = ""
+            existing.needs_google_sync = True
+            existing.save(update_fields=["google_event_id", "needs_google_sync"])
+            return ""
+        existing.is_deleted = True
+        existing.save(update_fields=["is_deleted"])
+        return "deleted"
+
+    start = _parse_google_datetime(item.get("start"))
+    if not start:
+        return ""
+    end = _parse_google_datetime(item.get("end"))
+    all_day = bool((item.get("start") or {}).get("date"))
+    title = item.get("summary") or "(untitled event)"
+    description = item.get("description") or ""
+    location = item.get("location") or ""
+    anchor, rule, start, end = _series_times(item, start, end, existing)
+
+    if existing:
+        if existing.is_automatic:
+            # Generated events are owned by the auction; a Google-side edit doesn't win.
+            return ""
+        if existing.needs_google_sync:
+            # We have an edit of our own that hasn't reached Google yet (a push that failed, or
+            # one that hasn't run). Taking Google's copy here would silently throw it away.
+            logger.info("Keeping the unsynced local copy of event %s rather than Google's.", existing.pk)
+            return ""
+        changed = (
+            existing.title != title
+            or existing.description != description
+            or existing.location != location
+            or existing.date_start != start
+            or existing.date_end != end
+            or existing.all_day != all_day
+            or existing.recurrence != rule
+            or existing.recurrence_start != anchor
+        )
+        if not changed:
+            return ""
+        existing.title = title
+        existing.description = description
+        existing.location = location
+        existing.date_start = start
+        existing.date_end = end
+        existing.all_day = all_day
+        existing.recurrence = rule
+        existing.recurrence_start = anchor
+        existing.is_deleted = False
+        # Content came *from* Google, so don't bounce it straight back — but Discord hasn't
+        # heard about it, and this is the only place that would ever tell it.
+        existing.needs_google_sync = False
+        existing.needs_discord_sync = True
+        existing.save()
+        return "updated"
+
+    # An event we've never seen. It might still be one of ours if a push succeeded but we failed
+    # to record the id — match on the uuid we stamp into extendedProperties. Anything carrying our
+    # uuid is ours either way, so it never becomes a second, Google-sourced club event.
+    private = (item.get("extendedProperties") or {}).get("private") or {}
+    our_uuid = private.get("auctionSiteEventUuid")
+    if our_uuid:
+        claimed = ClubEvent.objects.filter(club=club, uuid=our_uuid).first()
+        if claimed and not claimed.google_event_id:
+            claimed.google_event_id = google_id
+            claimed.needs_google_sync = False
+            claimed.save(update_fields=["google_event_id", "needs_google_sync"])
+        # Already knowing this event by a *different* id means this is a second copy of it — an
+        # instance of a recurring series, or a duplicate the admin made in Google. Claiming it
+        # would repoint us at the copy and orphan the original.
+        return ""
+
+    ClubEvent.objects.create(
+        club=club,
+        title=title,
+        description=description,
+        location=location,
+        date_start=start,
+        date_end=end,
+        all_day=all_day,
+        recurrence=rule,
+        recurrence_start=anchor,
+        source=ClubEvent.SOURCE_GOOGLE,
+        google_event_id=google_id,
+        needs_google_sync=False,
+    )
+    return "created"
 
 
 def sync_club(club):
@@ -480,18 +644,25 @@ def sync_club(club):
         club.save(update_fields=["google_calendar_last_error"])
         logger.warning("Google Calendar sync failed for club %s: %s", club.pk, exc)
         return False
-    if club.google_calendar_last_error:
-        club.google_calendar_last_error = ""
-        club.save(update_fields=["google_calendar_last_error"])
+    # Stamped here rather than inside pull_events, so "last sync" means a round trip that worked
+    # and not a run that gave up on an expired token half way through.
+    club.google_calendar_last_sync = timezone.now()
+    club.google_calendar_last_error = ""
+    club.save(update_fields=["google_calendar_last_sync", "google_calendar_last_error"])
     return True
 
 
 def disconnect(club, error=""):
-    """Forget this club's Google connection. The calendar itself stays in their account."""
+    """Forget this club's Google connection. The calendar itself stays in their account.
+
+    The calendar id and the events' Google ids are kept on purpose. Reconnecting the same Google
+    account then picks up the same calendar and *updates* the events already in it — members who
+    subscribed keep the calendar they subscribed to. Reconnecting a different account can't see
+    that calendar, and ``ensure_calendar()`` notices, drops the stale ids and starts a new one.
+    """
     club.google_calendar_refresh_token = ""
     club.google_calendar_access_token = ""
     club.google_calendar_token_expires = None
-    club.google_calendar_id = ""
     club.google_calendar_account_email = ""
     club.google_calendar_sync_token = ""
     club.google_calendar_connected_on = None
@@ -501,12 +672,30 @@ def disconnect(club, error=""):
             "google_calendar_refresh_token",
             "google_calendar_access_token",
             "google_calendar_token_expires",
-            "google_calendar_id",
             "google_calendar_account_email",
             "google_calendar_sync_token",
             "google_calendar_connected_on",
             "google_calendar_last_error",
         ]
     )
-    # Events stay on the club page; they just aren't linked to a Google event any more.
-    club.events.exclude(google_event_id="").update(google_event_id="", needs_google_sync=True)
+    # Everything is queued to go back out, so reconnecting catches the calendar up on whatever
+    # changed while it was disconnected.
+    club.events.filter(is_deleted=False).update(needs_google_sync=True)
+
+
+def is_calendar_public(club):
+    """True when the club's calendar really is shared publicly.
+
+    We can't read sharing through the API — that needs a scope over every calendar the admin owns
+    (see ``ensure_calendar``). But a public calendar has a public iCal feed, so asking for it
+    without credentials answers the question the honest way: 200 means members can subscribe.
+    """
+    url = club.google_calendar_ical_url_candidate
+    if not url:
+        return False
+    try:
+        resp = requests.get(url, timeout=TIMEOUT)
+    except requests.RequestException as exc:
+        msg = f"Could not reach Google to check the calendar's sharing: {exc}"
+        raise GoogleCalendarError(msg) from exc
+    return resp.status_code == 200

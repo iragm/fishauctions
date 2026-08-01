@@ -241,17 +241,81 @@ def refresh_calendar_pickups(sender, instance, **kwargs):
         logger.exception("Could not refresh calendar pickups for auction %s", instance.auction_id)
 
 
-@receiver(pre_delete, sender="auctions.PickupLocation")
-def remove_pickup_events_from_calendars(sender, instance, **kwargs):
-    """Take a deleted pickup location's events off Google and Discord before the FK cascade
-    removes the rows — once they're gone we'd have no record of what to clean up."""
+# What Discord shows about an auction. Any of these changing makes its scheduled event stale.
+DISCORD_AUCTION_FIELDS = (
+    "title",
+    "slug",
+    "date_start",
+    "date_end",
+    "is_online",
+    "promote_this_auction",
+    "is_deleted",
+)
+
+
+@receiver(pre_save, sender="auctions.Auction")
+def stash_previous_auction_discord_state(sender, instance, **kwargs):
+    """Snapshot what Discord is showing for this auction, so post_save can tell if it's stale.
+
+    Only auctions that actually have a scheduled event pay for the lookup — everything else
+    saves as often as it always did, with no extra query.
+    """
+    instance._previous_discord_state = None
+    if not instance.pk or not instance.discord_event_id:
+        return
+    from .models import Auction
+
+    instance._previous_discord_state = Auction.objects.filter(pk=instance.pk).values(*DISCORD_AUCTION_FIELDS).first()
+
+
+@receiver(post_save, sender="auctions.Auction")
+def flag_stale_auction_discord_event(sender, instance, **kwargs):
+    """Queue a Discord update when an auction with a scheduled event moves, is renamed, or stops
+    being promoted. discord_events.sync_auction_events() sends it on the next sync."""
+    if not instance.discord_event_id:
+        return
+    previous = getattr(instance, "_previous_discord_state", None)
+    if not previous or all(previous[field] == getattr(instance, field) for field in DISCORD_AUCTION_FIELDS):
+        return
+    from .models import Auction
+
+    # A queryset update, not instance.save(): saving here would re-enter this signal.
+    Auction.objects.filter(pk=instance.pk).update(discord_event_needs_update=True)
+
+
+@receiver(pre_delete, sender="auctions.Auction")
+def remove_auction_discord_event(sender, instance, **kwargs):
+    """An auction's own Discord event is tracked on the auction, not on a ClubEvent, so a club
+    that doesn't mirror auctions onto its calendar has nothing else to clean it up."""
+    if not instance.club_id or not instance.club.discord_server_id:
+        return
+    from auctions import discord_events
+    from auctions.models import Auction
+
+    # Re-read: the cascade may already have taken this down via the event's own handler.
+    event_id = Auction.objects.filter(pk=instance.pk).values_list("discord_event_id", flat=True).first()
+    if not event_id:
+        return
+    try:
+        discord_events.cancel_scheduled_event(instance.club.discord_server_id, event_id)
+    except Exception:
+        logger.exception("Could not remove the Discord event for deleted auction %s", instance.pk)
+
+
+@receiver(pre_delete, sender="auctions.ClubEvent")
+def remove_event_from_calendars(sender, instance, **kwargs):
+    """Take an event off Google and Discord before its row goes — once it's gone we'd have no
+    record of what to clean up.
+
+    Deleting a pickup location, an auction or a whole club cascades these rows away, so catching
+    it here covers every one of those without a handler per parent.
+    """
     from auctions import club_events
 
-    for event in instance.calendar_events.all():
-        try:
-            club_events._remove_remote(event)
-        except Exception:
-            logger.exception("Could not remove calendar event %s for a deleted pickup location", event.pk)
+    try:
+        club_events._remove_remote(instance)
+    except Exception:
+        logger.exception("Could not remove calendar event %s from Google and Discord", instance.pk)
 
 
 @receiver(pre_save, sender="auctions.ClubMember")

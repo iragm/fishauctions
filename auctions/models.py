@@ -1118,10 +1118,10 @@ class Club(CloudflareImageMixin, models.Model):
         default=False,
         verbose_name="This calendar is shared publicly",
         help_text=(
-            "Whether the admin has made the calendar public in Google Calendar. We can't read or "
-            "change sharing ourselves — that needs a scope granting access to all of their "
-            "calendars — so this is their word for it, and only controls whether the club page "
-            "advertises the Google subscribe links."
+            "Whether the admin has made the calendar public in Google Calendar. We can't change "
+            "sharing ourselves — that needs a scope granting access to all of their calendars — "
+            "but ticking this box is checked against the calendar's public feed before it sticks. "
+            "It only controls whether the club page advertises the Google subscribe links."
         ),
     )
     google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
@@ -1196,11 +1196,23 @@ class Club(CloudflareImageMixin, models.Model):
         return "https://calendar.google.com/calendar/render?cid=" + quote_plus(self.google_calendar_id)
 
     @property
-    def google_calendar_ical_url(self):
-        """Google's public iCal feed for this club's calendar, or empty when not shareable."""
-        if not (self.google_calendar_connected and self.google_calendar_is_public):
+    def google_calendar_ical_url_candidate(self):
+        """Where this calendar's public iCal feed would be, shared or not.
+
+        Fetching it anonymously is how ``google_calendar.is_calendar_public()`` checks whether the
+        admin really did share the calendar — the API can't tell us without a scope over all of
+        their calendars.
+        """
+        if not self.google_calendar_connected:
             return ""
         return f"https://calendar.google.com/calendar/ical/{quote_plus(self.google_calendar_id)}/public/basic.ics"
+
+    @property
+    def google_calendar_ical_url(self):
+        """Google's public iCal feed for this club's calendar, or empty when not shareable."""
+        if not self.google_calendar_is_public:
+            return ""
+        return self.google_calendar_ical_url_candidate
 
     @property
     def icon_display_url(self):
@@ -2417,15 +2429,42 @@ class ClubEvent(models.Model):
     discord_event_id = models.CharField(
         max_length=100, blank=True, help_text="Discord scheduled event id, once created."
     )
-    discord_event_attempted = models.BooleanField(
-        default=False,
-        help_text="Set once we've tried to create a Discord event, so a failure isn't retried forever.",
-    )
     needs_google_sync = models.BooleanField(
         default=True,
         help_text="Set when the event changes on our side and is waiting to be pushed to Google.",
     )
-    cancelled = models.BooleanField(default=False)
+    needs_discord_sync = models.BooleanField(
+        default=True,
+        help_text=(
+            "Set when the event changes and is waiting to reach Discord. Cleared once we've tried, "
+            "success or not, so a permanent failure isn't retried every run — the next edit re-arms it."
+        ),
+    )
+    all_day = models.BooleanField(
+        default=False,
+        help_text="An all-day event. date_end is then the exclusive end, the way Google and iCal write it.",
+    )
+    recurrence = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "The repeat rule from Google, one RRULE/EXDATE/RDATE line per row. One event stands "
+            "for the whole series; date_start holds the occurrence that's on now, or next."
+        ),
+    )
+    recurrence_start = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Where the series is anchored — the first occurrence. Only set for repeating events.",
+    )
+    cancelled = models.BooleanField(
+        default=False,
+        verbose_name="This event is cancelled",
+        help_text=(
+            "Keeps the event visible, struck through, instead of removing it. Subscribers are told "
+            "it's off rather than watching it vanish."
+        ),
+    )
     is_deleted = models.BooleanField(default=False)
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
@@ -2483,6 +2522,58 @@ class ClubEvent(models.Model):
         if self.date_end and self.date_end > self.date_start:
             return self.date_end
         return self.date_start + datetime.timedelta(hours=2)
+
+    @property
+    def is_recurring(self):
+        """True for a series. One row stands for all of it — see auctions/recurrence.py."""
+        return bool(self.recurrence and self.recurrence_start)
+
+    @property
+    def recurrence_lines(self):
+        from auctions import recurrence
+
+        return recurrence.from_text(self.recurrence)
+
+    @property
+    def recurrence_summary(self):
+        """ "Repeats monthly on the first Tuesday", for the club page. Empty when it doesn't."""
+        from auctions import recurrence
+
+        return recurrence.describe(self.recurrence_lines) if self.is_recurring else ""
+
+    @property
+    def occurrence_length(self):
+        """How long one occurrence runs. Constant across the series."""
+        return self.effective_end - self.date_start
+
+    def next_occurrence(self, now=None):
+        """When this event next happens (or is happening). None when the rule can't be read."""
+        from auctions import recurrence
+
+        if not self.is_recurring:
+            return self.date_start
+        return recurrence.current_or_next(
+            self.recurrence_start, self.recurrence_lines, self.occurrence_length, now or timezone.now()
+        )
+
+    def refresh_occurrence(self):
+        """Move a series on to the occurrence that's on now, or the next one. True when it moved.
+
+        ``date_start`` is what the rest of the site reads, so this is what keeps a weekly meeting
+        from sitting on the club page showing last Tuesday for ever.
+        """
+        if not self.is_recurring:
+            return False
+        occurrence = self.next_occurrence()
+        if not occurrence or occurrence == self.date_start:
+            return False
+        length = self.occurrence_length
+        self.date_start = occurrence
+        self.date_end = occurrence + length
+        # Google generates the series itself; Discord only ever holds one date.
+        self.needs_discord_sync = True
+        self.save(update_fields=["date_start", "date_end", "needs_discord_sync"])
+        return True
 
     @property
     def is_over(self):
@@ -2687,6 +2778,19 @@ class Auction(models.Model):
     first_discord_sent = models.BooleanField(default=False)
     second_discord_sent = models.BooleanField(default=False)
     discord_event_created = models.BooleanField(default=False)
+    discord_event_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text=(
+            "Discord scheduled event id for this auction, once auction_emails has created one. "
+            "Kept so the event can be moved or called off when the auction is."
+        ),
+    )
+    discord_event_needs_update = models.BooleanField(
+        default=False,
+        help_text="Set when something Discord shows about this auction changed and hasn't been sent yet.",
+    )
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")

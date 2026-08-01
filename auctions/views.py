@@ -12253,6 +12253,7 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY = "google_calendar_oauth_club_slug"
+GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"  # noqa: S105 - a session key name
 
 
 class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12284,13 +12285,32 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug):
         """Save the checkboxes on the settings page.
 
-        google_calendar_is_public is the admin telling us they've shared the calendar in Google;
-        we can't set or verify that ourselves without a scope over all their calendars.
+        google_calendar_is_public is the admin telling us they've shared the calendar in Google.
+        We still can't *set* that — it needs a scope over all their calendars — but we can check
+        it, by asking for the calendar the way a member would.
         """
+        from auctions import google_calendar as gcal
+
         club = self.club
         club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
         club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
-        club.google_calendar_is_public = "google_calendar_is_public" in request.POST
+        wants_public = "google_calendar_is_public" in request.POST
+        club.google_calendar_is_public = wants_public
+        # Their word, checked: a shared calendar has a public iCal feed, so fetching it without
+        # credentials tells us whether members can actually subscribe. Advertising links that
+        # 404 for everyone is worse than not advertising them.
+        warning = ""
+        if wants_public and club.google_calendar_connected:
+            try:
+                if not gcal.is_calendar_public(club):
+                    club.google_calendar_is_public = False
+                    warning = (
+                        "That calendar isn't shared publicly yet, so the Google subscribe links stay "
+                        "hidden. Follow the steps below, then tick the box again."
+                    )
+            except gcal.GoogleCalendarError as exc:
+                logger.warning("Could not check calendar sharing for club %s: %s", club.pk, exc)
+                warning = f"We couldn't check the calendar's sharing just now, so we've taken your word for it ({exc})."
         club.save(
             update_fields=[
                 "add_auctions_to_calendar",
@@ -12299,6 +12319,8 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
             ]
         )
         messages.success(request, "Calendar settings saved.")
+        if warning:
+            messages.warning(request, warning)
         return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
 
 
@@ -12317,9 +12339,13 @@ class GoogleCalendarConnectView(LoginRequiredMixin, View):
             return redirect(config_url)
         # Stash the club so the callback (which has no slug) knows what we're connecting.
         request.session[GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY] = club.slug
+        # A fresh nonce per attempt, not the per-user unsubscribe UUID: that one is printed in
+        # the footer of every email we send, so anyone holding one could hand this club's admin a
+        # callback URL that connects their calendar to someone else's Google account.
+        state = secrets.token_urlsafe(32)
+        request.session[GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY] = state
         redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
-        # Reuse the per-user unsubscribe UUID as the anti-CSRF state, same as Mailchimp/Square.
-        return redirect(gcal.authorize_url(redirect_uri, request.user.userdata.unsubscribe_link))
+        return redirect(gcal.authorize_url(redirect_uri, state))
 
 
 class GoogleCalendarCallbackView(LoginRequiredMixin, View):
@@ -12343,7 +12369,8 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
 
         code = request.GET.get("code")
         state = request.GET.get("state")
-        if not code or state != request.user.userdata.unsubscribe_link:
+        expected_state = request.session.pop(GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY, "")
+        if not code or not expected_state or not secrets.compare_digest(state or "", expected_state):
             messages.error(request, "Invalid Google authorization response. Please try again.")
             return redirect(config_url)
 
@@ -12468,11 +12495,11 @@ class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
         )
 
     def get(self, request, slug):
-        form = ClubEventForm()
+        form = ClubEventForm(user_timezone=_browser_timezone(request))
         return render(request, "auctions/club_event_form.html", self._context(form))
 
     def post(self, request, slug):
-        form = ClubEventForm(request.POST)
+        form = ClubEventForm(request.POST, user_timezone=_browser_timezone(request))
         if not form.is_valid():
             return render(request, "auctions/club_event_form.html", self._context(form))
         event = form.save(commit=False)
@@ -12486,6 +12513,15 @@ class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
 
     def _context(self, form):
         return {"club": self.club, "view": self, "form": form, "is_edit": False}
+
+
+def _browser_timezone(request):
+    """The timezone the admin is actually looking at times in.
+
+    base.html renders every page inside {% timezone user_timezone %}, so a form shows its times
+    in this zone; the form has to parse them back in the same one.
+    """
+    return request.COOKIES.get("user_timezone", settings.TIME_ZONE)
 
 
 class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12508,7 +12544,7 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
         )
 
     def get(self, request, slug, pk):
-        form = ClubEventForm(instance=self.event)
+        form = ClubEventForm(instance=self.event, user_timezone=_browser_timezone(request))
         return render(request, "auctions/club_event_form.html", self._context(form))
 
     def post(self, request, slug, pk):
@@ -12518,14 +12554,25 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
             club_events.retire_event(self.event)
             messages.success(request, f"Deleted {title}.")
             return redirect(club_url)
-        form = ClubEventForm(request.POST, instance=self.event)
+        was_cancelled = self.event.cancelled
+        previous_start = self.event.date_start
+        form = ClubEventForm(request.POST, instance=self.event, user_timezone=_browser_timezone(request))
         if not form.is_valid():
             return render(request, "auctions/club_event_form.html", self._context(form))
         event = form.save(commit=False)
+        if event.is_recurring and event.date_start != previous_start:
+            # The form edits one occurrence of a series, but the series is what's stored. Moving
+            # the occurrence moves the whole thing by the same amount, which is what an admin who
+            # pushed a weekly meeting an hour later means.
+            event.recurrence_start += event.date_start - previous_start
         event.needs_google_sync = True
+        event.needs_discord_sync = True
         event.save()
         _push_event_to_integrations(request, event)
-        messages.success(request, f"Updated {event.title}.")
+        if event.cancelled and not was_cancelled:
+            messages.success(request, f"{event.title} is marked cancelled. Everyone subscribed has been told.")
+        else:
+            messages.success(request, f"Updated {event.title}.")
         return redirect(club_url)
 
     def _context(self, form):
@@ -12548,19 +12595,8 @@ def _push_event_to_integrations(request, event):
         except gcal.GoogleCalendarError as exc:
             logger.warning("Could not push event %s to Google Calendar: %s", event.pk, exc)
             messages.warning(request, f"Saved, but Google Calendar didn't accept it yet: {exc}")
-    if club.discord_server_id and club.create_discord_events_for_club_events:
-        if event.discord_event_id:
-            discord_events.update_scheduled_event(
-                club.discord_server_id,
-                event.discord_event_id,
-                event.title,
-                event.date_start,
-                event.effective_end,
-                event.location,
-                event.description,
-            )
-        elif not event.discord_event_attempted and event.date_start > timezone.now():
-            discord_events.sync_club_events(club)
+    # Creates it, moves it, or takes it back down if the event was just called off.
+    discord_events.sync_one_event(club, event)
 
 
 class ClubEventsICalView(View):
@@ -12584,28 +12620,60 @@ class ClubEventsICalView(View):
             "CALSCALE:GREGORIAN",
             "METHOD:PUBLISH",
             f"X-WR-CALNAME:{_ical_escape(club.name)} events",
+            # Without a timezone, all-day events and floating times land on the wrong day for
+            # anyone reading the feed from elsewhere.
+            f"X-WR-TIMEZONE:{settings.TIME_ZONE}",
+            # Both spellings of "check back in an hour": the standard one and Outlook/Google's.
+            "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+            "X-PUBLISHED-TTL:PT1H",
         ]
         for event in list(past) + list(upcoming):
             lines += [
                 "BEGIN:VEVENT",
                 f"UID:{event.uuid}@{domain}",
                 f"DTSTAMP:{_ical_datetime(event.updated_at)}",
-                f"DTSTART:{_ical_datetime(event.date_start)}",
-                f"DTEND:{_ical_datetime(event.effective_end)}",
+                # Clients keep the copy they already imported unless the sequence goes up, so an
+                # edit here would never reach them. Seconds since the epoch is monotonic and fits
+                # the 32-bit integer the spec asks for.
+                f"SEQUENCE:{int(event.updated_at.timestamp())}",
+                *_ical_event_times(event),
+                # The rule itself, so a subscriber's calendar repeats the event the way Google
+                # does instead of receiving one copy of it.
+                *event.recurrence_lines,
                 f"SUMMARY:{_ical_escape(event.title)}",
                 f"URL:https://{domain}{event.get_absolute_url()}",
+                "STATUS:CANCELLED" if event.cancelled else "STATUS:CONFIRMED",
             ]
             if event.description:
                 lines.append(f"DESCRIPTION:{_ical_escape(event.description)}")
             if event.location:
                 lines.append(f"LOCATION:{_ical_escape(event.location)}")
-            if event.cancelled:
-                lines.append("STATUS:CANCELLED")
             lines.append("END:VEVENT")
         lines.append("END:VCALENDAR")
         response = HttpResponse("\r\n".join(lines), content_type="text/calendar; charset=utf-8")
         response["Content-Disposition"] = f'inline; filename="{club.slug}-events.ics"'
         return response
+
+
+def _ical_event_times(event):
+    """DTSTART/DTEND for one event.
+
+    A repeating event starts where its series is anchored, not at the occurrence the club page
+    happens to be showing — the RRULE that follows is measured from DTSTART, so anything else
+    would hand subscribers a different set of dates than Google has.
+
+    All-day events are dates, not times, or a calendar shows them as a midnight-to-midnight
+    appointment instead of a day.
+    """
+    start = event.recurrence_start if event.is_recurring else event.date_start
+    end = start + event.occurrence_length
+    if not event.all_day:
+        return [f"DTSTART:{_ical_datetime(start)}", f"DTEND:{_ical_datetime(end)}"]
+    start_day = timezone.localtime(start).date()
+    end_day = timezone.localtime(end).date()
+    if end_day <= start_day:
+        end_day = start_day + timedelta(days=1)
+    return [f"DTSTART;VALUE=DATE:{start_day:%Y%m%d}", f"DTEND;VALUE=DATE:{end_day:%Y%m%d}"]
 
 
 def _ical_datetime(value):
@@ -17873,7 +17941,14 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["upcoming_events"] = upcoming
         context["past_events"] = past
         context["has_any_events"] = bool(upcoming or past)
-        context["club_ical_url"] = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        ical_path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        context["club_ical_url"] = ical_path
+        # A relative link only downloads the file — a one-time import that never updates. These
+        # are the two links that actually *subscribe*: webcal:// hands the feed to the desktop
+        # or phone calendar app, and Google takes the https URL through its "add by URL" screen.
+        absolute_ical_url = self.request.build_absolute_uri(ical_path)
+        context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
+        context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
         if can_manage_auctions:
             # Admins still get the unpromoted auctions, which never become calendar events.
             context["unpromoted_auctions"] = Auction.objects.filter(

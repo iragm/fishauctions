@@ -10,7 +10,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import club_events, discord_events
+from auctions import club_events, discord_events, recurrence
 from auctions import google_calendar as gcal
 from auctions.models import Auction, Club, ClubEvent, ClubMember, PickupLocation
 
@@ -489,6 +489,36 @@ class ClubEventICalTests(TestCase):
         response = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 404)
 
+    def test_each_event_carries_a_sequence_so_edits_reach_subscribers(self):
+        """Most clients keep the copy they already imported unless the sequence goes up."""
+        event = ClubEvent.objects.create(club=self.club, title="Annual Show", date_start=self.start)
+        body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn(f"SEQUENCE:{int(event.updated_at.timestamp())}", body)
+
+    def test_all_day_events_are_dates_not_midnight_appointments(self):
+        day = datetime.datetime(2026, 8, 1, tzinfo=timezone.get_current_timezone())
+        ClubEvent.objects.create(
+            club=self.club,
+            title="Show weekend",
+            date_start=day,
+            date_end=day + datetime.timedelta(days=2),
+            all_day=True,
+        )
+        body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("DTSTART;VALUE=DATE:20260801", body)
+        # Google and iCal both write the end of an all-day event as the day after it finishes.
+        self.assertIn("DTEND;VALUE=DATE:20260803", body)
+
+    def test_a_cancelled_event_says_so(self):
+        ClubEvent.objects.create(club=self.club, title="Called off", date_start=self.start, cancelled=True)
+        body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("STATUS:CANCELLED", body)
+
+    def test_the_feed_names_its_timezone(self):
+        ClubEvent.objects.create(club=self.club, title="Annual Show", date_start=self.start)
+        body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("X-WR-TIMEZONE:", body)
+
 
 @override_settings(GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="secret")
 class GoogleCalendarSyncTests(TestCase):
@@ -741,16 +771,36 @@ class GoogleCalendarSyncTests(TestCase):
         self.club.refresh_from_db()
         self.assertIn("nope", self.club.google_calendar_last_error)
 
-    def test_disconnecting_clears_the_tokens_and_unlinks_events(self):
+    def test_disconnecting_clears_the_tokens(self):
         event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
         gcal.disconnect(self.club)
         self.club.refresh_from_db()
         event.refresh_from_db()
         self.assertFalse(self.club.google_calendar_connected)
-        self.assertEqual(self.club.google_calendar_id, "")
-        self.assertEqual(event.google_event_id, "")
+        self.assertEqual(self.club.google_calendar_refresh_token, "")
         # The event itself survives — only the Google link is gone.
         self.assertFalse(event.is_deleted)
+
+    def test_disconnecting_keeps_the_calendar_so_reconnecting_resumes_it(self):
+        """Making a second calendar would strand every member who subscribed to the first."""
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
+        gcal.disconnect(self.club)
+        self.club.refresh_from_db()
+        event.refresh_from_db()
+        self.assertEqual(self.club.google_calendar_id, "cal-1")
+        self.assertEqual(event.google_event_id, "g-1")
+        # Everything is queued to go back out, so the calendar catches up on reconnect.
+        self.assertTrue(event.needs_google_sync)
+
+    def test_a_calendar_the_new_account_cannot_see_is_replaced(self):
+        """Reconnecting a *different* Google account can't touch the old calendar, so we start
+        a new one rather than failing every sync from then on."""
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
+        with patch.object(gcal, "_request", side_effect=[404, {"id": "cal-2"}]):
+            self.assertEqual(gcal.ensure_calendar(self.club), "cal-2")
+        event.refresh_from_db()
+        self.assertEqual(event.google_event_id, "")
+        self.assertTrue(event.needs_google_sync)
 
     def test_a_revoked_refresh_token_disconnects_the_club(self):
         """Otherwise every sync fails forever with no sign of what to do about it."""
@@ -847,6 +897,7 @@ class GoogleCalendarConfigViewTests(TestCase):
         self.client.force_login(self.admin)
         session = self.client.session
         session["google_calendar_oauth_club_slug"] = self.club.slug
+        session["google_calendar_oauth_state"] = "expected"
         session.save()
         with patch.object(gcal, "exchange_code") as exchange:
             response = self.client.get(reverse("google_calendar_callback"), {"code": "abc", "state": "wrong"})
@@ -855,12 +906,33 @@ class GoogleCalendarConfigViewTests(TestCase):
         self.club.refresh_from_db()
         self.assertFalse(self.club.google_calendar_connected)
 
-    def test_a_successful_callback_stores_the_tokens(self):
+    def test_the_state_is_a_fresh_nonce_not_the_users_unsubscribe_link(self):
+        """That link is printed in the footer of every email we send, so anyone holding one
+        could otherwise complete this flow against someone else's Google account."""
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("google_calendar_connect", kwargs={"slug": self.club.slug}))
+        state = self.client.session["google_calendar_oauth_state"]
+        self.assertTrue(state)
+        self.assertNotEqual(state, str(self.admin.userdata.unsubscribe_link))
+        self.assertIn(f"state={state}", response.url)
+
+    def test_the_callback_rejects_a_state_that_was_never_issued(self):
+        """No connect step means no nonce in the session, so a link someone was handed is dead."""
         self.client.force_login(self.admin)
         session = self.client.session
         session["google_calendar_oauth_club_slug"] = self.club.slug
         session.save()
-        state = self.admin.userdata.unsubscribe_link
+        with patch.object(gcal, "exchange_code") as exchange:
+            self.client.get(reverse("google_calendar_callback"), {"code": "abc", "state": ""})
+        exchange.assert_not_called()
+
+    def test_a_successful_callback_stores_the_tokens(self):
+        self.client.force_login(self.admin)
+        session = self.client.session
+        session["google_calendar_oauth_club_slug"] = self.club.slug
+        session["google_calendar_oauth_state"] = "nonce-1"
+        session.save()
+        state = "nonce-1"
         with (
             patch.object(gcal, "exchange_code", return_value=("refresh", "access", 3600, "club@example.com")),
             patch.object(gcal, "ensure_calendar", return_value="cal-1"),
@@ -889,7 +961,7 @@ class DiscordClubEventTests(TestCase):
         create.assert_called_once()
         event.refresh_from_db()
         self.assertEqual(event.discord_event_id, "d-1")
-        self.assertTrue(event.discord_event_attempted)
+        self.assertFalse(event.needs_discord_sync)
 
     def test_auction_events_are_skipped_so_they_are_never_doubled_up(self):
         """auction_emails owns Discord events for auctions; this path must stay out of the way."""
@@ -897,6 +969,81 @@ class DiscordClubEventTests(TestCase):
         with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
             self.assertEqual(discord_events.sync_club_events(self.club), 0)
         create.assert_not_called()
+
+    def test_pickup_events_are_skipped_too(self):
+        """Four pickup slots on one auction would otherwise be four more Discord events, for
+        logistics that only concern people who already won a lot."""
+        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club, is_online=True)
+        location = PickupLocation.objects.create(
+            name="Shop", auction=auction, pickup_time=self.start, address="1 Main St"
+        )
+        self.assertTrue(ClubEvent.objects.filter(pickup_location=location).exists())
+        with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
+            self.assertEqual(discord_events.sync_club_events(self.club), 0)
+        create.assert_not_called()
+
+    def test_an_edited_event_is_moved_rather_than_left_at_its_old_time(self):
+        event = ClubEvent.objects.create(
+            club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1", needs_discord_sync=True
+        )
+        with patch.object(discord_events, "_patch_scheduled_event", return_value=200) as patched:
+            self.assertEqual(discord_events.sync_club_events(self.club), 1)
+        self.assertEqual(patched.call_args.args[1], "d-1")
+        event.refresh_from_db()
+        self.assertFalse(event.needs_discord_sync)
+
+    def test_an_event_deleted_in_discord_is_made_again(self):
+        event = ClubEvent.objects.create(
+            club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1", needs_discord_sync=True
+        )
+        with (
+            patch.object(discord_events, "_patch_scheduled_event", return_value=404),
+            patch.object(discord_events, "create_scheduled_event", return_value="d-2") as create,
+        ):
+            discord_events.sync_club_events(self.club)
+        create.assert_called_once()
+        event.refresh_from_db()
+        self.assertEqual(event.discord_event_id, "d-2")
+
+    def test_cancelling_an_event_takes_it_out_of_discord(self):
+        event = ClubEvent.objects.create(
+            club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1", cancelled=True
+        )
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            self.assertEqual(discord_events.sync_club_events(self.club), 1)
+        delete.assert_called_once_with("guild-1", "d-1")
+        event.refresh_from_db()
+        self.assertEqual(event.discord_event_id, "")
+
+    def test_a_cancellation_discord_refused_is_not_retried_every_run(self):
+        ClubEvent.objects.create(
+            club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1", cancelled=True
+        )
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=403):
+            discord_events.sync_club_events(self.club)
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=403) as delete:
+            discord_events.sync_club_events(self.club)
+        delete.assert_not_called()
+
+    def test_but_a_cancellation_discord_never_heard_is(self):
+        ClubEvent.objects.create(
+            club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1", cancelled=True
+        )
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=0):
+            discord_events.sync_club_events(self.club)
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            discord_events.sync_club_events(self.club)
+        delete.assert_called_once()
+
+    def test_turning_the_feature_off_takes_back_the_events_it_made(self):
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, discord_event_id="d-1")
+        self.club.create_discord_events_for_club_events = False
+        self.club.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            self.assertEqual(discord_events.sync_club_events(self.club), 1)
+        delete.assert_called_once_with("guild-1", "d-1")
+        event.refresh_from_db()
+        self.assertEqual(event.discord_event_id, "")
 
     def test_past_events_are_skipped(self):
         """Discord rejects a scheduled event that starts in the past."""
@@ -910,11 +1057,23 @@ class DiscordClubEventTests(TestCase):
         with patch.object(discord_events, "create_scheduled_event", return_value=None):
             discord_events.sync_club_events(self.club)
         event.refresh_from_db()
-        self.assertTrue(event.discord_event_attempted)
+        self.assertFalse(event.needs_discord_sync)
         self.assertEqual(event.discord_event_id, "")
         with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
             discord_events.sync_club_events(self.club)
         create.assert_not_called()
+
+    def test_but_editing_the_event_earns_it_another_try(self):
+        """A permanent failure shouldn't retry every 15 minutes; a fixed one shouldn't be stuck."""
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start)
+        with patch.object(discord_events, "create_scheduled_event", return_value=None):
+            discord_events.sync_club_events(self.club)
+        event.title = "Meeting, moved"
+        event.needs_discord_sync = True
+        event.save()
+        with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
+            discord_events.sync_club_events(self.club)
+        create.assert_called_once()
 
     def test_the_feature_can_be_turned_off(self):
         self.club.create_discord_events_for_club_events = False
@@ -978,9 +1137,9 @@ class AuctionDiscordEventTests(TestCase):
                 return {"id": "d-1"}
 
         start = timezone.now() + datetime.timedelta(days=2)
-        with patch.object(discord_events.requests, "post", return_value=FakeResponse()) as post:
+        with patch.object(discord_events.requests, "request", return_value=FakeResponse()) as request:
             discord_events.create_scheduled_event("guild-1", "x" * 250, start, start, "somewhere")
-        self.assertEqual(len(post.call_args.kwargs["json"]["name"]), 100)
+        self.assertEqual(len(request.call_args.kwargs["json"]["name"]), 100)
 
 
 class NextEventInMemberEmailTests(TestCase):
@@ -1222,6 +1381,760 @@ class NextEventInMemberEmailTests(TestCase):
         self.assertNotIn("Monthly Meeting", body)
 
 
+@override_settings(GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="secret")
+class GoogleCalendarPullSafetyTests(TestCase):
+    """The pull is the half that can quietly destroy data, so these are its guard rails."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Pull Club")
+        self.club.google_calendar_refresh_token = "refresh"
+        self.club.google_calendar_id = "cal-1"
+        self.club.save()
+        self.start = timezone.now() + datetime.timedelta(days=3)
+
+    def _item(self, **overrides):
+        item = {
+            "id": "g-1",
+            "status": "confirmed",
+            "summary": "Board meeting",
+            "description": "",
+            "location": "",
+            "start": {"dateTime": self.start.isoformat()},
+            "end": {"dateTime": (self.start + datetime.timedelta(hours=1)).isoformat()},
+        }
+        item.update(overrides)
+        return item
+
+    def test_the_first_pull_asks_for_a_bounded_window(self):
+        """No timeMax means one never-ending weekly meeting expands into an instance per week,
+        for ever, and every one of them becomes a club event."""
+        with patch.object(gcal, "_request", return_value={"nextSyncToken": "t"}) as request:
+            gcal.pull_events(self.club)
+        params = request.call_args.kwargs["params"]
+        self.assertIn("timeMin", params)
+        self.assertIn("timeMax", params)
+
+    def test_every_page_of_a_listing_carries_the_same_query(self):
+        """Page two dropping the query reverts to Google's defaults — deletions hidden, and a
+        window that no longer matches the first page's."""
+        pages = [
+            {"items": [], "nextPageToken": "page-2"},
+            {"items": [], "nextSyncToken": "token-2"},
+        ]
+        with patch.object(gcal, "_request", side_effect=pages) as request:
+            gcal.pull_events(self.club)
+        first_params = request.call_args_list[0].kwargs["params"]
+        second_params = request.call_args_list[1].kwargs["params"]
+        self.assertEqual(second_params["pageToken"], "page-2")
+        self.assertEqual(second_params["showDeleted"], "true")
+        self.assertEqual({key: value for key, value in second_params.items() if key != "pageToken"}, first_params)
+
+    def test_pagination_cannot_spin_forever(self):
+        """A page token that never advances would otherwise be an endless loop."""
+        page = {"items": [], "nextPageToken": "same-token-every-time"}
+        with patch.object(gcal, "_request", return_value=page) as request:
+            gcal.pull_events(self.club)
+        self.assertEqual(request.call_count, gcal.MAX_PULL_PAGES)
+
+    def test_an_unpushed_local_edit_is_not_overwritten_by_the_pull(self):
+        """push_pending runs first but can fail; the pull that follows must not then replace the
+        admin's edit with the stale copy from Google and clear the flag that would retry it."""
+        event = ClubEvent.objects.create(
+            club=self.club,
+            title="Renamed here",
+            date_start=self.start,
+            google_event_id="g-1",
+            needs_google_sync=True,
+        )
+        with patch.object(gcal, "_request", return_value={"items": [self._item()], "nextSyncToken": "t"}):
+            gcal.pull_events(self.club)
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Renamed here")
+        self.assertTrue(event.needs_google_sync)
+
+    def test_a_pickup_event_deleted_in_google_comes_back(self):
+        """It's generated from the auction's pickup time, so dropping it would leave the club
+        page disagreeing with the auction — and the next sync would recreate it anyway."""
+        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
+        event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
+        event.google_event_id = "g-1"
+        event.save()
+        with patch.object(
+            gcal, "_request", return_value={"items": [self._item(status="cancelled")], "nextSyncToken": "t"}
+        ):
+            gcal.pull_events(self.club)
+        event.refresh_from_db()
+        self.assertFalse(event.is_deleted)
+        self.assertEqual(event.google_event_id, "")
+        self.assertTrue(event.needs_google_sync)
+
+    def test_a_google_edit_never_overwrites_a_pickup_event(self):
+        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
+        event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
+        event.google_event_id = "g-1"
+        event.needs_google_sync = False
+        event.save()
+        original_title = event.title
+        with patch.object(gcal, "_request", return_value={"items": [self._item()], "nextSyncToken": "t"}):
+            gcal.pull_events(self.club)
+        event.refresh_from_db()
+        self.assertEqual(event.title, original_title)
+
+    def test_a_copy_of_one_of_our_events_does_not_steal_its_id(self):
+        """Google copies extendedProperties into duplicates and into each instance of a series;
+        claiming one would repoint us at the copy and orphan the original."""
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
+        item = self._item(
+            id="g-1_20260801T000000Z", extendedProperties={"private": {"auctionSiteEventUuid": str(event.uuid)}}
+        )
+        with patch.object(gcal, "_request", return_value={"items": [item], "nextSyncToken": "t"}):
+            created, _updated, _deleted = gcal.pull_events(self.club)
+        event.refresh_from_db()
+        self.assertEqual(event.google_event_id, "g-1")
+        self.assertEqual(created, 0)
+        self.assertEqual(ClubEvent.objects.filter(club=self.club).count(), 1)
+
+    def test_a_pulled_event_tells_discord_about_the_change(self):
+        """This is the only place that would ever hear about an edit made in Google Calendar."""
+        event = ClubEvent.objects.create(
+            club=self.club,
+            title="Old name",
+            date_start=self.start,
+            google_event_id="g-1",
+            needs_google_sync=False,
+            needs_discord_sync=False,
+        )
+        with patch.object(gcal, "_request", return_value={"items": [self._item()], "nextSyncToken": "t"}):
+            gcal.pull_events(self.club)
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Board meeting")
+        self.assertTrue(event.needs_discord_sync)
+
+    def test_an_all_day_event_stays_all_day_when_it_goes_back(self):
+        """Sending a datetime would turn the club's all-day event into a timed one."""
+        item = self._item(start={"date": "2026-08-01"}, end={"date": "2026-08-02"})
+        with patch.object(gcal, "_request", return_value={"items": [item], "nextSyncToken": "t"}):
+            gcal.pull_events(self.club)
+        event = ClubEvent.objects.get(google_event_id="g-1")
+        self.assertTrue(event.all_day)
+        body = gcal._event_body(event)
+        self.assertEqual(body["start"], {"date": "2026-08-01"})
+        self.assertEqual(body["end"], {"date": "2026-08-02"})
+
+    def test_last_sync_means_a_round_trip_that_worked(self):
+        with patch.object(gcal, "_request", return_value={"nextSyncToken": "t"}):
+            gcal.sync_club(self.club)
+        self.club.refresh_from_db()
+        self.assertIsNotNone(self.club.google_calendar_last_sync)
+
+    def test_an_expired_token_does_not_look_like_a_successful_sync(self):
+        self.club.google_calendar_sync_token = "stale"
+        self.club.save()
+        with patch.object(gcal, "_request", return_value=gcal.SYNC_TOKEN_GONE):
+            gcal.pull_events(self.club)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.google_calendar_sync_token, "")
+        self.assertIsNone(self.club.google_calendar_last_sync)
+
+
+class RecurrenceRuleTests(TestCase):
+    """The rule reader itself. Everything else trusts these answers."""
+
+    def setUp(self):
+        self.anchor = datetime.datetime(2026, 7, 7, 19, 0, tzinfo=datetime.timezone.utc)
+        self.hour = datetime.timedelta(hours=1)
+
+    def test_the_next_occurrence_of_a_weekly_series(self):
+        nxt = recurrence.current_or_next(
+            self.anchor,
+            ["RRULE:FREQ=WEEKLY;BYDAY=TU"],
+            self.hour,
+            datetime.datetime(2026, 7, 10, tzinfo=datetime.timezone.utc),
+        )
+        self.assertEqual(nxt, datetime.datetime(2026, 7, 14, 19, 0, tzinfo=datetime.timezone.utc))
+
+    def test_an_occurrence_under_way_beats_the_one_after_it(self):
+        """ "Our next event" shouldn't skip past the meeting happening this evening."""
+        during = datetime.datetime(2026, 7, 7, 19, 30, tzinfo=datetime.timezone.utc)
+        nxt = recurrence.current_or_next(self.anchor, ["RRULE:FREQ=WEEKLY;BYDAY=TU"], self.hour, during)
+        self.assertEqual(nxt, self.anchor)
+
+    def test_a_finished_series_keeps_its_last_occurrence(self):
+        """So it settles into the club page's recent history instead of vanishing."""
+        lines = ["RRULE:FREQ=WEEKLY;COUNT=2;BYDAY=TU"]
+        after = datetime.datetime(2027, 1, 1, tzinfo=datetime.timezone.utc)
+        nxt = recurrence.current_or_next(self.anchor, lines, self.hour, after)
+        self.assertEqual(nxt, datetime.datetime(2026, 7, 14, 19, 0, tzinfo=datetime.timezone.utc))
+
+    def test_an_excluded_occurrence_is_skipped(self):
+        lines = recurrence.with_exdate(
+            ["RRULE:FREQ=WEEKLY;BYDAY=TU"], datetime.datetime(2026, 7, 14, 19, 0, tzinfo=datetime.timezone.utc)
+        )
+        nxt = recurrence.current_or_next(
+            self.anchor, lines, self.hour, datetime.datetime(2026, 7, 10, tzinfo=datetime.timezone.utc)
+        )
+        self.assertEqual(nxt, datetime.datetime(2026, 7, 21, 19, 0, tzinfo=datetime.timezone.utc))
+
+    def test_excluding_the_same_occurrence_twice_changes_nothing(self):
+        moment = datetime.datetime(2026, 7, 14, 19, 0, tzinfo=datetime.timezone.utc)
+        once = recurrence.with_exdate(["RRULE:FREQ=WEEKLY;BYDAY=TU"], moment)
+        self.assertEqual(recurrence.with_exdate(once, moment), once)
+
+    def test_a_rule_google_sends_that_dateutil_cannot_read_is_survivable(self):
+        """One strange repeat must not stop a club's calendar syncing."""
+        self.assertIsNone(recurrence.current_or_next(self.anchor, ["RRULE:FREQ=NONSENSE"], self.hour, self.anchor))
+
+    def test_rules_are_described_in_english(self):
+        cases = {
+            "RRULE:FREQ=WEEKLY": "Repeats weekly",
+            "RRULE:FREQ=WEEKLY;INTERVAL=2": "Repeats every 2 weeks",
+            "RRULE:FREQ=WEEKLY;BYDAY=TU": "Repeats weekly on Tuesday",
+            "RRULE:FREQ=WEEKLY;BYDAY=TU,TH": "Repeats weekly on Tuesday and Thursday",
+            "RRULE:FREQ=MONTHLY;BYDAY=1TU": "Repeats monthly on the first Tuesday",
+            "RRULE:FREQ=MONTHLY;BYDAY=-1FR": "Repeats monthly on the last Friday",
+            "RRULE:FREQ=YEARLY": "Repeats yearly",
+        }
+        for rule, expected in cases.items():
+            self.assertEqual(recurrence.describe([rule]), expected, rule)
+
+    def test_lines_we_do_not_understand_are_dropped(self):
+        kept = recurrence.clean_lines(["RRULE:FREQ=WEEKLY", "", "SUMMARY:not a rule", "EXDATE:20260714T190000Z"])
+        self.assertEqual(kept, ["RRULE:FREQ=WEEKLY", "EXDATE:20260714T190000Z"])
+
+
+@override_settings(GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="secret")
+class RecurringEventPullTests(TestCase):
+    """A repeating event is read in as one event with a rule, not as fifty-two copies."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Repeat Club", enable_club_page=True)
+        self.club.google_calendar_refresh_token = "refresh"
+        self.club.google_calendar_id = "cal-1"
+        self.club.save()
+        # A week ago plus a few hours, so "the next one" is unambiguously later today.
+        self.anchor = (timezone.now() - datetime.timedelta(days=7) + datetime.timedelta(hours=5)).replace(microsecond=0)
+
+    def _master(self, **overrides):
+        item = {
+            "id": "g-series",
+            "status": "confirmed",
+            "summary": "Monthly meeting",
+            "start": {"dateTime": self.anchor.isoformat()},
+            "end": {"dateTime": (self.anchor + datetime.timedelta(hours=2)).isoformat()},
+            "recurrence": ["RRULE:FREQ=WEEKLY"],
+        }
+        item.update(overrides)
+        return item
+
+    def _pull(self, items):
+        with patch.object(gcal, "_request", return_value={"items": items, "nextSyncToken": "t"}):
+            return gcal.pull_events(self.club)
+
+    def test_the_pull_no_longer_asks_google_to_expand_series(self):
+        with patch.object(gcal, "_request", return_value={"nextSyncToken": "t"}) as request:
+            gcal.pull_events(self.club)
+        self.assertNotIn("singleEvents", request.call_args.kwargs["params"])
+
+    def test_a_series_becomes_one_event_holding_the_rule(self):
+        created, _updated, _deleted = self._pull([self._master()])
+        self.assertEqual(created, 1)
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        self.assertTrue(event.is_recurring)
+        self.assertEqual(event.recurrence, "RRULE:FREQ=WEEKLY")
+        self.assertEqual(event.recurrence_start, self.anchor)
+
+    def test_it_shows_the_next_occurrence_not_the_first_one(self):
+        """date_start is what the club page, the emails and Discord all read."""
+        self._pull([self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        self.assertGreater(event.date_start, timezone.now())
+        self.assertEqual(event.date_start, self.anchor + datetime.timedelta(days=7))
+        self.assertEqual(event.date_end - event.date_start, datetime.timedelta(hours=2))
+
+    def test_a_weekly_series_does_not_fill_the_club_page(self):
+        self._pull([self._master()])
+        upcoming, _past = club_events.upcoming_events(self.club)
+        self.assertEqual(upcoming.count(), 1)
+
+    def test_one_occurrence_cancelled_in_google_is_excluded_from_the_rule(self):
+        self._pull([self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        cancelled_start = event.date_start
+        instance = {
+            "id": "g-series_20260811T190000Z",
+            "status": "cancelled",
+            "recurringEventId": "g-series",
+            "originalStartTime": {"dateTime": cancelled_start.isoformat()},
+        }
+        self._pull([instance])
+        event.refresh_from_db()
+        self.assertIn("EXDATE", event.recurrence)
+        # It moved on to the occurrence after the one that was called off.
+        self.assertEqual(event.date_start, cancelled_start + datetime.timedelta(days=7))
+
+    def test_one_occurrence_moved_in_google_becomes_its_own_event(self):
+        self._pull([self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        moved_from = event.date_start
+        moved_to = moved_from + datetime.timedelta(days=1)
+        instance = {
+            "id": "g-series_moved",
+            "status": "confirmed",
+            "summary": "Monthly meeting (moved)",
+            "recurringEventId": "g-series",
+            "originalStartTime": {"dateTime": moved_from.isoformat()},
+            "start": {"dateTime": moved_to.isoformat()},
+            "end": {"dateTime": (moved_to + datetime.timedelta(hours=2)).isoformat()},
+        }
+        self._pull([instance])
+        moved = ClubEvent.objects.get(google_event_id="g-series_moved")
+        self.assertEqual(moved.date_start, moved_to)
+        self.assertFalse(moved.is_recurring)
+        # ...and the series no longer generates the slot it came from, so it isn't listed twice.
+        event.refresh_from_db()
+        self.assertNotEqual(event.date_start, moved_from)
+
+    def test_a_series_arriving_after_its_own_exception_still_lines_up(self):
+        """Google doesn't promise an order; an instance is useless without its series."""
+        instance = {
+            "id": "g-series_20260811T190000Z",
+            "status": "cancelled",
+            "recurringEventId": "g-series",
+            "originalStartTime": {"dateTime": (self.anchor + datetime.timedelta(days=7)).isoformat()},
+        }
+        self._pull([instance, self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        self.assertIn("EXDATE", event.recurrence)
+
+    def test_editing_the_series_in_google_keeps_the_occurrences_called_off(self):
+        """Google records those as separate instances, so its rule never mentions them."""
+        self._pull([self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        self._pull(
+            [
+                {
+                    "id": "g-series_x",
+                    "status": "cancelled",
+                    "recurringEventId": "g-series",
+                    "originalStartTime": {"dateTime": event.date_start.isoformat()},
+                }
+            ]
+        )
+        self._pull([self._master(summary="Monthly meeting, renamed")])
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Monthly meeting, renamed")
+        self.assertIn("EXDATE", event.recurrence)
+
+    def test_a_series_goes_back_to_google_anchored_where_it_started(self):
+        """Pushing the occurrence we're showing would walk the series forward a week each time."""
+        self._pull([self._master()])
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        body = gcal._event_body(event)
+        self.assertEqual(body["start"]["dateTime"], self.anchor.isoformat())
+        self.assertEqual(body["recurrence"], ["RRULE:FREQ=WEEKLY"])
+
+    def test_a_rule_we_cannot_read_leaves_a_plain_event(self):
+        created, _updated, _deleted = self._pull([self._master(recurrence=["RRULE:FREQ=NONSENSE"])])
+        self.assertEqual(created, 1)
+        event = ClubEvent.objects.get(google_event_id="g-series")
+        self.assertFalse(event.is_recurring)
+        self.assertEqual(event.date_start, self.anchor)
+
+
+class RecurringEventUpkeepTests(TestCase):
+    """Keeping the stored occurrence current, and what the rest of the site does with it."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Upkeep Club", enable_club_page=True)
+        # Two weeks ago plus a few hours, so the next occurrence is unambiguously later today.
+        self.anchor = (timezone.now() - datetime.timedelta(days=14) + datetime.timedelta(hours=5)).replace(
+            microsecond=0
+        )
+        self.event = ClubEvent.objects.create(
+            club=self.club,
+            title="Weekly meeting",
+            date_start=self.anchor,
+            date_end=self.anchor + datetime.timedelta(hours=2),
+            recurrence="RRULE:FREQ=WEEKLY",
+            recurrence_start=self.anchor,
+            source=ClubEvent.SOURCE_GOOGLE,
+        )
+
+    def test_the_sync_moves_it_on_to_the_next_occurrence(self):
+        self.assertEqual(club_events.refresh_recurring_events(self.club), 1)
+        self.event.refresh_from_db()
+        self.assertGreater(self.event.date_start, timezone.now())
+        # Discord holds one date, so it has to be told.
+        self.assertTrue(self.event.needs_discord_sync)
+
+    def test_moving_it_on_keeps_the_length_of_the_meeting(self):
+        club_events.refresh_recurring_events(self.club)
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.date_end - self.event.date_start, datetime.timedelta(hours=2))
+
+    def test_a_second_sync_changes_nothing(self):
+        club_events.refresh_recurring_events(self.club)
+        self.assertEqual(club_events.refresh_recurring_events(self.club), 0)
+
+    def test_a_repeating_event_is_advertised_in_membership_emails(self):
+        club_events.refresh_recurring_events(self.club)
+        self.assertEqual(club_events.next_member_facing_event(self.club), self.event)
+
+    def test_the_feed_hands_over_the_rule_not_one_copy(self):
+        club_events.refresh_recurring_events(self.club)
+        body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("RRULE:FREQ=WEEKLY", body)
+        # DTSTART is the series anchor: the rule is measured from it.
+        self.assertIn(f"DTSTART:{self.anchor.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}", body)
+        self.assertEqual(body.count("BEGIN:VEVENT"), 1)
+
+    def test_the_club_page_says_it_repeats(self):
+        club_events.refresh_recurring_events(self.club)
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Repeats weekly")
+
+    def test_moving_one_occurrence_on_the_site_moves_the_series(self):
+        club_events.refresh_recurring_events(self.club)
+        self.event.refresh_from_db()
+        admin = User.objects.create_user(username="repeatadmin", password="x", email="r@example.com")
+        ClubMember.objects.create(
+            club=self.club, user=admin, name="Repeat Admin", email="r@example.com", permission_admin=True
+        )
+        self.client.force_login(admin)
+        moved = self.event.date_start + datetime.timedelta(hours=1)
+        self.client.post(
+            reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}),
+            # What a browser posts: the time as the admin sees it, in their own timezone.
+            {"title": "Weekly meeting", "date_start": timezone.localtime(moved).strftime("%Y-%m-%d %H:%M:%S")},
+        )
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.recurrence_start, self.anchor + datetime.timedelta(hours=1))
+
+
+@override_settings(GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="secret")
+class GoogleCalendarPublicCheckTests(TestCase):
+    """'I shared it' is checked rather than believed — links that 404 for every member are
+    worse than no links."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Public Club")
+        self.club.google_calendar_refresh_token = "refresh"
+        self.club.google_calendar_id = "cal-1"
+        self.club.save()
+        self.admin = User.objects.create_user(username="pubadmin", password="x", email="pub@example.com")
+        ClubMember.objects.create(
+            club=self.club, user=self.admin, name="Pub Admin", email="pub@example.com", permission_admin=True
+        )
+        self.url = reverse("club_google_calendar_config", kwargs={"slug": self.club.slug})
+
+    class _Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def test_a_shared_calendar_answers_its_own_ical_url(self):
+        with patch.object(gcal.requests, "get", return_value=self._Response(200)):
+            self.assertTrue(gcal.is_calendar_public(self.club))
+
+    def test_a_private_one_does_not(self):
+        with patch.object(gcal.requests, "get", return_value=self._Response(404)):
+            self.assertFalse(gcal.is_calendar_public(self.club))
+
+    def test_ticking_the_box_without_sharing_it_does_not_stick(self):
+        self.client.force_login(self.admin)
+        with patch.object(gcal.requests, "get", return_value=self._Response(404)):
+            self.client.post(self.url, {"google_calendar_is_public": "on"})
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.google_calendar_is_public)
+        self.assertEqual(self.club.google_calendar_public_url, "")
+
+    def test_ticking_it_after_sharing_it_works(self):
+        self.client.force_login(self.admin)
+        with patch.object(gcal.requests, "get", return_value=self._Response(200)):
+            self.client.post(self.url, {"google_calendar_is_public": "on"})
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.google_calendar_is_public)
+
+    def test_we_take_their_word_for_it_when_google_is_unreachable(self):
+        """Being unable to check is not evidence they're wrong."""
+        self.client.force_login(self.admin)
+        with patch.object(gcal, "is_calendar_public", side_effect=gcal.GoogleCalendarError("offline")):
+            self.client.post(self.url, {"google_calendar_is_public": "on"})
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.google_calendar_is_public)
+
+
+@override_settings(DISCORD_BOT_TOKEN="bot-token")
+class AuctionDiscordEventLifecycleTests(TestCase):
+    """auction_emails creates an auction's Discord event; before this it could never be changed
+    again, so an auction that moved — or was called off — kept its original entry for ever."""
+
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Auction Club", discord_server_id="guild-1", create_events_for_auctions=True
+        )
+        self.start = timezone.now() + datetime.timedelta(days=5)
+        self.auction = Auction.objects.create(
+            title="Spring Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        Auction.objects.filter(pk=self.auction.pk).update(discord_event_id="d-1")
+        self.auction.refresh_from_db()
+
+    def test_moving_an_auction_queues_a_discord_update(self):
+        self.auction.date_start = self.start + datetime.timedelta(days=1)
+        self.auction.save()
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.discord_event_needs_update)
+
+    def test_an_unrelated_save_does_not(self):
+        self.auction.invoiced = True
+        self.auction.save()
+        self.auction.refresh_from_db()
+        self.assertFalse(self.auction.discord_event_needs_update)
+
+    def test_the_queued_update_reaches_discord(self):
+        self.auction.title = "Spring Auction, moved"
+        self.auction.save()
+        with patch.object(discord_events, "_patch_scheduled_event", return_value=200) as patched:
+            discord_events.sync_club_events(self.club)
+        self.assertEqual(patched.call_args.args[2], "Spring Auction, moved")
+        self.auction.refresh_from_db()
+        self.assertFalse(self.auction.discord_event_needs_update)
+
+    def test_unpromoting_an_auction_takes_its_event_out_of_discord(self):
+        self.auction.promote_this_auction = False
+        self.auction.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            discord_events.sync_club_events(self.club)
+        delete.assert_called_once_with("guild-1", "d-1")
+        self.auction.refresh_from_db()
+        self.assertEqual(self.auction.discord_event_id, "")
+
+    def test_deleting_an_auction_takes_its_event_out_of_discord(self):
+        self.auction.is_deleted = True
+        self.auction.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            discord_events.sync_club_events(self.club)
+        delete.assert_called_once()
+
+    def test_an_event_deleted_in_discord_is_made_again(self):
+        self.auction.title = "Spring Auction, moved"
+        self.auction.save()
+        with (
+            patch.object(discord_events, "_patch_scheduled_event", return_value=404),
+            patch.object(discord_events, "create_scheduled_event", return_value="d-2") as create,
+        ):
+            discord_events.sync_club_events(self.club)
+        create.assert_called_once()
+        self.auction.refresh_from_db()
+        self.assertEqual(self.auction.discord_event_id, "d-2")
+
+    def test_turning_auction_events_off_takes_back_what_it_made(self):
+        self.club.create_events_for_auctions = False
+        self.club.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=204) as delete:
+            discord_events.sync_club_events(self.club)
+        delete.assert_called_once()
+        self.auction.refresh_from_db()
+        self.assertEqual(self.auction.discord_event_id, "")
+
+    def test_a_refusal_is_not_retried_every_run(self):
+        self.auction.promote_this_auction = False
+        self.auction.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=403):
+            discord_events.sync_club_events(self.club)
+        self.auction.refresh_from_db()
+        self.assertFalse(self.auction.discord_event_needs_update)
+
+    def test_but_an_unreachable_discord_is(self):
+        self.auction.promote_this_auction = False
+        self.auction.save()
+        with patch.object(discord_events, "_delete_scheduled_event", return_value=0):
+            discord_events.sync_club_events(self.club)
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.discord_event_needs_update)
+
+    def test_auction_emails_records_the_id_it_creates(self):
+        from auctions.management.commands.auction_emails import Command
+
+        auction = Auction.objects.create(
+            title="Summer Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        Auction.objects.filter(pk=auction.pk).update(date_posted=timezone.now() - datetime.timedelta(days=2))
+        with patch.object(discord_events, "create_scheduled_event", return_value="d-9"):
+            Command()._create_discord_events(timezone.now(), "example.com")
+        auction.refresh_from_db()
+        self.assertEqual(auction.discord_event_id, "d-9")
+        self.assertTrue(auction.discord_event_created)
+
+
+@override_settings(DISCORD_BOT_TOKEN="bot-token", GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="s")
+class CalendarCleanupOnDeleteTests(TestCase):
+    """A row that cascades away takes no record of its Google and Discord copies with it, so
+    they have to be removed while it's still here."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Cleanup Club", discord_server_id="guild-1")
+        self.club.google_calendar_refresh_token = "refresh"
+        self.club.google_calendar_id = "cal-1"
+        self.club.save()
+        self.start = timezone.now() + datetime.timedelta(days=4)
+
+    def test_hard_deleting_an_auction_removes_its_events_from_google(self):
+        """Auction.delete() is a soft delete, but a queryset delete — which is what the Django
+        admin does — really does cascade the calendar events away."""
+        auction = Auction.objects.create(
+            title="Doomed", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        event = ClubEvent.objects.get(auction=auction)
+        event.google_event_id = "g-1"
+        event.save()
+        with patch.object(gcal, "delete_event", return_value=True) as delete:
+            Auction.objects.filter(pk=auction.pk).delete()
+        delete.assert_called()
+
+    def test_hard_deleting_an_auction_removes_its_discord_event(self):
+        auction = Auction.objects.create(
+            title="Doomed", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        Auction.objects.filter(pk=auction.pk).update(discord_event_id="d-1")
+        with patch.object(discord_events, "cancel_scheduled_event", return_value=True) as cancel:
+            Auction.objects.filter(pk=auction.pk).delete()
+        self.assertIn("d-1", [call.args[1] for call in cancel.call_args_list])
+
+    def test_soft_deleting_an_auction_retires_its_event_instead(self):
+        """The everyday path: the event is soft-deleted with the auction and its remote copies
+        are cleaned up by the next sync, not by a cascade."""
+        auction = Auction.objects.create(
+            title="Doomed", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        event = ClubEvent.objects.get(auction=auction)
+        event.google_event_id = "g-1"
+        event.save()
+        auction.delete()
+        event.refresh_from_db()
+        self.assertTrue(event.is_deleted)
+        with patch.object(gcal, "delete_event", return_value=True) as delete:
+            club_events.purge_retired(self.club)
+        delete.assert_called()
+
+    def test_deleting_a_club_takes_its_events_off_google(self):
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")
+        self.assertTrue(event.pk)
+        with patch.object(gcal, "delete_event", return_value=True) as delete:
+            self.club.delete()
+        delete.assert_called()
+
+    def test_an_event_that_comes_back_can_reach_discord_again(self):
+        """Retiring it cancels the Discord event; leaving it marked "already tried" would mean a
+        pickup time that's re-added never gets one."""
+        event = ClubEvent.objects.create(
+            club=self.club,
+            title="Meeting",
+            date_start=self.start,
+            discord_event_id="d-1",
+            needs_discord_sync=False,
+        )
+        with patch.object(discord_events, "cancel_scheduled_event", return_value=True):
+            club_events.retire_event(event)
+        event.refresh_from_db()
+        self.assertEqual(event.discord_event_id, "")
+        self.assertTrue(event.needs_discord_sync)
+
+
+class ClubEventTimezoneTests(TestCase):
+    """Every page renders inside {% timezone user_timezone %}, so a form shows an admin their own
+    times. Parsing them back in the site's timezone shifted the event on every single save."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="TZ Club", enable_club_page=True)
+        self.admin = User.objects.create_user(username="tzadmin", password="x", email="tz@example.com")
+        ClubMember.objects.create(
+            club=self.club, user=self.admin, name="TZ Admin", email="tz@example.com", permission_admin=True
+        )
+        self.client.force_login(self.admin)
+        self.client.cookies["user_timezone"] = "America/Los_Angeles"
+
+    def test_an_event_is_saved_at_the_time_the_admin_typed(self):
+        import zoneinfo
+
+        self.client.post(
+            reverse("club_event_add", kwargs={"slug": self.club.slug}),
+            {"title": "Evening meeting", "date_start": "2026-09-10 19:00:00"},
+        )
+        event = ClubEvent.objects.get(title="Evening meeting")
+        local = event.date_start.astimezone(zoneinfo.ZoneInfo("America/Los_Angeles"))
+        self.assertEqual((local.hour, local.minute), (19, 0))
+
+    def test_saving_an_event_again_does_not_move_it(self):
+        """The round trip is what actually bit: open, save, and the event slid by the offset."""
+        self.client.post(
+            reverse("club_event_add", kwargs={"slug": self.club.slug}),
+            {"title": "Evening meeting", "date_start": "2026-09-10 19:00:00"},
+        )
+        event = ClubEvent.objects.get(title="Evening meeting")
+        original = event.date_start
+        edit_url = reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk})
+        response = self.client.get(edit_url)
+        shown = response.context["form"]["date_start"].value()
+        self.client.post(edit_url, {"title": "Evening meeting", "date_start": shown})
+        event.refresh_from_db()
+        self.assertEqual(event.date_start, original)
+
+
+class ClubEventCancellationTests(TestCase):
+    """Deleting an event makes it vanish from every subscriber's calendar with no explanation;
+    cancelling tells them."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Cancel Club", enable_club_page=True)
+        self.admin = User.objects.create_user(username="canceladmin", password="x", email="c@example.com")
+        ClubMember.objects.create(
+            club=self.club, user=self.admin, name="Cancel Admin", email="c@example.com", permission_admin=True
+        )
+        self.client.force_login(self.admin)
+        self.start = timezone.now() + datetime.timedelta(days=3)
+        self.event = ClubEvent.objects.create(club=self.club, title="Monthly meeting", date_start=self.start)
+
+    def test_an_admin_can_call_an_event_off(self):
+        url = reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk})
+        response = self.client.post(
+            url,
+            {
+                "title": self.event.title,
+                "date_start": self.event.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+                "cancelled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.event.refresh_from_db()
+        self.assertTrue(self.event.cancelled)
+        self.assertFalse(self.event.is_deleted)
+        self.assertTrue(self.event.needs_google_sync)
+
+    def test_the_add_form_has_no_cancelled_box(self):
+        """You don't add an event in order to call it off."""
+        response = self.client.get(reverse("club_event_add", kwargs={"slug": self.club.slug}))
+        self.assertNotIn("cancelled", response.context["form"].fields)
+
+    def test_google_is_told_it_is_off_rather_than_being_asked_to_delete_it(self):
+        self.event.cancelled = True
+        body = gcal._event_body(self.event)
+        self.assertEqual(body["status"], "cancelled")
+
+    def test_the_club_page_still_shows_it(self):
+        self.event.cancelled = True
+        self.event.save()
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Monthly meeting")
+        self.assertContains(response, "Cancelled")
+
+
 class SyncAllTests(TestCase):
     def test_one_broken_club_does_not_stop_the_others(self):
         good = Club.objects.create(name="Good Club", discord_server_id="g-1")
@@ -1242,6 +2155,21 @@ class SyncAllTests(TestCase):
         self.assertEqual(sorted(calls), sorted([good.pk, bad.pk]))
         self.assertEqual(synced, 1)
 
+    def test_an_inactive_club_is_left_alone(self):
+        club = Club.objects.create(name="Closed Club", active=False, discord_server_id="g-3")
+        ClubEvent.objects.create(club=club, title="Old", date_start=timezone.now() + datetime.timedelta(days=1))
+        with patch.object(club_events, "sync_club") as sync_club:
+            club_events.sync_all()
+        self.assertNotIn(club.pk, [call.args[0].pk for call in sync_club.call_args_list])
+
+    def test_a_club_with_nothing_to_sync_is_skipped(self):
+        """`discord_server_id__isnull=False` read like a filter but matched every club saved with
+        the field left blank, because a blank CharField stores "" and not NULL."""
+        Club.objects.create(name="Empty Club", discord_server_id="")
+        with patch.object(club_events, "sync_club") as sync_club:
+            club_events.sync_all()
+        sync_club.assert_not_called()
+
     def test_the_celery_task_runs(self):
         from auctions.tasks import sync_club_calendars
 
@@ -1249,3 +2177,24 @@ class SyncAllTests(TestCase):
         with patch.object(club_events, "sync_all", return_value=0) as sync_all:
             sync_club_calendars()
         sync_all.assert_called_once()
+
+    def test_two_runs_cannot_overlap(self):
+        """Beat fires this every 15 minutes; a slow run would otherwise race the next one and
+        push the same events twice, or provision two calendars for one club."""
+        from django.core.cache import cache
+
+        from auctions.tasks import CALENDAR_SYNC_LOCK_KEY, sync_club_calendars
+
+        cache.delete(CALENDAR_SYNC_LOCK_KEY)
+        started = []
+
+        def slow():
+            started.append(1)
+            sync_club_calendars()  # the "second run", arriving while the first holds the lock
+            return 0
+
+        with patch.object(club_events, "sync_all", side_effect=slow):
+            sync_club_calendars()
+        self.assertEqual(len(started), 1)
+        # The lock is released, so the next scheduled run still happens.
+        self.assertIsNone(cache.get(CALENDAR_SYNC_LOCK_KEY))

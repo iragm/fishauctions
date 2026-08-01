@@ -4120,7 +4120,7 @@ class ClubEventForm(forms.ModelForm):
 
     class Meta:
         model = ClubEvent
-        fields = ["title", "date_start", "date_end", "location", "description"]
+        fields = ["title", "date_start", "date_end", "location", "description", "cancelled"]
         widgets = {
             "date_start": DateTimePickerInput(),
             "date_end": DateTimePickerInput(),
@@ -4134,11 +4134,18 @@ class ClubEventForm(forms.ModelForm):
         }
 
     def __init__(self, *args, **kwargs):
+        user_timezone = kwargs.pop("user_timezone", None)
+        if user_timezone:
+            # The form is rendered inside base.html's {% timezone %} block, so an admin sees these
+            # times in their own timezone. Read them back the same way, or every save shifts the
+            # event by the difference between their timezone and the site's.
+            timezone.activate(user_timezone)
         super().__init__(*args, **kwargs)
         self.fields["date_end"].required = False
+        is_edit = bool(self.instance and self.instance.pk)
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.layout = Layout(
+        layout_fields = [
             "title",
             Div(
                 Div("date_start", css_class="col-md-6"),
@@ -4147,7 +4154,13 @@ class ClubEventForm(forms.ModelForm):
             ),
             "location",
             "description",
-        )
+        ]
+        if is_edit:
+            # Only worth offering once the event exists — you don't add an event to call it off.
+            layout_fields.append("cancelled")
+        else:
+            del self.fields["cancelled"]
+        self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
 
     def clean(self):

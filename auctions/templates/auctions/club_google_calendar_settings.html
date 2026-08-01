@@ -83,7 +83,7 @@
         </button>
       </form>
       <form method="post" action="{% url 'google_calendar_disconnect' club.slug %}" class="d-inline"
-            data-confirm="The calendar itself stays in your Google account, but events will stop syncing to it."
+            data-confirm="The calendar itself stays in your Google account, but events will stop syncing to it. Reconnecting the same Google account later picks up that calendar again, so members who subscribed to it keep it."
             data-confirm-title="Disconnect Google Calendar?"
             data-confirm-ok="Disconnect"
             data-confirm-variant="danger">
@@ -170,8 +170,9 @@
         <label class="form-check-label" for="google_calendar_is_public">
           <strong>I've shared this calendar publicly in Google Calendar</strong><br>
           <small class="text-muted">
-            Shows the Google subscribe links on your club page. Tick this only after doing the four
-            steps below &mdash; we can't check it for you.
+            Shows the Google subscribe links on your club page. Do the four steps above first &mdash;
+            when you save, we try to load the calendar the way a member would, and untick this if it
+            isn't really shared yet.
           </small>
         </label>
       </div>

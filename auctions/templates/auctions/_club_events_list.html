@@ -18,14 +18,26 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
   </div>
   <div class="d-flex flex-wrap gap-2">
     {% if has_any_events %}
-    <a href="{{ club_ical_url }}" class="btn btn-sm btn-secondary">
-      <i class="bi bi-calendar-week"></i> Subscribe
-    </a>
-    {% endif %}
-    {% if club.google_calendar_public_url %}
-    <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-      <i class="bi bi-google"></i> Add to Google Calendar
-    </a>
+    {# Subscribing, not downloading: the plain .ics link is a one-time import that never updates
+       again, so it's the last item rather than the button. #}
+    <div class="btn-group">
+      <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-calendar-week"></i> Subscribe
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        {# One Google entry: the club's own calendar when it's shared, otherwise Google's
+           add-by-URL screen pointed at this feed. Two would be the same events twice. #}
+        <li>
+          <a class="dropdown-item" target="_blank" rel="noopener"
+             href="{% if club.google_calendar_public_url %}{{ club.google_calendar_public_url }}{% else %}{{ club_ical_google_url }}{% endif %}">
+            <i class="bi bi-google"></i> Google Calendar
+          </a>
+        </li>
+        <li><a class="dropdown-item" href="{{ club_ical_subscribe_url }}"><i class="bi bi-calendar-check"></i> Apple Calendar or Outlook</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="{{ club_ical_url }}"><i class="bi bi-download"></i> Download once (no updates)</a></li>
+      </ul>
+    </div>
     {% endif %}
   </div>
 </div>
@@ -38,11 +50,17 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
       <div>
         <div>
           {% if event.related_auction %}
-          <a href="{{ event.related_auction.get_absolute_url }}"><strong>{{ event.title }}</strong></a>
+          <a href="{{ event.related_auction.get_absolute_url }}" {% if event.cancelled %}class="text-decoration-line-through"{% endif %}><strong>{{ event.title }}</strong></a>
           {% else %}
-          <strong>{{ event.title }}</strong>
+          <strong {% if event.cancelled %}class="text-decoration-line-through"{% endif %}>{{ event.title }}</strong>
           {% endif %}
           {% if event.cancelled %}<span class="badge bg-danger rounded-pill ms-1">Cancelled</span>{% endif %}
+          {% if event.recurrence_summary %}
+          <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
+                title="This is the next one. The whole series is on your club's Google Calendar and in the subscribe links.">
+            <i class="bi bi-arrow-repeat"></i> {{ event.recurrence_summary }}
+          </span>
+          {% endif %}
           {% if event.auction and event.auction.pk == current_auction_id %}
           <span class="badge bg-success text-dark rounded-pill ms-1">Current auction</span>
           {% endif %}
@@ -56,8 +74,12 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
         </div>
         <div class="text-muted small">
           <i class="bi bi-clock"></i>
-          {{ event.date_start|date:"D, N j, Y" }} at {{ event.date_start|date:"g:i A" }}
-          {% if event.date_end %}&ndash; {{ event.date_end|date:"g:i A" }}{% endif %}
+          {{ event.date_start|date:"D, N j, Y" }}
+          {% if event.all_day %}
+          &mdash; all day
+          {% else %}
+          at {{ event.date_start|date:"g:i A" }}{% if event.date_end %} &ndash; {{ event.date_end|date:"g:i A" }}{% endif %}
+          {% endif %}
         </div>
         {% if event.location %}
         <div class="text-muted small">

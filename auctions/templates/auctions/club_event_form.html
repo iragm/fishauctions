@@ -19,7 +19,7 @@
   </a>
   {% if is_edit %}
   <form method="post"
-        data-confirm="This event will be removed from your club page, your Google Calendar, and Discord. This can't be undone."
+        data-confirm="This event will be removed from your club page, your Google Calendar, and Discord, and it will simply vanish from the calendar of everyone who subscribed. If it's only been called off, tick 'This event is cancelled' above instead — that leaves it in place and tells them. Deleting can't be undone."
         data-confirm-title="Delete {{ event.title }}?"
         data-confirm-ok="Delete event"
         data-confirm-variant="danger">

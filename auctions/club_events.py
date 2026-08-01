@@ -151,23 +151,43 @@ def retire_event(event, *, remote=True):
 
 def _remove_remote(event):
     """Delete an event's Google and Discord counterparts. Never raises."""
-    if event.google_event_id and event.club.google_calendar_connected:
+    club = event.club
+    if event.google_event_id and club.google_calendar_connected:
         try:
             google_calendar.delete_event(event)
         except google_calendar.GoogleCalendarError:
             logger.warning("Could not remove event %s from Google Calendar", event.pk)
-    if event.discord_event_id and event.club.discord_server_id:
-        if discord_events.cancel_scheduled_event(event.club.discord_server_id, event.discord_event_id):
+    if not club.discord_server_id:
+        return
+    if event.discord_event_id:
+        if discord_events.cancel_scheduled_event(club.discord_server_id, event.discord_event_id):
             event.discord_event_id = ""
-            event.save(update_fields=["discord_event_id"])
+            # An event that comes back — a pickup time re-added, an auction re-promoted — has to
+            # be able to reach Discord again, so re-arm it rather than leaving it "already tried".
+            event.needs_discord_sync = True
+            event.save(update_fields=["discord_event_id", "needs_discord_sync"])
+    # An auction's own Discord event is made by auction_emails and tracked on the auction, so it
+    # needs taking down here too — otherwise the auction disappears everywhere but Discord.
+    auction = event.auction if event.auction_id else None
+    if auction and auction.discord_event_id:
+        if discord_events.cancel_scheduled_event(club.discord_server_id, auction.discord_event_id):
+            from auctions.models import Auction
+
+            auction.discord_event_id = ""
+            auction.discord_event_needs_update = False
+            # A queryset update, not auction.save(): this also runs from ClubEvent's pre_delete,
+            # where saving the auction would re-enter the mirroring signal mid-cascade.
+            Auction.objects.filter(pk=auction.pk).update(discord_event_id="", discord_event_needs_update=False)
 
 
 def purge_retired(club):
     """Clean up after events that were soft-deleted without their remote copies being removed."""
     from auctions.models import ClubEvent
 
-    stragglers = ClubEvent.objects.filter(club=club, is_deleted=True).exclude(google_event_id="", discord_event_id="")
-    for event in stragglers:
+    stragglers = ClubEvent.objects.filter(club=club, is_deleted=True).filter(
+        Q(google_event_id__gt="") | Q(discord_event_id__gt="") | Q(auction__discord_event_id__gt="")
+    )
+    for event in stragglers.select_related("club", "auction"):
         _remove_remote(event)
 
 
@@ -305,9 +325,26 @@ def _pickup_description(auction, location):
     return " ".join(parts)
 
 
+def refresh_recurring_events(club):
+    """Move each repeating event on to the occurrence that's on now, or the next one.
+
+    One row stands for a whole series (see auctions/recurrence.py), and its ``date_start`` is what
+    every other part of the site reads. Nothing else would ever move it along, so a weekly meeting
+    would sit on the club page showing last Tuesday for ever. Returns how many moved.
+    """
+    from auctions.models import ClubEvent
+
+    touched = 0
+    for event in ClubEvent.objects.filter(club=club, is_deleted=False).exclude(recurrence=""):
+        if event.refresh_occurrence():
+            touched += 1
+    return touched
+
+
 def sync_club(club):
     """Bring one club fully up to date. Safe to call often; every step is idempotent."""
     sync_auction_events(club)
+    refresh_recurring_events(club)
     purge_retired(club)
     if club.google_calendar_connected:
         google_calendar.sync_club(club)
@@ -321,11 +358,15 @@ def sync_all():
 
     # Skip clubs with nothing to do. The token column is encrypted, so it can only be tested for
     # NULL — an empty-string token slips through and sync_club() no-ops on it, which is fine.
+    # Everything else is tested for content: `discord_server_id__isnull=False` looked like a
+    # filter but matched every club that had ever been saved with the field left blank, because
+    # a blank CharField stores "" rather than NULL.
     clubs = Club.objects.filter(
         Q(google_calendar_refresh_token__isnull=False)
-        | Q(discord_server_id__isnull=False)
+        | Q(discord_server_id__gt="")
         | Q(auctions__is_deleted=False, auctions__promote_this_auction=True)
-        | Q(events__is_deleted=False)
+        | Q(events__is_deleted=False),
+        active=True,
     ).distinct()
     count = 0
     for club in clubs:

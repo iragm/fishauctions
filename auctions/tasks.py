@@ -29,6 +29,10 @@ AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off schedul
 # Constants for BAP recalculation scheduling
 BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 
+# One club-calendar sync at a time; see sync_club_calendars.
+CALENDAR_SYNC_LOCK_KEY = "sync_club_calendars_running"
+CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -811,13 +815,26 @@ def sync_club_calendars(self):
     """Keep every club's events, Google Calendar, and Discord scheduled events in step.
 
     Does three things per club: mirror promoted auctions into events, exchange changes with
-    Google Calendar (push ours, pull theirs), and create Discord events for anything new. Each
-    club is isolated, so one broken connection doesn't stop the rest.
+    Google Calendar (push ours, pull theirs), and reconcile Discord scheduled events. Each club
+    is isolated, so one broken connection doesn't stop the rest.
+
+    Only one run at a time: this is scheduled every 15 minutes but a slow Google or a big club
+    can take longer than that, and two runs racing would push the same event twice and could
+    provision two calendars for one club.
     """
+    from django.core.cache import cache
+
     from auctions import club_events
 
-    count = club_events.sync_all()
-    logger.info("Synced calendars for %s club(s)", count)
+    # Times out well past the beat interval, so a worker that dies mid-run can't wedge the lock.
+    if not cache.add(CALENDAR_SYNC_LOCK_KEY, "1", timeout=CALENDAR_SYNC_LOCK_SECONDS):
+        logger.info("Club calendar sync is already running; skipping this run.")
+        return
+    try:
+        count = club_events.sync_all()
+        logger.info("Synced calendars for %s club(s)", count)
+    finally:
+        cache.delete(CALENDAR_SYNC_LOCK_KEY)
 
 
 @shared_task(bind=True, ignore_result=True)
