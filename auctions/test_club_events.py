@@ -1,8 +1,10 @@
 """Tests for club events, Google Calendar sync, and the Discord events built on top of them."""
 
 import datetime
+import zoneinfo
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.test import TestCase, override_settings
@@ -1805,10 +1807,14 @@ class RecurringEventUpkeepTests(TestCase):
         )
         self.client.force_login(admin)
         moved = self.event.date_start + datetime.timedelta(hours=1)
+        # What a browser posts: the time as the admin sees it, in their own timezone. This admin
+        # has no user_timezone cookie, so _browser_timezone falls back to the site's zone and the
+        # view parses in that -- render it the same way. Not timezone.localtime(), which reads the
+        # thread-local zone a previous test's form left activated (see ClubEventTimezoneTests).
+        site_time = moved.astimezone(zoneinfo.ZoneInfo(settings.TIME_ZONE))
         self.client.post(
             reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}),
-            # What a browser posts: the time as the admin sees it, in their own timezone.
-            {"title": "Weekly meeting", "date_start": timezone.localtime(moved).strftime("%Y-%m-%d %H:%M:%S")},
+            {"title": "Weekly meeting", "date_start": site_time.strftime("%Y-%m-%d %H:%M:%S")},
         )
         self.event.refresh_from_db()
         self.assertEqual(self.event.recurrence_start, self.anchor + datetime.timedelta(hours=1))
@@ -2058,6 +2064,9 @@ class ClubEventTimezoneTests(TestCase):
         )
         self.client.force_login(self.admin)
         self.client.cookies["user_timezone"] = "America/Los_Angeles"
+        # ClubEventForm activates this zone and nothing deactivates it, so without this every test
+        # that runs after one of these in the same process sees Los Angeles as the current zone.
+        self.addCleanup(timezone.deactivate)
 
     def test_an_event_is_saved_at_the_time_the_admin_typed(self):
         import zoneinfo
