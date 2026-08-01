@@ -9,6 +9,27 @@
 
     <p>{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
 
+    {% comment %}
+      Same providers as the sign-in page, so someone who created their account in the app can find
+      the matching button here (and vice versa) instead of being pushed into a second, password
+      account with the same address. Hidden in the app, where the web OAuth redirect is blocked in
+      embedded WebViews and the app has its own native flow.
+    {% endcomment %}
+    {% if not request.is_mobile_app %}
+      {% if GOOGLE_LOGIN_ENABLED %}
+      <a id='sign-up-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign up with Google</a>
+      {% endif %}
+      {% if APPLE_LOGIN_ENABLED %}
+      <a id='sign-up-apple' class='btn btn-primary' href="/apple/login/?process=login&next={{ redirect_field_value }}">Sign up with Apple</a>
+      {% endif %}
+      {% if FACEBOOK_LOGIN_ENABLED %}
+      <a id='sign-up-facebook' class='btn btn-primary' href="/facebook/login/?process=login&next={{ redirect_field_value }}">Sign up with Facebook</a>
+      {% endif %}
+      {% if GOOGLE_LOGIN_ENABLED or APPLE_LOGIN_ENABLED or FACEBOOK_LOGIN_ENABLED %}
+      <h5 class="mt-3">Or create an account on this site:</h5>
+      {% endif %}
+    {% endif %}
+
     <form class="signup" id="signup_form" method="post" action="{% url 'account_signup' %}">
       {% csrf_token %}
       {{ form | crispy }}

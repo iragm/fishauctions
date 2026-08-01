@@ -24,10 +24,15 @@ from .views import (
     MobileNotificationPrefsView,
     MobileOfflineSnapshotView,
     MobileOfflineSyncView,
+    MobilePaymentAuthorizationView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
     MobilePrinterObservedView,
     MobilePrinterProfilesView,
+    MobileSocialAuthView,
+    MobileSocialCompleteView,
+    MobileSocialContinueView,
+    MobileSocialDoneView,
     MobileTokenRefreshView,
     MobileUserMeView,
     MobileWebSessionConsumeView,
@@ -39,7 +44,17 @@ urlpatterns = [
     path("config/", MobileConfigView.as_view(), name="mobile-config"),
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
+    # Legacy Google-only endpoint. Superseded by auth/social/ below, which runs allauth's pipeline
+    # for all three providers; kept alive until older installs age out.
     path("auth/google/", MobileGoogleAuthView.as_view(), name="mobile-auth-google"),
+    # Unified native social sign-in (apple / google / facebook).
+    path("auth/social/", MobileSocialAuthView.as_view(), name="mobile-auth-social"),
+    path("auth/social/complete/", MobileSocialCompleteView.as_view(), name="mobile-auth-social-complete"),
+    # Loaded by the WebView, not the app's HTTP client: the ?t= token is the credential.
+    path("auth/social/continue/", MobileSocialContinueView.as_view(), name="mobile-auth-social-continue"),
+    # The app watches for this exact path to know the web continuation finished. Changing it needs
+    # an app release (AllauthWebScreen.defaultSocialCompletionPath).
+    path("auth/social/done/", MobileSocialDoneView.as_view(), name="mobile-auth-social-done"),
     path("auth/refresh/", MobileTokenRefreshView.as_view(), name="mobile-auth-refresh"),
     path("auth/me/", MobileUserMeView.as_view(), name="mobile-auth-me"),
     # Pre-authenticate the WebView from the native JWT session (one-time handoff token).
@@ -68,6 +83,7 @@ urlpatterns = [
     # Lots
     path("lots/<int:pk>/watch/", MobileLotWatchView.as_view(), name="mobile-lot-watch"),
     # Payments
+    path("payments/authorization/", MobilePaymentAuthorizationView.as_view(), name="mobile-payment-authorization"),
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),
     path("payments/confirm/", MobilePaymentConfirmView.as_view(), name="mobile-payment-confirm"),
     # Command palette

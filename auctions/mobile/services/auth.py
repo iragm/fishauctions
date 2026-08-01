@@ -38,14 +38,14 @@ class MobileAuthService:
             logger.info("Mobile login attempted for inactive user: %s", credential)
             return None
 
-        if not MobileAuthService._email_verification_satisfied(user):
+        if not MobileAuthService.email_verification_satisfied(user):
             logger.info("Mobile login blocked for user with unverified email: %s", credential)
             return None
 
         return user
 
     @staticmethod
-    def _email_verification_satisfied(user) -> bool:
+    def email_verification_satisfied(user) -> bool:
         """Mirror allauth's email-verification gate so mobile matches web login policy.
 
         When ``ACCOUNT_EMAIL_VERIFICATION`` is "mandatory", allauth refuses web login until the user

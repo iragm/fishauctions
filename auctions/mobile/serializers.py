@@ -10,6 +10,7 @@ from auctions.mobile.services.ar import (
     MAX_FRAMES_PER_BATCH,
 )
 from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
+from auctions.mobile.services.social_auth import SUPPORTED_PROVIDERS
 from auctions.models import MobileDevice, ObservedPrinter, UserData, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
@@ -30,6 +31,39 @@ class MobileGoogleAuthSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/auth/google/."""
 
     id_token = serializers.CharField(write_only=True, help_text="Google ID token from the client-side sign-in flow")
+
+
+class MobileSocialAuthSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/auth/social/ — one shape for all three providers.
+
+    Which credential field is used depends on the provider (and, for Facebook, on the platform):
+    Google and Apple send ``id_token``; Facebook sends ``id_token`` for iOS Limited Login and
+    ``access_token`` for the classic Android flow. The field-level checks here are deliberately
+    thin — everything that decides whether a credential is *genuine* happens in
+    ``auctions.mobile.services.social_auth``, which is also where the per-provider requirements are
+    enforced, so that a serializer change can't quietly weaken verification.
+
+    ``email``/``first_name``/``last_name`` are Apple's one-time first-authorization values, which
+    Apple sends outside the token. They are unauthenticated hints; see
+    ``_apply_apple_first_authorization_hints`` for exactly how far they are (not) trusted.
+    """
+
+    provider = serializers.ChoiceField(choices=SUPPORTED_PROVIDERS)
+    id_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    access_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    authorization_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    # The *raw* nonce; the provider was given sha256() of it. Not an email/identity field, so no
+    # length or charset rules beyond keeping it sane — the hash comparison is the real check.
+    nonce = serializers.CharField(required=False, allow_blank=True, max_length=256, write_only=True)
+    email = serializers.CharField(required=False, allow_blank=True, max_length=254)
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+
+
+class MobileSocialCompleteSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/auth/social/complete/."""
+
+    pending_token = serializers.CharField(max_length=128, write_only=True)
 
 
 class MobileUserSerializer(serializers.Serializer):

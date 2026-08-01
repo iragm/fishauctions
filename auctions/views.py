@@ -181,6 +181,7 @@ from .forms import (
     validate_image_url,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .mobile.services.web_session import mark_session_opened_by_app, session_opened_by_app
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
@@ -11822,6 +11823,12 @@ class SquareConnectView(LoginRequiredMixin, View):
         if not request.user.userdata.square_enabled:
             messages.error(request, "Square isn't enabled for your account.")
             return redirect(reverse("home"))
+        # Remember, for the callback, that this round trip started inside the app, so it can end
+        # with a "Return to the app" button rather than leaving the merchant on a web page they
+        # have to dismiss themselves. ``?return_to_app=1`` is the app's explicit way to say so when
+        # it opens this URL in an in-app browser view that carries no session of ours.
+        if session_opened_by_app(request) or request.GET.get("return_to_app"):
+            mark_session_opened_by_app(request.session)
         _stash_club_for_payment_oauth(request)
         # Build Square OAuth URL
         # Use the user's unsubscribe_link as state parameter for security
@@ -11964,7 +11971,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
                     request,
                     f"Square account linked to {club.name}. Members can now pay dues directly on this site.",
                 )
-                return redirect(reverse("club_membership_settings", kwargs={"slug": club.slug}))
+                return self._done(request, reverse("club_membership_settings", kwargs={"slug": club.slug}), seller)
 
             messages.success(
                 request,
@@ -11973,10 +11980,12 @@ class SquareCallbackView(LoginRequiredMixin, View):
 
             # Redirect to last auction or home
             if request.user.userdata.last_auction_created:
-                return redirect(
-                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True"
+                return self._done(
+                    request,
+                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True",
+                    seller,
                 )
-            return redirect(reverse("square_seller"))
+            return self._done(request, reverse("square_seller"), seller)
 
         except Exception as e:
             logger.exception("Error during Square OAuth: %s", e)
@@ -11991,6 +12000,23 @@ class SquareCallbackView(LoginRequiredMixin, View):
             else:
                 messages.error(request, "An error occurred connecting your Square account. Please try again.")
             return redirect(reverse("square_seller"))
+
+    @staticmethod
+    def _done(request, web_url, seller):
+        """End a successful connect: back to the app if that's where it started, else ``web_url``.
+
+        Apple's Tap to Pay review guide wants onboarding completed inside the app (requirement 2.2),
+        and the app routes this OAuth through an in-app browser view. That view has no idea the
+        merchant is finished, so without this page they'd sit on a web page and have to work out
+        that the Done button is what comes next. The deep link closes it for them.
+        """
+        if not session_opened_by_app(request):
+            return redirect(web_url)
+        return render(
+            request,
+            "auctions/square_connected_app.html",
+            {"seller": seller, "web_url": web_url},
+        )
 
 
 MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
@@ -13665,6 +13691,247 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
     def _yes_no(value):
         return "True" if value else "False"
 
+    @staticmethod
+    def _apple_sign_in_items(base_url, site_host):
+        """Sign in with Apple: the app half, the web half, and the two things Apple requires of both.
+
+        Split into three because they fail independently and a deployment can legitimately stop
+        after the first. The bundle id alone is a complete, working native sign-in — verifying an
+        Apple identity token only needs Apple's public keys.
+        """
+        from auctions.apple_signin import revocation_configured
+
+        section = "Sign in with Apple"
+        callback = reverse("apple_callback")
+        return [
+            {
+                "section": section,
+                "name": "Sign in with Apple in the mobile app",
+                "configured": bool(settings.APPLE_SIGN_IN_BUNDLE_ID),
+                "what_it_does": (
+                    "Adds &ldquo;Sign in with Apple&rdquo; to the app's login screen. Apple requires this on iOS for any "
+                    "app that offers another social login. This one value is enough on its own &mdash; verifying an "
+                    "Apple token only needs Apple's public keys, which the server fetches automatically."
+                ),
+                "where_to_get_it": (
+                    "Your app's <strong>Bundle ID</strong>. Not the Services ID below &mdash; they are different "
+                    "strings, and confusing the two is the most common way an Apple integration fails."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; Identifiers</strong> and click your app's App ID.",
+                    "Tick <strong>Sign in with Apple</strong>, then <strong>Save</strong>.",
+                    "Copy the Bundle ID exactly as shown.",
+                ],
+                "snippets": [{"code": 'APPLE_SIGN_IN_BUNDLE_ID="com.fishauctions.app"'}],
+                "links": [{"label": "Apple Developer — Identifiers", "url": "https://developer.apple.com/account"}],
+            },
+            {
+                "section": section,
+                "name": "Sign in with Apple on the website",
+                "configured": bool(
+                    settings.APPLE_SIGN_IN_SERVICES_ID
+                    and settings.APPLE_SIGN_IN_KEY_ID
+                    and settings.APPLE_SIGN_IN_PRIVATE_KEY
+                ),
+                "what_it_does": (
+                    "Adds the same button to the website, so someone who created their account in the app can sign in "
+                    "on a computer and land on the same account. Optional: skip it and the app button still works."
+                ),
+                "where_to_get_it": (
+                    "A <strong>Services ID</strong> (a second identifier, separate from the bundle id above) plus your "
+                    "Team ID, a Key ID, and the <code>.p8</code> private key. Put the <code>.p8</code> file next to "
+                    "<code>.env</code> and give just its filename."
+                ),
+                "setup_steps": [
+                    "<strong>Identifiers &rarr; +</strong> &rarr; <strong>Services IDs</strong>. Pick a reverse-DNS "
+                    "identifier that is <em>not</em> your bundle id, e.g. <code>fish.auction.signin</code>.",
+                    "Open it, tick <strong>Sign in with Apple</strong> &rarr; <strong>Configure</strong>. Set the "
+                    "Primary App ID, add your domain, and set the return URL to "
+                    f"<code>{base_url}{callback}</code>. "
+                    "<strong>Note the path</strong> &mdash; there is no <code>/accounts/</code> prefix on this site, "
+                    "unlike most allauth documentation. Getting it wrong gives an <code>invalid_client</code> error "
+                    "from Apple with no explanation. Apple also rejects <code>http://</code>, so this can't be tested "
+                    "on localhost.",
+                    "<strong>Keys &rarr; +</strong>, tick <strong>Sign in with Apple</strong>, configure it against "
+                    "your App ID, and register. <strong>Download the <code>.p8</code> &mdash; Apple lets you do that "
+                    "exactly once.</strong> Note the Key ID shown on that page; your Team ID is top-right of the "
+                    "developer site.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'APPLE_SIGN_IN_SERVICES_ID="fish.auction.signin"\n'
+                            'APPLE_SIGN_IN_TEAM_ID="ABCDE12345"\n'
+                            'APPLE_SIGN_IN_KEY_ID="FGHIJ67890"\n'
+                            'APPLE_SIGN_IN_KEY_FILE="AuthKey_FGHIJ67890.p8"'
+                        )
+                    }
+                ],
+                "links": [{"label": "Apple Developer — Keys", "url": "https://developer.apple.com/account"}],
+            },
+            {
+                "section": section,
+                "name": "Account deletion & Hide My Email",
+                "configured": revocation_configured(),
+                "what_it_does": (
+                    "Two things Apple requires of any site offering Sign in with Apple. Both fail <em>silently</em>, "
+                    "which is why they get their own entry:"
+                    "<ul class='mb-0'>"
+                    "<li><strong>Deleting an account must revoke the Apple grant.</strong> That call needs the team "
+                    "key above, so set those values even if you skip the website button. Without it, deletion is "
+                    "incomplete by Apple's rules and is an App Review item.</li>"
+                    "<li><strong>Hide My Email needs your sending domain registered with Apple.</strong> Until it is, "
+                    "every message to a <code>@privaterelay.appleid.com</code> address is <strong>discarded without a "
+                    "bounce or an error</strong> &mdash; no confirmation email, no invoice, no outbid notice. The user "
+                    "simply never hears from the site again.</li>"
+                    "</ul>"
+                ),
+                "where_to_get_it": (
+                    "The revocation half is checked automatically above. The email domain can't be checked from here "
+                    "&mdash; register it and send yourself a test."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; More &rarr; Configure Sign in with "
+                    "Apple for Email Communication</strong>.",
+                    f"Under <strong>Email Sources</strong> add your domain (<code>{site_host}</code>) and the exact "
+                    f"<code>DEFAULT_FROM_EMAIL</code> address (<code>{settings.DEFAULT_FROM_EMAIL}</code>).",
+                    "Click <strong>Verify</strong> &mdash; Apple checks SPF. Fix SPF first if it fails.",
+                    "Test it: sign in with Apple choosing <em>Hide My Email</em>, and confirm the email arrives.",
+                ],
+                "links": [
+                    {
+                        "label": "Apple — Configure email communication",
+                        "url": "https://developer.apple.com/account/resources/services/configure",
+                    }
+                ],
+            },
+        ]
+
+    @staticmethod
+    def _facebook_login_items(base_url):
+        section = "Facebook Login"
+        callback = reverse("facebook_callback")
+        return [
+            {
+                "section": section,
+                "name": "Facebook Login",
+                "configured": bool(settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET),
+                "what_it_does": (
+                    "Adds &ldquo;Continue with Facebook&rdquo; to the app and the website. "
+                    "<strong>Expect most Facebook users to arrive without an email address</strong> &mdash; Facebook "
+                    "often supplies none, and never confirms the one it does supply. Those users are asked to choose "
+                    "an address and confirm it. That is deliberate: trusting an unconfirmed Facebook address would let "
+                    "someone claim an existing account by putting that address on a Facebook profile."
+                ),
+                "where_to_get_it": (
+                    "The App ID and App Secret from your Facebook app's <strong>Basic settings</strong>. "
+                    "<strong>Facebook is the one provider a fork can't configure from <code>.env</code> alone</strong>: "
+                    "the mobile SDKs read the app id from <code>Info.plist</code> / <code>AndroidManifest.xml</code> at "
+                    "launch, so it is also compiled into the app build. The value here decides whether the button is "
+                    "<em>offered</em> and must match what the app was built with."
+                ),
+                "setup_steps": [
+                    "Create an app, use case <strong>Authenticate and request data from users with Facebook Login</strong>.",
+                    "<strong>App settings &rarr; Basic</strong>: copy the App ID and reveal the App Secret. Fill in the "
+                    "Privacy Policy URL and User data deletion URL &mdash; Facebook won't let the app go live without them.",
+                    "<strong>Use cases &rarr; Authentication</strong>: make sure <code>email</code> and "
+                    "<code>public_profile</code> are added. <code>email</code> needs no App Review.",
+                    "<strong>Facebook Login &rarr; Settings</strong>: add "
+                    f"<code>{base_url}{callback}</code> to Valid OAuth Redirect URIs "
+                    "(again, no <code>/accounts/</code> prefix).",
+                    "Flip the app <strong>Live</strong>. While it is in Development mode only accounts listed under "
+                    "App roles can sign in.",
+                ],
+                "snippets": [
+                    {
+                        "code": 'FACEBOOK_APP_ID="1234567890123456"\nFACEBOOK_APP_SECRET="0123456789abcdef0123456789abcdef"'
+                    }
+                ],
+                "links": [{"label": "Facebook — My Apps", "url": "https://developers.facebook.com/apps"}],
+            },
+        ]
+
+    @staticmethod
+    def _tap_to_pay_items():
+        """Tap to Pay on iPhone: the Apple-side steps that sit on top of a working Square connection.
+
+        Only shown once Square is set up, because Tap to Pay charges through Square and none of this
+        means anything without it.
+        """
+        from post_office.models import EmailTemplate
+
+        from auctions.management.commands.tap_to_pay_launch_announcement import EMAIL_TEMPLATE_NAME
+
+        if not settings.SQUARE_APPLICATION_ID:
+            return []
+        section = "Tap to Pay on iPhone"
+        return [
+            {
+                "section": section,
+                "name": "Apple's publishing entitlement",
+                # Not a .env value — an Apple-side request. "Done" here means "nothing to configure
+                # in this file", the same way the branding item does.
+                "configured": True,
+                "what_it_does": (
+                    "<strong>Nothing to configure here, and this page can't tell whether Apple has granted it.</strong> "
+                    "Lets merchants take card payments by tapping the card on an iPhone, charging through their "
+                    "connected Square account. <strong>This is an App Store step, not a setting on this page.</strong> "
+                    "The <em>development</em> entitlement does not cover distribution: TestFlight and the App Store "
+                    "need the separate <em>publishing</em> entitlement, which Apple grants only after reviewing the app "
+                    "against its Tap to Pay requirements. Apple asks for a screen recording of onboarding and a checkout."
+                ),
+                "where_to_get_it": "Request it from Apple; the review is on their side and takes time.",
+                "links": [
+                    {
+                        "label": "Request the entitlement",
+                        "url": "https://developer.apple.com/contact/request/tap-to-pay-on-iphone/",
+                    }
+                ],
+            },
+            {
+                "section": section,
+                "name": "Launch email & push notification",
+                "configured": EmailTemplate.objects.filter(name=EMAIL_TEMPLATE_NAME).exists(),
+                "what_it_does": (
+                    "Apple's marketing requirements ask for a launch email and an in-app push to every eligible "
+                    "merchant, due <strong>once the feature is generally available</strong> &mdash; not at first "
+                    "release. The wording and artwork for both <strong>must</strong> come from Apple's Tap to Pay "
+                    "Marketing Guide and Toolkit; the guide forbids writing your own. The command below therefore "
+                    "refuses to send until that copy is in place, rather than sending something that would fail review."
+                ),
+                "where_to_get_it": (
+                    "The toolkit's access page and password are on <strong>page 23 of the review guide PDF</strong> "
+                    "Apple sends with the development entitlement."
+                ),
+                "setup_steps": [
+                    "Download the &ldquo;Launch email&rdquo; template and the &ldquo;Value Proposition&rdquo; "
+                    "push-notification copy from Apple's toolkit.",
+                    f"Create an email template named <code>{EMAIL_TEMPLATE_NAME}</code> in the admin and paste the "
+                    "launch email into it.",
+                    "Run the command below with the push copy. Re-running is safe &mdash; nobody is contacted twice.",
+                ],
+                "snippets": [
+                    {
+                        "label": "Check who would be contacted, without sending:",
+                        "code": "docker exec -it django python3 manage.py tap_to_pay_launch_announcement --dry-run",
+                    },
+                    {
+                        "label": "Send it:",
+                        "code": (
+                            "docker exec -it django python3 manage.py tap_to_pay_launch_announcement \\\n"
+                            '  --push-title "<from the toolkit>" --push-body "<from the toolkit>"'
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Email templates",
+                        "url": "/admin/post_office/emailtemplate/",
+                    }
+                ],
+            },
+        ]
+
     def get_context_data(self, **kwargs):
         from urllib.parse import urlsplit
 
@@ -14029,6 +14296,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     },
                 ],
             },
+            # -- Sign in with Apple -----------------------------------------------
+            *self._apple_sign_in_items(base_url, site_host),
+            # -- Facebook Login ---------------------------------------------------
+            *self._facebook_login_items(base_url),
+            # -- Tap to Pay on iPhone ---------------------------------------------
+            *self._tap_to_pay_items(),
             # -- Mobile push notifications ---------------------------------------
             {
                 "section": "Mobile push notifications",

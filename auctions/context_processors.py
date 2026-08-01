@@ -35,9 +35,25 @@ def google_analytics(request):
 
 
 def google_oauth(request):
+    """Which social sign-in buttons the web login/signup pages should draw.
+
+    Each provider is independent: a deployment can configure any subset, and the pages fall back to
+    the password form when none are set. Apple and Facebook need the *web* half of their config —
+    Apple's Services ID (the native app's bundle id doesn't work for the browser redirect) and
+    Facebook's app id and secret — so a mobile-only configuration correctly shows no web button.
+    """
     token = (settings.GOOGLE_OAUTH_LINK or "").strip()
     google_login_enabled = bool(token) and token not in GOOGLE_OAUTH_PLACEHOLDER_VALUES
-    return {"GOOGLE_OAUTH_LINK": token, "GOOGLE_LOGIN_ENABLED": google_login_enabled}
+    return {
+        "GOOGLE_OAUTH_LINK": token,
+        "GOOGLE_LOGIN_ENABLED": google_login_enabled,
+        # The web Apple flow also needs the team key to build its client secret; without it the
+        # redirect reaches Apple and fails there, so treat it as not configured.
+        "APPLE_LOGIN_ENABLED": bool(
+            settings.APPLE_SIGN_IN_SERVICES_ID and settings.APPLE_SIGN_IN_PRIVATE_KEY and settings.APPLE_SIGN_IN_KEY_ID
+        ),
+        "FACEBOOK_LOGIN_ENABLED": bool(settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET),
+    }
 
 
 def theme(request):

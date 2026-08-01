@@ -6,18 +6,15 @@
   <h1 class="h4 mb-3">Accept payments with Square</h1>
 
   {% comment %}
-    Connecting/reconnecting a Square account is a web OAuth redirect to Square, which is blocked
-    inside the native app WebView. Show a banner pointing to the website and hide the connect links
-    below on mobile. (On-device Tap to Pay itself is handled natively, not from these links.)
+    The connect links render in the app exactly as they do on the web. Apple's Tap to Pay on iPhone
+    review guide (requirement 2.2 and the General Requirements) requires the whole merchant
+    onboarding to be completable inside the app, without sending anyone to a second app — so there
+    is deliberately no "open this on the website" banner here. The app intercepts /square/connect/
+    and the Square OAuth hosts and opens them in an in-app browser view (SFSafariViewController /
+    Chrome Custom Tabs), which Apple counts as in-app and which shares Safari's cookie jar, so a
+    merchant whose Square login is "Sign in with Google" still works. Loading the same OAuth in the
+    shell's own WebView is what would fail: Google blocks its sign-in in embedded WebViews.
   {% endcomment %}
-  {% if request.is_mobile_app %}
-    <div class="alert alert-warning" role="alert">
-      Connecting a Square account isn't available in the app. Open
-      <a href="https://{{ request.get_host }}{{ request.path }}" target="_blank" rel="noopener">this page on the website</a>
-      in your browser to connect your account.
-    </div>
-  {% endif %}
-
   {% if request.user.is_authenticated and not request.user.userdata.square_enabled %}
     <div class="alert alert-info" role="alert">
       Square is currently disabled for your account. A site administrator can re-enable it for you.  You can still connect your Square accout, but you won't be able to accept payments until it's enabled.
@@ -31,9 +28,7 @@
         This Square account was connected before in‑person (Tap to Pay) payments were supported.
         Reconnect to enable charging cards on your phone — your existing settings and club link stay in place.
       </div>
-      {% if not request.is_mobile_app %}
       <a class="btn btn-warning btn-sm flex-shrink-0" href="{% url 'square_connect' %}">Reconnect Square</a>
-      {% endif %}
     </div>
   {% endif %}
 
@@ -42,7 +37,7 @@
   </p>
 
   <ol class="mb-4">
-    <li>{% if seller or request.is_mobile_app %}Connect your Square account{% else %}<a href="{% url 'square_connect' %}">Connect your Square account</a>{% endif %}</li>
+    <li>{% if seller %}Connect your Square account{% else %}<a href="{% url 'square_connect' %}">Connect your Square account</a>{% endif %}</li>
     <li>That's it — users will see a Pay button on their invoices!</li>
   </ol>
 
@@ -110,7 +105,6 @@
     <li>There's no fine print here, no fees beyond the standard Square fees, and you can disable payments at any time.</li>
   </ul>
 
-  {% if not request.is_mobile_app %}
   <h4>Ready to get started?</h4>
   <div class="d-flex align-items-center gap-2 mb-4">
     <a class="btn btn-primary btn-sm" href="{% url 'square_connect' %}">Connect your Square account</a>
@@ -118,7 +112,6 @@
       <span class="small">and start accepting payments in {{ auction }} today!</span>
     {% endif %}
   </div>
-  {% endif %}
 
   {% if seller %}
     {% url 'square_seller_delete' as disconnect_url %}

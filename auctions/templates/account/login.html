@@ -10,14 +10,26 @@
     <h1>{% trans "Sign In" %}</h1>
 
     {% comment %}
-      The native app has its own Google Sign-In path (see MobileGoogleAuthView); the web OAuth
-      redirect is blocked inside embedded WebViews ("disallowed_useragent"), so hide it in the app.
+      The native app has its own sign-in path for all three providers (MobileSocialAuthView); the
+      web OAuth redirect is blocked inside embedded WebViews ("disallowed_useragent"), so hide these
+      in the app. Each provider appears only when this deployment has configured it — a site with
+      none of them just shows the password form below.
     {% endcomment %}
-    {% if GOOGLE_LOGIN_ENABLED and not request.is_mobile_app %}
-    <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
+    {% if not request.is_mobile_app %}
+      {% if GOOGLE_LOGIN_ENABLED %}
+      <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
+      {% endif %}
+      {% if APPLE_LOGIN_ENABLED %}
+      <a id='sign-in-apple' class='btn btn-primary' href="/apple/login/?process=login&next={{ redirect_field_value }}">Sign in with Apple</a>
+      {% endif %}
+      {% if FACEBOOK_LOGIN_ENABLED %}
+      <a id='sign-in-facebook' class='btn btn-primary' href="/facebook/login/?process=login&next={{ redirect_field_value }}">Sign in with Facebook</a>
+      {% endif %}
     {% endif %}
 
-      <br><br><h5>{% if GOOGLE_LOGIN_ENABLED and not request.is_mobile_app %}Don't have a Google account?  {% endif %}Sign in with your account on this site:</h5>
+    {% with social_shown=GOOGLE_LOGIN_ENABLED|default:APPLE_LOGIN_ENABLED|default:FACEBOOK_LOGIN_ENABLED %}
+      <br><br><h5>{% if social_shown and not request.is_mobile_app %}Rather not use those?  {% endif %}Sign in with your account on this site:</h5>
+    {% endwith %}
 
     <form class="login" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}

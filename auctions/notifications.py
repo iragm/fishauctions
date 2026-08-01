@@ -40,11 +40,24 @@ CATEGORY_VOLUNTEER = "volunteer"
 # "A lot you're watching is being sold right now." Distinct from CATEGORY_WATCHED (the nightly
 # "watched lots ending soon" mail): this one has no email form and is worthless minutes later.
 CATEGORY_LOT_SELLING = "lot_selling"
+# "Tap to Pay on iPhone is here." Apple's marketing requirements ask for a launch email (6.1) AND an
+# in-app push (6.3) with different, separately-specified copy, so the push must not fall back to
+# emailing its own text -- that would be a third message that is neither of the two required ones,
+# on top of the launch email the same command already sent.
+CATEGORY_TAP_TO_PAY_LAUNCH = "tap_to_pay_launch"
 
 # Categories with no email equivalent -- either app-native, or so time-critical that a late email is
 # worse than nothing. A push that can't be delivered in these categories is simply dropped; every
 # other category falls back to email (see send_push_to_user).
-PUSH_ONLY_CATEGORIES = frozenset({CATEGORY_PROMO, CATEGORY_PRINTER, CATEGORY_VOLUNTEER, CATEGORY_LOT_SELLING})
+PUSH_ONLY_CATEGORIES = frozenset(
+    {
+        CATEGORY_PROMO,
+        CATEGORY_PRINTER,
+        CATEGORY_VOLUNTEER,
+        CATEGORY_LOT_SELLING,
+        CATEGORY_TAP_TO_PAY_LAUNCH,
+    }
+)
 
 # Categories that are always emailed, never pushed:
 #   account     - a signed-out or wrong phone must never receive password resets / security warnings

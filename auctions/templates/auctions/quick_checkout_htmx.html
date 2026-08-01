@@ -24,9 +24,25 @@
             Square QR check below and the create_mobile_payment seller/permission check). The
             scan-a-QR-code flow doesn't apply on the device itself, so we hide the QR section below
             and show only this native button in-app.
+
+            The label and the missing icon are both fixed by Apple's Tap to Pay on iPhone review
+            guide, not by taste:
+
+            * 5.4 -- the label must be one of the guide's localized strings. In English that is
+              "Tap to Pay on iPhone" or "Tap to Pay", nothing else. "Tap to Pay on iPhone" is
+              iPhone-only wording, so Android gets the short form.
+            * 5.5 -- if the button carries an icon it must be SF Symbols' wave.3.right.circle(.fill).
+              A Bootstrap credit-card glyph is not that, and the marketing rules separately forbid
+              drawing our own Tap to Pay iconography, so there is no substitute glyph to reach for.
+              The requirement is conditional on using an icon at all, so no icon means it does not
+              apply -- which is also what the app does (see tapToPaySymbolAsset in the Flutter app).
+
+            5.2 also asks that this be reachable without scrolling and, where there are several
+            payment options, sit at the top of the list -- hence its position above the PayPal and
+            Square QR block, which is hidden in-app anyway.
           {% endcomment %}
           <a href="fishauctions://pay/{{ invoice.pk }}" class="btn btn-primary btn-lg w-100 my-2">
-            <i class="bi bi-credit-card-2-front"></i> Tap to Pay with card
+            {% if request.is_ios_app %}Tap to Pay on iPhone{% else %}Tap to Pay{% endif %}
           </a>
         {% endif %}
         {% if not request.is_mobile_app %}

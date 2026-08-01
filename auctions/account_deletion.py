@@ -31,7 +31,9 @@ What deletion means, and why it isn't a ``User.delete()``:
   joining the auction themselves is theirs, and its name and contact details go.
 * **Everything personal actually goes**: the site profile and its address/coordinates, devices and
   their push tokens, browsing and search history, watched lots, saved payment-processor connections,
-  and the sign-in identities (password, email address records, linked Google account, app tokens).
+  and the sign-in identities (password, email address records, linked Google/Apple/Facebook
+  accounts, app tokens). A linked Apple account also has its grant revoked at Apple, which Apple
+  requires of any app offering Sign in with Apple.
 
 Club and auction history record what deletion did, so an admin reading the roster later can see why
 a record lost its name. Those histories are free text and sometimes quote an email address, so the
@@ -173,6 +175,17 @@ def _delete_sign_in_identities(user):
     """Drop every way back into this account: password, email records, social logins, JWTs."""
     from allauth.account.models import EmailAddress
     from allauth.socialaccount.models import SocialAccount, SocialToken
+
+    from auctions.apple_signin import revoke_all_for_user
+
+    # Apple requires an app offering Sign in with Apple to revoke the grant when the account goes;
+    # a deletion that leaves it standing is incomplete by their rules. Must happen before the token
+    # rows below are dropped -- they're the only way to reach Apple, so afterwards it's impossible.
+    # Best effort: Apple being unreachable must not be what stops someone's account being deleted.
+    try:
+        revoke_all_for_user(user)
+    except Exception:
+        logger.exception("Failed to revoke Apple sign-in grants for user %s", user.pk)
 
     SocialToken.objects.filter(account__user=user).delete()
     SocialAccount.objects.filter(user=user).delete()

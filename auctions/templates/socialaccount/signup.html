@@ -12,7 +12,12 @@
 {% endblocktrans %}</p>
 
 If you are signing up for the first time and seeing this page, please enter the following information:
-<form class="signup" id="signup_form" method="post" action="{% url 'socialaccount_signup' %}">
+{% comment %}
+  Posts back to whatever URL served this page rather than a fixed one. The same view is reachable
+  at allauth's /3rdparty/signup/ and at the /social/signup/ alias the app's WebView allowlist
+  expects (auctions/urls.py); hardcoding either would bounce the other one out of the flow.
+{% endcomment %}
+<form class="signup" id="signup_form" method="post" action="">
   {% csrf_token %}
   {{ form | crispy }}
   {% if redirect_field_value %}

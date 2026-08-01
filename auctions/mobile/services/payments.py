@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,138 @@ class PaymentService:
         except Exception:
             logger.exception("Failed to record Square token handout for invoice %s", invoice.pk)
 
+    # Shown by the app verbatim when a signed-in user can't take payments. Sent from here rather
+    # than compiled into the app so the reason can be reworded without an app release.
+    NOT_A_MERCHANT_MESSAGE = "Only an auction admin with a connected Square account can set up Tap to Pay."
+
+    @staticmethod
+    def _latest_admin_auction(user):
+        """The auction this user most plausibly collects money for, or None.
+
+        ``last_auction_used`` first: it's the auction the app is already working in (the check-in
+        ping and the command palette both write it), so it's the one whose seller the next tap will
+        actually charge. Falling back to their newest auction keeps warm-up working for an admin
+        who hasn't touched anything on this device yet.
+
+        Only used to *pre*-authorize the reader. Getting it wrong costs one extra on-device
+        ``authorize()`` when the real invoice arrives -- ``create_mobile_payment`` re-resolves the
+        seller per invoice and is what actually decides which account is charged.
+        """
+        from auctions.models import Auction
+
+        userdata = getattr(user, "userdata", None)
+        candidate = getattr(userdata, "last_auction_used", None)
+        if candidate and not candidate.is_deleted and candidate.permission_check(user):
+            return candidate
+        # Newest first by end date, then creation, so an auction with no end date still sorts.
+        recent = (
+            Auction.objects.filter(is_deleted=False)
+            .select_related("club", "created_by")
+            .order_by("-date_end", "-date_start")
+        )
+        # permission_check covers creator/superuser/AuctionTOS-admin/club-admin and needs a query
+        # or two each, so only look at auctions this user is plausibly attached to, newest first.
+        plausible = recent.filter(
+            Q(created_by=user) | Q(auctiontos__user=user, auctiontos__is_admin=True) | Q(club__members__user=user)
+        ).distinct()[:20]
+        for auction in plausible:
+            if auction.permission_check(user):
+                return auction
+        return None
+
+    @staticmethod
+    def get_payment_authorization(user) -> dict:
+        """Credentials for warming up the Tap to Pay reader *before* there is an invoice.
+
+        Apple requires the reader to start preparing when the app comes to the foreground
+        (requirement 1.5) and the Tap to Pay UI to appear within a second 90% of the time (5.6).
+        Square's SDK only starts preparing once it is authorized, and ``create_mobile_payment``
+        authorizes per invoice -- i.e. at the moment the cashier presses the button, which is too
+        late. This hands the same seller token out one step earlier.
+
+        ``can_accept_terms`` answers requirement 3.8: only an administrator may accept Apple's Tap
+        to Pay terms, and only the backend knows who administers an auction with a linked Square
+        seller. It tracks eligibility exactly -- a user who may take payments here is by definition
+        an auction/club admin for that seller.
+
+        Never returns credentials for a user who could not charge right now: an account whose token
+        is missing, expired beyond refresh, or predates the in-person scope reports
+        ``eligible: true`` with no token, which the app handles by showing the setup UI and skipping
+        the warm-up. Nothing here charges anything or has side effects.
+        """
+        if not PaymentService._user_can_take_payments(user):
+            return {
+                "eligible": False,
+                "can_accept_terms": False,
+                "message": PaymentService.NOT_A_MERCHANT_MESSAGE,
+            }
+
+        auction = PaymentService._latest_admin_auction(user)
+        seller = auction.effective_square_seller if auction else None
+        result = {"eligible": True, "can_accept_terms": True}
+        if seller:
+            result["seller_name"] = PaymentService._seller_display_name(auction, seller)
+        if not seller or not seller.supports_tap_to_pay:
+            return result
+
+        # Only now touch the token: get_valid_access_token can hit Square's refresh endpoint, and
+        # there's no reason to spend that round trip on a seller who can't take an in-person charge.
+        access_token = seller.get_valid_access_token()
+        location_id = seller.get_location_id() if access_token else None
+        if access_token and location_id:
+            result["access_token"] = access_token
+            result["location_id"] = location_id
+            # Deliberately the application log, not auction history the way ``create`` records it.
+            # The app calls this on every foreground, so a history row per call would bury the
+            # entries that actually mean something (a token pulled against a specific invoice) under
+            # thousands of routine warm-ups. This still leaves a trace of every issuance.
+            logger.info(
+                "Square Tap to Pay warm-up credentials issued to user %s for seller %s",
+                user.pk,
+                seller.pk,
+            )
+        return result
+
+    @staticmethod
+    def _seller_display_name(auction, seller) -> str:
+        """What the app shows as the merchant taking the payment.
+
+        The club or auction name, not the Square account's owner email — this is the name a buyer
+        would recognise on a receipt, and it avoids putting an admin's personal address on screen.
+        """
+        club = getattr(seller, "club", None) or (auction.club if auction else None)
+        if club:
+            return club.name
+        if auction:
+            return auction.title
+        return str(seller)
+
+    @staticmethod
+    def _user_can_take_payments(user) -> bool:
+        """True when this user administers any auction or club that could take a payment.
+
+        Mirrors ``_check_admin_access`` (which needs an invoice) at the level the warm-up endpoint
+        works at. Deliberately strict: this gate is what stands between a signed-in buyer and a
+        seller's OAuth token.
+        """
+        from auctions.models import Auction, ClubMember
+
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if Auction.objects.filter(is_deleted=False, created_by=user).exists():
+            return True
+        if Auction.objects.filter(is_deleted=False, auctiontos__user=user, auctiontos__is_admin=True).exists():
+            return True
+        return (
+            ClubMember.objects.filter(user=user, is_deleted=False)
+            .filter(
+                Q(permission_admin=True) | Q(permission_money=True) | Q(permission_manage_auctions=True),
+            )
+            .exists()
+        )
+
     @staticmethod
     def create_mobile_payment(invoice_pk: int, user, request=None) -> dict:
         """Validate an invoice and return payment context for the mobile SDK.
@@ -252,7 +385,8 @@ class PaymentService:
         nothing is trusted until verified against Square. ``idempotency_key`` is
         accepted for contract compatibility but no longer used to charge.
 
-        Returns a dict with ``payment_id``, ``status``, and ``receipt_number`` from Square.
+        Returns a dict with ``payment_id``, ``status``, ``receipt_number`` and ``receipt_url``
+        from Square.
 
         Raises
         ------
@@ -332,6 +466,10 @@ class PaymentService:
         sq_payment = result.payment
         fetched_payment_id = getattr(sq_payment, "id", "") or ""
         receipt_number = (getattr(sq_payment, "receipt_number", "") or "")[:10]
+        # Square's own hosted receipt page. Requirement 5.10 says a confidential digital receipt
+        # must be sendable for every outcome, approved or declined; the app shares this through the
+        # OS share sheet, and with the URL that share is a real receipt instead of a bare number.
+        receipt_url = getattr(sq_payment, "receipt_url", "") or ""
         payment_status = getattr(sq_payment, "status", None)
 
         # SECURITY BOUNDARY: the card was charged on-device, so the client merely reports a
@@ -432,4 +570,6 @@ class PaymentService:
             "payment_id": payment_id,
             "status": payment_status,
             "receipt_number": receipt_number or None,
+            # Additive: the app treats a missing/null link as "no receipt to share".
+            "receipt_url": receipt_url or None,
         }

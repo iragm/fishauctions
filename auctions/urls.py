@@ -1,3 +1,4 @@
+from allauth.socialaccount import views as socialaccount_views
 from django.contrib.auth.decorators import login_required
 from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
@@ -6,6 +7,12 @@ from django_ses.views import SESEventWebhookView
 from . import passkit_views, views
 
 urlpatterns = [
+    # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
+    # /social/... (AllauthWebScreen), so the mobile social-login continuation is sent here instead.
+    # Same views, second path — the /3rdparty/ URLs keep working for the web, and the names stay
+    # allauth's so reverse() anywhere else is unaffected.
+    path("social/signup/", socialaccount_views.signup, name="mobile_socialaccount_signup"),
+    path("social/connections/", socialaccount_views.connections, name="mobile_socialaccount_connections"),
     # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
     # by Apple's spec — devices build them from the webServiceURL in pass.json — and
     # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
