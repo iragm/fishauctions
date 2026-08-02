@@ -364,8 +364,11 @@ class AppleNotificationForgeryTests(AppleNotificationTestCase):
 
     def test_the_jwks_is_only_ever_fetched_from_apple(self):
         """Nothing in a request can point key lookup at another host."""
+        signed = self.signed_notification()
+        # process_notification rather than self.post: post() patches requests.get itself, so an
+        # outer patch here would be shadowed and never see the call it is meant to inspect.
         with patch("requests.get", return_value=_FakeResponse(_jwks())) as fetch:
-            self.post(self.signed_notification())
+            process_notification(signed)
         self.assertEqual(fetch.call_args.args[0], "https://appleid.apple.com/auth/keys")
 
 
