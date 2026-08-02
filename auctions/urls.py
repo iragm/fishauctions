@@ -4,7 +4,7 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import passkit_views, views
+from . import apple_notifications, passkit_views, views
 
 urlpatterns = [
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
@@ -13,6 +13,15 @@ urlpatterns = [
     # allauth's so reverse() anywhere else is unaffected.
     path("social/signup/", socialaccount_views.signup, name="mobile_socialaccount_signup"),
     path("social/connections/", socialaccount_views.connections, name="mobile_socialaccount_connections"),
+    # Sign in with Apple server-to-server notifications (see auctions/apple_notifications.py).
+    # allauth has no view for these. The path is whatever was registered in Apple's developer
+    # portal and matches with or without the trailing slash, because APPEND_SLASH can't rescue a
+    # POST — the redirect drops the body, and Apple would only see it as a failed delivery.
+    re_path(
+        r"^apple/notifications/?$",
+        apple_notifications.AppleServerNotificationView.as_view(),
+        name="apple_server_notifications",
+    ),
     # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
     # by Apple's spec — devices build them from the webServiceURL in pass.json — and
     # deliberately have no trailing slash (iOS sends none; POSTs can't follow the

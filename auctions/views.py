@@ -13894,16 +13894,18 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
 
     @staticmethod
     def _apple_sign_in_items(base_url, site_host):
-        """Sign in with Apple: the app half, the web half, and the two things Apple requires of both.
+        """Sign in with Apple: the app half, the web half, and the things Apple requires of both.
 
-        Split into three because they fail independently and a deployment can legitimately stop
-        after the first. The bundle id alone is a complete, working native sign-in — verifying an
-        Apple identity token only needs Apple's public keys.
+        Split up because these fail independently and a deployment can legitimately stop after the
+        first. The bundle id alone is a complete, working native sign-in — verifying an Apple
+        identity token only needs Apple's public keys.
         """
+        from auctions.apple_notifications import notifications_configured
         from auctions.apple_signin import revocation_configured
 
         section = "Sign in with Apple"
         callback = reverse("apple_callback")
+        notification_url = f"{base_url}{reverse('apple_server_notifications')}"
         return [
             {
                 "section": section,
@@ -14003,6 +14005,47 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {
                         "label": "Apple — Configure email communication",
                         "url": "https://developer.apple.com/account/resources/services/configure",
+                    }
+                ],
+            },
+            {
+                "section": section,
+                "name": "Server-to-server notifications",
+                # Green once the endpoint can actually verify a notification, which needs an
+                # identifier to check the audience against. Whether Apple has been *told* the URL
+                # can't be seen from here — that half is the setup steps below.
+                "configured": notifications_configured(),
+                "what_it_does": (
+                    "Apple tells this site when someone disconnects the app, deletes their Apple ID, or turns "
+                    "<em>Hide My Email</em> forwarding off. <strong>Apple sends each of these exactly once and keeps no "
+                    "history</strong>, so until the URL is registered they are not delayed &mdash; they are lost. "
+                    "Without it: people who revoked the app stay signed in, an account whose Apple ID was deleted "
+                    "becomes an unreachable ghost nobody can sign into, and mail keeps being sent to a relay address "
+                    "that has been throwing it away. It is also how Apple expects a site to keep sessions valid "
+                    "without re-checking every account against Apple on a timer."
+                ),
+                "where_to_get_it": (
+                    "Nothing to add to <code>.env</code> &mdash; the endpoint is built in and uses the identifiers "
+                    "above. It just has to be registered with Apple, in the same place the web return URL is set."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; Identifiers</strong> and click your "
+                    "App ID (or the Services ID, if that is where you configured Sign in with Apple).",
+                    "Next to <strong>Sign in with Apple</strong> click <strong>Edit</strong> / "
+                    "<strong>Configure</strong>.",
+                    f"Put <code>{notification_url}</code> in <strong>Server to Server Notification Endpoint</strong> "
+                    "and save. Apple requires https and will not accept a localhost address, so this can only be set "
+                    "on a live site.",
+                    "Check it: opening that URL in a browser answers <code>ok</code>. Apple itself only ever POSTs to "
+                    "it, and a real notification is recorded in the log as <code>apple_notifications</code>.",
+                ],
+                "links": [
+                    {
+                        "label": "Apple — Processing changes for Sign in with Apple accounts",
+                        "url": (
+                            "https://developer.apple.com/documentation/signinwithapple/"
+                            "processing-changes-for-sign-in-with-apple-accounts"
+                        ),
                     }
                 ],
             },
