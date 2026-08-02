@@ -2617,6 +2617,10 @@ class ClubAPIKey(models.Model):
     can_read_club_member_list = models.BooleanField(default=False)
     can_update_club_members = models.BooleanField(default=False)
     can_add_bap_points = models.BooleanField(default=False)
+    can_renew_memberships = models.BooleanField(
+        default=False,
+        help_text="Renew a membership from an external system, creating the member if they're new.",
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -6118,6 +6122,14 @@ class AuctionTOS(models.Model):
                         self_val = getattr(self_club_member, field, None)
                         dup_val = getattr(dup_club_member, field, None)
                         if (self_val is None or self_val == "") and dup_val:
+                            setattr(self_club_member, field, dup_val)
+                    # Membership dates: keep whichever row is paid through the later date.  The
+                    # duplicate is often the row that was renewed, and a merge must never shorten
+                    # (or silently end) someone's membership.
+                    for field in ("membership_last_paid", "membership_expiration_date"):
+                        self_val = getattr(self_club_member, field, None)
+                        dup_val = getattr(dup_club_member, field, None)
+                        if dup_val and (self_val is None or dup_val > self_val):
                             setattr(self_club_member, field, dup_val)
                     self_club_member.save()
                     ClubHistory.objects.create(

@@ -97,6 +97,7 @@
           <div class="mb-3">
             <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
           </div>
+          {% include "auctions/partials/email_preview_wallet_buttons.html" %}
           {% endif %}
 
           <div id="outgoing-email-preview-welcome-next-event" class="mb-3"></div>
@@ -155,6 +156,7 @@
           <div class="mb-3">
             <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
           </div>
+          {% include "auctions/partials/email_preview_wallet_buttons.html" %}
           {% endif %}
 
           <div id="outgoing-email-preview-renewal-next-event" class="mb-3"></div>
@@ -215,6 +217,7 @@
           <div class="mb-3">
             <img src="{{ preview_barcode_url }}" alt="Membership barcode" style="max-width:320px;width:100%;height:auto;">
           </div>
+          {% include "auctions/partials/email_preview_wallet_buttons.html" %}
           {% endif %}
 
           <div id="outgoing-email-preview-expiring-next-event" class="mb-3"></div>

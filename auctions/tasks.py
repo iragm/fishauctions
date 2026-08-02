@@ -53,6 +53,50 @@ def _greeting_name(member):
     return name or "Member"
 
 
+# Inline style for the wallet buttons in membership emails.  Email clients strip <style> blocks
+# and know nothing about Bootstrap, so this hand-rolls what btn-dark looks like on the web
+# membership card (see partials/club_member_uuid_card.html).
+_WALLET_BUTTON_STYLE = (
+    "display:inline-block;padding:10px 16px;margin:0 8px 8px 0;background:#303030;color:#ffffff;"
+    "text-decoration:none;border-radius:6px;font-family:sans-serif;font-size:14px;"
+)
+
+
+def wallet_links(member, current_site=None):
+    """Return (google_url, apple_url) for adding this member's card to a phone wallet.
+
+    Either is "" when that wallet isn't configured on this site, or when the club has member
+    barcodes turned off (there is no card to add).  Both links are UUID-keyed capability URLs,
+    so they work from an email without the recipient being logged in.
+    """
+    if not member.club.show_member_barcode:
+        return "", ""
+    from django.urls import reverse
+
+    from auctions import apple_wallet
+    from auctions.templatetags.membership_tags import google_wallet_save_url
+
+    current_site = current_site or Site.objects.get_current()
+    google_url = google_wallet_save_url(member) or ""
+    apple_url = ""
+    if apple_wallet.is_configured():
+        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.slug, "uuid": member.uuid})
+        apple_url = f"https://{current_site.domain}{path}"
+    return google_url, apple_url
+
+
+def _wallet_buttons_html(google_url, apple_url):
+    """The "Add to Google/Apple Wallet" buttons that sit under the barcode in membership emails."""
+    buttons = []
+    if google_url:
+        buttons.append(f"<a href='{escape(google_url)}' style='{_WALLET_BUTTON_STYLE}'>Add to Google Wallet</a>")
+    if apple_url:
+        buttons.append(f"<a href='{escape(apple_url)}' style='{_WALLET_BUTTON_STYLE}'>Add to Apple Wallet</a>")
+    if not buttons:
+        return ""
+    return f"<div>{''.join(buttons)}</div>"
+
+
 def next_event_fragment(club, current_site, *, include_event=True, as_links=True):
     """Return (text, html) for the "our next event" line, or ('', '').
 
@@ -161,6 +205,7 @@ def _render_membership_email_html(
     next_event_html,
     opening_text="",
     closing_text="",
+    wallet_buttons_html="",
 ):
     html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
     if opening_text:
@@ -174,8 +219,11 @@ def _render_membership_email_html(
     if barcode_url:
         html_parts.append(
             f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
-            "style='max-width:320px;width:100%;height:auto;'></div><br>"
+            "style='max-width:320px;width:100%;height:auto;'></div>"
         )
+        if wallet_buttons_html:
+            html_parts.append(wallet_buttons_html)
+        html_parts.append("<br>")
     if next_event_html:
         html_parts.append(f"{next_event_html}<br><br>")
     if closing_text:
@@ -192,13 +240,20 @@ def _render_membership_email_html(
     return "".join(html_parts)
 
 
-def send_club_member_email(member, subject, message_text, email_type="welcome"):
+def send_club_member_email(member, subject, message_text, email_type="welcome", force_email=False):
+    """Send one of the club's membership emails.
+
+    ``force_email`` skips the push-notification path in notify_user; use it when an admin has
+    explicitly asked for an email to go out (the resend-membership-card action), where silently
+    turning it into a push would not be what they confirmed.
+    """
     if not member.email or member.contact_status == "do_not_contact":
         return False
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
     intro_text = ""
     barcode_url = member.barcode_image_link_png if member.club.show_member_barcode else ""
+    google_wallet_url, apple_wallet_url = wallet_links(member, current_site=current_site)
 
     opening_text = ""
     closing_text = ""
@@ -228,6 +283,10 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     text_parts.extend([message_text, "", f"View your membership here: {membership_link}"])
     if barcode_url:
         text_parts.extend(["", f"Membership barcode: {barcode_url}"])
+        if google_wallet_url:
+            text_parts.append(f"Add to Google Wallet: {google_wallet_url}")
+        if apple_wallet_url:
+            text_parts.append(f"Add to Apple Wallet: {apple_wallet_url}")
     if next_text:
         text_parts.extend(["", next_text])
     if closing_text:
@@ -246,6 +305,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
         next_event_html=next_html,
         opening_text=opening_text,
         closing_text=closing_text,
+        wallet_buttons_html=_wallet_buttons_html(google_wallet_url, apple_wallet_url),
     )
 
     def _send_membership_email():
@@ -257,6 +317,10 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
             html_message=html_message,
             headers={"Reply-to": _membership_email_reply_to(member.club)},
         )
+
+    if force_email:
+        _send_membership_email()
+        return True
 
     # A member may or may not be a linked site user; notify_user pushes only when that user opted in
     # (and has a live device), otherwise it emails — so guest members always get the email.
@@ -271,6 +335,31 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
         send_email=_send_membership_email,
     )
     return True
+
+
+def send_membership_card_email(member):
+    """Email a member a link to their membership card (admin-triggered resend).
+
+    Returns True when the email was queued, False when the member can't be emailed.
+    """
+    expiration_text = ""
+    expiration = member.effective_expiration_date
+    if expiration and member.club.membership_annual_fee:
+        if member.is_paid_member:
+            expiration_text = f"  Your membership is paid through {expiration.strftime('%B %-d, %Y')}."
+        else:
+            expiration_text = f"  Your membership expired on {expiration.strftime('%B %-d, %Y')}."
+    message_text = (
+        f"Here's the link to your {member.club.name} membership card."
+        f"{expiration_text}  Scan it at club events, or add it to your phone's wallet."
+    )
+    return send_club_member_email(
+        member,
+        subject=f"Your {member.club.name} membership card",
+        message_text=message_text,
+        email_type="membership_card",
+        force_email=True,
+    )
 
 
 def maybe_send_membership_renewal_confirmation(member):

@@ -40,6 +40,7 @@
     <tr><th>Read club member list</th><td>{% if api_key.can_read_club_member_list %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>Update club members</th><td>{% if api_key.can_update_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>Add BAP points</th><td>{% if api_key.can_add_bap_points %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Renew memberships</th><td>{% if api_key.can_renew_memberships %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
   </tbody>
 </table>
 
@@ -75,6 +76,40 @@
   <div class="mb-2">
     <strong>Add BAP points:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/bap-awards/</code><br>
     <span class="ms-3 text-muted">Example body: <code>{"points":5,"notes":"Bred angelfish","email":"mike@example.com"}</code></span>
+  </div>
+  {% endif %}
+  {% if api_key.can_renew_memberships %}
+  <div class="mb-2">
+    <strong>Renew a membership:</strong> <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/renew/</code><br>
+    <span class="ms-3 text-muted">
+      Send the member's details. They're matched by <code>email</code> (required) and added to the club if
+      they're new, then their membership is renewed the same way the <strong>Renew</strong> button on the
+      member list does: {% if club.membership_system == "january_first" %}the expiration moves to the next
+      January 1st{% else %}the expiration moves a year forward, from the current expiration if it hasn't
+      passed yet{% endif %}, the club history and treasurer's report record the renewal, and the member
+      gets the renewal confirmation email{% if not club.send_membership_renewal_confirmation %} (currently
+      turned off in this club's email settings){% endif %}. Any other field this key may write can ride
+      along and is applied before the renewal; blank values are ignored instead of clearing what's on file.
+    </span>
+  </div>
+  <div class="ms-3 mb-2">
+    <div class="mb-1">Example:</div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl -X POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/renew/ \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mike@example.com","first_name":"Mike","last_name":"Smith","phone_number":"555-0143"}'</code></pre>
+    <div class="mb-1">Response &mdash; <code>200</code> for an existing member, <code>201</code> when one was created:</div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "created": false,
+  "id": {{ example_member_id|default:"123" }},
+  "name": "Mike Smith",
+  "email": "mike@example.com",
+  "membership_number": 1234567890,
+  "membership_last_paid": "{{ example_last_paid|date:"Y-m-d" }}",
+  "membership_expiration_date": "{{ example_new_expiration|date:"Y-m-d" }}",
+  "wallet_link": "https://{{ site_domain }}/clubs/{{ club.slug }}/member/&lt;uuid&gt;/",
+  ...
+}</code></pre>
   </div>
   {% endif %}
 </div>

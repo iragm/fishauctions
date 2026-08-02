@@ -64,6 +64,7 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "bap_points",
             "hap_points",
             "membership_last_paid",
+            "membership_expiration_date",
             "membership_expiration_reminder_due",
             "createdon",
             "source",
@@ -74,7 +75,16 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "simple_membership_link",
             "distance_to",
         ]
-        read_only_fields = ["id", "createdon", "club", "is_deleted", "membership_number"]
+        # membership_expiration_date is reported but not writable here: it is set by renewals
+        # (the renew endpoint / Renew button) so the ledger and club history always agree with it.
+        read_only_fields = [
+            "id",
+            "createdon",
+            "club",
+            "is_deleted",
+            "membership_number",
+            "membership_expiration_date",
+        ]
 
 
 class ClubMemberIngestSerializer(serializers.Serializer):

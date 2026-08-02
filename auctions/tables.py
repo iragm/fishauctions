@@ -587,6 +587,17 @@ class ClubMemberHTMxTable(tables.Table):
                 renew_url,
             )
 
+        # Members whose dues were recorded as a last-paid date only (CSV imports, older
+        # rosters) still have a real expiration -- the one is_paid_member and the member-list
+        # filters use.  Show that derived date, marked as derived, instead of calling them
+        # expired and disagreeing with every other membership surface.
+        derived = False
+        if not value:
+            effective = record.effective_expiration_date
+            if effective:
+                value = effective
+                derived = True
+
         if not value:
             if has_fee and not record.is_deleted:
                 badge = format_html(" <span class='badge bg-danger ms-1'>Expired</span>")
@@ -594,6 +605,13 @@ class ClubMemberHTMxTable(tables.Table):
             return format_html("—")
 
         formatted = value.strftime("%b %-d, %Y")
+        if derived:
+            formatted = format_html(
+                "<span title='No expiration date is set for this member, so this is one membership "
+                "period after {}'>{}*</span>",
+                record.membership_last_paid.strftime("%b %-d, %Y"),
+                formatted,
+            )
         days_expired = (today - value).days
         if days_expired > 0:
             return format_html(
@@ -676,15 +694,21 @@ class ClubMemberHTMxTable(tables.Table):
                         record.email,
                         icon_class,
                     )
-                # Member-number action is hidden entirely when the club has the feature disabled.
+                # Member-number and membership-card actions are hidden entirely when the club has
+                # the barcode feature disabled — there is no card to show or send.
                 membership_number_item = format_html("")
                 if record.club.show_member_barcode:
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
+                    resend_card_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "resend_card"})
                     membership_number_item = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'
                         ' hx-get="{}" hx-target="#modals-here">'
-                        '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>',
+                        '<i class="bi bi-credit-card-2-front me-1"></i>Membership number</a></li>'
+                        '<li><a class="dropdown-item" href="javascript:void(0)"'
+                        ' hx-get="{}" hx-target="#modals-here">'
+                        '<i class="bi bi-send me-1"></i>Resend membership card</a></li>',
                         membership_number_url,
+                        resend_card_url,
                     )
                 # Renew and set-expiry are only meaningful when the club charges a membership fee.
                 renewal_items = format_html("")

@@ -471,7 +471,16 @@ def _upsert_clubmember_shadow_tos(
     return tos
 
 
-def close_modal_response(action=None, *, event_name=None, redirect_url=None, table_selector=None, extra_triggers=None):
+def close_modal_response(
+    action=None,
+    *,
+    event_name=None,
+    redirect_url=None,
+    table_selector=None,
+    extra_triggers=None,
+    toast=None,
+    toast_type="success",
+):
     """Ask the active HtmxModal to close (with optional action) after a successful POST.
 
     The response body is a tiny ``<script>`` that calls ``window.closeModal`` — HTMX evaluates
@@ -480,6 +489,9 @@ def close_modal_response(action=None, *, event_name=None, redirect_url=None, tab
 
     Pass ``extra_triggers={"event_name": detail, ...}`` to fire additional HTMX triggers (e.g.
     a separate table-refresh event) in the same response via the ``HX-Trigger`` header.
+
+    Pass ``toast="Something happened"`` to also raise a toast as the modal closes — the modal is
+    gone by the time the user looks, so anything they need to read afterwards goes here.
     """
     detail = {"action": action} if action else {}
     if event_name is not None:
@@ -488,7 +500,11 @@ def close_modal_response(action=None, *, event_name=None, redirect_url=None, tab
         detail["redirectUrl"] = redirect_url
     if table_selector is not None:
         detail["tableSelector"] = table_selector
-    body = f"<script>window.closeModal({json.dumps(detail)});</script>"
+    body = ""
+    if toast:
+        toast_options = json.dumps({"title": toast, "type": toast_type, "delay": 8000})
+        body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
+    body += f"<script>window.closeModal({json.dumps(detail)});</script>"
     headers = {}
     if extra_triggers:
         headers["HX-Trigger"] = json.dumps(extra_triggers)
@@ -19295,6 +19311,51 @@ class ClubMemberCreateView(APIView):
         return render(request, "auctions/generic_admin_form.html", context)
 
 
+def renew_club_member(member, *, acting_user=None, actor="", money_description=""):
+    """Extend a membership by one period and record it, returning the member.
+
+    Shared by the Renew button on the member list and the API-key renew endpoint so the two
+    can't drift: same expiration math, same club history, same ledger entry, same confirmation
+    email.  ``actor`` names a non-user actor (an API key) for the history line.
+    """
+    today = timezone.now().date()
+    member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
+    member.membership_last_paid = today
+    member.save(
+        update_fields=[
+            "membership_last_paid",
+            "membership_expiration_date",
+            "membership_expiration_reminder_30_days_due",
+            "membership_expiration_reminder_due",
+        ]
+    )
+    member.update_last_club_activity()
+    new_exp_str = (
+        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+    )
+    via = f" via {actor}" if actor else ""
+    ClubHistory.objects.create(
+        club=member.club,
+        user=acting_user,
+        action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
+        applies_to="MEMBERSHIP",
+    )
+    if member.club.membership_annual_fee:
+        ClubMoney.objects.create(
+            club=member.club,
+            created_by=acting_user,
+            date=today,
+            amount=member.club.membership_annual_fee,
+            description=money_description or f"Membership renewal for {member}{via}",
+            category=ClubMoney.CATEGORY_MEMBERSHIP,
+        )
+    try:
+        maybe_send_membership_renewal_confirmation(member)
+    except Exception:
+        logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
+    return member
+
+
 class ClubMemberRenewView(APIView):
     """Renew a club member's membership, extending the current expiration by one year."""
 
@@ -19326,40 +19387,7 @@ class ClubMemberRenewView(APIView):
 
     def post(self, request, pk):
         member = self._get_member(pk, request)
-        today = timezone.now().date()
-        member.membership_expiration_date = self._new_expiration(member, today)
-        member.membership_last_paid = today
-        member.save(
-            update_fields=[
-                "membership_last_paid",
-                "membership_expiration_date",
-                "membership_expiration_reminder_30_days_due",
-                "membership_expiration_reminder_due",
-            ]
-        )
-        member.update_last_club_activity()
-        new_exp_str = (
-            member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
-        )
-        ClubHistory.objects.create(
-            club=member.club,
-            user=request.user,
-            action=f"Renewed membership for {member}; new expiration {new_exp_str}",
-            applies_to="MEMBERSHIP",
-        )
-        if member.club.membership_annual_fee:
-            ClubMoney.objects.create(
-                club=member.club,
-                created_by=request.user,
-                date=today,
-                amount=member.club.membership_annual_fee,
-                description=f"Manual membership renewal for {member}",
-                category=ClubMoney.CATEGORY_MEMBERSHIP,
-            )
-        try:
-            maybe_send_membership_renewal_confirmation(member)
-        except Exception:
-            logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
+        renew_club_member(member, acting_user=request.user, money_description=f"Manual membership renewal for {member}")
         return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
 
@@ -19398,6 +19426,57 @@ class ClubMembershipNumberView(APIView):
             applies_to="MEMBERS",
         )
         return render(request, "auctions/club_membership_number.html", {"member": member})
+
+
+class ClubMemberResendCardView(APIView):
+    """Email a member a fresh link to their membership card."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_member(self, pk, request):
+        try:
+            member = ClubMember.objects.get(pk=pk, is_deleted=False)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if not member.club.show_member_barcode:
+            # No membership cards for this club — admin endpoint should not be reachable.
+            raise Http404
+        return member
+
+    def post(self, request, pk):
+        from auctions.tasks import send_membership_card_email
+
+        member = self._get_member(pk, request)
+        # Rather than hiding the action for members we can't email, say why on click.
+        if not member.email:
+            return close_modal_response(
+                toast=f"{member.display_name} has no email address on file.", toast_type="danger"
+            )
+        if member.contact_status == "do_not_contact":
+            return close_modal_response(
+                toast=f"{member.display_name} is marked do-not-contact, so no email was sent.",
+                toast_type="danger",
+            )
+        try:
+            sent = send_membership_card_email(member)
+        except Exception:
+            logger.exception("Failed to send membership card email to club member %s", member.pk)
+            sent = False
+        if not sent:
+            return close_modal_response(
+                toast=f"Couldn't email {member.display_name} — check the site's email settings.",
+                toast_type="danger",
+            )
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Emailed membership card to {member} ({member.email})",
+            applies_to="MEMBERS",
+        )
+        return close_modal_response(toast=f"Membership card emailed to {member.email}.")
 
 
 class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
@@ -19905,6 +19984,20 @@ class ClubMemberConfirmView(APIView):
                 "body": "This cannot be undone.",
                 "action_url": action_url,
                 "confirm_button_label": "Delete",
+            }
+        elif action == "resend_card":
+            if member.is_deleted or not member.club.show_member_barcode:
+                raise Http404
+            context = {
+                "title": "Resend membership card",
+                "body": format_html(
+                    "Email {} ({}) a link to their membership card",
+                    member.display_name,
+                    member.email or "no email address on file",
+                ),
+                "action_url": reverse("club_member_resend_card", kwargs={"pk": pk}),
+                "confirm_button_label": "Send email",
+                "confirm_button_class": "btn-primary",
             }
         else:
             raise Http404
@@ -20505,6 +20598,12 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
         context["membership_numbers_enabled"] = self.club.show_member_barcode
+        # Wallet buttons ride along under the barcode in the real emails, but only for the
+        # wallets this site is actually set up for.
+        from auctions import apple_wallet, google_wallet
+
+        context["google_wallet_enabled"] = google_wallet.is_configured()
+        context["apple_wallet_enabled"] = apple_wallet.is_configured()
 
         # Build the next-event HTML fragment exactly once on the server so the JS preview just
         # toggles visibility (no client-side templating). Uses the same builder as the real
@@ -21140,6 +21239,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                     "can_read_club_member_list": False,
                     "can_update_club_members": False,
                     "can_add_bap_points": False,
+                    "can_renew_memberships": False,
                 },
             },
         )
@@ -21157,6 +21257,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             "can_read_club_member_list": checkbox_value("can_read_club_member_list"),
             "can_update_club_members": checkbox_value("can_update_club_members"),
             "can_add_bap_points": checkbox_value("can_add_bap_points"),
+            "can_renew_memberships": checkbox_value("can_renew_memberships"),
         }
         if not name:
             return render(
@@ -21175,6 +21276,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             can_read_club_member_list=form_values["can_read_club_member_list"],
             can_update_club_members=form_values["can_update_club_members"],
             can_add_bap_points=form_values["can_add_bap_points"],
+            can_renew_memberships=form_values["can_renew_memberships"],
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -21210,6 +21312,12 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["site_domain"] = Site.objects.get_current().domain
         ctx["example_member_id"] = (
             self.club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
+        )
+        # Dates in the renew example, so it shows what this club's renewal actually returns.
+        today = timezone.now().date()
+        ctx["example_last_paid"] = today
+        ctx["example_new_expiration"] = _compute_member_renewal_expiration(
+            self.club, ClubMember(club=self.club, membership_expiration_date=None), today
         )
         return ctx
 
@@ -21405,14 +21513,10 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return dt.date().strftime("%b %-d, %Y")
 
     def _paid_member_filter(self):
-        today = timezone.now().date()
-        if self.club.membership_system == "january_first":
-            paid_cutoff = date_type(today.year, 1, 1)
-        else:
-            paid_cutoff = today - timedelta(days=365)
-        return Q(membership_expiration_date__gte=today) | (
-            Q(membership_expiration_date__isnull=True) & Q(membership_last_paid__gte=paid_cutoff)
-        )
+        """One definition of "paid member" for the whole site — see filters.membership_paid_q."""
+        from .filters import membership_paid_q
+
+        return membership_paid_q(timezone.now().date())
 
     def _get_cached_club_stats(self, auction):
         cached_stats = auction.cached_stats or {}
@@ -22301,6 +22405,84 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             user=self.request.user,
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
+        )
+
+
+class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
+    """Renew a membership from an external system (a club's own website, a payment form, ...).
+
+    POST the member's info; the member is looked up by email within the club and created if they
+    are new, then their membership is renewed exactly as the Renew button on the member list does
+    (same expiration math, club history, ledger entry, and confirmation email).  Responds with the
+    full member record, including the new ``membership_expiration_date``.
+
+    Any club member field the key is allowed to write may be sent along and is applied before the
+    renewal, so a renewal doubles as a details refresh.  Blank values are ignored rather than
+    wiping details already on file.
+    """
+
+    def _actor(self):
+        if self.is_api_key_request():
+            return f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
+        return "API"
+
+    def post(self, request, slug):
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_renew_memberships",
+            "You do not have permission to renew memberships for this club.",
+        )
+        data = self.get_mapped_request_data()
+        email = (data.get("email") or "").strip().lower()
+        if not email:
+            return Response({"email": ["An email address is required to look up or create the member."]}, status=400)
+        # Blanks would otherwise overwrite details already on file (the CSV import's merge rule).
+        data = {key: value for key, value in data.items() if value not in ("", None)}
+        member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).order_by("pk").first()
+        created = member is None
+        serializer = ClubMemberAPIKeySerializer(instance=member, data=data, partial=not created)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            # Same diagnostics as member create: an admin can see the rejected payload later.
+            try:
+                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                ClubHistory.objects.create(
+                    club=club,
+                    user=None,
+                    action=(
+                        f"Failed to renew membership via {self._actor()} — validation errors: "
+                        f"{serializer.errors} — POST data: {field_dump}"
+                    ),
+                    applies_to="MEMBERSHIP",
+                )
+            except Exception:
+                pass  # Never let the history write mask the original error
+            raise
+        save_kwargs = {}
+        if created:
+            save_kwargs = {"club": club}
+            if self.is_api_key_request():
+                save_kwargs["added_by"] = None
+                save_kwargs["source"] = self.request.api_key.name
+            else:
+                save_kwargs["added_by"] = request.user
+        member = serializer.save(**save_kwargs)
+        if created:
+            ClubHistory.objects.create(
+                club=club,
+                user=None if self.is_api_key_request() else request.user,
+                action=f"Added member {member} via {self._actor()} (membership renewal)",
+                applies_to="MEMBERS",
+            )
+        member = renew_club_member(
+            member,
+            acting_user=None if self.is_api_key_request() else request.user,
+            actor=self._actor(),
+        )
+        return Response(
+            {"created": created, **ClubMemberSerializer(member).data},
+            status=201 if created else 200,
         )
 
 

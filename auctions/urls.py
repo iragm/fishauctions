@@ -888,6 +888,11 @@ urlpatterns = [
         name="club_member_membership_number",
     ),
     path(
+        "api/clubmember/<int:pk>/resend-card/",
+        views.ClubMemberResendCardView.as_view(),
+        name="club_member_resend_card",
+    ),
+    path(
         "api/clubmember/<int:pk>/apple-wallet.pkpass",
         views.ClubMemberAppleWalletPassView.as_view(),
         name="club_member_apple_wallet",
@@ -950,6 +955,11 @@ urlpatterns = [
         name="club_member_renew_page",
     ),
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
+    path(
+        "api/v1/clubs/<slug:slug>/members/renew/",
+        views.ClubMemberRenewAPIView.as_view(),
+        name="api_club_member_renew",
+    ),
     path(
         "api/v1/clubs/<slug:slug>/members/<int:pk>/",
         views.ClubMemberDetailAPIView.as_view(),

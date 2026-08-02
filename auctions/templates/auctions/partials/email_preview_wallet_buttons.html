@@ -1,0 +1,15 @@
+{% comment %}
+Non-clickable stand-ins for the "Add to ... Wallet" buttons that the real membership emails
+put under the barcode (see tasks._wallet_buttons_html).  Like the rest of this preview they
+carry no working links.  Each only appears when that wallet is configured for the site.
+{% endcomment %}
+{% if google_wallet_enabled or apple_wallet_enabled %}
+<div class="mb-3 d-flex flex-wrap gap-2">
+  {% if google_wallet_enabled %}
+  <span class="btn btn-sm btn-dark disabled" aria-disabled="true"><i class="bi bi-google"></i> Add to Google Wallet</span>
+  {% endif %}
+  {% if apple_wallet_enabled %}
+  <span class="btn btn-sm btn-dark disabled" aria-disabled="true"><i class="bi bi-apple"></i> Add to Apple Wallet</span>
+  {% endif %}
+</div>
+{% endif %}
