@@ -71,6 +71,13 @@ ruff.toml            # Linting/format config
 
 ## Frontend / Templates
 
+- **Template tags must open and close on one line.** Django's lexer has no `re.DOTALL`, so a
+  `{# … #}`, `{% … %}`, or `{{ … }}` split across two lines is not an error — Django doesn't
+  recognize it and renders it onto the page as text for users to read. Use
+  `{% comment %} … {% endcomment %}` for any note longer than one line. Enforced by
+  `auctions/template_lint.py` (a pre-commit hook, part of `--ci`/`--lint`, and
+  `auctions/test_template_hygiene.py`).
+
 - Read `style_reference.md` before making any frontend/template/CSS change. It
   documents the palette, text-on-color rules, outline-button and pagination
   fixes, the unavailable-action ("stay clickable") standard, and the message-type
