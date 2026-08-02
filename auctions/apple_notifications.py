@@ -122,8 +122,28 @@ def _fetch_jwks(force: bool = False) -> dict:
     return keys_data
 
 
+def _find_jwk(keys_data: dict, kid: str) -> dict | None:
+    """Apple's published key with this ``kid``, as the raw JWK."""
+    for jwk in keys_data.get("keys") or []:
+        if isinstance(jwk, dict) and jwk.get("kid") == kid:
+            return jwk
+    return None
+
+
 def _signing_key(signed_payload: str):
-    """(algorithm, public key) for ``signed_payload``, or raise :class:`AppleNotificationError`."""
+    """(algorithm, public key) for ``signed_payload``, or raise :class:`AppleNotificationError`.
+
+    **The algorithm comes from Apple's published key, never from the token's header.** The header is
+    written by whoever sent the request, and letting it pick the algorithm is how JWT verification
+    is classically broken: ``alg: HS256`` against a known ``kid`` asks the library to use a public
+    key — a public value — as an HMAC secret, and ``alg: none`` asks it to skip the check entirely.
+    Taking the algorithm from the JWK closes that off structurally rather than by keeping an
+    allowlist in sync. PyJWT then rejects any token whose header disagrees, which is the behaviour
+    we want: Apple signs with RS256, so a payload claiming anything else isn't Apple's.
+
+    The header is still read for the ``kid`` (that is what it is for) and given a cheap sanity check
+    first, so obvious junk is refused without a network round trip.
+    """
     import jwt
     from allauth.socialaccount.internal import jwtkit
 
@@ -132,23 +152,36 @@ def _signing_key(signed_payload: str):
     except jwt.PyJWTError as exc:
         msg = "Payload is not a JWT."
         raise AppleNotificationError(msg) from exc
-    algorithm = header.get("alg")
     kid = header.get("kid")
-    if algorithm not in ALLOWED_ALGORITHMS or not kid:
-        msg = f"Unacceptable JWT header (alg={algorithm!r}, kid={kid!r})."
+    if header.get("alg") not in ALLOWED_ALGORITHMS or not kid or not isinstance(kid, str):
+        msg = f"Unacceptable JWT header (alg={header.get('alg')!r}, kid={kid!r})."
         raise AppleNotificationError(msg)
 
+    jwk = None
     for force in (False, True):
-        keys_data = _fetch_jwks(force=force)
-        try:
-            key = jwtkit.lookup_kid_jwk(keys_data, kid) if keys_data.get("keys") else None
-        except Exception as exc:  # allauth raises OAuth2Error for a JWK it can't build
-            msg = f"Apple's key {kid} could not be used."
-            raise AppleNotificationError(msg) from exc
-        if key is not None:
-            return algorithm, key
-    msg = f"No Apple signing key matches kid {kid}."
-    raise AppleNotificationError(msg)
+        # An unknown kid means either a forgery or a key rotation, and only one re-fetch tells them
+        # apart. _fetch_jwks throttles the retry so the first case can't turn into a stampede.
+        jwk = _find_jwk(_fetch_jwks(force=force), kid)
+        if jwk is not None:
+            break
+    if jwk is None:
+        msg = f"No Apple signing key matches kid {kid}."
+        raise AppleNotificationError(msg)
+
+    # allauth's own default for a JWK that omits `alg`, and Apple's keys all carry RS256 anyway.
+    algorithm = jwk.get("alg", "RS256")
+    if algorithm not in ALLOWED_ALGORITHMS:
+        msg = f"Apple's key {kid} names an algorithm we don't accept ({algorithm!r})."
+        raise AppleNotificationError(msg)
+    try:
+        key = jwtkit.lookup_kid_jwk({"keys": [jwk]}, kid)
+    except Exception as exc:  # allauth raises OAuth2Error for a JWK it can't build
+        msg = f"Apple's key {kid} could not be used."
+        raise AppleNotificationError(msg) from exc
+    if key is None:
+        msg = f"Apple's key {kid} could not be used."
+        raise AppleNotificationError(msg)
+    return algorithm, key
 
 
 def verify_notification(signed_payload: str) -> dict:
@@ -157,6 +190,13 @@ def verify_notification(signed_payload: str) -> dict:
     Checks the signature against Apple's published keys, that Apple issued it, that it was meant for
     *this* app (``aud`` is one of ours) and that it hasn't expired. Deliberately does **not** consume
     the ``jti`` — see the module docstring.
+
+    Everything downstream reads the dict this returns, and nothing reads the request body, so a
+    payload that doesn't get past here cannot reach a single handler.
+
+    An empty ``APPLE_ALLOWED_AUDIENCES`` is safe rather than permissive: PyJWT treats "no audience
+    matched" as a failure, so a deployment with no Apple identifiers rejects everything. The view's
+    configuration check exists to give Apple a retryable 503 instead, not to keep this closed.
     """
     import jwt
 
@@ -181,8 +221,11 @@ def verify_notification(signed_payload: str) -> dict:
                 "require": ["iss", "aud", "iat"],
             },
         )
-    except jwt.PyJWTError as exc:
-        msg = f"Notification failed verification: {exc}"
+    # TypeError/ValueError as well as PyJWTError: PyJWT raises a bare TypeError when a key and an
+    # algorithm don't belong together, which an attacker could otherwise provoke on demand. It fails
+    # closed either way, but as an unhandled 500 it would be a way to mail the admins on request.
+    except (jwt.PyJWTError, TypeError, ValueError) as exc:
+        msg = f"Notification failed verification: {type(exc).__name__}: {exc}"
         raise AppleNotificationError(msg) from exc
 
 

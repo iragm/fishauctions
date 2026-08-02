@@ -256,6 +256,119 @@ class AppleNotificationVerificationTests(AppleNotificationTestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class AppleNotificationForgeryTests(AppleNotificationTestCase):
+    """Nothing reaches a handler without Apple's signature. Each of these tries to get past it.
+
+    ``account-delete`` is the event used throughout, because it is the one with teeth: if any of
+    these returned 200, an anonymous POST could unlink an account and start its deletion clock.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user, self.account = self.make_apple_user()
+
+    def assert_refused(self, signed_payload, *, status=400):
+        with patch("auctions.apple_notifications.handle_event") as handler:
+            response = self.post(signed_payload)
+        self.assertEqual(response.status_code, status)
+        # The real proof: no handler ran, whatever the status code says.
+        handler.assert_not_called()
+        self.assertTrue(SocialAccount.objects.filter(pk=self.account.pk).exists())
+        self.assertTrue(SocialToken.objects.filter(account=self.account).exists())
+
+    def forged(self, header, payload):
+        """A token assembled by hand, so the header can say things no signer would produce."""
+        import base64
+
+        def segment(data):
+            return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
+        return f"{segment(header)}.{segment(payload)}.AAAA"
+
+    @property
+    def delete_claims(self):
+        return {
+            "iss": APPLE_ISSUER,
+            "aud": BUNDLE_ID,
+            "iat": int(timezone.now().timestamp()),
+            "jti": "forged-1",
+            "events": json.dumps({"type": "account-delete", "sub": "apple-sub-1"}),
+        }
+
+    def test_alg_none_with_a_real_kid(self):
+        """The oldest JWT attack: ask the library to skip the signature check."""
+        self.assert_refused(self.forged({"alg": "none", "kid": KID}, self.delete_claims))
+
+    def test_alg_hs256_with_a_real_kid(self):
+        """Key confusion: Apple's public key used as an HMAC secret, which anyone can read."""
+        self.assert_refused(self.forged({"alg": "HS256", "kid": KID}, self.delete_claims))
+
+    def test_alg_swapped_to_another_asymmetric_algorithm(self):
+        """ES256 against Apple's RSA key. Raised a bare TypeError before the JWK became the source
+        of the algorithm — refused either way, but as a 500 it was a way to mail the admins."""
+        self.assert_refused(self.forged({"alg": "ES256", "kid": KID}, self.delete_claims))
+
+    def test_valid_signature_from_the_wrong_signer(self):
+        """A properly signed token — just not by a key Apple publishes."""
+        self.assert_refused(self.signed_notification(event_type="account-delete", key=IMPOSTOR_KEY))
+
+    def test_signature_stripped_off_a_genuine_notification(self):
+        genuine = self.signed_notification(event_type="account-delete")
+        header, payload, _ = genuine.split(".")
+        self.assert_refused(f"{header}.{payload}.")
+
+    def test_payload_tampered_after_signing(self):
+        """The classic: take a real notification and change whose account it is about."""
+        import base64
+
+        genuine = self.signed_notification(event_type="consent-revoked", sub="somebody-else")
+        header, _, signature = genuine.split(".")
+        swapped = base64.urlsafe_b64encode(
+            json.dumps(
+                {
+                    "iss": APPLE_ISSUER,
+                    "aud": BUNDLE_ID,
+                    "iat": int(timezone.now().timestamp()),
+                    "jti": "tampered",
+                    "events": json.dumps({"type": "account-delete", "sub": "apple-sub-1"}),
+                }
+            ).encode()
+        ).rstrip(b"=")
+        self.assert_refused(f"{header}.{swapped.decode()}.{signature}")
+
+    def test_no_kid_at_all(self):
+        self.assert_refused(self.forged({"alg": "RS256"}, self.delete_claims))
+
+    def test_kid_that_is_not_a_string(self):
+        self.assert_refused(self.forged({"alg": "RS256", "kid": {"$ne": None}}, self.delete_claims))
+
+    def test_not_a_jwt_at_all(self):
+        self.assert_refused("hello")
+
+    @override_settings(APPLE_ALLOWED_AUDIENCES=[])
+    def test_an_unconfigured_deployment_still_refuses_rather_than_accepts(self):
+        """The view answers 503 before verifying. This checks the layer under it fails closed too,
+        because process_notification is importable and PyJWT could have read [] as 'any audience'."""
+        with patch("requests.get", return_value=_FakeResponse(_jwks())):
+            with self.assertRaises(AppleNotificationError):
+                process_notification(self.signed_notification(event_type="account-delete"))
+        self.assertTrue(SocialAccount.objects.filter(pk=self.account.pk).exists())
+
+    def test_a_notification_for_a_different_apple_app_is_refused(self):
+        self.assert_refused(self.signed_notification(event_type="account-delete", audience="com.someone.else"))
+
+    def test_an_issuer_that_is_not_apple_is_refused(self):
+        self.assert_refused(
+            self.signed_notification(event_type="account-delete", issuer="https://appleid.apple.com.evil.test")
+        )
+
+    def test_the_jwks_is_only_ever_fetched_from_apple(self):
+        """Nothing in a request can point key lookup at another host."""
+        with patch("requests.get", return_value=_FakeResponse(_jwks())) as fetch:
+            self.post(self.signed_notification())
+        self.assertEqual(fetch.call_args.args[0], "https://appleid.apple.com/auth/keys")
+
+
 class AppleNotificationEventParsingTests(AppleNotificationTestCase):
     def test_events_claim_is_parsed_when_it_is_a_json_string(self):
         """Apple's `events` is a string containing JSON, not an object. The easy bug to ship."""
