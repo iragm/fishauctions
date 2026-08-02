@@ -31226,11 +31226,7 @@ class ClubMemberMembershipStatusFilterTests(TestCase):
         return set(ClubMemberFilter({"query": query}, queryset=qs).qs.values_list("name", flat=True))
 
     def test_paid_matches_is_paid_member(self):
-        expected = {
-            member.name
-            for member in ClubMember.objects.filter(club=self.club)
-            if member.is_paid_member
-        }
+        expected = {member.name for member in ClubMember.objects.filter(club=self.club) if member.is_paid_member}
         self.assertEqual(self._names("current"), expected)
         self.assertIn(self.paid_without_expiration.name, self._names("current"))
 
