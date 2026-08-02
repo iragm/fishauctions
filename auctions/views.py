@@ -110,7 +110,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from . import club_events, discord_events
+from . import club_events, discord_events, voice
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -230,6 +230,7 @@ from .models import (
     UserIgnoreCategory,
     UserInterestCategory,
     UserLabelPrefs,
+    VoiceGrammar,
     VolunteerJob,
     VolunteerSignup,
     Watch,
@@ -4584,6 +4585,19 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # into the queue elsewhere flows straight into selling them here.
         head_lot = queue_head_lot(self.auction)
         context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
+        # Voice input (mobile app only — the app listens, this page owns the form). The page needs
+        # the same score cutoffs the app is using, so that "green" here and "confident" there mean
+        # the same thing after someone tunes them in the admin. No configured grammar means the app
+        # is running on its bundled defaults, so use ours, which match.
+        grammar = VoiceGrammar.load()
+        thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
+        defaults = voice.default_thresholds()
+        context["voice_config"] = {
+            "enabled": grammar.enabled if grammar else True,
+            "confident": thresholds.get("confident", defaults["confident"]),
+            "unsure": thresholds.get("unsure", defaults["unsure"]),
+            "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
+        }
         return context
 
     def pop_queue_and_set_next(self, lot, result):
@@ -4910,6 +4924,45 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         else:
             result = {"message": "No lot found"}
         return JsonResponse(result)
+
+    def get(self, request, *args, **kwargs):
+        return self.http_method_not_allowed(request, *args, **kwargs)
+
+
+class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
+    """Record what the app's voice recognition heard on the set-winners page, and any correction.
+
+    The page writes this, not the app, because the page is the only side that sees both halves: the
+    app tells it what it heard and what it matched, and the page is where the operator then fixes a
+    wrong bidder number before saving. Posting the returned ``id`` back with ``corrected_to`` lands
+    the correction on the same row.
+
+    This is the whole reason voice can be tuned at all. The first version's fatal flaw wasn't the
+    speech engine — it was having no record of *what* it misheard, which left grammar changes as
+    guesswork. Every row with a ``corrected_to`` names a word to fix in the Voice grammar admin.
+
+    Admin-only via ``AuctionViewMixin`` (which raises PermissionDenied for non-admins), and
+    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out, and never an error that
+    could interrupt a sale.
+    """
+
+    def post(self, request, *args, **kwargs):
+        log_id = request.POST.get("id")
+        try:
+            log_id = int(log_id) if log_id else None
+        except (TypeError, ValueError):
+            log_id = None
+        result_id = voice.log_command(
+            request.user,
+            self.auction,
+            log_id=log_id,
+            slot=request.POST.get("slot", ""),
+            heard=request.POST.get("heard", ""),
+            chosen=request.POST.get("chosen", ""),
+            confidence=request.POST.get("confidence"),
+            corrected_to=request.POST.get("corrected_to", ""),
+        )
+        return JsonResponse({"id": result_id})
 
     def get(self, request, *args, **kwargs):
         return self.http_method_not_allowed(request, *args, **kwargs)

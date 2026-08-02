@@ -4,37 +4,8 @@
 {% load currency_filters %}
 {% block title %}Set winners for {{ auction }}{% endblock %}
 
-{# Disable analytics and ads for this page to enable cross-origin isolation for SharedArrayBuffer #}
-{% block analytics %}
-{# Analytics disabled for voice recognition cross-origin isolation #}
-{% endblock %}
-
-{% block ads %}
-{# Ads disabled for voice recognition cross-origin isolation #}
-{% endblock %}
-
-{# Override CDN resources with self-hosted versions for cross-origin isolation #}
-{% block core_css %}
-<link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
-<link rel="stylesheet" href="{% static 'css/vendor/bootstrap-icons.min.css' %}">
-{% endblock %}
-
-{% block core_js %}
-{# Self-hosted jQuery, Bootstrap for cross-origin isolation #}
-{# jQuery must be self-hosted to enable cross-origin isolation - will be added to download script #}
-<script type="text/javascript" src="{% static 'js/vendor/jquery.min.js' %}"></script>
-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
-{% endblock %}
-
 {% block extra_js %}
-{# Use self-hosted Vosklet instead of CDN for cross-origin isolation #}
-{% comment %}
-  Voice input (microphone) isn't wired up for the native app WebView yet and isn't used on the web
-  either (the button below is commented out), so skip loading the speech WASM in the mobile app.
-{% endcomment %}
-{% if not request.is_mobile_app %}
-<script src="{% static 'js/vendor/Vosklet.js' %}" async defer></script>
-{% endif %}
+{% if request.is_mobile_app %}{{ voice_config|json_script:"voice-config" }}{% endif %}
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {
@@ -92,6 +63,9 @@
       let fields = ['price', 'winner', 'lot']
       if (response.success_message) {
         removeTooltip()
+        // The lot is sold and the fields are about to be emptied, so nothing voice filled is still
+        // pending -- anything typed from here is a new lot, not a correction. No-op without voice.
+        if (window.voiceResetFields) { window.voiceResetFields(); }
         fields.forEach(function(field) {
           $("#" + field).val('');
         })
@@ -187,344 +161,316 @@
     htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()), {target: '#result'});
   }
 
-  // Voice recognition functionality
-  let voiceRecognizer = null;
-  let isListening = false;
-  let pendingLot = null;
-  let pendingPrice = null;
-  let pendingWinner = null;
-  let isSoldCommandGiven = false;
+{% if request.is_mobile_app %}
+  {% comment %}
+    Voice-driven set winners. The app does the listening -- iOS WKWebView has no Web Speech API and
+    the shell denies the WebView's microphone -- and writes into these same three fields, so
+    everything below is a receiver plus the UI for how sure the app is. Validation, submit, undo and
+    the queue auto-advance above are untouched: the page still owns the form, and voice reaches it
+    through the same blur/submit paths a person's fingers would.
+  {% endcomment %}
+  const voiceConfig = JSON.parse(document.getElementById('voice-config').textContent);
+  const voiceSlotToField = {lot: 'lot', bidder: 'winner', price: 'price'};
+  const voiceFieldToSlot = {lot: 'lot', winner: 'bidder', price: 'price'};
+  const voiceFieldLabel = {lot: 'the lot number', winner: 'the bidder', price: 'the price'};
+  const voiceHelpSeenKey = 'voiceMicHelpSeen';
+  // What voice put in each field, the telemetry row it came from, and whether we're still unsure of
+  // it. Keyed by field id. voiceFilled is what makes a later edit recognisable as a correction.
+  let voiceFilled = {};
+  let voiceLogIds = {};
+  let voiceUnsure = {};
+  let voiceListening = false;
 
-  // Convert spoken numbers to digits
-  function parseSpokenNumber(text) {
-    const numberWords = {
-      'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-      'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
-      'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
-      'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
-      'eighteen': '18', 'nineteen': '19', 'twenty': '20', 'thirty': '30',
-      'forty': '40', 'fifty': '50', 'sixty': '60', 'seventy': '70',
-      'eighty': '80', 'ninety': '90', 'hundred': '100', 'thousand': '1000'
-    };
-
-    let result = '';
-    let words = text.toLowerCase().split(/[\s-]+/);
-
-    for (let word of words) {
-      if (numberWords[word] !== undefined) {
-        result += numberWords[word];
-      } else if (/^\d+$/.test(word)) {
-        result += word;
-      }
-    }
-
-    return result || null;
+  function voiceStatus(text) {
+    $("#voice-status").text(text || '');
   }
 
-  // Handle voice recognition results
-  function handleVoiceResult(text) {
-    text = text.toLowerCase().trim();
-    //console.log('Voice recognized:', text);
-
-    // Check for undo command
-    if (/\bundo\b/.test(text)) {
-      console.log('Undo command detected');
-      if (!$("#undo_button").hasClass('d-none')) {
-        undoSellLot();
-      }
-      return;
-    }
-
-    // Check for sold command
-    if (/\bsold\b/.test(text)) {
-      console.log('Sold command detected');
-      isSoldCommandGiven = true;
-      // Try to auto-submit if all fields are filled
-      tryAutoSubmit();
-      return;
-    }
-
-    // Check for lot number
-    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*)(?:\s|$)/i);
-    if (lotMatch) {
-      let lotNumber = parseSpokenNumber(lotMatch[1]);
-      if (lotNumber) {
-        console.log('Lot number detected:', lotNumber);
-        $("#lot").val(lotNumber);
-        $("#lot").trigger('blur');
-        pendingLot = lotNumber;
-        tryAutoSubmit();
-        return;
-      }
-    }
-
-    // Check for price (dollar/dollars)
-    let priceMatch = text.match(/(\d+|[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*)\s+dollars?/i);
-    if (priceMatch) {
-      let price = parseSpokenNumber(priceMatch[1]);
-      if (price) {
-        console.log('Price detected:', price);
-        $("#price").val(price);
-        $("#price").trigger('blur');
-        pendingPrice = price;
-        tryAutoSubmit();
-        return;
-      }
-    }
-
-    // Check for bidder number
-    let bidderMatch = text.match(/\bbidder\s+(\d+|[A-Za-z]+(?:-[A-Za-z]+)*)(?:\s|$)/i);
-    if (bidderMatch) {
-      let bidderNum = bidderMatch[1].trim();
-      // Try to parse as number first
-      let parsedBidder = parseSpokenNumber(bidderNum);
-      if (!parsedBidder) {
-        // If not a number, might be a letter or word - use as is
-        parsedBidder = bidderNum.toUpperCase().charAt(0);
-      }
-      console.log('Bidder detected:', parsedBidder);
-      $("#winner").val(parsedBidder);
-      $("#winner").trigger('blur');
-      pendingWinner = parsedBidder;
-      tryAutoSubmit();
-      return;
-    }
+  function voiceBridge() {
+    const bridge = window.flutter_inappwebview;
+    return (bridge && bridge.callHandler) ? bridge : null;
   }
 
-  // Try to auto-submit if sold command was given and all fields are filled
-  function tryAutoSubmit() {
-    if (isSoldCommandGiven) {
-      let lot = $("#lot").val();
-      let price = $("#price").val();
-      let winner = $("#winner").val();
-
-      if (lot && price && winner) {
-        console.log('Auto-submitting form...');
-        sendFormData('save');
-        isSoldCommandGiven = false;
-        pendingLot = null;
-        pendingPrice = null;
-        pendingWinner = null;
-      }
-    }
-  }
-async function startVoiceRecognition() {
-  if (isListening) return;
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: false,
-      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+  {% comment %}
+    Tuning telemetry (VOICE-5). Fire-and-forget in both directions: a failure here must never cost a
+    sale, and a missing row only costs us one sample. Passing the returned id back with
+    corrected_to is what pairs a correction with the command that caused it.
+  {% endcomment %}
+  function voiceLogCommand(slot, fields, onSaved) {
+    if (!slot) { return; }
+    const data = $.extend({slot: slot}, fields);
+    $.ajax({
+      url: "{% url 'auction_voice_command_log' slug=auction.slug %}",
+      method: 'POST',
+      beforeSend: function (request) {
+        request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+      },
+      data: data,
+      success: function (response) {
+        if (onSaved && response && response.id) { onSaved(response.id); }
+      },
+      error: function () {}
     });
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const micNode = ctx.createMediaStreamSource(stream);
-    const module = await loadVosklet();
-    const modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
-    const model = await module.createModel(modelUrl, "English", "vosk-model-small-en-us-0.15");
-    const recognizer = await module.createRecognizer(model, ctx.sampleRate);
-    recognizer.addEventListener("partialResult", ev => {
-        $("#voice-status").text(ev.detail.partial);
+  }
 
-      if (ev.detail && ev.detail.partial) {
-        $("#voice-status").text(ev.detail.partial);
-      }
+  function voiceClearUnsure(field) {
+    delete voiceUnsure[field];
+    $("#" + field).removeClass('voice-unsure-field');
+    $("#voice-unsure-" + field).addClass('d-none').empty();
+  }
+
+  function voiceUnsureFields() {
+    return Object.keys(voiceUnsure);
+  }
+
+  {% comment %}
+    The unsure state: amber dashed field plus what was heard, what it became, and a one-tap Confirm.
+    When the app couldn't separate two candidates ("fifteen" / "fifty"), both are offered rather
+    than one of them being guessed at -- picking the other one is a single tap and is recorded as a
+    correction, which is exactly the sample the grammar needs.
+  {% endcomment %}
+  function voiceShowUnsure(field, heard, value, candidates) {
+    voiceUnsure[field] = true;
+    $("#" + field).addClass('voice-unsure-field');
+    const box = $("#voice-unsure-" + field);
+    box.empty().removeClass('d-none');
+    const summary = $('<span class="me-2"></span>');
+    summary.text(heard ? 'heard "' + heard + '" → ' + value + '?' : 'not sure: ' + value + '?');
+    box.append(summary);
+    const confirmButton = $('<button type="button" class="btn btn-sm btn-success text-dark me-1">Confirm</button>');
+    confirmButton.on('click', function () { voiceClearUnsure(field); });
+    box.append(confirmButton);
+    (candidates || []).forEach(function (candidate) {
+      const text = String(candidate);
+      if (text === String(value)) { return; }
+      const pick = $('<button type="button" class="btn btn-sm btn-outline-secondary me-1"></button>');
+      pick.text(text);
+      pick.on('click', function () { voiceApplyCorrection(field, text); });
+      box.append(pick);
     });
-
-recognizer.addEventListener("result", ev => {
-    let detailObj;
-    try {
-        detailObj = JSON.parse(ev.detail);
-    } catch (err) {
-        console.error("[DEBUG] Failed to parse ev.detail:", err, ev.detail);
-        return;
-    }
-    if (detailObj && detailObj.text && detailObj.text.trim() !== "") {
-        $("#voice-status").text(detailObj.text);
-        handleVoiceResult(detailObj.text);
-    }
-});
-
-
-    // Convert Float32 [-1..1] to Int16 PCM (optional, mostly for debugging)
-    function floatToInt16(float32) {
-      const out = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        let s = Math.max(-1, Math.min(1, float32[i]));
-        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      return out;
-    }
-
-    const transferer = await module.createTransferer(ctx, 128 * 150);
-
-    // Gain factor to boost quiet audio
-    const GAIN = 5;
-
-    transferer.port.onmessage = ev => {
-      const data = ev.data;
-      if (!data) return;
-
-      if (data.constructor.name === "Float32Array") {
-        for (let i = 0; i < data.length; i++) data[i] *= GAIN;
-      }
-
-      const slice = data.subarray ? data.subarray(0,20) : data.slice(0,20);
-      // RMS/volume
-      // const rms = Math.sqrt(slice.reduce((sum,v)=>sum+v*v,0)/slice.length);
-      // console.log("[DEBUG] Audio chunk RMS:", rms);
-
-      // Feed Float32 directly to recognizer (Vosklet expects floats)
-      try {
-        const accepted = recognizer.acceptWaveform(data);
-        //console.log("[DEBUG] acceptWaveform returned:", accepted);
-      } catch (err) {
-        console.error("[DEBUG] acceptWaveform error:", err);
-      }
-    };
-
-    micNode.connect(transferer);
-
-    voiceRecognizer = { ctx, recognizer, transferer, micNode, stream };
-    isListening = true;
-    $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
-    $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
-    $("#voice-status").text("Listening...");
-    $("#voice-btn").prop("disabled", false);
-
-  } catch (err) {
-    $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
-    isListening = false;
-    voiceRecognizer = null;
-  }
-}
-
-  // Stop voice recognition
-  function stopVoiceRecognition() {
-    if (!isListening || !voiceRecognizer) return;
-
-    try {
-      // Stop all media stream tracks
-      if (voiceRecognizer.stream) {
-        voiceRecognizer.stream.getTracks().forEach(track => track.stop());
-      }
-
-      // Close audio context
-      if (voiceRecognizer.ctx) {
-        voiceRecognizer.ctx.close();
-      }
-
-      voiceRecognizer = null;
-      isListening = false;
-      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
-      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
-      $("#voice-status").text("Voice control stopped");
-    } catch (err) {
-      console.error("Error stopping voice recognition:", err);
-      // Reset state anyway
-      voiceRecognizer = null;
-      isListening = false;
-      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
-      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
-      $("#voice-status").text("Voice control stopped");
-    }
   }
 
-  // Toggle voice recognition
-  function toggleVoiceRecognition() {
-    if (isListening) {
-      stopVoiceRecognition();
+  function voiceApplyCorrection(field, value) {
+    $("#" + field).val(value);
+    voiceRecordCorrection(field, value);
+    voiceClearUnsure(field);
+    $("#" + field).trigger('blur');
+  }
+
+  function voiceRecordCorrection(field, value) {
+    // No id means either the operator typed this field themselves (nothing to correct) or the
+    // command's own POST is still in flight -- one round trip against however long it takes a person
+    // to notice a wrong bidder and retype it. Dropping that sample beats guessing which row it
+    // belonged to.
+    if (!voiceLogIds[field] || String(value) === String(voiceFilled[field])) { return; }
+    voiceLogCommand(voiceFieldToSlot[field], {id: voiceLogIds[field], corrected_to: value});
+    voiceFilled[field] = value;
+  }
+
+  function voiceFillField(slot, field, value, confidence, heard, candidates) {
+    $("#" + field).val(value);
+    voiceFilled[field] = value;
+    // Fire the field's own blur: that already runs sendFormData() validation (which paints the
+    // is-valid green, or red for a bidder who doesn't exist) and, for #lot, getLotPicture().
+    $("#" + field).trigger('blur');
+    if (confidence >= voiceConfig.confident) {
+      voiceClearUnsure(field);
     } else {
-      startVoiceRecognition();
+      voiceShowUnsure(field, heard, value, candidates);
     }
+    voiceLogCommand(slot, {heard: heard, chosen: value, confidence: confidence}, function (id) {
+      voiceLogIds[field] = id;
+    });
   }
 
+  function voiceClearFields() {
+    ['lot', 'price', 'winner'].forEach(function (field) {
+      $("#" + field).val('');
+      voiceClearUnsure(field);
+    });
+    voiceFilled = {};
+    voiceLogIds = {};
+    $("#result").html('');
+  }
 
-  let webSpeechRecognizer = null;
-  let isWebSpeechListening = false;
+  // Called from handleServerResponse once a lot is actually saved: the fields are empty again, so
+  // whatever the operator types next is a new lot, not a correction of the last one.
+  window.voiceResetFields = function () {
+    ['lot', 'price', 'winner'].forEach(voiceClearUnsure);
+    voiceFilled = {};
+    voiceLogIds = {};
+  };
 
-  function startWebSpeechRecognition() {
-    if (isWebSpeechListening) return;
+  function voiceBlockedMessage(blockedBy) {
+    const missing = (blockedBy || []).map(function (item) {
+      return voiceFieldLabel[voiceSlotToField[item]] || String(item);
+    });
+    voiceUnsureFields().forEach(function (field) {
+      const label = voiceFieldLabel[field];
+      if (missing.indexOf(label) === -1) { missing.push(label); }
+    });
+    return missing;
+  }
 
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      $("#voice-status").text("Web Speech API not supported in this browser.");
+  function voiceHandleCommand(event) {
+    const slot = event.slot;
+    const value = (event.value === null || event.value === undefined) ? '' : String(event.value);
+    const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;
+    const heard = event.heard || '';
+    const field = voiceSlotToField[slot];
+    if (field) {
+      voiceFillField(slot, field, value, confidence, heard, event.candidates);
       return;
     }
-
-    webSpeechRecognizer = new SR();
-    webSpeechRecognizer.lang = "en-US";
-    webSpeechRecognizer.continuous = true;
-    webSpeechRecognizer.interimResults = true;
-
-    webSpeechRecognizer.onstart = function () {
-      isWebSpeechListening = true;
-      $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
-      $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
-      $("#voice-status").text("Listening (Web Speech)...");
-    };
-
-    webSpeechRecognizer.onerror = function (ev) {
-      console.error("Web Speech error:", ev.error);
-      $("#voice-status").text("Voice error: " + ev.error);
-    };
-
-    webSpeechRecognizer.onend = function () {
-      isWebSpeechListening = false;
-      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
-      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
-      $("#voice-status").text("Voice control stopped");
-    };
-
-    webSpeechRecognizer.onresult = function (ev) {
-      // Iterate results to find final or best transcript
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const res = ev.results[i];
-        const transcript = res[0].transcript.trim();
-        if (!transcript) continue;
-
-        if (res.isFinal) {
-          $("#voice-status").text(transcript);
-          handleVoiceResult(transcript); // reuse existing handler
-        } else {
-          // Show partial result
-          $("#voice-status").text(transcript);
-        }
+    if (slot === 'sold') {
+      // Never save past an unsure field: block_auto_submit_when_unsure exists because selling a lot
+      // to a bidder nobody confirmed is far more expensive than asking one question.
+      const blocked = voiceConfig.block_auto_submit_when_unsure
+        ? voiceBlockedMessage(event.blocked_by)
+        : (event.blocked_by || []).map(function (item) { return voiceFieldLabel[voiceSlotToField[item]] || String(item); });
+      if (blocked.length) {
+        voiceStatus('Not saved: check ' + blocked.join(', '));
+        window.jQuery.toast({
+          title: 'Not saved yet',
+          content: 'Confirm ' + blocked.join(' and ') + ', then say sold again.',
+          type: 'warning',
+          delay: 6000
+        });
+        return;
       }
-    };
-
-    try {
-      webSpeechRecognizer.start();
-    } catch (err) {
-      console.error("Failed to start Web Speech:", err);
-      $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
-      isWebSpeechListening = false;
+      voiceLogCommand(slot, {heard: heard, chosen: 'save', confidence: confidence});
+      sendFormData('save');
+      return;
     }
+    if (slot === 'unsold') {
+      voiceLogCommand(slot, {heard: heard, chosen: 'end_unsold', confidence: confidence});
+      sendFormData('end_unsold');
+      return;
+    }
+    if (slot === 'undo') {
+      if ($("#undo_button").hasClass('d-none')) {
+        voiceStatus('Nothing to undo');
+        return;
+      }
+      voiceLogCommand(slot, {heard: heard, chosen: 'undo', confidence: confidence});
+      undoSellLot();
+      return;
+    }
+    if (slot === 'clear') {
+      voiceLogCommand(slot, {heard: heard, chosen: 'clear', confidence: confidence});
+      voiceClearFields();
+      $("#lot").focus();
+      return;
+    }
+    if (slot === 'confirm') {
+      // Confirms the field it names, or everything outstanding when it names nothing.
+      const named = voiceSlotToField[value];
+      (named ? [named] : voiceUnsureFields()).forEach(voiceClearUnsure);
+      return;
+    }
+    // Unknown slot: ignore it. That's what lets either side add one without shipping the other.
   }
 
-  function stopWebSpeechRecognition() {
-    if (!isWebSpeechListening || !webSpeechRecognizer) return;
-    try {
-      webSpeechRecognizer.stop();
-    } catch (err) {
-      console.error("Error stopping Web Speech:", err);
-    } finally {
-      webSpeechRecognizer = null;
-      isWebSpeechListening = false;
-      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
-      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
-      $("#voice-status").text("Voice control stopped");
-    }
-  }
-
-  function toggleWebSpeechRecognition() {
-    if (isWebSpeechListening) {
-      stopWebSpeechRecognition();
+  function voiceRenderState(state) {
+    const listening = !!(state && state.listening);
+    voiceListening = listening;
+    const button = $("#voice-btn");
+    if (listening) {
+      button.removeClass('btn-primary').addClass('btn-danger');
+      button.html('<i class="bi bi-mic-fill"></i> Stop');
+      $("#voice-level").removeClass('d-none');
+      voiceStatus(state && state.on_device === false ? 'Listening (online)' : 'Listening');
     } else {
-      startWebSpeechRecognition();
+      button.removeClass('btn-danger').addClass('btn-primary');
+      button.html('<i class="bi bi-mic"></i> Listen');
+      $("#voice-level").addClass('d-none');
+      $("#voice-level-bar").css('width', '0%');
+      voiceStatus('');
     }
   }
 
+  {% comment %}
+    The app pushes events in with evaluateJavascript, so this has to exist before anyone taps
+    Listen. Unknown event types are ignored for the same reason unknown slots are.
+  {% endcomment %}
+  window.fishauctionsVoice = {
+    onEvent: function (event) {
+      // Tolerate a JSON string as well as an object: which one arrives depends on how the app
+      // builds the evaluateJavascript call, and that is not worth a coordinated release to agree on.
+      if (typeof event === 'string') {
+        try { event = JSON.parse(event); } catch (err) { return; }
+      }
+      if (!event || !event.type) { return; }
+      if (event.type === 'state') {
+        voiceRenderState(event);
+      } else if (event.type === 'level') {
+        const level = Math.max(0, Math.min(1, Number(event.level) || 0));
+        $("#voice-level-bar").css('width', Math.round(level * 100) + '%');
+      } else if (event.type === 'transcript') {
+        // v1 had no transcript and no meter, which made "dead microphone" and "bad model" look
+        // exactly alike. Showing what was heard, even when nothing matched, is the difference.
+        voiceStatus(event.text ? 'heard: "' + event.text + '"' : '');
+      } else if (event.type === 'command') {
+        voiceHandleCommand(event);
+      } else if (event.type === 'error') {
+        // Reset the button first: voiceRenderState clears the status line, and the error is the one
+        // thing that has to survive on it.
+        voiceRenderState({listening: false});
+        voiceStatus(event.message || event.code || 'Voice error');
+        window.jQuery.toast({
+          title: event.code === 'permission_denied' ? 'Microphone blocked' : 'Voice problem',
+          content: event.message || 'Voice input stopped.',
+          type: 'danger',
+          delay: 8000
+        });
+      }
+    }
+  };
 
+  function voiceShowFirstRunHelp() {
+    let seen = false;
+    try { seen = window.localStorage.getItem(voiceHelpSeenKey) === '1'; } catch (err) { seen = false; }
+    if (seen) { return; }
+    $("#voice-first-run").removeClass('d-none');
+  }
+
+  function voiceInit() {
+    const bridge = voiceBridge();
+    // enabled:false is the site-wide kill switch (Voice grammar in the admin) -- don't even ask.
+    if (!bridge || !voiceConfig.enabled) { return; }
+    $("#voice-btn").on('click', function () {
+      const button = $(this);
+      button.prop('disabled', true);
+      const stopping = voiceListening;
+      const call = stopping
+        ? bridge.callHandler('voiceStop')
+        : bridge.callHandler('voiceStart', {auction: '{{ auction.slug|escapejs }}'});
+      call.then(function (state) {
+        button.prop('disabled', false);
+        voiceRenderState(state);
+        if (!stopping && state && state.listening) { voiceShowFirstRunHelp(); }
+        if (!stopping && state && state.error) { voiceStatus(state.error); }
+      }).catch(function () {
+        button.prop('disabled', false);
+        voiceStatus('Voice is not available on this phone');
+      });
+    });
+    $("#voice-first-run-dismiss").on('click', function () {
+      $("#voice-first-run").addClass('d-none');
+      try { window.localStorage.setItem(voiceHelpSeenKey, '1'); } catch (err) {}
+    });
+    // Typing over a field voice filled is the correction we most want to know about.
+    $("#lot, #price, #winner").on('change', function () {
+      voiceRecordCorrection(this.id, $(this).val());
+    });
+    // supported:false means this app build has no voice handlers at all -- leave the button hidden
+    // rather than showing every phone a dead control.
+    bridge.callHandler('voiceGetState').then(function (state) {
+      if (!state || !state.supported) { return; }
+      $("#voice-btn").removeClass('d-none');
+      voiceRenderState(state);
+    }).catch(function () {});
+  }
+{% endif %}
 
 $(document).ready(function() {
         var lotSearch;
@@ -584,6 +530,9 @@ $(document).ready(function() {
         e.preventDefault();
         sendFormData('save');
     });
+    {% if request.is_mobile_app %}
+    voiceInit();
+    {% endif %}
 });
 
 
@@ -595,9 +544,21 @@ $(document).ready(function() {
 
 <small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
 <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
-{% if not request.is_mobile_app %}
-<!-- <button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleWebSpeechRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button> -->
+{% if request.is_mobile_app %}
+{% comment %}
+  Voice input. Rendered hidden and revealed only once the app answers voiceGetState() with
+  supported: true -- is_mobile_app alone isn't enough, because app builds that predate the voice
+  handlers would otherwise show every phone a button that does nothing.
+{% endcomment %}
+<button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
+<span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>
 <small id="voice-status" class="ms-2 text-muted"></small>
+<div id="voice-first-run" class="alert alert-info mt-2 d-none" role="alert">
+  <i class="bi bi-info-circle"></i> <strong>Keep the microphone near the auctioneer.</strong>
+  A phone in your pocket 20 ft from the podium can't hear well enough for this to work, and no
+  amount of software fixes that. Use a Bluetooth headset or a clip-on mic, or hold the phone up.
+  <button type="button" id="voice-first-run-dismiss" class="btn btn-sm btn-primary ms-2">Got it</button>
+</div>
 {% endif %}
 
 </span>
@@ -612,12 +573,18 @@ $(document).ready(function() {
   </p>
 </div>
 
+  {% comment %}
+    The .voice-unsure divs stay empty unless the app fills a field it isn't sure it heard right;
+    they hold the "heard X -> Y?" prompt and its Confirm button. Harmless on the web, where nothing
+    ever writes to them.
+  {% endcomment %}
   <form id="auctionForm" class="row row-cols-md-auto g-3 d-flex align-items-center justify-content-center">
     <div class="col-12 mb-3">
         <div class="input-group">
             <input type="text" class="form-control" id="lot" placeholder="Lot number" autocomplete="off">
             <div class="invalid-tooltip"></div>
         </div>
+        <div class="voice-unsure d-none" id="voice-unsure-lot"></div>
     </div>
     <div class="col-12 mb-3">
         <label class="visually-hidden" for="price" class="form-label">Sell Price</label>
@@ -631,12 +598,14 @@ $(document).ready(function() {
             {% endif %}
             <div class="invalid-tooltip"></div>
         </div>
+        <div class="voice-unsure d-none" id="voice-unsure-price"></div>
     </div>
     <div class="col-12 mb-3">
         <div class="input-group">
             <input type="text" class="form-control" id="winner" placeholder="Winner" autocomplete="off">
             <div class="invalid-tooltip"></div>
         </div>
+        <div class="voice-unsure d-none" id="voice-unsure-winner"></div>
     </div>
     <div class="col-12 mb-3">
       <div class="btn-group" role="group" aria-label="Save">

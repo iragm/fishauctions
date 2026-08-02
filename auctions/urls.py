@@ -401,6 +401,11 @@ urlpatterns = [
         name="auction_unsell_lot",
     ),
     path(
+        "auctions/<slug:slug>/lots/set-winners/voice-log/",
+        views.VoiceCommandLogView.as_view(),
+        name="auction_voice_command_log",
+    ),
+    path(
         "auctions/<slug:slug>/queue/",
         views.LotQueueView.as_view(),
         name="auction_lot_queue",

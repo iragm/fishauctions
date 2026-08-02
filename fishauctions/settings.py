@@ -300,7 +300,6 @@ MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
-    "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

@@ -35,6 +35,7 @@ from .views import (
     MobileSocialDoneView,
     MobileTokenRefreshView,
     MobileUserMeView,
+    MobileVoiceVocabularyView,
     MobileWebSessionConsumeView,
     MobileWebSessionView,
 )
@@ -68,6 +69,12 @@ urlpatterns = [
     path("clubs/mine/", MobileMyClubsView.as_view(), name="mobile-clubs-mine"),
     # Auctions
     path("auctions/last-used/", MobileLastUsedAuctionView.as_view(), name="mobile-last-used-auction"),
+    # Voice-driven set winners: what the app is allowed to hear in this auction.
+    path(
+        "auctions/<slug:slug>/voice/vocabulary/",
+        MobileVoiceVocabularyView.as_view(),
+        name="mobile-voice-vocabulary",
+    ),
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
     path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),

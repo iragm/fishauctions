@@ -49,6 +49,8 @@ from .models import (
     UserData,
     UserInterestCategory,
     UserLabelPrefs,
+    VoiceCommandLog,
+    VoiceGrammar,
     Watch,
     guess_category,
 )
@@ -586,6 +588,92 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
             )
 
     actions = [draft_profile, export_to_csv]
+
+
+@admin.register(VoiceGrammar)
+class VoiceGrammarAdmin(admin.ModelAdmin):
+    """The words the app listens for on the set-winners page. One row, site-wide.
+
+    Tune it against the Voice command log: sort that list by the rows with a correction and you are
+    looking at exactly what is being misheard. An auctioneer who says "hammer" instead of "sold"
+    needs a word added to ``anchors``, not an app release. Save takes effect the next time a phone
+    fetches config.
+
+    Delete the row to hand control back to the app's bundled defaults; uncheck ``enabled`` to turn
+    the microphone button off everywhere mid-auction.
+    """
+
+    list_display = ("__str__", "enabled", "backend", "locale", "auto_submit_on_sold", "updatedon")
+    readonly_fields = ("updatedon",)
+    fieldsets = (
+        (
+            None,
+            {
+                "description": (
+                    "Only one of these exists — saving a second edits the first. The app merges "
+                    "what it gets here over the grammar it ships with, so a blank-ish row is safe."
+                ),
+                "fields": ("enabled", "backend", "locale", "prefer_on_device"),
+            },
+        ),
+        (
+            "Words",
+            {
+                "description": (
+                    "Anchors say which field a spoken number belongs to. Homophones are the pairs "
+                    "a room with a PA system cannot distinguish — the app offers both rather than "
+                    "guessing between them."
+                ),
+                "fields": ("anchors", "number_words", "homophones"),
+            },
+        ),
+        (
+            "Scoring",
+            {
+                "description": (
+                    "Raise 'confident' if wrong bidders are being filled in green; lower 'unsure' "
+                    "if commands are being dropped that the operator can hear were correct."
+                ),
+                "fields": ("weights", "thresholds"),
+            },
+        ),
+        ("Saving", {"fields": ("auto_submit_on_sold", "block_auto_submit_when_unsure")}),
+    )
+
+    def has_add_permission(self, request):
+        # The singleton exists or it doesn't; once it does, "Add" would just overwrite it.
+        return not VoiceGrammar.objects.exists()
+
+
+@admin.register(VoiceCommandLog)
+class VoiceCommandLogAdmin(admin.ModelAdmin):
+    """What voice heard, what it filled in, and what the operator changed it to.
+
+    The tuning queue: filter to rows with a correction (search a value in ``corrected_to``, or sort
+    by it) and each one names a word the grammar gets wrong. Fix it in Voice grammar above.
+    Read-only — these are observations, and editing them would only corrupt the sample.
+    """
+
+    list_display = ("createdon", "auction", "user", "slot", "heard", "chosen", "confidence", "corrected_to")
+    list_filter = ("slot", "auction")
+    search_fields = ("heard", "chosen", "corrected_to", "user__username", "auction__title")
+    raw_id_fields = ("auction", "user")
+    readonly_fields = (
+        "auction",
+        "user",
+        "slot",
+        "heard",
+        "chosen",
+        "confidence",
+        "corrected_to",
+        "createdon",
+        "updatedon",
+    )
+    date_hierarchy = "createdon"
+    actions = [export_to_csv]
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(PushNotificationSent)
