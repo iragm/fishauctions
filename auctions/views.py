@@ -74,7 +74,7 @@ from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.decorators.clickjacking import xframe_options_exempt
@@ -473,6 +473,19 @@ def _upsert_clubmember_shadow_tos(
     return tos
 
 
+_SCRIPT_JSON_ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"}
+
+
+def script_json(value):
+    """``json.dumps`` for a value that gets embedded in an inline ``<script>``.
+
+    json.dumps escapes quotes and backslashes but leaves ``<`` alone, so a value containing
+    ``</script>`` closes the tag early and everything after it runs as markup.  Escape the same
+    three characters Django's ``|json_script`` filter does, which keeps the payload inert.
+    """
+    return json.dumps(value).translate(_SCRIPT_JSON_ESCAPES)
+
+
 def close_modal_response(
     action=None,
     *,
@@ -504,11 +517,15 @@ def close_modal_response(
         detail["tableSelector"] = table_selector
     body = ""
     if toast:
-        toast_options = json.dumps({"title": toast, "type": toast_type, "delay": 8000})
+        # The toast plugin in base.html builds its markup by string concatenation, so the title
+        # lands in the DOM as HTML — escape it here, since callers pass names and emails.
+        toast_options = script_json({"title": escape(toast), "type": toast_type, "delay": 8000})
         body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
-    body += f"<script>window.closeModal({json.dumps(detail)});</script>"
+    body += f"<script>window.closeModal({script_json(detail)});</script>"
     headers = {}
     if extra_triggers:
+        # A header value rather than markup, and Django rejects CR/LF in headers, so plain
+        # json.dumps is safe here — no HTML escaping wanted.
         headers["HX-Trigger"] = json.dumps(extra_triggers)
     return HttpResponse(body, headers=headers)
 
