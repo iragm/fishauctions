@@ -25,8 +25,18 @@
     var results = document.getElementById("command-palette-results");
     var searchUrl = modalEl.dataset.searchUrl;
     var logUrl = modalEl.dataset.logUrl;
+    var assistUrl = modalEl.dataset.assistUrl;
+    var executeUrl = modalEl.dataset.executeUrl;
+    var assistEnabled = modalEl.dataset.assistEnabled === "1";
     var csrfToken = modalEl.dataset.csrf;
     var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    // Recent exchanges, so "print that label" knows which lot we just made. Kept in
+    // sessionStorage (per tab, cleared when the tab closes) and capped server-side too.
+    var CONTEXT_KEY = "cp_assist_context";
+    var CONTEXT_MAX = 5;
+    var assistInFlight = false;
+    var countdownTimer = null;
 
     var DEBOUNCE_MS = 300;
     var debounceTimer = null;
@@ -293,9 +303,400 @@
       });
     }
 
+    // --- Natural-language assist ---------------------------------------------
+
+    function loadContext() {
+      try {
+        var raw = window.sessionStorage.getItem(CONTEXT_KEY);
+        var parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.slice(-CONTEXT_MAX) : [];
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function rememberExchange(query, summary, action, data) {
+      try {
+        var entries = loadContext();
+        entries.push({ query: query, result: summary || "", action: action || "", data: data || {} });
+        window.sessionStorage.setItem(CONTEXT_KEY, JSON.stringify(entries.slice(-CONTEXT_MAX)));
+      } catch (err) {
+        /* sessionStorage can be unavailable (private mode); context is a nicety, not required */
+      }
+    }
+
+    function clearNav() {
+      items = [];
+      activeIndex = -1;
+    }
+
+    // Stop a pending countdown without running it. Safe to call at any time.
+    function cancelCountdown() {
+      if (countdownTimer) {
+        window.clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+    }
+
+    function showThinking() {
+      results.innerHTML = "";
+      clearNav();
+      var wrap = document.createElement("div");
+      wrap.className = "cp-thinking text-muted d-flex align-items-center gap-2 px-2 py-3";
+      var spinner = document.createElement("span");
+      spinner.className = "spinner-border spinner-border-sm";
+      spinner.setAttribute("role", "status");
+      wrap.appendChild(spinner);
+      var label = document.createElement("span");
+      label.textContent = "Working out what you mean…";
+      wrap.appendChild(label);
+      results.appendChild(wrap);
+    }
+
+    // A plain message block. `type` follows the site's message-type standard: info for neutral
+    // facts, danger for failures, warning for cautions.
+    function renderNote(message, type, icon) {
+      var note = document.createElement("div");
+      note.className = "alert alert-" + (type || "info") + (type === "warning" ? " text-dark" : "") + " mb-2";
+      var i = document.createElement("i");
+      i.className = "bi " + (icon || "bi-info-circle") + " me-2";
+      note.appendChild(i);
+      var span = document.createElement("span");
+      span.textContent = message;
+      note.appendChild(span);
+      return note;
+    }
+
+    function renderFollowups(followups) {
+      if (!followups || !followups.length) {
+        return null;
+      }
+      var list = document.createElement("div");
+      list.className = "list-group list-group-flush";
+      followups.forEach(function (followup) {
+        if (!followup || !followup.url) {
+          return;
+        }
+        var el = makeItem({ title: followup.label, url: followup.url, icon: "bi-arrow-right-short", type: "assist" });
+        el._cpData = { title: followup.label, url: followup.url, type: "assist" };
+        list.appendChild(el);
+        items.push(el);
+      });
+      return list;
+    }
+
+    // Options from a clarify response: clicking one appends it to the context and re-asks, so
+    // "which bob?" is answered by clicking rather than retyping the whole command.
+    function renderOptions(query, message, options) {
+      var list = document.createElement("div");
+      list.className = "list-group list-group-flush";
+      options.forEach(function (option) {
+        var el = makeItem({ title: option, icon: "bi-check2-circle", type: "assist-option" });
+        el._cpData = { title: option, type: "assist-option" };
+        el.addEventListener("click", function (event) {
+          event.preventDefault();
+          rememberExchange(query, "Asked: " + message, "clarify", {});
+          input.value = option;
+          submitAssist(option);
+        });
+        list.appendChild(el);
+        items.push(el);
+      });
+      return list;
+    }
+
+    // The 5 second window before a database change. Cancel stops it; "Go now" skips the wait.
+    // Either way the server re-checks permissions when execute is called — this is UX only.
+    function renderCountdown(query, response) {
+      results.innerHTML = "";
+      clearNav();
+      var card = document.createElement("div");
+      card.className = "cp-countdown card mb-2";
+      var body = document.createElement("div");
+      body.className = "card-body";
+
+      var heading = document.createElement("div");
+      heading.className = "d-flex align-items-center gap-2 mb-2";
+      var spinner = document.createElement("span");
+      spinner.className = "spinner-border spinner-border-sm text-primary";
+      spinner.setAttribute("role", "status");
+      heading.appendChild(spinner);
+      var summary = document.createElement("strong");
+      summary.textContent = response.summary || "About to make a change";
+      heading.appendChild(summary);
+      body.appendChild(heading);
+
+      var hint = document.createElement("p");
+      hint.className = "text-muted small mb-2";
+      hint.textContent = "Starting in a moment — cancel if that's not what you meant.";
+      body.appendChild(hint);
+
+      var progressWrap = document.createElement("div");
+      progressWrap.className = "progress mb-3";
+      var bar = document.createElement("div");
+      bar.className = "progress-bar";
+      bar.style.width = "0%";
+      progressWrap.appendChild(bar);
+      body.appendChild(progressWrap);
+
+      var buttons = document.createElement("div");
+      buttons.className = "d-flex gap-2";
+      var go = document.createElement("button");
+      go.type = "button";
+      go.className = "btn btn-success text-dark";
+      go.textContent = "Go now";
+      var cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "btn btn-secondary";
+      cancel.textContent = "Cancel";
+      buttons.appendChild(go);
+      buttons.appendChild(cancel);
+      body.appendChild(buttons);
+      card.appendChild(body);
+      results.appendChild(card);
+
+      var delay = response.delay_ms || 5000;
+      var started = Date.now();
+      var done = false;
+
+      function fire() {
+        if (done) {
+          return;
+        }
+        done = true;
+        cancelCountdown();
+        runExecute(query, response);
+      }
+
+      countdownTimer = window.setInterval(function () {
+        var elapsed = Date.now() - started;
+        var pct = Math.min(100, (elapsed / delay) * 100);
+        bar.style.width = pct + "%";
+        if (elapsed >= delay) {
+          fire();
+        }
+      }, 100);
+
+      go.addEventListener("click", fire);
+      cancel.addEventListener("click", function () {
+        done = true;
+        cancelCountdown();
+        results.innerHTML = "";
+        clearNav();
+        results.appendChild(renderNote("Cancelled — nothing was changed.", "info", "bi-info-circle"));
+      });
+    }
+
+    function runExecute(query, response) {
+      showThinking();
+      fetch(executeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+        credentials: "same-origin",
+        body: JSON.stringify({ action: response.action, params: response.params }),
+      })
+        .then(function (resp) {
+          return resp.json();
+        })
+        .then(function (data) {
+          renderAssist(query, data);
+        })
+        .catch(function () {
+          renderAssist(query, { kind: "error", message: "That didn't go through. Please try again." });
+        });
+    }
+
+    function renderAssist(query, response) {
+      var kind = response && response.kind;
+      if (kind === "results") {
+        render(response.groups || []);
+        return;
+      }
+      if (kind === "navigate" && response.url) {
+        rememberExchange(query, response.message || "Opened a page", "navigate", {});
+        navigatedByClick = true;
+        finalized = true;
+        window.location.href = response.url;
+        return;
+      }
+      if (kind === "countdown") {
+        renderCountdown(query, response);
+        return;
+      }
+      results.innerHTML = "";
+      clearNav();
+      if (kind === "clarify") {
+        results.appendChild(renderNote(response.message || "Which one did you mean?", "info", "bi-question-circle"));
+        if (response.options && response.options.length) {
+          results.appendChild(renderOptions(query, response.message, response.options));
+        }
+        return;
+      }
+      if (kind === "done") {
+        rememberExchange(query, response.message || "Done", response.action || "", response.data || {});
+        results.appendChild(renderNote(response.message || "Done.", "success", "bi-check-circle-fill"));
+        var followups = renderFollowups(response.followups);
+        if (followups) {
+          results.appendChild(followups);
+        }
+        return;
+      }
+      results.appendChild(
+        renderNote(
+          (response && response.message) || "I couldn't do that.",
+          "danger",
+          "bi-exclamation-triangle-fill"
+        )
+      );
+    }
+
+    // The single entry point for "act on what's typed": Enter with nothing selected, and the
+    // final speech transcript, both land here so voice and typing share one path.
+    function submitAssist(query) {
+      query = (query === undefined ? input.value : query).trim();
+      if (!assistEnabled || !query || assistInFlight) {
+        return;
+      }
+      assistInFlight = true;
+      finalized = true; // this query ends in an assist result, not an abandoned search
+      showThinking();
+      fetch(assistUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+        credentials: "same-origin",
+        body: JSON.stringify({ q: query, context: loadContext() }),
+      })
+        .then(function (resp) {
+          return resp.json();
+        })
+        .then(function (data) {
+          renderAssist(query, data);
+        })
+        .catch(function () {
+          renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
+        })
+        .then(function () {
+          assistInFlight = false;
+        });
+    }
+
+    // --- Speech to text ------------------------------------------------------
+
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var recognition = null;
+    var listening = false;
+    var micButtons = [];
+    var paletteMic = document.getElementById("command-palette-mic");
+    var navbarMic = document.getElementById("navbar-mic");
+
+    function setListening(state) {
+      listening = state;
+      micButtons.forEach(function (button) {
+        button.classList.toggle("listening", state);
+        button.setAttribute("aria-pressed", state ? "true" : "false");
+      });
+    }
+
+    function stopListening() {
+      if (recognition && listening) {
+        try {
+          recognition.stop();
+        } catch (err) {
+          /* already stopped */
+        }
+      }
+      setListening(false);
+    }
+
+    function startListening() {
+      if (!recognition || listening) {
+        return;
+      }
+      try {
+        recognition.start();
+        setListening(true);
+      } catch (err) {
+        setListening(false);
+      }
+    }
+
+    function buildRecognition() {
+      var speech = new SpeechRecognition();
+      speech.continuous = false;
+      speech.interimResults = true;
+      speech.lang = document.documentElement.lang || "en-US";
+
+      speech.addEventListener("result", function (event) {
+        var transcript = "";
+        var isFinal = false;
+        for (var i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            isFinal = true;
+          }
+        }
+        transcript = transcript.trim();
+        if (!transcript) {
+          return;
+        }
+        // Interim words stream into the box so the user watches it being typed for them, and
+        // the ordinary debounced search runs on them exactly as if they had typed it.
+        input.value = transcript;
+        if (isFinal) {
+          setListening(false);
+          submitAssist(transcript);
+        } else {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(runSearch, DEBOUNCE_MS);
+        }
+      });
+      speech.addEventListener("end", function () {
+        setListening(false);
+      });
+      speech.addEventListener("error", function () {
+        setListening(false);
+      });
+      return speech;
+    }
+
+    if (assistEnabled && SpeechRecognition) {
+      recognition = buildRecognition();
+      [paletteMic, navbarMic].forEach(function (button) {
+        if (!button) {
+          return;
+        }
+        micButtons.push(button);
+        button.classList.remove("d-none");
+      });
+      if (paletteMic) {
+        paletteMic.addEventListener("click", function () {
+          if (listening) {
+            stopListening();
+          } else {
+            startListening();
+          }
+        });
+      }
+      if (navbarMic) {
+        // From the navbar: open the palette first so the user can see the words appear.
+        navbarMic.addEventListener("click", function (event) {
+          event.preventDefault();
+          if (listening) {
+            stopListening();
+            return;
+          }
+          open();
+          window.setTimeout(startListening, 250);
+        });
+      }
+    }
+
     // --- Events --------------------------------------------------------------
 
     input.addEventListener("input", function () {
+      // Typing means the user has moved on: never let a countdown started a moment ago fire
+      // against a query they are already editing.
+      cancelCountdown();
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(runSearch, DEBOUNCE_MS);
     });
@@ -314,6 +715,11 @@
         if (activeIndex >= 0 && items[activeIndex]) {
           event.preventDefault();
           activate(items[activeIndex]._cpData);
+        } else if (assistEnabled && input.value.trim()) {
+          // Enter with nothing selected used to do nothing at all; it is now the assist
+          // trigger, so no existing keyboard behaviour changes.
+          event.preventDefault();
+          submitAssist();
         }
       }
     });
@@ -331,7 +737,12 @@
       input.value = "";
       fetchResults("");
     });
-    modalEl.addEventListener("hidden.bs.modal", flushFinal);
+    modalEl.addEventListener("hidden.bs.modal", function () {
+      // Never leave the microphone running, or a countdown pending, once the palette is hidden.
+      stopListening();
+      cancelCountdown();
+      flushFinal();
+    });
 
     // Leaving the page (normal link, back button, tab close) does not fire the modal's hidden
     // event, so finalize here too. pagehide fires on navigation and on bfcache unload.

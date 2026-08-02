@@ -132,6 +132,7 @@ from .filters import (
 )
 from .forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
+    QUICK_ADD_LOT_FIELDS,
     AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
@@ -215,6 +216,7 @@ from .models import (
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
+    LLMUsage,
     Lot,
     LotHistory,
     LotImage,
@@ -249,7 +251,18 @@ from .serializers import (
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
-from .services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member, map_fields
+from .services import (
+    LOT_ADD_BLOCK_BULK_DISABLED,
+    LOT_ADD_BLOCK_NO_TOS,
+    apply_club_member_to_tos,
+    check_in_auctiontos,
+    ensure_club_member,
+    existing_tos_for_club_member,
+    lot_add_block,
+    map_fields,
+    recalculate_seller_invoice,
+    save_new_lot,
+)
 from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -385,9 +398,8 @@ class AuctionViewMixin:
             self.allow_non_admins = prev_allow_non_admins
         if is_admin:
             return True
-        if self.auction and self.auction.is_club_managed:
-            if check_club_permission(self.request.user, self.auction.club, "permission_add_edit"):
-                return True
+        if user_can_add_edit_people(self.request.user, self.auction):
+            return True
         raise PermissionDenied()
 
     @property
@@ -420,6 +432,19 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+def user_can_add_edit_people(user, auction):
+    """Can this user manage participants in this auction? (non-raising)
+
+    The club-managed half of ``AuctionViewMixin.can_add_edit_people``, split out so the command
+    palette's ``check_in`` action asks exactly the same question the check-in modal does without
+    having to build a view. Callers that also accept plain auction admins should check
+    ``auction.permission_check(user)`` first, as the mixin does.
+    """
+    if not auction or not auction.is_club_managed:
+        return False
+    return check_club_permission(user, auction.club, "permission_add_edit")
 
 
 _UNSET = object()
@@ -4157,23 +4182,7 @@ window.mountHtmxModal(document.currentScript.previousElementSibling);
 
     def post(self, request, *args, **kwargs):
         tos = self.auctiontos
-        bidder_number = (request.POST.get("bidder_number") or "").strip()
-        update_fields = []
-        if not tos.checked_in:
-            tos.checked_in = timezone.now()
-            update_fields.append("checked_in")
-        if not tos.bidding_allowed:
-            tos.bidding_allowed = True
-            update_fields.append("bidding_allowed")
-        if update_fields:
-            tos.save(update_fields=update_fields)
-        if bidder_number and bidder_number != tos.bidder_number:
-            tos.force_set_bidder_number(bidder_number, acting_user=request.user)
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Checked in {tos.name}",
-            user=request.user,
-        )
+        check_in_auctiontos(tos, acting_user=request.user, bidder_number=request.POST.get("bidder_number", ""))
         messages.success(request, f"Checked in {tos.name}.")
         return close_modal_response("reload-page")
 
@@ -4756,6 +4765,61 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
+    def cross_check_price_and_winner(self, lot, price, winner, action, lot_error, price_error, winner_error):
+        """The price/winner checks that need the lot, price and winner all resolved together.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
+        action runs exactly these checks rather than a parallel copy of them.
+        Returns the possibly-updated ``(price_error, winner_error)``.
+        """
+        if (
+            not price_error
+            and lot
+            and winner
+            and lot.high_bidder
+            and lot.auction.online_bidding == "allow"
+            and action != "force_save"
+        ):
+            if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
+                price_error = "Lower than an online bid"
+                winner_error = f"Bidder {lot.high_bidder_for_admins} has bid more than this"
+        if not price_error and price and lot and not lot_error and action != "force_save":
+            if lot.reserve_price and price < lot.reserve_price:
+                price_error = f"This lot's minimum bid is ${lot.reserve_price}"
+            if price < self.auction.minimum_bid:
+                price_error = f"Minimum bid is ${self.auction.minimum_bid}"
+        return price_error, winner_error
+
+    def commit_winner(self, lot, winner, price, action, result):
+        """Record the sale: set the winner, check the buyer in on force_save, log history, advance the queue.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
+        action commits through this exact code instead of reimplementing it.
+        """
+        result["success_message"] = self.set_winner(lot, winner, price)
+        if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
+            winner.checked_in = timezone.now()
+            update_fields = ["checked_in"]
+            if not winner.bidding_allowed:
+                winner.bidding_allowed = True
+                update_fields.append("bidding_allowed")
+            winner.save(update_fields=update_fields)
+            lot.auction.create_history(
+                applies_to="USERS",
+                action=f"Checked in {winner.name} (ignored errors, lot sold)",
+                user=self.request.user,
+            )
+        try:
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
+                user=self.request.user,
+            )
+        except Exception:
+            logger.exception("create_history failed for lot %s", lot.pk)
+        self.pop_queue_and_set_next(lot, result)
+        return result
+
     def post(self, request, *args, **kwargs):
         """All lot validation checks called from here"""
         lot = request.POST.get("lot", None)
@@ -4806,48 +4870,14 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 logger.exception("create_history failed for lot %s", lot.pk)
             self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
-        if (
-            not price_error
-            and lot
-            and winner
-            and lot.high_bidder
-            and lot.auction.online_bidding == "allow"
-            and action != "force_save"
-        ):
-            if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
-                price_error = "Lower than an online bid"
-                winner_error = f"Bidder {lot.high_bidder_for_admins} has bid more than this"
-        if not price_error and price and lot and not lot_error and action != "force_save":
-            if lot.reserve_price and price < lot.reserve_price:
-                price_error = f"This lot's minimum bid is ${lot.reserve_price}"
-            if price < self.auction.minimum_bid:
-                price_error = f"Minimum bid is ${self.auction.minimum_bid}"
+        price_error, winner_error = self.cross_check_price_and_winner(
+            lot, price, winner, action, lot_error, price_error, winner_error
+        )
         if not lot_error and not price_error and not winner_error:
             if action != "validate":
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
-                result["success_message"] = self.set_winner(lot, winner, price)
-                if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
-                    winner.checked_in = timezone.now()
-                    update_fields = ["checked_in"]
-                    if not winner.bidding_allowed:
-                        winner.bidding_allowed = True
-                        update_fields.append("bidding_allowed")
-                    winner.save(update_fields=update_fields)
-                    lot.auction.create_history(
-                        applies_to="USERS",
-                        action=f"Checked in {winner.name} (ignored errors, lot sold)",
-                        user=self.request.user,
-                    )
-                try:
-                    lot.auction.create_history(
-                        applies_to="LOTS",
-                        action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
-                        user=self.request.user,
-                    )
-                except Exception:
-                    logger.exception("create_history failed for lot %s", lot.pk)
-                self.pop_queue_and_set_next(lot, result)
+                self.commit_winner(lot, winner, price, action, result)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -6447,19 +6477,17 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
             for lot in lots:
-                lot.auctiontos_seller = self.tos
-                lot.auction = self.auction
-                if self.tos.user:
-                    lot.user = self.tos.user
-                # if not lot.description:
-                #    lot.description = ""
                 if not lot.pk:
                     new_lot_count += 1
-                    lot.added_by = self.request.user
-                    if not self.is_admin:
-                        if self.tos.user:
-                            lot.user = self.tos.user
-                lot.save()
+                    # save_new_lot is shared with the command palette's add_lot action so a lot
+                    # added by voice lands exactly the same way as one added on this page.
+                    save_new_lot(lot, auction=self.auction, tos=self.tos, added_by=self.request.user)
+                else:
+                    lot.auctiontos_seller = self.tos
+                    lot.auction = self.auction
+                    if self.tos.user:
+                        lot.user = self.tos.user
+                    lot.save()
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
                 self.auction.create_history(
@@ -6468,10 +6496,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     user=self.request.user,
                 )
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
-                invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
-                if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-                invoice.recalculate()
+                recalculate_seller_invoice(self.auction, self.tos)
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
             if "print" in str(self.request.GET.get("type", "")):
@@ -6518,24 +6543,17 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-        if not self.tos:
-            messages.error(request, "You can't add lots until you join this auction")
-            return redirect(
-                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
-            )
-        else:
-            if not self.tos.selling_allowed and not self.is_admin:
-                messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.can_submit_lots:
-            messages.error(request, f"Lot submission has ended for {self.auction}")
+        block = lot_add_block(self.auction, self.tos, self.is_admin)
+        if block:
+            code, message = block
+            messages.error(request, message)
+            if code == LOT_ADD_BLOCK_NO_TOS:
+                return redirect(
+                    f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                )
+            if code == LOT_ADD_BLOCK_BULK_DISABLED:
+                return redirect(self.auction.add_lot_link)
             return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
-            messages.error(
-                request,
-                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
-            )
-            return redirect(self.auction.add_lot_link)
         self.queryset = self.tos.unbanned_lot_qs
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
@@ -6551,20 +6569,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         self.LotFormSet = modelformset_factory(
             Lot,
             extra=extra,
-            fields=(
-                # "custom_lot_number",
-                "lot_name",
-                "summernote_description",
-                "species_category",
-                "i_bred_this_fish",
-                "quantity",
-                "donation",
-                "reserve_price",
-                "buy_now_price",
-                "custom_checkbox",
-                "custom_field_1",
-                "custom_dropdown",
-            ),
+            fields=QUICK_ADD_LOT_FIELDS,
             form=QuickAddLot,
         )
         return super().dispatch(request, *args, **kwargs)
@@ -6658,24 +6663,17 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-        if not self.tos:
-            messages.error(request, "You can't add lots until you join this auction")
-            return redirect(
-                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
-            )
-        else:
-            if not self.tos.selling_allowed and not self.is_admin:
-                messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.can_submit_lots:
-            messages.error(request, f"Lot submission has ended for {self.auction}")
+        block = lot_add_block(self.auction, self.tos, self.is_admin)
+        if block:
+            code, message = block
+            messages.error(request, message)
+            if code == LOT_ADD_BLOCK_NO_TOS:
+                return redirect(
+                    f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                )
+            if code == LOT_ADD_BLOCK_BULK_DISABLED:
+                return redirect(self.auction.add_lot_link)
             return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
-            messages.error(
-                request,
-                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
-            )
-            return redirect(self.auction.add_lot_link)
         self.queryset = self.tos.unbanned_lot_qs
         return super().dispatch(request, *args, **kwargs)
 
@@ -23836,6 +23834,70 @@ class CommandPaletteLogView(View):
         return JsonResponse({"id": search_id})
 
 
+class CommandPaletteAssistBase(View):
+    """Shared plumbing for the two natural-language endpoints: JSON body parsing and throttling.
+
+    Both endpoints are login-only (applied in ``urls.py``, like the other palette routes) and both
+    are throttled before any work happens, so a throttled request can never reach the model.
+    """
+
+    def load_json(self, request):
+        """Parse the request body as JSON. Returns ``{}`` for anything unparseable."""
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def throttled_response(self, request):
+        """A 429 with a message the palette renders, or ``None`` when the user is under the limit."""
+        from auctions import palette_assist
+
+        message = palette_assist.check_cooldown(request.user)
+        if message:
+            return JsonResponse({"kind": "error", "message": message}, status=429)
+        return None
+
+
+class CommandPaletteAssistView(CommandPaletteAssistBase):
+    """Turn a natural-language command palette query into results, a navigation, or an action.
+
+    POST JSON: ``{"q": "...", "context": [...]}``. Returns one of the assist response kinds
+    (results / navigate / countdown / clarify / done / error). Nothing that changes the database
+    happens here -- confirm-tier actions come back as a countdown and are run by the execute
+    endpoint.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        throttled = self.throttled_response(request)
+        if throttled:
+            return throttled
+        data = self.load_json(request)
+        response = palette_assist.assist(request, data.get("q", ""), data.get("context"))
+        return JsonResponse(response)
+
+
+class CommandPaletteExecuteView(CommandPaletteAssistBase):
+    """Run a confirm-tier palette action once the client's countdown has elapsed.
+
+    POST JSON: ``{"action": "...", "params": {...}}``. The countdown is client-side UX only --
+    this re-runs the action's own resolver, so permissions and validation are checked here
+    independently of whatever the assist call decided a moment ago.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        throttled = self.throttled_response(request)
+        if throttled:
+            return throttled
+        data = self.load_json(request)
+        response = palette_assist.execute(request, data.get("action", ""), data.get("params"))
+        return JsonResponse(response)
+
+
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     """Admin overview of what people search for in the command palette.
 
@@ -23860,4 +23922,23 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         context["top_bounces"] = top(base.filter(result="bounce"))
         context["total_searches"] = base.count()
         context["total_bounces"] = base.filter(result="bounce").count()
+        # Natural-language assist: what it's being used for and what it's costing.
+        usage = LLMUsage.objects.all()
+        totals = usage.aggregate(
+            calls=Count("id"),
+            prompt=Sum("prompt_tokens"),
+            completion=Sum("completion_tokens"),
+            total=Sum("total_tokens"),
+        )
+        context["llm_calls"] = totals["calls"] or 0
+        context["llm_prompt_tokens"] = totals["prompt"] or 0
+        context["llm_completion_tokens"] = totals["completion"] or 0
+        context["llm_total_tokens"] = totals["total"] or 0
+        context["llm_failures"] = usage.filter(success=False).count()
+        context["llm_by_action"] = list(
+            usage.exclude(action="")
+            .values("action")
+            .annotate(count=Count("id"), tokens=Sum("total_tokens"))
+            .order_by("-count")[:10]
+        )
         return context

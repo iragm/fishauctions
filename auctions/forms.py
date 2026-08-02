@@ -20,6 +20,7 @@ from django.core.files.uploadedfile import UploadedFile
 from django.db.models import Q
 from django.forms import (
     HiddenInput,
+    modelform_factory,
 )
 from django.urls import reverse
 from django.utils import timezone
@@ -260,6 +261,25 @@ class QuickAddTOS(forms.ModelForm):
         return cleaned_data
 
 
+# The Lot fields the quick-add form edits. ``QuickAddLot.__init__`` reaches for several of these
+# by name (including ``summernote_description``, which its own Meta.fields leaves out), so the form
+# is only usable when built with exactly this list. Shared by the bulk-add page's formset factory
+# and by the command palette's add_lot action, so both build the identical form.
+QUICK_ADD_LOT_FIELDS = (
+    "lot_name",
+    "summernote_description",
+    "species_category",
+    "i_bred_this_fish",
+    "quantity",
+    "donation",
+    "reserve_price",
+    "buy_now_price",
+    "custom_checkbox",
+    "custom_field_1",
+    "custom_dropdown",
+)
+
+
 class QuickAddLot(forms.ModelForm):
     """Add a new lot by filling out only the most important fields"""
 
@@ -465,6 +485,15 @@ class QuickAddLot(forms.ModelForm):
                             "This needs to be a donation due to the max lots per user allowed in this auction",
                         )
         return cleaned_data
+
+
+def quick_add_lot_form_class():
+    """The concrete quick-add lot form, with the same fields the bulk-add page builds it with.
+
+    Use this instead of instantiating :class:`QuickAddLot` directly -- on its own it is missing
+    the fields its ``__init__`` configures, and raises ``KeyError``.
+    """
+    return modelform_factory(Lot, form=QuickAddLot, fields=QUICK_ADD_LOT_FIELDS)
 
 
 class TOSFormSetHelper(FormHelper):

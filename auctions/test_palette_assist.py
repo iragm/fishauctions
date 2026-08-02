@@ -1,0 +1,608 @@
+"""Tests for the command palette's natural-language assist.
+
+Everything runs against a :class:`FakeProvider` installed with ``llm.set_provider_override`` --
+no network, and every test can script exactly what the model "says", including malformed replies.
+
+The things worth guarding here are the ones that would be expensive to get wrong: that an obvious
+query never costs a model call, that nothing the model returns can widen what a user is allowed to
+do, and that the execute endpoint is a real gate rather than a rubber stamp on the countdown.
+"""
+
+import datetime
+import json
+
+from django.core.cache import cache
+from django.test import Client, override_settings
+from django.urls import reverse
+from django.utils import timezone
+
+from auctions import llm, palette_actions, palette_assist
+from auctions.llm import LLMError, LLMProvider, LLMResult
+from auctions.models import AuctionTOS, LLMUsage, Lot
+from auctions.tests import StandardTestCase
+
+
+class FakeProvider(LLMProvider):
+    """A scripted provider. Hand it the replies you want, in order."""
+
+    name = "fake"
+
+    def __init__(self, replies=None):
+        super().__init__(model="fake-model", api_key="fake-key")
+        self.replies = list(replies or [])
+        self.calls = []
+
+    def is_configured(self):
+        return True
+
+    def complete_json(self, system, messages, max_tokens=800):
+        self.calls.append({"system": system, "messages": messages})
+        if not self.replies:
+            msg = "FakeProvider ran out of scripted replies"
+            raise LLMError(msg)
+        return LLMResult(data=self.replies.pop(0), model="fake-model", prompt_tokens=11, completion_tokens=7)
+
+    @property
+    def call_count(self):
+        return len(self.calls)
+
+
+@override_settings(SINGLE_CLUB_MODE=False)
+class PaletteAssistTestCase(StandardTestCase):
+    """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles."""
+
+    def setUp(self):
+        super().setUp()
+        self.provider = FakeProvider()
+        llm.set_provider_override(self.provider)
+        self._clear_throttles(self.user)
+        self._clear_throttles(self.admin_user)
+        self._clear_throttles(self.userB)
+        # An in-person auction that is genuinely open for lot submission, so add_lot has somewhere
+        # legitimate to go. StandardTestCase's auctions are mostly in the past.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.lot_submission_start_date = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.max_lots_per_user = None
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        # self.user created both auctions, so they are always an admin. A plain participant is
+        # needed for the permission tests: in_person_buyer is user_with_no_lots' TOS (bidder 555).
+        self.member = self.user_with_no_lots
+        self.member.userdata.last_auction_used = self.in_person_auction
+        self.member.userdata.save()
+        self._clear_throttles(self.member)
+        self.assertFalse(self.in_person_auction.permission_check(self.member))
+
+    def tearDown(self):
+        llm.set_provider_override(None)
+        super().tearDown()
+
+    # -- helpers ----------------------------------------------------------
+
+    def _clear_throttles(self, user):
+        cache.delete(f"palette_assist_cooldown_{user.pk}")
+        cache.delete(f"palette_assist_calls_{user.pk}")
+
+    def _script(self, *replies):
+        self.provider.replies = list(replies)
+        self.provider.calls = []
+
+    def _assist(self, query, context=None, user=None, skip_throttle_reset=False):
+        """POST to the assist endpoint as ``user`` (defaults to self.user)."""
+        user = user or self.user
+        if not skip_throttle_reset:
+            cache.delete(f"palette_assist_cooldown_{user.pk}")
+        self.client.force_login(user)
+        return self.client.post(
+            reverse("command_palette_assist"),
+            data=json.dumps({"q": query, "context": context or []}),
+            content_type="application/json",
+        )
+
+    def _execute(self, action, params, user=None):
+        user = user or self.user
+        cache.delete(f"palette_assist_cooldown_{user.pk}")
+        self.client.force_login(user)
+        return self.client.post(
+            reverse("command_palette_execute"),
+            data=json.dumps({"action": action, "params": params}),
+            content_type="application/json",
+        )
+
+
+class HeuristicTests(PaletteAssistTestCase):
+    """Obvious queries must never reach the model."""
+
+    def test_short_query_with_a_match_skips_the_llm(self):
+        self._script({"action": "open_page", "params": {"page": "nope"}})
+        response = self._assist("This auction is in-person")
+        data = response.json()
+        self.assertEqual(data["kind"], "results")
+        self.assertEqual(self.provider.call_count, 0, "a short query with an obvious match must not call the LLM")
+
+    def test_command_phrasing_reaches_the_llm_even_when_short(self):
+        self._script({"error": "nope"})
+        self._assist("add a lot")
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_long_query_reaches_the_llm(self):
+        self._script({"error": "nope"})
+        self._assist("please add a lot of blue shrimp to my most recent auction for me")
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_empty_query_returns_default_results(self):
+        self._script({"error": "nope"})
+        response = self._assist("")
+        self.assertEqual(response.json()["kind"], "results")
+        self.assertEqual(self.provider.call_count, 0)
+
+
+class AuthAndThrottleTests(PaletteAssistTestCase):
+    """Both endpoints are login-only, and both are throttled before any model call."""
+
+    def test_endpoints_require_login(self):
+        client = Client()
+        self._script({"error": "nope"})
+        resp = client.post(
+            reverse("command_palette_assist"), data=json.dumps({"q": "add a lot"}), content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("login", resp.url.lower())
+        resp = client.post(
+            reverse("command_palette_execute"),
+            data=json.dumps({"action": "add_lot", "params": {}}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.provider.call_count, 0, "an anonymous request must never reach the LLM")
+
+    def test_rapid_second_assist_is_throttled(self):
+        self._script({"error": "first"}, {"error": "second"})
+        first = self._assist("add a lot of blue shrimp for someone")
+        self.assertEqual(first.status_code, 200)
+        calls_after_first = self.provider.call_count
+        second = self._assist("add another lot of blue shrimp", skip_throttle_reset=True)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["kind"], "error")
+        self.assertTrue(second.json()["message"])
+        self.assertEqual(self.provider.call_count, calls_after_first, "a throttled request must not reach the provider")
+
+    def test_execute_is_throttled_too(self):
+        self._execute("add_lot", {"name": "x"})
+        self.client.force_login(self.user)
+        second = self.client.post(
+            reverse("command_palette_execute"),
+            data=json.dumps({"action": "add_lot", "params": {"name": "x"}}),
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, 429)
+
+    def test_sustained_call_budget(self):
+        cache.set(f"palette_assist_calls_{self.user.pk}", palette_assist.WINDOW_MAX_CALLS, timeout=300)
+        self._script({"error": "nope"})
+        response = self._assist("add a lot of blue shrimp please")
+        self.assertEqual(response.json()["kind"], "error")
+        self.assertEqual(self.provider.call_count, 0, "over the window cap, no model call should happen")
+
+
+class UntrustedOutputTests(PaletteAssistTestCase):
+    """Whatever the model returns is input, not instruction."""
+
+    def test_malformed_reply_is_rejected(self):
+        self._script({"nonsense": True}, {"also": "wrong"}, [], "not even a dict")
+        response = self._assist("do something impossible with several words")
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_unknown_action_is_rejected(self):
+        self._script({"action": "delete_everything", "params": {}}, {"error": "gave up"})
+        response = self._assist("please delete the entire database now")
+        self.assertIn(response.json()["kind"], {"error", "clarify"})
+        self.assertFalse(Lot.objects.filter(is_deleted=True, lot_name="delete_everything").exists())
+
+    def test_unknown_param_is_rejected(self):
+        result = palette_actions.run_action(self._request_for(self.user), "add_lot", {"name": "x", "sudo": True})
+        self.assertIn("error", result)
+
+    def test_unknown_lookup_is_rejected(self):
+        parsed = palette_assist.parse_reply({"lookup": "read_all_invoices", "params": {}})
+        self.assertEqual(parsed["kind"], "invalid")
+
+    def test_non_lookup_action_cannot_be_used_as_a_lookup(self):
+        parsed = palette_assist.parse_reply({"lookup": "add_lot", "params": {}})
+        self.assertEqual(parsed["kind"], "invalid")
+
+    def _request_for(self, user):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user
+        return request
+
+
+class DangerTierTests(PaletteAssistTestCase):
+    """safe executes now, confirm counts down, navigate goes to the page."""
+
+    def test_safe_action_runs_during_assist(self):
+        self._script({"action": "my_context", "params": {}, "summary": "Look you up"})
+        response = self._assist("tell me everything about my current situation")
+        data = response.json()
+        self.assertEqual(data["kind"], "done")
+
+    def test_confirm_action_returns_a_countdown_and_writes_nothing(self):
+        before = Lot.objects.filter(lot_name="blue shrimp").count()
+        self._script(
+            {
+                "action": "add_lot",
+                "params": {"name": "blue shrimp", "quantity": 1},
+                "summary": "Add a lot of blue shrimp",
+            }
+        )
+        response = self._assist("add a lot of blue shrimp to my auction")
+        data = response.json()
+        self.assertEqual(data["kind"], "countdown")
+        self.assertEqual(data["action"], "add_lot")
+        self.assertEqual(data["delay_ms"], palette_assist.COUNTDOWN_MS)
+        self.assertEqual(
+            Lot.objects.filter(lot_name="blue shrimp").count(), before, "assist must not write; execute does"
+        )
+
+    def test_execute_actually_adds_the_lot(self):
+        response = self._execute("add_lot", {"name": "blue shrimp", "quantity": 2})
+        data = response.json()
+        self.assertEqual(data["kind"], "done", data)
+        lot = Lot.objects.filter(lot_name="blue shrimp", auction=self.in_person_auction).first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(lot.quantity, 2)
+        self.assertEqual(lot.auctiontos_seller, self.in_person_tos)
+
+    def test_navigate_action_returns_a_url_and_does_not_act(self):
+        self._script({"action": "print_labels", "params": {"scope": "mine"}, "summary": "Open labels"})
+        response = self._assist("I would like to print all of my labels now")
+        data = response.json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertIn("print-my-labels", data["url"])
+
+    def test_execute_refuses_non_confirm_actions(self):
+        response = self._execute("open_page", {"page": "invoice"})
+        self.assertEqual(response.json()["kind"], "error")
+
+
+class PermissionTests(PaletteAssistTestCase):
+    """The model can ask for anything; the resolvers decide what actually happens."""
+
+    def test_non_admin_cannot_add_a_lot_for_someone_else(self):
+        response = self._execute("add_lot", {"name": "sneaky lot", "bidder": "555"}, user=self.member)
+        data = response.json()
+        self.assertEqual(data["kind"], "error")
+        self.assertIn("admin", data["message"].lower())
+        self.assertFalse(Lot.objects.filter(lot_name="sneaky lot").exists())
+
+    def test_admin_can_add_a_lot_for_a_bidder(self):
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(bidder_number="555")
+        self.admin_user.userdata.last_auction_used = self.in_person_auction
+        self.admin_user.userdata.save()
+        response = self._execute("add_lot", {"name": "admin added lot", "bidder": "555"}, user=self.admin_user)
+        data = response.json()
+        self.assertEqual(data["kind"], "done", data)
+        lot = Lot.objects.filter(lot_name="admin added lot").first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(lot.auctiontos_seller.bidder_number, "555")
+
+    def test_non_admin_cannot_set_a_lot_winner(self):
+        response = self._execute("set_lot_winner", {"lot": "101-1", "winner": "555", "price": "10"}, user=self.member)
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_non_admin_cannot_check_people_in(self):
+        response = self._execute("check_in", {"person": "555"}, user=self.member)
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_action_on_an_auction_the_user_has_not_joined_fails(self):
+        # user_who_does_not_join has no AuctionTOS anywhere.
+        stranger = self.user_who_does_not_join
+        self._clear_throttles(stranger)
+        response = self._execute(
+            "add_lot", {"name": "trespassing lot", "auction": self.in_person_auction.slug}, user=stranger
+        )
+        data = response.json()
+        self.assertEqual(data["kind"], "error")
+        self.assertFalse(Lot.objects.filter(lot_name="trespassing lot").exists())
+
+    def test_execute_revalidates_independently_of_assist(self):
+        """The countdown params from an admin's assist are worthless in someone else's hands."""
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(bidder_number="555")
+        self.admin_user.userdata.last_auction_used = self.in_person_auction
+        self.admin_user.userdata.save()
+        self._script({"action": "add_lot", "params": {"name": "borrowed lot", "bidder": "555"}, "summary": "Add a lot"})
+        assisted = self._assist("add a lot called borrowed lot for bidder 555", user=self.admin_user)
+        self.assertEqual(assisted.json()["kind"], "countdown")
+        params = assisted.json()["params"]
+        # Replay the admin's exact countdown params as a plain participant. The countdown carries
+        # no authority of its own: execute re-runs the resolver, which refuses.
+        response = self._execute("add_lot", params, user=self.member)
+        data = response.json()
+        self.assertEqual(data["kind"], "error", data)
+        self.assertIn("admin", data["message"].lower())
+        self.assertFalse(Lot.objects.filter(lot_name="borrowed lot").exists())
+
+
+class LookupScopeTests(PaletteAssistTestCase):
+    """Read-only lookups must not become a way to enumerate people."""
+
+    def _run(self, user, params):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user
+        return palette_actions.run_action(request, "find_person", params)
+
+    def test_participant_cannot_enumerate_the_room(self):
+        AuctionTOS.objects.create(
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            name="Secret Attendee",
+            bidder_number="901",
+        )
+        result = self._run(self.member, {"name": "Secret Attendee"})
+        names = [person.get("name", "") for person in result.get("people", [])]
+        self.assertNotIn("Secret Attendee", names, "a plain participant must not be able to look up other attendees")
+
+    def test_admin_can_look_up_a_participant(self):
+        AuctionTOS.objects.create(
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            name="Visible Attendee",
+            bidder_number="902",
+        )
+        result = self._run(self.user, {"name": "Visible Attendee"})
+        names = [person.get("name", "") for person in result.get("people", [])]
+        self.assertIn("Visible Attendee", names)
+
+    def test_my_context_only_describes_the_caller(self):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.member
+        context = palette_actions.user_context(self.member)
+        self.assertEqual(context["username"], self.member.username)
+        self.assertFalse(context["last_auction"]["is_admin"])
+
+
+class ConversationTests(PaletteAssistTestCase):
+    """Lookups, clarification, and remembering what just happened."""
+
+    def test_lookup_round_then_action(self):
+        self._script(
+            {"lookup": "find_person", "params": {"name": "no_lots"}},
+            {"action": "my_context", "params": {}, "summary": "Here's your situation"},
+        )
+        response = self._assist("who is the person called no_lots and what am I working on")
+        self.assertEqual(response.json()["kind"], "done")
+        self.assertEqual(self.provider.call_count, 2, "the lookup result should be fed back for a second round")
+
+    def test_clarify_is_passed_through(self):
+        self._script({"clarify": "Which Bob did you mean?", "options": ["Bob Smith", "Bob Jones"]})
+        response = self._assist("add a lot of blue shrimp for bob please")
+        data = response.json()
+        self.assertEqual(data["kind"], "clarify")
+        self.assertEqual(data["message"], "Which Bob did you mean?")
+        self.assertEqual(data["options"], ["Bob Smith", "Bob Jones"])
+
+    def test_ambiguous_person_becomes_more_info_needed(self):
+        AuctionTOS.objects.create(
+            auction=self.in_person_auction, pickup_location=self.in_person_location, name="Bob Smith"
+        )
+        AuctionTOS.objects.create(
+            auction=self.in_person_auction, pickup_location=self.in_person_location, name="Bob Jones"
+        )
+        self.admin_user.userdata.last_auction_used = self.in_person_auction
+        self.admin_user.userdata.save()
+        response = self._execute("add_lot", {"name": "shrimp", "bidder": "bob"}, user=self.admin_user)
+        data = response.json()
+        self.assertEqual(data["kind"], "clarify")
+        self.assertIn("bob", data["message"].lower())
+
+    def test_context_chaining_resolves_that_label(self):
+        """ "print that label" resolves the lot from the previous exchange."""
+        lot = Lot.objects.create(
+            lot_name="context lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            quantity=1,
+        )
+        self._script({"action": "print_labels", "params": {"lot_id": lot.pk}, "summary": "Print that lot's label"})
+        context = [{"query": "add a lot of blue shrimp", "result": "Added context lot", "data": {"lot_id": lot.pk}}]
+        response = self._assist("print that label", context=context)
+        data = response.json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertEqual(data["url"], reverse("single_lot_label", kwargs={"pk": lot.pk}))
+        # The context really was handed to the model.
+        sent = json.dumps(self.provider.calls[0]["messages"])
+        self.assertIn(str(lot.pk), sent)
+
+    def test_context_is_capped_and_sanitized(self):
+        raw = [{"query": f"q{i}", "result": f"r{i}"} for i in range(20)]
+        raw.append({"query": "x", "result": "y", "data": {"lot_id": 5, "evil": "drop table"}})
+        cleaned = palette_assist.sanitize_context(raw)
+        self.assertLessEqual(len(cleaned), palette_assist.MAX_CONTEXT_ENTRIES)
+        self.assertNotIn("evil", cleaned[-1].get("data", {}))
+
+    def test_context_rejects_junk(self):
+        self.assertEqual(palette_assist.sanitize_context("nope"), [])
+        self.assertEqual(palette_assist.sanitize_context([1, 2, "three"]), [])
+
+
+class BusinessRuleTests(PaletteAssistTestCase):
+    """The action layer must inherit the site's rules, not restate them."""
+
+    def test_lot_submission_closed_is_reported(self):
+        self.in_person_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.save()
+        response = self._execute("add_lot", {"name": "too late"}, user=self.member)
+        data = response.json()
+        self.assertEqual(data["kind"], "error")
+        self.assertIn("submission has ended", data["message"].lower())
+        self.assertFalse(Lot.objects.filter(lot_name="too late").exists())
+
+    def test_missing_lot_name_asks_for_it(self):
+        response = self._execute("add_lot", {"quantity": 1}, user=self.member)
+        self.assertEqual(response.json()["kind"], "clarify")
+
+    def test_selling_not_allowed_is_reported(self):
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(selling_allowed=False)
+        response = self._execute("add_lot", {"name": "not allowed"}, user=self.member)
+        self.assertEqual(response.json()["kind"], "error")
+        self.assertFalse(Lot.objects.filter(lot_name="not allowed").exists())
+
+    def test_check_in_marks_the_person_checked_in(self):
+        # use_check_in_mode is a property: club-managed, with users managed through check-in.
+        from auctions.models import Club
+
+        club = Club.objects.create(name="Check In Club", abbreviation="CIC")
+        self.in_person_auction.club = club
+        self.in_person_auction.manage_users_through_club = "checkin"
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.use_check_in_mode)
+        self.admin_user.userdata.last_auction_used = self.in_person_auction
+        self.admin_user.userdata.save()
+        tos = AuctionTOS.objects.create(
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            name="Arriving Person",
+            bidder_number="777",
+        )
+        response = self._execute("check_in", {"person": "777"}, user=self.admin_user)
+        self.assertEqual(response.json()["kind"], "done", response.json())
+        tos.refresh_from_db()
+        self.assertIsNotNone(tos.checked_in)
+        self.assertTrue(tos.bidding_allowed)
+
+
+class SharedLotAddPathTests(PaletteAssistTestCase):
+    """The bulk-add page and the palette action must stay on one code path.
+
+    ``save_new_lot`` / ``recalculate_seller_invoice`` / ``lot_add_block`` were extracted out of
+    ``BulkAddLots`` for the palette to reuse, and the page's save path had no test of its own, so
+    this covers both sides of the split.
+    """
+
+    def _bulk_post(self, lot_name):
+        """POST one lot through the real bulk-add page as its own formset."""
+        url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        self.client.force_login(self.user)
+        page = self.client.get(url)
+        self.assertEqual(page.status_code, 200)
+        formset = page.context["formset"]
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": str(formset.initial_form_count()),
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "form-0-lot_name": lot_name,
+            "form-0-quantity": "1",
+            "form-0-reserve_price": str(self.in_person_auction.minimum_bid),
+            "form-0-summernote_description": "",
+            "form-0-custom_field_1": "",
+            "form-0-custom_dropdown": "",
+        }
+        return self.client.post(url, data)
+
+    def test_bulk_add_page_still_saves_lots(self):
+        response = self._bulk_post("page added lot")
+        self.assertEqual(response.status_code, 302)
+        lot = Lot.objects.filter(lot_name="page added lot", auction=self.in_person_auction).first()
+        self.assertIsNotNone(lot, "the bulk add page must still create lots after the refactor")
+        self.assertEqual(lot.auctiontos_seller, self.in_person_tos)
+        self.assertEqual(lot.added_by, self.user)
+
+    def test_page_and_palette_produce_equivalent_lots(self):
+        self._bulk_post("via the page")
+        self._execute("add_lot", {"name": "via the palette"})
+        page_lot = Lot.objects.filter(lot_name="via the page").first()
+        palette_lot = Lot.objects.filter(lot_name="via the palette").first()
+        self.assertIsNotNone(page_lot)
+        self.assertIsNotNone(palette_lot)
+        for attribute in ("auction_id", "auctiontos_seller_id", "user_id", "added_by_id"):
+            self.assertEqual(
+                getattr(page_lot, attribute),
+                getattr(palette_lot, attribute),
+                f"{attribute} differs between the page and the palette",
+            )
+
+
+class UsageLoggingTests(PaletteAssistTestCase):
+    """Every model call is accounted for."""
+
+    def test_llm_usage_row_is_written(self):
+        LLMUsage.objects.all().delete()
+        self._script({"action": "my_context", "params": {}, "summary": "ok"})
+        self._assist("tell me about my current auction situation please")
+        usage = LLMUsage.objects.all()
+        self.assertEqual(usage.count(), 1)
+        row = usage.first()
+        self.assertEqual(row.user, self.user)
+        self.assertEqual(row.model, "fake-model")
+        self.assertEqual(row.total_tokens, 18)
+        self.assertEqual(row.action, "my_context")
+        self.assertTrue(row.success)
+
+    def test_failed_call_is_recorded_as_unsuccessful(self):
+        LLMUsage.objects.all().delete()
+        self._script()  # no replies -> the provider raises LLMError
+        response = self._assist("do something that needs the model and several words")
+        self.assertEqual(response.json()["kind"], "error")
+        self.assertTrue(LLMUsage.objects.filter(success=False).exists())
+
+    def test_analytics_page_shows_usage(self):
+        LLMUsage.objects.create(user=self.user, model="fake-model", total_tokens=42, response_kind="done")
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "42")
+
+
+class AssistDisabledTests(PaletteAssistTestCase):
+    """With no provider configured the palette is exactly what it was before."""
+
+    def test_assist_falls_back_to_search(self):
+        llm.set_provider_override(None)
+        with override_settings(OPENAI_API_KEY="", LLM_BASE_URL=""):
+            response = self._assist("add a lot of blue shrimp for bob")
+            data = response.json()
+            self.assertEqual(data["kind"], "results")
+            self.assertIn("groups", data)
+
+    def test_assist_enabled_reflects_the_key(self):
+        llm.set_provider_override(None)
+        with override_settings(OPENAI_API_KEY=""):
+            self.assertFalse(llm.assist_enabled())
+        with override_settings(OPENAI_API_KEY="sk-test"):
+            self.assertTrue(llm.assist_enabled())
+
+
+class RegistryTests(PaletteAssistTestCase):
+    """The prompt is generated from the registry, so the two can't drift apart."""
+
+    def test_prompt_lists_every_action(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        for name in palette_actions.ACTIONS:
+            self.assertIn(name, prompt)
+
+    def test_every_action_has_a_valid_danger_level(self):
+        valid = {
+            palette_actions.DANGER_SAFE,
+            palette_actions.DANGER_CONFIRM,
+            palette_actions.DANGER_NAVIGATE,
+        }
+        for action in palette_actions.ACTIONS.values():
+            self.assertIn(action.danger, valid, action.name)
+
+    def test_lookups_are_all_safe(self):
+        for action in palette_actions.ACTIONS.values():
+            if action.lookup:
+                self.assertEqual(action.danger, palette_actions.DANGER_SAFE, action.name)

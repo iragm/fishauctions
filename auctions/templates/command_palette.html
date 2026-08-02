@@ -31,11 +31,28 @@ Most-of-the-page on desktop; fullscreen on mobile.
   #command-palette-results .cp-item .cp-item-title {
     font-weight: 500;
   }
+  {% comment %} Listening state: the mic pulses so it's obvious the browser is still recording. {% endcomment %}
+  .cp-mic.listening {
+    color: #fff;
+    background-color: #a93226;
+    border-color: #a93226;
+    animation: cp-mic-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes cp-mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(169, 50, 38, 0.7); }
+    50% { box-shadow: 0 0 0 0.5rem rgba(169, 50, 38, 0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cp-mic.listening { animation: none; }
+  }
 </style>
 <div class="modal fade" id="command-palette-modal" tabindex="-1" aria-labelledby="command-palette-input"
      aria-hidden="true"
      data-search-url="{% url 'command_palette' %}"
      data-log-url="{% url 'command_palette_log' %}"
+     data-assist-url="{% url 'command_palette_assist' %}"
+     data-execute-url="{% url 'command_palette_execute' %}"
+     data-assist-enabled="{% if palette_assist_enabled %}1{% else %}0{% endif %}"
      data-csrf="{{ csrf_token }}">
   <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down command-palette-dialog">
     <div class="modal-content">
@@ -44,16 +61,23 @@ Most-of-the-page on desktop; fullscreen on mobile.
           <span class="input-group-text bg-body border-0"><i class="bi bi-search"></i></span>
           <input type="text" id="command-palette-input"
                  class="form-control form-control-lg border-0 shadow-none"
-                 placeholder="Search for anything…"
+                 placeholder="{% if palette_assist_enabled %}Search, or tell me what to do…{% else %}Search for anything…{% endif %}"
                  autocomplete="off" spellcheck="false"
                  aria-label="Search" aria-controls="command-palette-results">
+          {% comment %} Hidden by default; the script removes d-none only when the browser supports speech recognition. {% endcomment %}
+          {% if palette_assist_enabled %}
+          <button type="button" class="btn btn-outline-secondary cp-mic d-none" id="command-palette-mic"
+                  aria-pressed="false" aria-label="Speak a command" title="Speak a command">
+            <i class="bi bi-mic-fill"></i>
+          </button>
+          {% endif %}
         </div>
         <button type="button" class="btn-close ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body pt-2" id="command-palette-results" aria-live="polite"></div>
       <div class="modal-footer py-1 justify-content-start d-none d-md-flex">
         <small class="text-muted">
-          <kbd>↑</kbd> <kbd>↓</kbd> to navigate · <kbd>Enter</kbd> to open · <kbd>Esc</kbd> to close
+          <kbd>↑</kbd> <kbd>↓</kbd> to navigate · <kbd>Enter</kbd> to {% if palette_assist_enabled %}open or run a command{% else %}open{% endif %} · <kbd>Esc</kbd> to close
         </small>
       </div>
     </div>

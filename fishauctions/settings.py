@@ -765,6 +765,15 @@ ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=Fals
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 
+# Natural-language command palette ("assist"). See auctions/llm.py and .env.example.
+# Assist is enabled only when the provider is configured (an API key is set); with no key the
+# command palette behaves exactly as it did before -- plain search, no mic, no LLM calls.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Optional: point at any OpenAI-compatible endpoint (proxy, local model) instead of OpenAI.
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
+
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [
     "albino",

@@ -11675,6 +11675,39 @@ class CommandPaletteSearch(models.Model):
         return f"{self.user} searched '{self.search}' ({self.result})"
 
 
+class LLMUsage(models.Model):
+    """One row per language-model call made by the command palette's natural-language assist.
+
+    Exists to answer "what is this costing and is it working?" -- token totals per user, which
+    actions get run, and how often a query ends in an error. Written by ``palette_assist`` for
+    every provider call, including failed ones (``success=False``), and summarized on the
+    command palette analytics page.
+    """
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True)
+    model = models.CharField(max_length=100, blank=True, help_text="Model string reported by the provider.")
+    prompt_tokens = models.PositiveIntegerField(default=0)
+    completion_tokens = models.PositiveIntegerField(default=0)
+    total_tokens = models.PositiveIntegerField(default=0)
+    query = models.CharField(max_length=600, blank=True, help_text="What the user typed or said.")
+    response_kind = models.CharField(
+        max_length=30,
+        blank=True,
+        help_text="navigate, countdown, clarify, done, error, or lookup for an intermediate round.",
+    )
+    action = models.CharField(max_length=50, blank=True, help_text="Registry action name, when one was chosen.")
+    success = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+        verbose_name = "LLM usage"
+        verbose_name_plural = "LLM usage"
+
+    def __str__(self):
+        return f"{self.user} · {self.model} · {self.total_tokens} tokens ({self.response_kind})"
+
+
 class ChatSubscription(models.Model):
     """Get notifications about new chat messages on lots"""
 

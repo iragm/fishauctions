@@ -33,6 +33,7 @@ from .models import (
     GeneralInterest,
     Invoice,
     InvoicePayment,
+    LLMUsage,
     Location,
     Lot,
     LotHistory,
@@ -111,6 +112,14 @@ class CommandPaletteSearchAdmin(admin.ModelAdmin):
     list_filter = ("result", "result_type")
     search_fields = ("search",)
     readonly_fields = ("createdon", "updatedon")
+
+
+class LLMUsageAdmin(admin.ModelAdmin):
+    model = LLMUsage
+    list_display = ("createdon", "user", "model", "query", "response_kind", "action", "total_tokens", "success")
+    list_filter = ("success", "response_kind", "action", "model")
+    search_fields = ("query", "action")
+    readonly_fields = ("createdon",)
 
 
 class AdCampaignResponseInline(admin.TabularInline):
@@ -1198,6 +1207,7 @@ admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
+admin.site.register(LLMUsage, LLMUsageAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)

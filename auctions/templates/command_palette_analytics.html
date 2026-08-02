@@ -7,6 +7,20 @@
   Add common bounce terms as <code>synonyms</code> on an existing
   <a href="/admin/auctions/commandpalettepage/">command palette page</a>, or create a new page for them.
 </p>
+{% if llm_calls %}
+<div class="alert alert-info">
+  <h5 class="mb-2"><i class="bi bi-stars"></i> Natural-language assist</h5>
+  <p class="mb-1">
+    {{ llm_calls }} model call{{ llm_calls|pluralize }} · {{ llm_total_tokens }} tokens
+    ({{ llm_prompt_tokens }} prompt / {{ llm_completion_tokens }} completion){% if llm_failures %} · {{ llm_failures }} failed{% endif %}.
+  </p>
+  {% if llm_by_action %}
+  <p class="mb-0"><small>
+    {% for row in llm_by_action %}<code>{{ row.action }}</code> ×{{ row.count }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </small></p>
+  {% endif %}
+</div>
+{% endif %}
 <div class="row">
   <div class="col-lg-6 mb-4">
     <h5>Top searches</h5>

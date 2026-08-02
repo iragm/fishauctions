@@ -165,7 +165,17 @@ def site_config(request):
         # When the whole site is one club, the club name duplicates the navbar
         # brand, so templates can hide it.
         "single_club_mode": getattr(settings, "SINGLE_CLUB_MODE", False),
+        # Natural-language command palette. False (no API key configured) means the palette
+        # renders exactly as it did before the feature existed -- no microphone, no assist.
+        "palette_assist_enabled": _palette_assist_enabled(),
     }
+
+
+def _palette_assist_enabled():
+    """Whether the command palette should offer natural-language/voice commands."""
+    from auctions.llm import assist_enabled
+
+    return assist_enabled()
 
 
 def label_print_method(request):

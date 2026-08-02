@@ -213,6 +213,16 @@ urlpatterns = [
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
     path("command-palette/", login_required(views.CommandPaletteView.as_view()), name="command_palette"),
     path("command-palette/log/", login_required(views.CommandPaletteLogView.as_view()), name="command_palette_log"),
+    path(
+        "command-palette/assist/",
+        login_required(views.CommandPaletteAssistView.as_view()),
+        name="command_palette_assist",
+    ),
+    path(
+        "command-palette/execute/",
+        login_required(views.CommandPaletteExecuteView.as_view()),
+        name="command_palette_execute",
+    ),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
