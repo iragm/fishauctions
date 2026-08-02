@@ -2865,7 +2865,9 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                     account_age,
                     data.memo,
                     "Yes" if data.is_club_member else "",
-                    "No" if not data.bidding_allowed else "",
+                    # Spelled out both ways on purpose: this file gets edited and fed back into the user
+                    # importer, where a blank permission cell is ambiguous (it used to mean "no").
+                    "Yes" if data.bidding_allowed else "No",
                     add_to_calendar,
                 ]
             )
@@ -5502,6 +5504,31 @@ class CSVContactImportMixin:
             return None
         return CSVContactImportMixin.CONTACT_STATUS_MAP.get(value.strip().lower())
 
+    # Values a yes/no cell may hold.  A cell that matches neither list (including a blank one) is
+    # "unspecified", not False -- see parse_csv_boolean.
+    CSV_TRUE_VALUES = frozenset({"yes", "y", "true", "t", "1", "x", "✓", "checked", "on", "allowed", "enabled"})
+    CSV_FALSE_VALUES = frozenset({"no", "n", "false", "f", "0", "unchecked", "off", "blocked", "disabled"})
+
+    @staticmethod
+    def parse_csv_boolean(value, extra_true=None):
+        """Read a yes/no cell as True/False, or None when the file didn't say either way.
+
+        None means "unspecified": callers use the field's own default when creating a record and leave an
+        existing record alone when updating.  A blank cell must never read as False -- the user CSV export
+        writes an empty "Bidding allowed" cell for everyone who *can* bid, so blank-means-no turned a
+        re-imported export into a mass revocation and locked whole auctions out of bidding.
+        """
+        text = (value or "").strip().lower()
+        if not text:
+            return None
+        if extra_true and text in extra_true:
+            return True
+        if text in CSVContactImportMixin.CSV_TRUE_VALUES:
+            return True
+        if text in CSVContactImportMixin.CSV_FALSE_VALUES:
+            return False
+        return None
+
     @staticmethod
     def parse_flexible_date(value):
         """Parse a date string, supporting incomplete formats: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
@@ -5629,13 +5656,15 @@ class CSVContactImportMixin:
 
     @staticmethod
     def _merge_planned_fields(primary, duplicate):
-        """Fold a later same-key row's data into the primary planned action: fill only blank string fields
-        (so complementary rows combine without loss) while leaving the primary's existing non-empty values,
-        booleans and ints untouched (so a conflicting value can't be silently flipped). Optional-column
-        ``present`` flags are OR-ed so a column that appears in either row still drives an update."""
+        """Fold a later same-key row's data into the primary planned action: fill only unset fields (so
+        complementary rows combine without loss) while leaving the primary's existing non-empty values,
+        booleans and ints untouched (so a conflicting value can't be silently flipped). A tri-state
+        boolean's explicit ``False`` counts as data and fills a primary that left it unspecified.
+        Optional-column ``present`` flags are OR-ed so a column that appears in either row still drives
+        an update."""
         primary_fields = primary.setdefault("fields", {})
         for key, value in duplicate.get("fields", {}).items():
-            if value in (None, "", False):
+            if value in (None, ""):
                 continue
             if primary_fields.get(key) in (None, ""):
                 primary_fields[key] = value
@@ -5935,17 +5964,19 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         return label
 
     def _parse_user_row(self, row):
-        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has."""
+        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has.
+
+        The three permission-ish booleans are tri-state: True/False when the row says so, None when the
+        cell is blank or unreadable.  None means "use the field default" on a create and "leave it alone"
+        on an update, so a column of blank cells can never strip bidding or admin from a whole roster.
+        """
         club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
-        is_club_member = self.extract_csv_field(row, club_member_fields).lower() in [
-            "yes",
-            "true",
-            "member",
-            "club member",
-            self.auction.alternative_split_label.lower(),
-        ]
-        bidding_allowed = self.extract_csv_field(row, self.BIDDING_FIELDS, "yes").lower() in ["yes", "true"]
-        is_admin = self.extract_csv_field(row, self.ADMIN_FIELDS).lower() in ["yes", "true", "1"]
+        is_club_member = self.parse_csv_boolean(
+            self.extract_csv_field(row, club_member_fields),
+            extra_true={"member", "club member", self.auction.alternative_split_label.lower()},
+        )
+        bidding_allowed = self.parse_csv_boolean(self.extract_csv_field(row, self.BIDDING_FIELDS))
+        is_admin = self.parse_csv_boolean(self.extract_csv_field(row, self.ADMIN_FIELDS))
         fields = {
             "bidder_number": self.extract_csv_field(row, self.BIDDER_NUMBER_FIELDS)[:20],
             "name": self.extract_csv_field(row, self.NAME_FIELDS)[:181],
@@ -5958,12 +5989,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             "is_admin": is_admin,
         }
         cols = list(row.keys())
-        present = {
-            "is_club_member": self.csv_columns_exist(cols, club_member_fields),
-            "bidding_allowed": self.csv_columns_exist(cols, self.BIDDING_FIELDS),
-            "memo": self.csv_columns_exist(cols, self.MEMO_FIELDS),
-            "is_admin": self.csv_columns_exist(cols, self.ADMIN_FIELDS),
-        }
+        # Only the non-boolean optional columns need a header-level "present" flag; the booleans carry
+        # their own None-means-unspecified sentinel, which is per row rather than per file.
+        present = {"memo": self.csv_columns_exist(cols, self.MEMO_FIELDS)}
         return fields, present
 
     def plan_row(self, row):
@@ -6000,25 +6028,39 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         bidder_number = fields.get("bidder_number", "")
         if bidder_number and AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exists():
             bidder_number = ""
-        return AuctionTOS.objects.create(
-            auction=self.auction,
-            pickup_location=self.auction.location_qs.first(),
-            manually_added=True,
-            bidder_number=bidder_number,
-            name=fields.get("name", ""),
-            phone_number=fields.get("phone", ""),
-            email=fields.get("email", ""),
-            address=fields.get("address", ""),
-            is_club_member=fields.get("is_club_member", False),
-            bidding_allowed=fields.get("bidding_allowed", True),
-            memo=fields.get("memo", ""),
-            is_admin=fields.get("is_admin", False),
-        )
+        bidding_allowed = fields.get("bidding_allowed")
+        create_kwargs = {
+            "auction": self.auction,
+            "pickup_location": self.auction.location_qs.first(),
+            "manually_added": True,
+            "bidder_number": bidder_number,
+            "name": fields.get("name", ""),
+            "phone_number": fields.get("phone", ""),
+            "email": fields.get("email", ""),
+            "address": fields.get("address", ""),
+            "is_club_member": bool(fields.get("is_club_member")),
+            "memo": fields.get("memo", ""),
+            "is_admin": bool(fields.get("is_admin")),
+        }
+        if bidding_allowed is not None:
+            create_kwargs["bidding_allowed"] = bidding_allowed
+        # When the file said nothing, bidding_allowed is left off entirely so AuctionTOS.save() decides it
+        # from the auction's own rules (only_approved_bidders and the manually-added/past-participant
+        # exemptions) -- exactly what this person would have got had an admin added them by hand.
+        tos = AuctionTOS.objects.create(**create_kwargs)
+        if bidding_allowed is not None and tos.bidding_allowed != bidding_allowed:
+            # Those same rules force-allow bidding for every manually added user in an approval auction,
+            # so an explicit "no" in the file has to be re-applied over the top of them; otherwise a club
+            # that runs its allow/deny list through the importer can never deny anyone.
+            tos.bidding_allowed = bidding_allowed
+            tos.save(update_fields=["bidding_allowed"])
+        return tos
 
     def _update_tos(self, tos, fields, present):
-        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when their
-        column was present in the file; the CSV bidder number wins (when non-conflicting) so the number
-        physically assigned at check-in is the one the scanner resolves to. Returns True if anything changed."""
+        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when the row
+        actually said yes or no (a blank cell leaves the current value alone); the CSV bidder number wins
+        (when non-conflicting) so the number physically assigned at check-in is the one the scanner
+        resolves to. Returns True if anything changed."""
         changed = False
         name = fields.get("name", "")
         if name and tos.name != name:
@@ -6036,19 +6078,22 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         if email and not tos.email:
             tos.email = email
             changed = True
-        if present.get("is_club_member") and tos.is_club_member != fields.get("is_club_member"):
-            tos.is_club_member = fields.get("is_club_member")
+        is_club_member = fields.get("is_club_member")
+        if is_club_member is not None and tos.is_club_member != is_club_member:
+            tos.is_club_member = is_club_member
             changed = True
-        if present.get("bidding_allowed") and tos.bidding_allowed != fields.get("bidding_allowed"):
-            tos.bidding_allowed = fields.get("bidding_allowed")
+        bidding_allowed = fields.get("bidding_allowed")
+        if bidding_allowed is not None and tos.bidding_allowed != bidding_allowed:
+            tos.bidding_allowed = bidding_allowed
             changed = True
         if present.get("memo"):
             memo = fields.get("memo", "")
             if tos.memo != memo:
                 tos.memo = memo
                 changed = True
-        if present.get("is_admin") and tos.is_admin != fields.get("is_admin"):
-            tos.is_admin = fields.get("is_admin")
+        is_admin = fields.get("is_admin")
+        if is_admin is not None and tos.is_admin != is_admin:
+            tos.is_admin = is_admin
             changed = True
         bidder_number = fields.get("bidder_number", "")
         if bidder_number and tos.bidder_number != bidder_number:

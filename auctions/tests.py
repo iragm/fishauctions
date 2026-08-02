@@ -3891,6 +3891,130 @@ class CSVImportTests(StandardTestCase):
         self.assertIn("1 users added", history.action)
 
 
+class CSVImportBiddingPermissionTests(StandardTestCase):
+    """The "allow bidding" column, which decides whether people can bid at all.
+
+    A blank cell in that column used to mean "no", and the user CSV export leaves it blank for everyone
+    who *can* bid -- so exporting the user list and importing it back silently revoked bidding from every
+    user in the auction, and the only symptom was "Bid failed! This auction requires admin approval".
+    """
+
+    def _import(self, rows, header=("email", "name", "bidding allowed")):
+        csv_buffer = io.StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(header)
+        for row in rows:
+            writer.writerow(row)
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+        self.client.login(username="admin_user", password="testpassword")
+        return self.run_csv_import(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            csv_file,
+        )
+
+    def _tos(self, email):
+        return AuctionTOS.objects.filter(auction=self.online_auction, email=email).first()
+
+    def test_blank_bidding_cell_does_not_disable_bidding_for_a_new_user(self):
+        self._import([["new@example.com", "New User", ""]])
+        self.assertTrue(self._tos("new@example.com").bidding_allowed)
+
+    def test_blank_bidding_cell_leaves_an_existing_user_alone(self):
+        """Re-importing an exported user list must not revoke bidding from everyone in the auction."""
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", ""]])
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.bidding_allowed)
+
+    def test_explicit_no_disables_bidding(self):
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", "No"]])
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.bidding_allowed)
+
+    def test_explicit_yes_restores_bidding(self):
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = False
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", "Yes"]])
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.bidding_allowed)
+
+    def test_common_yes_and_no_spellings_are_understood(self):
+        self._import(
+            [
+                ["y@example.com", "Y User", "Y"],
+                ["one@example.com", "One User", "1"],
+                ["padded@example.com", "Padded User", "  TRUE  "],
+                ["x@example.com", "X User", "x"],
+                ["n@example.com", "N User", "N"],
+                ["zero@example.com", "Zero User", "0"],
+                ["false@example.com", "False User", " False "],
+            ]
+        )
+        for email in ("y@example.com", "one@example.com", "padded@example.com", "x@example.com"):
+            self.assertTrue(self._tos(email).bidding_allowed, f"{email} should be allowed to bid")
+        for email in ("n@example.com", "zero@example.com", "false@example.com"):
+            self.assertFalse(self._tos(email).bidding_allowed, f"{email} should not be allowed to bid")
+
+    def test_unreadable_value_leaves_bidding_at_the_default(self):
+        self._import([["huh@example.com", "Huh User", "maybe?"]])
+        self.assertTrue(self._tos("huh@example.com").bidding_allowed)
+
+    def test_no_bidding_column_at_all_allows_bidding(self):
+        self._import([["nocolumn@example.com", "No Column User"]], header=("email", "name"))
+        self.assertTrue(self._tos("nocolumn@example.com").bidding_allowed)
+
+    def test_explicit_no_wins_over_the_manually_added_default(self):
+        """AuctionTOS.save() force-allows bidding for manually added users in an approval auction."""
+        self.online_auction.only_approved_bidders = True
+        self.online_auction.save()
+        self._import(
+            [
+                ["denied@example.com", "Denied User", "no"],
+                ["allowed@example.com", "Allowed User", ""],
+            ]
+        )
+        self.assertFalse(self._tos("denied@example.com").bidding_allowed)
+        self.assertTrue(self._tos("allowed@example.com").bidding_allowed)
+
+    def test_blank_admin_cell_does_not_strip_an_existing_admin(self):
+        """Same rule on the admin column: a roster with one 'yes' can't demote everyone else."""
+        self.admin_online_tos.email = "theadmin@example.com"
+        self.admin_online_tos.save()
+        self._import(
+            [["theadmin@example.com", self.admin_online_tos.name, ""]],
+            header=("email", "name", "admin"),
+        )
+        # The row matched the existing record by email rather than creating a second one...
+        self.assertEqual(
+            AuctionTOS.objects.filter(auction=self.online_auction, email="theadmin@example.com").count(), 1
+        )
+        # ...and the blank cell left their admin flag alone.
+        self.admin_online_tos.refresh_from_db()
+        self.assertTrue(self.admin_online_tos.is_admin)
+
+    def test_user_csv_export_spells_out_bidding_allowed(self):
+        """The export is a round-trip source for the importer, so it can't leave the column blank."""
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("user_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        rows = list(csv.reader(response.content.decode("utf-8").splitlines()))
+        column = rows[0].index("Bidding allowed")
+        values = {row[column] for row in rows[1:] if row}
+        self.assertIn("Yes", values)
+        self.assertIn("No", values)
+        self.assertNotIn("", values)
+
+
 class CSVImportPreviewTests(StandardTestCase):
     """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
 
