@@ -789,7 +789,10 @@ class MobileSocialAuthView(APIView):
             sociallogin = build_sociallogin(django_request, data)
         except SocialAuthError as exc:
             logger.info("Mobile social sign-in rejected: %s", exc)
-            return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response(
+                {"detail": "Unable to complete social sign-in."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         provider = sociallogin.account.provider
         uid = sociallogin.account.uid
