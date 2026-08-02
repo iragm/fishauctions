@@ -913,6 +913,11 @@ urlpatterns = [
         name="bap_embed",
     ),
     path(
+        "clubs/<slug:slug>/events-embed/",
+        views.ClubEventsEmbedView.as_view(),
+        name="club_events_embed",
+    ),
+    path(
         "clubs/<slug:slug>/print-barcodes/",
         views.ClubBarcodeLabelsView.as_view(),
         name="club_barcode_labels",

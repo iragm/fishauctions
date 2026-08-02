@@ -1,0 +1,58 @@
+{% comment %}
+Club-admin-only "Put these on your website" control for embedding the club's events. Included
+from _club_events_list.html, which already gates it on can_manage_auctions. Expects `club` and
+`club_events_embed_path`. Nothing here is member data — it's the same events the public club
+page and the iCal feed already show.
+
+Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} blocks in here.
+Django's {% templatetag openbrace %}# … #{% templatetag closebrace %} form is single-line only;
+spread one over two lines and it renders straight onto the page.
+{% endcomment %}
+{% if club_events_embed_path %}
+{% with embed_url=request.scheme|add:"://"|add:request.get_host|add:club_events_embed_path %}
+<div class="mb-3">
+  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+          data-bs-target="#club-events-embed-snippets" aria-expanded="false"
+          aria-controls="club-events-embed-snippets">
+    <i class="bi bi-code-slash"></i> Put these on your website
+  </button>
+  <div class="collapse mt-2" id="club-events-embed-snippets">
+    <div class="card card-body">
+      <p class="small mb-2">
+        Paste one of these into WordPress (a Custom HTML block), Wix, Squarespace, or any other
+        site. It reads this calendar live, so it updates itself whenever you add or change an
+        event here &mdash; there's nothing to keep in sync by hand. Only the event name, date and
+        place are shown, never anything about your members.
+      </p>
+
+      <label class="form-label small fw-bold mb-1">Next event only &mdash; light</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ embed_url }}?format=iframelight&amp;count=1"
+    style="border:0;width:100%;max-width:480px;height:200px"&gt;&lt;/iframe&gt;</pre>
+
+      <label class="form-label small fw-bold mb-1">Next event only &mdash; dark</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ embed_url }}?format=iframedark&amp;count=1"
+    style="border:0;width:100%;max-width:480px;height:200px"&gt;&lt;/iframe&gt;</pre>
+
+      <label class="form-label small fw-bold mb-1">Next 10 events &mdash; light</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ embed_url }}?format=iframelight&amp;count=10"
+    style="border:0;width:100%;max-width:480px;height:880px"&gt;&lt;/iframe&gt;</pre>
+
+      <label class="form-label small fw-bold mb-1">Next 10 events &mdash; dark</label>
+      <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ embed_url }}?format=iframedark&amp;count=10"
+    style="border:0;width:100%;max-width:480px;height:880px"&gt;&lt;/iframe&gt;</pre>
+
+      <p class="small text-muted mb-2">
+        <i class="bi bi-info-circle"></i>
+        Pick the one that matches your site's colors, and change <code>height</code> if it
+        scrolls or leaves a gap. Any <code>count</code> from 1 to 10 works.
+      </p>
+
+      <label class="form-label small fw-bold mb-1">Unstyled list (style it yourself)</label>
+      <div class="small mb-2"><code>{{ embed_url }}?format=unstyledhtml&amp;count=10</code></div>
+      <label class="form-label small fw-bold mb-1">JSON (for developers)</label>
+      <div class="small mb-0"><code>{{ embed_url }}?format=json&amp;count=10</code></div>
+    </div>
+  </div>
+</div>
+{% endwith %}
+{% endif %}

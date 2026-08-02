@@ -227,12 +227,48 @@ class PickupEventTests(TestCase):
         for event in events:
             self.assertEqual(event.date_end - event.date_start, datetime.timedelta(minutes=15))
 
-    def test_two_locations_make_two_events(self):
+    def test_several_locations_make_no_pickup_events(self):
+        """A member goes to one location; the rest would just be noise in their calendar."""
         when = self.start + datetime.timedelta(days=3)
         self._location("North", pickup_time=when)
         self._location("South", pickup_time=when + datetime.timedelta(hours=2))
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_a_multi_location_auction_still_gets_its_own_event(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("North", pickup_time=when)
+        self._location("South", pickup_time=when + datetime.timedelta(hours=2))
+        self.assertTrue(ClubEvent.objects.filter(auction=self.auction, is_deleted=False).exists())
+
+    def test_adding_a_second_location_retires_the_first_ones_pickup_events(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("North", pickup_time=when, second_pickup_time=when + datetime.timedelta(days=1))
         self.assertEqual(self._pickups().count(), 2)
-        self.assertEqual({e.location for e in self._pickups()}, {"North St", "South St"})
+        self._location("South", pickup_time=when + datetime.timedelta(hours=2))
+        self.assertEqual(self._pickups().count(), 0)
+
+    def test_dropping_back_to_one_location_brings_its_pickup_events_back(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("North", pickup_time=when)
+        south = self._location("South", pickup_time=when + datetime.timedelta(hours=2))
+        self.assertEqual(self._pickups().count(), 0)
+        south.delete()
+        club_events.sync_pickup_events(self.auction)
+        self.assertEqual(self._pickups().count(), 1)
+        self.assertEqual(self._pickups().first().location, "North St")
+
+    def test_a_second_location_with_no_pickup_time_does_not_suppress_the_real_one(self):
+        """Half-filled locations are common; only ones that would make an event should count."""
+        when = self.start + datetime.timedelta(days=3)
+        self._location("Clubhouse", pickup_time=when)
+        self._location("Undecided")
+        self.assertEqual(self._pickups().count(), 1)
+
+    def test_a_mail_location_alongside_a_real_one_does_not_suppress_it(self):
+        when = self.start + datetime.timedelta(days=3)
+        self._location("Clubhouse", pickup_time=when)
+        self._location("By mail", pickup_by_mail=True, pickup_time=when)
+        self.assertEqual(self._pickups().count(), 1)
 
     def test_in_person_auctions_get_no_pickup_events(self):
         """For an in-person auction the pickup is the auction, which already has its own event."""
@@ -455,6 +491,215 @@ class ClubEventViewTests(TestCase):
         response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.assertContains(response, "Club Picnic")
         self.assertNotContains(response, reverse("club_event_add", kwargs={"slug": self.club.slug}))
+
+
+class ClubPageCalendarButtonTests(TestCase):
+    """Two buttons, both of which subscribe. Nothing that hands out a frozen copy."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Subscribe Club", enable_club_page=True)
+        self.start = timezone.now() + datetime.timedelta(days=3)
+        ClubEvent.objects.create(club=self.club, title="Club Picnic", date_start=self.start)
+
+    def _page(self):
+        return self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+
+    def test_both_subscribe_buttons_are_offered(self):
+        response = self._page()
+        self.assertContains(response, "Google Calendar")
+        self.assertContains(response, "Apple Calendar or Outlook")
+        self.assertContains(response, "webcal://")
+
+    def test_there_is_no_one_time_download(self):
+        """A static copy of a calendar goes stale the moment it's imported.
+
+        The feed's path is still all over the page — it's what both subscribe links point at.
+        What must be gone is a bare *relative* link to it, which only downloads the file.
+        """
+        ical_path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        response = self._page()
+        self.assertNotContains(response, f'href="{ical_path}"')
+        self.assertNotContains(response, "Download once")
+
+    def test_the_club_page_does_not_leak_template_comments(self):
+        """Django's {# #} comment is single-line only — a two-line one renders onto the page."""
+        body = self._page().content.decode()
+        for phrase in ("Subscribing, not downloading", "dropdown-menu-end", "#}"):
+            self.assertNotIn(phrase, body)
+
+
+class ClubEventsEmbedTests(TestCase):
+    """The iframe/JSON feed clubs paste into WordPress, and the admin-only snippets for it."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Embed Club", enable_club_page=True)
+        self.admin = User.objects.create_user(username="em_admin", password="pw", email="ea@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.member = User.objects.create_user(username="em_member", password="pw", email="em@example.com")
+        ClubMember.objects.create(club=self.club, user=self.member)
+        self.start = timezone.now() + datetime.timedelta(days=1)
+        self.url = reverse("club_events_embed", kwargs={"slug": self.club.slug})
+
+    def _events(self, count):
+        for i in range(count):
+            ClubEvent.objects.create(
+                club=self.club,
+                title=f"Meeting {i}",
+                date_start=self.start + datetime.timedelta(days=i),
+                location=f"{i} Main St",
+            )
+
+    def test_json_is_the_default_and_lists_upcoming_events(self):
+        self._events(2)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["club"], "Embed Club")
+        self.assertEqual([e["title"] for e in payload["events"]], ["Meeting 0", "Meeting 1"])
+        self.assertIn("0 Main St", payload["events"][0]["location"])
+
+    def test_count_one_returns_only_the_next_event(self):
+        self._events(3)
+        payload = self.client.get(self.url, {"count": 1}).json()
+        self.assertEqual([e["title"] for e in payload["events"]], ["Meeting 0"])
+
+    def test_count_is_capped_at_ten(self):
+        self._events(14)
+        payload = self.client.get(self.url, {"count": 99}).json()
+        self.assertEqual(len(payload["events"]), 10)
+
+    def test_a_junk_count_falls_back_to_the_default(self):
+        self._events(3)
+        payload = self.client.get(self.url, {"count": "lots"}).json()
+        self.assertEqual(len(payload["events"]), 3)
+
+    def test_a_zero_or_negative_count_still_returns_one_event(self):
+        self._events(3)
+        self.assertEqual(len(self.client.get(self.url, {"count": 0}).json()["events"]), 1)
+        self.assertEqual(len(self.client.get(self.url, {"count": -5}).json()["events"]), 1)
+
+    def test_past_and_deleted_events_are_left_out(self):
+        self._events(1)
+        ClubEvent.objects.create(
+            club=self.club, title="Last year", date_start=timezone.now() - datetime.timedelta(days=30)
+        )
+        ClubEvent.objects.create(club=self.club, title="Gone", date_start=self.start, is_deleted=True)
+        titles = [e["title"] for e in self.client.get(self.url).json()["events"]]
+        self.assertEqual(titles, ["Meeting 0"])
+
+    def test_pickup_events_are_left_out(self):
+        """Logistics for people who already won lots, not something to put on a club's website."""
+        auction = Auction.objects.create(
+            title="Embed Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(days=2),
+            club=self.club,
+            is_online=True,
+        )
+        PickupLocation.objects.create(
+            auction=auction,
+            name="Clubhouse",
+            address="1 Main St",
+            pickup_time=self.start + datetime.timedelta(days=3),
+        )
+        self.assertTrue(ClubEvent.objects.filter(club=self.club, source=ClubEvent.SOURCE_PICKUP).exists())
+        titles = [e["title"] for e in self.client.get(self.url).json()["events"]]
+        self.assertEqual(titles, ["Embed Auction"])
+
+    def test_the_limit_counts_real_events_not_ones_filtered_out(self):
+        """Filtering after the slice would hand back fewer events than asked for."""
+        auction = Auction.objects.create(
+            title="Embed Auction",
+            date_start=self.start,
+            date_end=self.start + datetime.timedelta(hours=2),
+            club=self.club,
+            is_online=True,
+        )
+        PickupLocation.objects.create(
+            auction=auction,
+            name="Clubhouse",
+            address="1 Main St",
+            pickup_time=self.start + datetime.timedelta(hours=3),
+        )
+        self._events(3)
+        payload = self.client.get(self.url, {"count": 2}).json()
+        self.assertEqual(len(payload["events"]), 2)
+        self.assertNotIn("pickup", " ".join(e["title"] for e in payload["events"]).lower())
+
+    def test_iframe_formats_render_a_themed_page(self):
+        self._events(1)
+        for fmt, theme in (("iframelight", "light"), ("iframedark", "dark")):
+            with self.subTest(fmt=fmt):
+                response = self.client.get(self.url, {"format": fmt})
+                self.assertEqual(response.status_code, 200)
+                body = response.content.decode()
+                self.assertIn(f'data-theme="{theme}"', body)
+                self.assertIn("Meeting 0", body)
+
+    def test_one_event_and_many_events_are_labelled_differently(self):
+        self._events(3)
+        self.assertContains(self.client.get(self.url, {"format": "iframelight", "count": 1}), "Next event")
+        self.assertContains(self.client.get(self.url, {"format": "iframelight"}), "Upcoming events")
+
+    def test_the_unstyled_format_is_a_bare_list(self):
+        self._events(1)
+        body = self.client.get(self.url, {"format": "unstyledhtml"}).content.decode()
+        self.assertIn("club-events", body)
+        self.assertNotIn("<style", body)
+
+    def test_an_empty_calendar_says_so_rather_than_erroring(self):
+        response = self.client.get(self.url, {"format": "iframelight"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nothing coming up")
+
+    def test_an_unknown_format_falls_back_to_json(self):
+        self._events(1)
+        response = self.client.get(self.url, {"format": "iframelite"})
+        self.assertEqual(response["Content-Type"], "application/json")
+
+    def test_the_embed_can_be_framed_and_fetched_cross_origin(self):
+        self._events(1)
+        for fmt in ("json", "iframelight"):
+            with self.subTest(fmt=fmt):
+                response = self.client.get(self.url, {"format": fmt})
+                self.assertEqual(response["Access-Control-Allow-Origin"], "*")
+                self.assertNotIn("X-Frame-Options", response)
+
+    def test_a_club_with_its_page_disabled_has_no_embed(self):
+        self.club.enable_club_page = False
+        self.club.save()
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+
+    def test_the_embed_exposes_no_member_data(self):
+        self._events(1)
+        body = self.client.get(self.url).content.decode()
+        for secret in ("em@example.com", "ea@example.com", "em_member", "em_admin"):
+            self.assertNotIn(secret, body)
+
+    def test_only_admins_are_offered_the_snippets(self):
+        self._events(1)
+        page = reverse("club_detail", kwargs={"slug": self.club.slug})
+
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(page), "Put these on your website")
+        self.assertContains(self.client.get(page), self.url)
+
+        self.client.force_login(self.member)
+        self.assertNotContains(self.client.get(page), "Put these on your website")
+
+        self.client.logout()
+        self.assertNotContains(self.client.get(page), "Put these on your website")
+
+    def test_the_snippets_offer_the_next_event_and_the_next_ten(self):
+        self._events(1)
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("count=1", body)
+        self.assertIn("count=10", body)
+        self.assertIn("iframelight", body)
+        self.assertIn("iframedark", body)
 
 
 class ClubEventICalTests(TestCase):

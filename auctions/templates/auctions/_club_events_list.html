@@ -1,7 +1,12 @@
 {% comment %}
 The club page's event list: upcoming events, then a little recent history. Shared by both the
 tabbed (BAP enabled) and untabbed layouts of club_detail.html so the two can't drift apart.
-Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club, club_ical_url.
+Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club,
+club_ical_subscribe_url, club_ical_google_url, club_events_embed_path.
+
+Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} blocks in here.
+Django's {% templatetag openbrace %}# … #{% templatetag closebrace %} form is single-line only;
+spread one over two lines and it renders straight onto the page for members to read.
 {% endcomment %}
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -11,36 +16,35 @@ Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club
       <i class="bi bi-calendar-plus"></i> Add event
     </a>
     <span class="align-self-center text-muted small" data-bs-toggle="tooltip"
-          title="Promoted auctions are added here on their own, along with a short event for each of an online auction's pickup times. You only need this button for meetings, swaps, talks and the like.">
+          title="Promoted auctions are added here on their own, along with a short event for the pickup times of an online auction that has a single pickup location. You only need this button for meetings, swaps, talks and the like.">
       <i class="bi bi-info-circle"></i> Auctions are added automatically
     </span>
     {% endif %}
   </div>
   <div class="d-flex flex-wrap gap-2">
+    {% comment %}
+    Both buttons subscribe, so the club page keeps updating itself in the member's calendar. The
+    one-time .ics download used to sit alongside them and was never the right answer — nobody
+    wants a frozen snapshot of events that have already happened.
+
+    One Google button: the club's own calendar when it's shared, otherwise Google's add-by-URL
+    screen pointed at our feed. Two would be the same events twice.
+    {% endcomment %}
     {% if has_any_events %}
-    {# Subscribing, not downloading: the plain .ics link is a one-time import that never updates
-       again, so it's the last item rather than the button. #}
-    <div class="btn-group">
-      <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-        <i class="bi bi-calendar-week"></i> Subscribe
-      </button>
-      <ul class="dropdown-menu dropdown-menu-end">
-        {# One Google entry: the club's own calendar when it's shared, otherwise Google's
-           add-by-URL screen pointed at this feed. Two would be the same events twice. #}
-        <li>
-          <a class="dropdown-item" target="_blank" rel="noopener"
-             href="{% if club.google_calendar_public_url %}{{ club.google_calendar_public_url }}{% else %}{{ club_ical_google_url }}{% endif %}">
-            <i class="bi bi-google"></i> Google Calendar
-          </a>
-        </li>
-        <li><a class="dropdown-item" href="{{ club_ical_subscribe_url }}"><i class="bi bi-calendar-check"></i> Apple Calendar or Outlook</a></li>
-        <li><hr class="dropdown-divider"></li>
-        <li><a class="dropdown-item" href="{{ club_ical_url }}"><i class="bi bi-download"></i> Download once (no updates)</a></li>
-      </ul>
-    </div>
+    <a class="btn btn-sm btn-secondary" target="_blank" rel="noopener"
+       href="{% if club.google_calendar_public_url %}{{ club.google_calendar_public_url }}{% else %}{{ club_ical_google_url }}{% endif %}">
+      <i class="bi bi-google"></i> Google Calendar
+    </a>
+    <a class="btn btn-sm btn-secondary" href="{{ club_ical_subscribe_url }}">
+      <i class="bi bi-calendar-check"></i> Apple Calendar or Outlook
+    </a>
     {% endif %}
   </div>
 </div>
+
+{% if can_manage_auctions %}
+{% include "auctions/partials/club_events_embed_snippets.html" %}
+{% endif %}
 
 {% if upcoming_events %}
 <ul class="list-group mb-3">

@@ -68,6 +68,7 @@ from django.http import (
 )
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.defaultfilters import date as date_filter
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
@@ -18344,12 +18345,13 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["upcoming_events"] = upcoming
         context["past_events"] = past
         context["has_any_events"] = bool(upcoming or past)
-        ical_path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
-        context["club_ical_url"] = ical_path
-        # A relative link only downloads the file — a one-time import that never updates. These
-        # are the two links that actually *subscribe*: webcal:// hands the feed to the desktop
-        # or phone calendar app, and Google takes the https URL through its "add by URL" screen.
-        absolute_ical_url = self.request.build_absolute_uri(ical_path)
+        # Both of these *subscribe*, so the calendar keeps updating: webcal:// hands the feed to
+        # the desktop or phone calendar app, and Google takes the https URL through its
+        # "add by URL" screen. There's deliberately no plain link to the .ics — a relative one
+        # only downloads the file, which is a one-time import of events that then never changes.
+        absolute_ical_url = self.request.build_absolute_uri(
+            reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        )
         context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
         context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
         if can_manage_auctions:
@@ -18357,6 +18359,12 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["unpromoted_auctions"] = Auction.objects.filter(
                 club=self.club, is_deleted=False, promote_this_auction=False
             ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
+            # Snippets for putting the calendar on the club's own website — admins only, though
+            # the embed itself is public (it shows what this page already does). Which is also
+            # why it's offered only when the club page is on: with it off the embed 404s, and
+            # handing out a snippet that renders nothing is worse than not offering one.
+            if self.club.enable_club_page:
+                context["club_events_embed_path"] = reverse("club_events_embed", kwargs={"slug": self.club.slug})
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 
@@ -19776,6 +19784,96 @@ class BapEmbedView(View):
                 "club_name": club.name,
                 "program_label": label,
                 "leaderboard": rows,
+            },
+        )
+        response = HttpResponse(html)
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+
+# How many events the embed will ever hand out. Clubs paste this into a sidebar; past ten it
+# stops being "what's coming up" and turns into a second copy of the club page.
+CLUB_EVENTS_EMBED_MAX = 10
+
+
+def _club_events_embed_rows(request, club, count):
+    """The club's next few events, flattened for the embed: what, when, where, and a link back.
+
+    Everything here is already on the public club page and in the public iCal feed — no member
+    data of any kind. Pickup events are left out for the same reason
+    ``club_events.next_member_facing_event`` drops them: they're logistics for people who
+    already won lots, not something to put on the club's website.
+    """
+    upcoming, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
+    rows = []
+    for event in upcoming:
+        start = timezone.localtime(event.date_start)
+        if event.all_day:
+            when = f"{date_filter(start, 'D, N j, Y')} — all day"
+        else:
+            when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
+        rows.append(
+            {
+                "title": event.title,
+                "when": when,
+                "starts": start.isoformat(),
+                "all_day": event.all_day,
+                "location": event.location,
+                "cancelled": event.cancelled,
+                "repeats": event.recurrence_summary,
+                "url": request.build_absolute_uri(event.get_absolute_url()),
+            }
+        )
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubEventsEmbedView(View):
+    """Public, embeddable list of a club's next few events, for WordPress and the like.
+
+    Same shape as ``BapEmbedView``: ?format= picks the representation (json, iframelight,
+    iframedark, unstyledhtml) and ?count= how many events, 1 to CLUB_EVENTS_EMBED_MAX. count=1
+    is the "next event" banner clubs put at the top of a page; the default is the full list.
+    Framing and cross-origin fetches are allowed so a third-party site can use it. GET-only and
+    public, so CSRF never applies; the snippets that produce these URLs are admin-only, but the
+    URLs themselves show nothing the club page doesn't.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+
+        try:
+            count = int(request.GET.get("count") or CLUB_EVENTS_EMBED_MAX)
+        except (TypeError, ValueError):
+            count = CLUB_EVENTS_EMBED_MAX
+        count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
+
+        rows = _club_events_embed_rows(request, club, count)
+        fmt = (request.GET.get("format") or "json").strip().lower()
+
+        if fmt in ("iframelight", "iframedark"):
+            embed_mode = "dark" if fmt == "iframedark" else "light"
+        elif fmt == "unstyledhtml":
+            embed_mode = "unstyled"
+        else:
+            # json or anything unrecognized falls back to JSON — a typo never leaks an
+            # unexpected page.
+            response = JsonResponse({"club": club.name, "events": rows})
+            response["Access-Control-Allow-Origin"] = "*"
+            return response
+
+        html = render_to_string(
+            "auctions/club_events_embed.html",
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                # One event reads as "here's what's next", ten as a calendar. The heading has to
+                # say which, because the embed is dropped onto a page with no other context.
+                "heading": "Next event" if count == 1 else "Upcoming events",
+                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
+                "events": rows,
             },
         )
         response = HttpResponse(html)
