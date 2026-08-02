@@ -1,3 +1,4 @@
+from allauth.socialaccount import views as socialaccount_views
 from django.contrib.auth.decorators import login_required
 from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
@@ -6,6 +7,12 @@ from django_ses.views import SESEventWebhookView
 from . import passkit_views, views
 
 urlpatterns = [
+    # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
+    # /social/... (AllauthWebScreen), so the mobile social-login continuation is sent here instead.
+    # Same views, second path — the /3rdparty/ URLs keep working for the web, and the names stay
+    # allauth's so reverse() anywhere else is unaffected.
+    path("social/signup/", socialaccount_views.signup, name="mobile_socialaccount_signup"),
+    path("social/connections/", socialaccount_views.connections, name="mobile_socialaccount_connections"),
     # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
     # by Apple's spec — devices build them from the webServiceURL in pass.json — and
     # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
@@ -228,6 +235,16 @@ urlpatterns = [
     path("square/onboard/success/", views.SquareCallbackView.as_view(), name="square_callback"),
     path("mailchimp/connect/<slug:slug>/", views.MailchimpConnectView.as_view(), name="mailchimp_connect"),
     path("mailchimp/callback/", views.MailchimpCallbackView.as_view(), name="mailchimp_callback"),
+    path(
+        "google-calendar/connect/<slug:slug>/",
+        views.GoogleCalendarConnectView.as_view(),
+        name="google_calendar_connect",
+    ),
+    path(
+        "google-calendar/callback/",
+        views.GoogleCalendarCallbackView.as_view(),
+        name="google_calendar_callback",
+    ),
     path(
         "mailchimp/webhook/<slug:slug>/<str:secret>/",
         views.MailchimpWebhookView.as_view(),
@@ -507,6 +524,13 @@ urlpatterns = [
         login_required(views.UserPreferencesUpdate.as_view()),
         name="preferences",
     ),
+    path(
+        "account/delete/",
+        login_required(views.AccountDeleteView.as_view()),
+        name="account_delete",
+    ),
+    # Public: the user is signed out by the time they land here.
+    path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
     path("faq/", views.FAQ.as_view(), name="faq"),
@@ -542,7 +566,8 @@ urlpatterns = [
         views.PickupLocationsDelete.as_view(),
         name="delete_pickup",
     ),
-    path("blog/<slug:slug>/", views.BlogPostView.as_view()),
+    path("blog/<slug:slug>/", views.BlogPostView.as_view(), name="blog_post"),
+    path("privacy/", views.PrivacyPolicyView.as_view(), name="privacy_policy"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(
@@ -629,6 +654,11 @@ urlpatterns = [
         "api/invoices/<int:pk>/renewal-toggle/",
         views.InvoiceRenewalNeededToggleView.as_view(),
         name="invoice_renewal_toggle",
+    ),
+    path(
+        "api/users/<slug:slug>/enable-bidding",
+        views.EnableBiddingForAllUsers.as_view(),
+        name="auction_enable_bidding_for_all",
     ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
@@ -718,6 +748,24 @@ urlpatterns = [
         views.MailchimpDisconnectView.as_view(),
         name="mailchimp_disconnect",
     ),
+    path(
+        "clubs/<slug:slug>/google-calendar/",
+        views.ClubGoogleCalendarConfigView.as_view(),
+        name="club_google_calendar_config",
+    ),
+    path(
+        "clubs/<slug:slug>/google-calendar/sync/",
+        views.GoogleCalendarSyncNowView.as_view(),
+        name="google_calendar_sync_now",
+    ),
+    path(
+        "clubs/<slug:slug>/google-calendar/disconnect/",
+        views.GoogleCalendarDisconnectView.as_view(),
+        name="google_calendar_disconnect",
+    ),
+    path("clubs/<slug:slug>/events/add/", views.ClubEventCreateView.as_view(), name="club_event_add"),
+    path("clubs/<slug:slug>/events/<int:pk>/", views.ClubEventUpdateView.as_view(), name="club_event_edit"),
+    path("clubs/<slug:slug>/events.ics", views.ClubEventsICalView.as_view(), name="club_events_ical"),
     path("clubs/<slug:slug>/brevo/", views.ClubBrevoConfigView.as_view(), name="club_brevo_config"),
     path("clubs/<slug:slug>/brevo/connect/", views.BrevoConnectView.as_view(), name="brevo_connect"),
     path(
@@ -845,6 +893,11 @@ urlpatterns = [
         name="club_member_membership_number",
     ),
     path(
+        "api/clubmember/<int:pk>/resend-card/",
+        views.ClubMemberResendCardView.as_view(),
+        name="club_member_resend_card",
+    ),
+    path(
         "api/clubmember/<int:pk>/apple-wallet.pkpass",
         views.ClubMemberAppleWalletPassView.as_view(),
         name="club_member_apple_wallet",
@@ -907,6 +960,11 @@ urlpatterns = [
         name="club_member_renew_page",
     ),
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
+    path(
+        "api/v1/clubs/<slug:slug>/members/renew/",
+        views.ClubMemberRenewAPIView.as_view(),
+        name="api_club_member_renew",
+    ),
     path(
         "api/v1/clubs/<slug:slug>/members/<int:pk>/",
         views.ClubMemberDetailAPIView.as_view(),

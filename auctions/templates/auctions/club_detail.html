@@ -59,7 +59,7 @@
 {# ── Tabbed layout when BAP is enabled ─────────────────────────────── #}
 <ul class="nav nav-tabs mb-3" id="clubTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" data-tab-url="{% url 'club_detail' club.slug %}" type="button" role="tab">Auctions</button>
+    <button class="nav-link {% if active_club_tab == 'auctions' %}active{% endif %}" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" data-tab-url="{% url 'club_detail' club.slug %}" type="button" role="tab">Events</button>
   </li>
   <li class="nav-item" role="presentation">
     <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'bap' %}" type="button" role="tab">BAP</button>
@@ -83,37 +83,9 @@
 
 <div class="tab-content" id="clubTabContent">
 
-  {# Auctions tab #}
+  {# Events tab #}
   <div class="tab-pane fade {% if active_club_tab == 'auctions' %}show active{% endif %}" id="auctions-tab" role="tabpanel">
-    {% if club_auctions %}
-    <ul class="list-group">
-      {% for auction in club_auctions %}
-      <li class="list-group-item d-flex justify-content-between align-items-center">
-        <span>
-          <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
-          <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
-        </span>
-        <span class="d-flex align-items-center gap-2">
-        {% if can_manage_auctions and not auction.promote_this_auction %}
-        <span class="badge bg-secondary rounded-pill">Not promoted</span>
-        {% endif %}
-        {% if auction.pk == current_auction_id %}
-        <span class="badge bg-success rounded-pill">Current</span>
-        {% elif can_manage_auctions and auction.date_start > now %}
-        <form method="post" class="d-inline">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="make_current">
-          <input type="hidden" name="auction" value="{{ auction.pk }}">
-          <button type="submit" class="btn btn-sm btn-outline-secondary text-light py-0">Make current</button>
-        </form>
-        {% endif %}
-        </span>
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="text-muted">No auctions yet.</p>
-    {% endif %}
+    {% include "auctions/_club_events_list.html" %}
   </div>
 
   {# BAP leaderboard tab #}
@@ -248,34 +220,8 @@
 </div>
 {% endif %}
 
-{% if club_auctions %}
-<h4 class="mt-4">Auctions</h4>
-<ul class="list-group">
-  {% for auction in club_auctions %}
-  <li class="list-group-item d-flex justify-content-between align-items-center">
-    <span>
-      <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
-      <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
-    </span>
-    <span class="d-flex align-items-center gap-2">
-    {% if can_manage_auctions and not auction.promote_this_auction %}
-    <span class="badge bg-secondary rounded-pill">Not promoted</span>
-    {% endif %}
-    {% if auction.pk == current_auction_id %}
-    <span class="badge bg-success rounded-pill">Current</span>
-    {% elif can_manage_auctions and auction.date_start > now %}
-    <form method="post" class="d-inline">
-      {% csrf_token %}
-      <input type="hidden" name="action" value="make_current">
-      <input type="hidden" name="auction" value="{{ auction.pk }}">
-      <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
-    </form>
-    {% endif %}
-    </span>
-  </li>
-  {% endfor %}
-</ul>
-{% endif %}
+<h4 class="mt-4">Events</h4>
+{% include "auctions/_club_events_list.html" %}
 {% endif %}{# /show_bap_tabs #}
 
 <div id="modals-here"></div>
@@ -283,6 +229,17 @@
 {% endblock %}
 
 {% block extra_js %}
+<script>
+// base.html only initializes the Bootstrap 4 selector ([data-toggle]), so Bootstrap 5 tooltips
+// have to be started per page — the same thing auction_volunteers.html and htmx_table_view.html
+// do. getOrCreateInstance keeps this safe if anything else on the page initializes them too.
+document.addEventListener('DOMContentLoaded', function () {
+  if (!window.bootstrap || !bootstrap.Tooltip) { return; }
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+    bootstrap.Tooltip.getOrCreateInstance(el);
+  });
+});
+</script>
 {% if show_bap_tabs %}
 <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
 <script>

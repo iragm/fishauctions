@@ -21,6 +21,10 @@
     <i class="bi bi-discord fs-5"></i>
     <span><strong>Discord</strong><br><small class="text-muted">Link a Discord server and sync roles</small></span>
   </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_google_calendar_config' club.slug %}">
+    <i class="bi bi-calendar-event fs-5"></i>
+    <span><strong>Google Calendar</strong><br><small class="text-muted">Sync your events with a shared Google calendar</small></span>
+  </a>
   <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_mailchimp_config' club.slug %}">
     <i class="bi bi-envelope-paper fs-5"></i>
     <span><strong>Mailchimp</strong><br><small class="text-muted">Sync members to a Mailchimp audience</small></span>

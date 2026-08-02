@@ -82,7 +82,10 @@ class CheckinPingGeofenceTests(CheckinBase):
         self.assertEqual(offer["rules_url"], self.venue.get_absolute_url())
 
     def test_no_join_offer_outside_500ft(self):
-        # NEAR is within the 2 mi admin radius but well outside the 500 ft welcome radius.
+        # NEAR is within the 2 mi admin radius but well outside the 500 ft welcome radius. Only
+        # applies once the location is known to be exact -- see WelcomeRadiusWithoutExactLocationTests.
+        self.venue.exact_location_set = True
+        self.venue.save()
         self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
 
     def test_nothing_when_outside_2mi(self):
@@ -178,6 +181,161 @@ class CheckinPingStateTests(CheckinBase):
         self.assertNotIn("set_location_offer", self._types(self._ping(self.arrival, *NEAR)))
 
 
+class WelcomeRadiusWithoutExactLocationTests(CheckinBase):
+    """Until the auction's exact location is pinned, the geofence widens to 2 mi — except check-in.
+
+    The stored coordinates are a geocoded street address until an admin pins them from their phone,
+    and those can be off by much more than 500 ft.
+    """
+
+    def _make_checkin_mode(self):
+        club = Club.objects.create(name="Fish Club")
+        ClubMember.objects.create(club=club, user=self.creator, permission_admin=True)
+        self.venue.club = club
+        self.venue.manage_users_through_club = "checkin"
+        self.venue.save()
+
+    def test_join_offer_widens_to_2mi(self):
+        self.assertFalse(self.venue.exact_location_set)
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))  # ~0.35 mi
+
+    def test_join_offer_narrows_once_the_location_is_exact(self):
+        self.venue.exact_location_set = True
+        self.venue.save()
+        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
+        # ...but still fires at the venue itself.
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))
+
+    def test_2mi_is_still_the_outer_limit(self):
+        self.assertEqual(self._ping(self.arrival, *FAR).json()["actions"], [])  # ~3.45 mi
+
+    def test_auto_check_in_is_not_widened(self):
+        # The one action that must not fire from a mile away: nobody gets a bidder number on the
+        # floor without being at the venue.
+        self._make_checkin_mode()
+        AuctionTOS.objects.create(auction=self.venue, pickup_location=self.location, user=self.arrival, name="Arrive")
+        self.assertNotIn("checked_in", self._types(self._ping(self.arrival, *NEAR)))
+        self.assertIsNone(AuctionTOS.objects.get(auction=self.venue, user=self.arrival).checked_in)
+        # At the venue it still fires.
+        self.assertIn("checked_in", self._types(self._ping(self.arrival, *AT)))
+
+    def test_window_still_applies(self):
+        self.venue.date_start = timezone.now() + datetime.timedelta(hours=4)  # > 3 h out
+        self.venue.date_end = timezone.now() + datetime.timedelta(hours=10)
+        self.venue.save()
+        self.assertEqual(self._ping(self.arrival, *NEAR).json()["actions"], [])
+
+    def test_exactly_one_join_offer_even_across_bands(self):
+        # One offer per person per auction, period: getting it from a mile away spends it, and
+        # arriving at the venue does not produce a second one.
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
+        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
+        self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *AT)))
+
+
+class SelfCheckinDisabledTests(CheckinBase):
+    """``Auction.allow_self_checkin`` off: the app's join/check-in flow disappears for end users.
+
+    Only meaningful in check-in mode — that's where checking in is what assigns a bidder number, so
+    an auction that hands numbers out at the door needs the app to stay out of it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        club = Club.objects.create(name="Fish Club")
+        ClubMember.objects.create(club=club, user=self.creator, permission_admin=True)
+        self.venue.club = club
+        self.venue.manage_users_through_club = "checkin"
+        self.venue.allow_self_checkin = False
+        self.venue.save()
+        self.assertTrue(self.venue.use_check_in_mode)
+        self.assertFalse(self.venue.allows_app_self_checkin)
+
+    def _join(self, user):
+        return self.client.post(
+            reverse("mobile-checkin-join"),
+            data={"auction": self.venue.slug},
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def test_default_is_on(self):
+        self.assertTrue(Auction(title="x").allow_self_checkin)
+
+    def test_flag_only_applies_to_check_in_mode(self):
+        # Same flag, no check-in mode: the app's welcome prompt still offers to join.
+        self.venue.manage_users_through_club = ""
+        self.venue.save()
+        self.assertTrue(self.venue.allows_app_self_checkin)
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))
+
+    def test_no_join_offer(self):
+        self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
+
+    def test_no_nudge_row_burned_while_disabled(self):
+        # Re-enabling later must still offer the join, so the one-shot nudge must not have been used.
+        self._ping(self.arrival, *AT)
+        self.venue.allow_self_checkin = True
+        self.venue.save()
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))
+
+    def test_no_auto_check_in_for_existing_tos(self):
+        AuctionTOS.objects.create(auction=self.venue, pickup_location=self.location, user=self.arrival, name="Arrive")
+        self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
+        self.assertIsNone(AuctionTOS.objects.get(auction=self.venue, user=self.arrival).checked_in)
+
+    def test_join_endpoint_forbidden_and_writes_nothing(self):
+        resp = self._join(self.arrival)
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("bidder number", resp.json()["detail"])
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.venue, user=self.arrival).exists())
+
+    def test_admin_location_offer_unaffected(self):
+        self.assertIn("set_location_offer", self._types(self._ping(self.creator, *NEAR)))
+
+
+class CheckinBidderNumberTests(CheckinBase):
+    """Checking in with the app tells the user their bidder number (and lets them bid)."""
+
+    def setUp(self):
+        super().setUp()
+        club = Club.objects.create(name="Fish Club")
+        ClubMember.objects.create(club=club, user=self.creator, permission_admin=True)
+        self.venue.club = club
+        self.venue.manage_users_through_club = "checkin"
+        self.venue.save()
+
+    def test_ping_check_in_reports_the_bidder_number(self):
+        tos = AuctionTOS.objects.create(
+            auction=self.venue,
+            pickup_location=self.location,
+            user=self.arrival,
+            name="Arrive",
+            bidder_number="222",
+            bidding_allowed=False,
+        )
+        action = next(a for a in self._ping(self.arrival, *AT).json()["actions"] if a["type"] == "checked_in")
+        self.assertEqual(action["bidder_number"], "222")
+        self.assertIn("Your bidder number is 222.", action["message"])
+        tos.refresh_from_db()
+        # Check-in is what grants bidding in check-in mode, same as the admin check-in modal.
+        self.assertTrue(tos.bidding_allowed)
+
+    def test_join_returns_the_bidder_number_it_assigned(self):
+        resp = self.client.post(
+            reverse("mobile-checkin-join"),
+            data={"auction": self.venue.slug},
+            content_type="application/json",
+            **_bearer(self.arrival),
+        )
+        self.assertEqual(resp.status_code, 200)
+        tos = AuctionTOS.objects.get(auction=self.venue, user=self.arrival)
+        self.assertTrue(resp.json()["checked_in"])
+        self.assertTrue(tos.bidder_number)
+        self.assertEqual(resp.json()["bidder_number"], tos.bidder_number)
+        self.assertTrue(tos.bidding_allowed)
+
+
 class CheckinJoinTests(CheckinBase):
     def _join(self, user):
         return self.client.post(
@@ -190,7 +348,16 @@ class CheckinJoinTests(CheckinBase):
     def test_creates_tos_once_with_history(self):
         resp = self._join(self.arrival)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"joined": True, "checked_in": False, "rules_url": self.venue.get_absolute_url()})
+        tos = AuctionTOS.objects.get(auction=self.venue, user=self.arrival)
+        self.assertEqual(
+            resp.json(),
+            {
+                "joined": True,
+                "checked_in": False,
+                "bidder_number": tos.bidder_number,
+                "rules_url": self.venue.get_absolute_url(),
+            },
+        )
         self.assertEqual(AuctionTOS.objects.filter(auction=self.venue, user=self.arrival).count(), 1)
         self.assertTrue(
             AuctionHistory.objects.filter(auction=self.venue, action__icontains="joined via the app").exists()
@@ -251,8 +418,105 @@ class CheckinSetLocationTests(CheckinBase):
         self.assertEqual(self.location.latitude, VENUE[0])  # unchanged
 
 
+class AppJoinClubMemberTests(CheckinBase):
+    """Joining a club-managed auction from the app must create/link the ClubMember.
+
+    In these auctions the club owns the bidder number and the bidding/selling permissions, so a
+    participant record with no member behind it is a broken record: the number is unknown to the
+    club, no club admin screen can find them, and it isn't theirs again next year.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Fish Club")
+        ClubMember.objects.create(club=self.club, user=self.creator, permission_admin=True)
+
+    def _club_managed(self, mode="checkin"):
+        self.venue.club = self.club
+        self.venue.manage_users_through_club = mode
+        self.venue.save()
+
+    def _join(self, user):
+        return self.client.post(
+            reverse("mobile-checkin-join"),
+            data={"auction": self.venue.slug},
+            content_type="application/json",
+            **_bearer(user),
+        )
+
+    def test_join_creates_the_club_member_and_links_it(self):
+        self._club_managed()
+        resp = self._join(self.arrival)
+        self.assertEqual(resp.status_code, 200)
+        member = ClubMember.objects.get(club=self.club, user=self.arrival)
+        self.assertEqual(member.source, self.venue.title)
+        self.assertTrue(member.bidder_number)
+        tos = AuctionTOS.objects.get(auction=self.venue, user=self.arrival)
+        self.assertEqual(tos.clubmember, member)
+        # The number the app shows the user is the club's number, not an auction-only one.
+        self.assertEqual(tos.bidder_number, member.bidder_number)
+        self.assertEqual(resp.json()["bidder_number"], member.bidder_number)
+
+    def test_join_adopts_the_existing_shadow_record_of_a_club_member(self):
+        # Creating a member in a club-managed auction auto-creates its shadow AuctionTOS (signals);
+        # joining from the app must claim that row rather than add a second one.
+        self._club_managed()
+        member = ClubMember.objects.create(club=self.club, user=self.arrival, name="Arrive", email=self.arrival.email)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.venue, clubmember=member).exists())
+        self._join(self.arrival)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.venue, user=self.arrival).count(), 1)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, user=self.arrival).count(), 1)
+        tos = AuctionTOS.objects.get(auction=self.venue, user=self.arrival)
+        self.assertEqual(tos.clubmember, member)
+        self.assertEqual(tos.bidder_number, member.bidder_number)
+        self.assertFalse(tos.manually_added)  # a real join now, not an auto-added shadow
+
+    def test_join_binds_a_member_that_was_added_by_email_only(self):
+        self._club_managed()
+        member = ClubMember.objects.create(club=self.club, user=None, name="Arrive", email="arrive@example.com")
+        self._join(self.arrival)
+        member.refresh_from_db()
+        self.assertEqual(member.user, self.arrival)
+        self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 2)  # creator + this one
+
+    def test_join_creates_the_member_in_auto_add_mode_too(self):
+        # "all" mode is club-managed as well, so the same rule applies.
+        self._club_managed(mode="all")
+        self._join(self.arrival)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, user=self.arrival).exists())
+
+    def test_no_club_member_for_an_auction_that_is_not_club_managed(self):
+        self._join(self.arrival)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.venue, user=self.arrival).exists())
+        self.assertFalse(ClubMember.objects.filter(user=self.arrival).exists())
+
+    def test_no_club_member_when_a_club_is_set_but_not_managing_users(self):
+        self.venue.club = self.club
+        self.venue.save()  # manage_users_through_club stays ""
+        self._join(self.arrival)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, user=self.arrival).exists())
+
+    def test_only_approved_bidders_does_not_leak_permissions_into_the_club(self):
+        self.venue.only_approved_bidders = True
+        self.venue.only_approved_sellers = True
+        self._club_managed(mode="all")
+        self._join(self.arrival)
+        member = ClubMember.objects.get(club=self.club, user=self.arrival)
+        self.assertFalse(member.bidding_allowed)
+        self.assertFalse(member.selling_allowed)
+
+    def test_proximity_check_in_reports_the_club_bidder_number(self):
+        # End to end: club-managed check-in auction, member exists, the user walks in with the app.
+        self._club_managed()
+        member = ClubMember.objects.create(club=self.club, user=self.arrival, name="Arrive", email=self.arrival.email)
+        action = next(a for a in self._ping(self.arrival, *AT).json()["actions"] if a["type"] == "checked_in")
+        member.refresh_from_db()
+        self.assertEqual(action["bidder_number"], member.bidder_number)
+        self.assertIn(f"Your bidder number is {member.bidder_number}.", action["message"])
+
+
 class CheckinCloneTests(TestCase):
-    def test_clone_copies_exact_location_set(self):
+    def _clone(self, **auction_kwargs):
         creator = User.objects.create_user(username="cloner", password="x", email="c@example.com", is_superuser=True)
         original = Auction.objects.create(
             created_by=creator,
@@ -260,7 +524,7 @@ class CheckinCloneTests(TestCase):
             is_online=False,
             date_start=timezone.now(),
             date_end=timezone.now() + datetime.timedelta(hours=6),
-            exact_location_set=True,
+            **auction_kwargs,
         )
         self.client.force_login(creator)
         # Cloning is triggered by ?copy=<slug>&clone on the create-auction POST (see AuctionCreateView).
@@ -274,4 +538,11 @@ class CheckinCloneTests(TestCase):
         )
         clone = Auction.objects.filter(title="Cloned auction").first()
         self.assertIsNotNone(clone)
-        self.assertTrue(clone.exact_location_set)
+        return clone
+
+    def test_clone_copies_exact_location_set(self):
+        self.assertTrue(self._clone(exact_location_set=True).exact_location_set)
+
+    def test_clone_copies_allow_self_checkin(self):
+        # An auction that assigns bidder numbers at the door will run the same way next year.
+        self.assertFalse(self._clone(allow_self_checkin=False).allow_self_checkin)

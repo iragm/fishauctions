@@ -78,6 +78,8 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
+        {# Styled yes/no dialogs for data-confirm actions, in place of the browser's confirm() #}
+        <script type="text/javascript" src="{% static 'js/confirm_modal.js' %}"></script>
         {% if request.user.is_authenticated %}
         <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
         {% endif %}
@@ -416,6 +418,14 @@ window.onload = function() {
         {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
           <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
+        </div>
+        {% endif %}
+        {# A pending deletion is the one thing that changes what this account is, so it says so on every page #}
+        {% if request.user.is_authenticated and request.user.userdata.account_deletion_requested %}
+        <div class="alert alert-warning text-dark mb-0" role="alert">
+          <i class="bi bi-exclamation-triangle"></i>
+          Your account is scheduled to be deleted on {{ request.user.userdata.account_deletion_due|date:"F j, Y" }}.
+          <a href="{% url 'account_delete' %}" class="alert-link">Keep my account</a>
         </div>
         {% endif %}
         <script>

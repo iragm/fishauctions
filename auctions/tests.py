@@ -38,6 +38,7 @@ from .forms import (
     CustomSignupForm,
 )
 from .models import (
+    PRIVACY_POLICY_SLUG,
     Auction,
     AuctionCampaign,
     AuctionDropdown,
@@ -46,6 +47,7 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
+    BlogPost,
     Category,
     ChatSubscription,
     Club,
@@ -3889,6 +3891,236 @@ class CSVImportTests(StandardTestCase):
         self.assertIn("1 users added", history.action)
 
 
+class CSVImportBiddingPermissionTests(StandardTestCase):
+    """The "allow bidding" column, which decides whether people can bid at all.
+
+    A blank cell in that column used to mean "no", and the user CSV export leaves it blank for everyone
+    who *can* bid -- so exporting the user list and importing it back silently revoked bidding from every
+    user in the auction, and the only symptom was "Bid failed! This auction requires admin approval".
+    """
+
+    def _import(self, rows, header=("email", "name", "bidding allowed")):
+        csv_buffer = io.StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(header)
+        for row in rows:
+            writer.writerow(row)
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+        self.client.login(username="admin_user", password="testpassword")
+        return self.run_csv_import(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            csv_file,
+        )
+
+    def _tos(self, email):
+        return AuctionTOS.objects.filter(auction=self.online_auction, email=email).first()
+
+    def test_blank_bidding_cell_does_not_disable_bidding_for_a_new_user(self):
+        self._import([["new@example.com", "New User", ""]])
+        self.assertTrue(self._tos("new@example.com").bidding_allowed)
+
+    def test_blank_bidding_cell_leaves_an_existing_user_alone(self):
+        """Re-importing an exported user list must not revoke bidding from everyone in the auction."""
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", ""]])
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.bidding_allowed)
+
+    def test_explicit_no_disables_bidding(self):
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", "No"]])
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.bidding_allowed)
+
+    def test_explicit_yes_restores_bidding(self):
+        self.online_tos.email = "existing@example.com"
+        self.online_tos.bidding_allowed = False
+        self.online_tos.save()
+        self._import([["existing@example.com", self.online_tos.name or "Existing User", "Yes"]])
+        self.online_tos.refresh_from_db()
+        self.assertTrue(self.online_tos.bidding_allowed)
+
+    def test_common_yes_and_no_spellings_are_understood(self):
+        self._import(
+            [
+                ["y@example.com", "Y User", "Y"],
+                ["one@example.com", "One User", "1"],
+                ["padded@example.com", "Padded User", "  TRUE  "],
+                ["x@example.com", "X User", "x"],
+                ["n@example.com", "N User", "N"],
+                ["zero@example.com", "Zero User", "0"],
+                ["false@example.com", "False User", " False "],
+            ]
+        )
+        for email in ("y@example.com", "one@example.com", "padded@example.com", "x@example.com"):
+            self.assertTrue(self._tos(email).bidding_allowed, f"{email} should be allowed to bid")
+        for email in ("n@example.com", "zero@example.com", "false@example.com"):
+            self.assertFalse(self._tos(email).bidding_allowed, f"{email} should not be allowed to bid")
+
+    def test_unreadable_value_leaves_bidding_at_the_default(self):
+        self._import([["huh@example.com", "Huh User", "maybe?"]])
+        self.assertTrue(self._tos("huh@example.com").bidding_allowed)
+
+    def test_no_bidding_column_at_all_allows_bidding(self):
+        self._import([["nocolumn@example.com", "No Column User"]], header=("email", "name"))
+        self.assertTrue(self._tos("nocolumn@example.com").bidding_allowed)
+
+    def test_explicit_no_wins_over_the_manually_added_default(self):
+        """AuctionTOS.save() force-allows bidding for manually added users in an approval auction."""
+        self.online_auction.only_approved_bidders = True
+        self.online_auction.save()
+        self._import(
+            [
+                ["denied@example.com", "Denied User", "no"],
+                ["allowed@example.com", "Allowed User", ""],
+            ]
+        )
+        self.assertFalse(self._tos("denied@example.com").bidding_allowed)
+        self.assertTrue(self._tos("allowed@example.com").bidding_allowed)
+
+    def test_blank_admin_cell_does_not_strip_an_existing_admin(self):
+        """Same rule on the admin column: a roster with one 'yes' can't demote everyone else."""
+        self.admin_online_tos.email = "theadmin@example.com"
+        self.admin_online_tos.save()
+        self._import(
+            [["theadmin@example.com", self.admin_online_tos.name, ""]],
+            header=("email", "name", "admin"),
+        )
+        # The row matched the existing record by email rather than creating a second one...
+        self.assertEqual(
+            AuctionTOS.objects.filter(auction=self.online_auction, email="theadmin@example.com").count(), 1
+        )
+        # ...and the blank cell left their admin flag alone.
+        self.admin_online_tos.refresh_from_db()
+        self.assertTrue(self.admin_online_tos.is_admin)
+
+    def test_user_csv_export_spells_out_bidding_allowed(self):
+        """The export is a round-trip source for the importer, so it can't leave the column blank."""
+        self.online_tos.bidding_allowed = True
+        self.online_tos.save()
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("user_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        rows = list(csv.reader(response.content.decode("utf-8").splitlines()))
+        column = rows[0].index("Bidding allowed")
+        values = {row[column] for row in rows[1:] if row}
+        self.assertIn("Yes", values)
+        self.assertIn("No", values)
+        self.assertNotIn("", values)
+
+
+class EnableBiddingForAllUsersTests(StandardTestCase):
+    """The bulk repair on the users page for an auction that lost bidding for everyone at once."""
+
+    def _url(self):
+        return reverse("auction_enable_bidding_for_all", kwargs={"slug": self.online_auction.slug})
+
+    def _disable_bidding_for_everyone(self):
+        AuctionTOS.objects.filter(auction=self.online_auction).update(bidding_allowed=False)
+
+    def test_button_is_hidden_when_everyone_can_bid(self):
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 0)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertNotContains(response, "Enable bidding for all users")
+
+    def test_button_appears_once_someone_cannot_bid(self):
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 1)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertContains(response, "Enable bidding for all users")
+
+    def test_check_in_auctions_never_offer_it(self):
+        """Bidding off until you check in at the door is the point of that mode, not a fault to repair."""
+        club = Club.objects.create(name="Bidding Repair Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = "checkin"
+        self.online_auction.save()
+        self._disable_bidding_for_everyone()
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 0)
+        self.client.login(username="admin_user", password="testpassword")
+        self.assertEqual(self.client.get(self._url()).status_code, 404)
+
+    def test_modal_names_the_number_of_affected_users(self):
+        self._disable_bidding_for_everyone()
+        count = self.online_auction.users_with_bidding_disabled
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"Enable bidding for {count} users?")
+        self.assertContains(response, "cannot be undone")
+
+    def test_post_enables_bidding_and_records_history(self):
+        self._disable_bidding_for_everyone()
+        count = self.online_auction.users_with_bidding_disabled
+        self.assertTrue(count)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.post(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            AuctionTOS.objects.filter(auction=self.online_auction, bidding_allowed=False).exists(),
+        )
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        self.assertIn(f"Enabled bidding for {count} users", history.action)
+
+    def test_the_user_who_could_not_bid_can_bid_afterwards(self):
+        """End to end: the fix has to clear the actual 'requires admin approval' bid error."""
+        from auctions.bidding import check_bidding_permissions
+
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        self.unsoldLot.active = True
+        self.unsoldLot.date_end = self.online_auction.date_end
+        self.unsoldLot.save()
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.assertEqual(
+            check_bidding_permissions(self.unsoldLot, self.userB),
+            "This auction requires admin approval before you can bid",
+        )
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(self._url())
+        self.tosB.refresh_from_db()
+        self.assertTrue(self.tosB.bidding_allowed)
+        self.assertNotEqual(
+            check_bidding_permissions(self.unsoldLot, self.userB),
+            "This auction requires admin approval before you can bid",
+        )
+
+    def test_non_admin_cannot_use_it(self):
+        self._disable_bidding_for_everyone()
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.post(self._url())
+        self.assertIn(response.status_code, [302, 403])
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, bidding_allowed=False).exists())
+
+    def test_club_managed_auction_also_fixes_the_member_records(self):
+        """Otherwise the club page still says 'no' and a later member edit pushes it back down."""
+        club = Club.objects.create(name="Managed Bidding Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = "all"
+        self.online_auction.save()
+        member = ClubMember.objects.create(club=club, name="Managed Member", email="managed@example.com")
+        tos = AuctionTOS.objects.filter(auction=self.online_auction, clubmember=member).first()
+        self.assertIsNotNone(tos, "creating a member should have created its shadow participant record")
+        ClubMember.objects.filter(pk=member.pk).update(bidding_allowed=False)
+        AuctionTOS.objects.filter(pk=tos.pk).update(bidding_allowed=False)
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(self._url())
+        tos.refresh_from_db()
+        member.refresh_from_db()
+        self.assertTrue(tos.bidding_allowed)
+        self.assertTrue(member.bidding_allowed)
+
+
 class CSVImportPreviewTests(StandardTestCase):
     """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
 
@@ -6124,6 +6356,19 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         )
         # manage_users_through_club is always rendered so JS can toggle it based on club selection
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
+
+    def test_allow_self_checkin_field_rendered_for_js_toggling(self):
+        # Like manage_users_through_club, the real widget is always rendered so the form JS can show
+        # it only in check-in mode (see update_self_checkin_field in auction_edit_form.html).
+        form = AuctionEditForm(
+            instance=self.in_person_auction,
+            user=self.in_person_auction.created_by,
+            cloned_from=None,
+            user_timezone="UTC",
+        )
+        self.assertNotIsInstance(form.fields["allow_self_checkin"].widget, forms.HiddenInput)
+        self.assertFalse(form.fields["allow_self_checkin"].required)
+        self.assertTrue(self.in_person_auction.allow_self_checkin)  # on by default
 
     def test_membership_fee_field_stays_visible_for_club_managed_auction(self):
         paid_club = Club.objects.create(name="Paid Club", membership_annual_fee=Decimal("20.00"))
@@ -10956,6 +11201,46 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         assert new_lot is not None
         assert new_lot.auctiontos_seller == new_tos
 
+    def test_import_lots_csv_new_seller_gets_a_club_member(self):
+        """In a club-managed auction, an imported seller needs a ClubMember like any participant.
+
+        The club owns the bidder number there, so a seller row with no member behind it carries a
+        number the club has never heard of."""
+        club = Club.objects.create(name="Import Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, name="Admin", permission_admin=True)
+        self.in_person_auction.club = club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.in_person_auction.slug})
+        csv_content = "Name,Email,Lot Name,Quantity\nImported Seller,imported@example.com,Bag of guppies,2\n"
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.run_csv_import(url, csv_file)
+        self.assertEqual(response.status_code, 200)
+
+        member = ClubMember.objects.get(club=club, email="imported@example.com")
+        self.assertTrue(member.bidder_number)
+        sellers = AuctionTOS.objects.filter(auction=self.in_person_auction, email="imported@example.com")
+        self.assertEqual(sellers.count(), 1)  # the member's shadow row was adopted, not duplicated
+        seller = sellers.first()
+        self.assertEqual(seller.clubmember, member)
+        self.assertEqual(seller.bidder_number, member.bidder_number)
+        lot = Lot.objects.filter(lot_name="Bag of guppies", auction=self.in_person_auction).first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(lot.auctiontos_seller, seller)
+
+    def test_import_lots_csv_new_seller_without_club_management_has_no_member(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.in_person_auction.slug})
+        csv_content = "Name,Email,Lot Name,Quantity\nPlain Seller,plain@example.com,Bag of snails,1\n"
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        self.run_csv_import(url, csv_file)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, email="plain@example.com").exists())
+        self.assertFalse(ClubMember.objects.filter(email="plain@example.com").exists())
+
     def test_import_lots_csv_boolean_fields(self):
         """CSV import handles boolean fields correctly"""
         self.client.login(username=self.admin_user.username, password="testpassword")
@@ -11131,6 +11416,47 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
         assert "lots_import.csv" in history.action
         assert "1 lots created" in history.action
+
+    def _import_lot_csv(self, csv_content):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        return self.run_csv_import(url, csv_file)
+
+    def test_update_without_a_donation_column_keeps_the_flags(self):
+        """These feed the invoice, so an unrelated column update must not silently clear them."""
+        self.lot.donation = True
+        self.lot.i_bred_this_fish = True
+        self.lot.custom_checkbox = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name\n{self.lot.lot_number_int},Renamed Lot\n")
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.lot_name, "Renamed Lot")
+        self.assertTrue(self.lot.donation)
+        self.assertTrue(self.lot.i_bred_this_fish)
+        self.assertTrue(self.lot.custom_checkbox)
+
+    def test_update_with_a_blank_donation_cell_keeps_the_flag(self):
+        self.lot.donation = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name,Donation\n{self.lot.lot_number_int},Renamed Lot,\n")
+        self.lot.refresh_from_db()
+        self.assertTrue(self.lot.donation)
+
+    def test_update_with_an_explicit_no_clears_the_flag(self):
+        self.lot.donation = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name,Donation\n{self.lot.lot_number_int},Renamed Lot,no\n")
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.donation)
+
+    def test_new_lot_defaults_to_off_when_the_file_says_nothing(self):
+        self._import_lot_csv("Name,Email,Lot Name\nBlank Flags,blankflags@example.com,Blank Flag Lot\n")
+        new_lot = Lot.objects.filter(lot_name="Blank Flag Lot", auction=self.online_auction).first()
+        self.assertIsNotNone(new_lot)
+        self.assertFalse(new_lot.donation)
+        self.assertFalse(new_lot.i_bred_this_fish)
 
 
 class SquarePaymentTests(StandardTestCase):
@@ -19156,7 +19482,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertIsNone(auction.club)
 
     def test_club_detail_shows_promoted_auctions(self):
-        """Club detail page lists promoted auctions belonging to that club"""
+        """The club page's event list includes promoted auctions belonging to that club"""
         auction = Auction.objects.create(
             title="Club Promoted Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -19168,10 +19494,10 @@ class ClubAuctionIntegrationTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(auction, response.context["club_auctions"])
+        self.assertIn(auction, [event.auction for event in response.context["upcoming_events"]])
 
     def test_club_detail_does_not_show_unpromoted_auctions(self):
-        """Club detail page does not list unpromoted auctions"""
+        """Unpromoted auctions are never mirrored onto the calendar"""
         Auction.objects.create(
             title="Unpromoted Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -19183,19 +19509,20 @@ class ClubAuctionIntegrationTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(list(response.context["club_auctions"])), 0)
+        self.assertEqual(len(list(response.context["upcoming_events"])), 0)
 
-    def test_club_detail_lists_newest_auctions_first(self):
-        older = Auction.objects.create(
-            title="Older Auction",
+    def test_club_detail_lists_soonest_events_first(self):
+        """The list is a calendar now, so it reads forward in time rather than newest-first."""
+        sooner = Auction.objects.create(
+            title="Sooner Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
             date_end=timezone.now() + timezone.timedelta(days=14),
             created_by=self.owner,
             club=self.club,
             promote_this_auction=True,
         )
-        newer = Auction.objects.create(
-            title="Newer Auction",
+        later = Auction.objects.create(
+            title="Later Auction",
             date_start=timezone.now() + timezone.timedelta(days=21),
             date_end=timezone.now() + timezone.timedelta(days=28),
             created_by=self.owner,
@@ -19204,8 +19531,8 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
-        auctions = list(response.context["club_auctions"])
-        self.assertEqual([auction.pk for auction in auctions[:2]], [newer.pk, older.pk])
+        events = list(response.context["upcoming_events"])
+        self.assertEqual([event.auction_id for event in events[:2]], [sooner.pk, later.pk])
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
         """When a member gains manage_auctions permission, existing auctions get club filled in"""
@@ -27598,12 +27925,24 @@ class MobileConfigTests(TestCase):
 
     def setUp(self):
         self.url = reverse("mobile-config")
+        # privacy_policy_url is only offered when the page exists. The post is seeded by migration,
+        # but a TransactionTestCase earlier in the run can truncate it away, so make it explicit.
+        BlogPost.objects.get_or_create(slug=PRIVACY_POLICY_SLUG, defaults={"title": "Privacy"})
 
     @override_settings(
         SQUARE_APPLICATION_ID="sq0idp-test",
         SQUARE_ENVIRONMENT="sandbox",
         GOOGLE_OAUTH_CLIENT_ID="123.apps.googleusercontent.com",
         NAVBAR_BRAND="Test Auctions",
+        # Pinned empty so the exact-response assertion doesn't depend on whether the .env of the
+        # machine running the tests happens to have the Firebase config files; the firebase block
+        # has its own tests below.
+        FIREBASE_CLIENT_CONFIG={},
+        # Same reason: pin the social providers so this doesn't depend on the running machine's
+        # .env. Both keys are always present, whatever their value -- the app hides a provider's
+        # button when its key is empty, so the key going missing would be a silent breakage.
+        APPLE_ALLOWED_AUDIENCES=["com.fishauctions.app"],
+        FACEBOOK_APP_ID="1234567890",
     )
     def test_returns_public_config_without_auth(self):
         resp = self.client.get(self.url)
@@ -27614,8 +27953,17 @@ class MobileConfigTests(TestCase):
                 "square_application_id": "sq0idp-test",
                 "square_environment": "sandbox",
                 "google_server_client_id": "123.apps.googleusercontent.com",
+                # Which social sign-in buttons to draw. Apple is a boolean because the native flow's
+                # audience is the app's own bundle id and needs nothing at runtime; Facebook's app id
+                # is public by construction (it's compiled into the app and registered as an
+                # fb<app-id> URL scheme). Neither secret is ever sent -- see test_exposes_no_secrets.
+                "apple_sign_in_enabled": True,
+                "facebook_app_id": "1234567890",
                 "brand_name": "Test Auctions",
                 "icon_url": "http://testserver/static/android-chrome-512x512.png",
+                # Apple requires both to be linkable from inside the app at sign-up.
+                "terms_url": "/tos/",
+                "privacy_policy_url": "/privacy/",
             },
         )
 
@@ -27625,15 +27973,37 @@ class MobileConfigTests(TestCase):
         with override_settings(
             SQUARE_CLIENT_SECRET="sq0csp-supersecret",
             SECRET_KEY="django-secret-key-value",
+            FIREBASE_CLIENT_CONFIG={},  # same reason as above: keep the key allowlist exact
+            # Each social provider has a public half that belongs here and a secret half that never
+            # does. Set both so the assertions below prove the line is drawn in the right place.
+            FACEBOOK_APP_ID="1234567890",
+            FACEBOOK_APP_SECRET="fb-app-secret-value",
+            APPLE_ALLOWED_AUDIENCES=["com.fishauctions.app"],
+            APPLE_SIGN_IN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----apple-p8-value-----END PRIVATE KEY-----",
         ):
             resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             set(resp.json().keys()),
-            {"square_application_id", "square_environment", "google_server_client_id", "brand_name", "icon_url"},
+            {
+                "square_application_id",
+                "square_environment",
+                "google_server_client_id",
+                "apple_sign_in_enabled",
+                "facebook_app_id",
+                "brand_name",
+                "icon_url",
+                "terms_url",
+                "privacy_policy_url",
+            },
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)
+        # The Facebook app *id* is public (compiled into the app, registered as a URL scheme); the
+        # app secret and Apple's .p8 signing key are not, and must never travel to a device.
+        self.assertIn(b"1234567890", resp.content)
+        self.assertNotIn(b"fb-app-secret-value", resp.content)
+        self.assertNotIn(b"apple-p8-value", resp.content)
 
     def test_includes_firebase_block_for_configured_platforms(self):
         android = {
@@ -31080,3 +31450,502 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
         self.assertEqual(
             offenders, [], "Label printing must not be gated on the mobile app UA:\n" + "\n".join(offenders)
         )
+
+
+class ClubMemberMembershipStatusFilterTests(TestCase):
+    """The membership chips on the member list ("Paid club member", "Expiring soon", "Unpaid",
+    "Never paid") must agree with ClubMember.is_paid_member.
+
+    They used to read membership_expiration_date and nothing else, so every member whose dues
+    were recorded only as a last-paid date (CSV imports, older rosters, auction-invoice
+    renewals) came back as unpaid *and* never-paid, and never as paid or expiring.
+    """
+
+    def setUp(self):
+        self.today = timezone.now().date()
+        self.club = Club.objects.create(
+            name="Membership Filter Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal(20),
+        )
+        self.current = ClubMember.objects.create(
+            club=self.club,
+            name="Current Member",
+            membership_expiration_date=self.today + datetime.timedelta(days=200),
+        )
+        self.expiring = ClubMember.objects.create(
+            club=self.club,
+            name="Expiring Member",
+            membership_expiration_date=self.today + datetime.timedelta(days=10),
+        )
+        self.expired = ClubMember.objects.create(
+            club=self.club,
+            name="Expired Member",
+            membership_expiration_date=self.today - datetime.timedelta(days=1),
+        )
+        self.never_paid = ClubMember.objects.create(club=self.club, name="Never Paid Member")
+        self.paid_without_expiration = ClubMember.objects.create(
+            club=self.club,
+            name="Last Paid Only Member",
+            membership_last_paid=self.today - datetime.timedelta(days=30),
+        )
+
+    def _names(self, query):
+        from .filters import ClubMemberFilter
+
+        qs = ClubMember.objects.filter(club=self.club)
+        return set(ClubMemberFilter({"query": query}, queryset=qs).qs.values_list("name", flat=True))
+
+    def test_paid_matches_is_paid_member(self):
+        expected = {member.name for member in ClubMember.objects.filter(club=self.club) if member.is_paid_member}
+        self.assertEqual(self._names("current"), expected)
+        self.assertIn(self.paid_without_expiration.name, self._names("current"))
+
+    def test_unpaid_is_the_complement_of_paid(self):
+        self.assertEqual(self._names("expired"), {self.expired.name, self.never_paid.name})
+
+    def test_never_paid_excludes_members_with_a_last_paid_date(self):
+        self.assertEqual(self._names("never"), {self.never_paid.name})
+
+    def test_expiring_soon_uses_the_explicit_expiration(self):
+        self.assertEqual(self._names("expiring"), {self.expiring.name})
+
+    def test_expiring_soon_covers_a_rolling_expiration_derived_from_last_paid(self):
+        derived = ClubMember.objects.create(
+            club=self.club,
+            name="Derived Expiring Member",
+            membership_last_paid=self.today - datetime.timedelta(days=355),
+        )
+        self.assertEqual(derived.effective_expiration_date, self.today + datetime.timedelta(days=10))
+        self.assertIn(derived.name, self._names("expiring"))
+
+    def test_january_first_derived_expiration_only_counts_inside_the_window(self):
+        from .filters import membership_expiring_soon_q
+
+        club = Club.objects.create(
+            name="January Club", membership_system="january_first", membership_annual_fee=Decimal(20)
+        )
+        paid_this_year = ClubMember.objects.create(
+            club=club, name="Paid This Year", membership_last_paid=datetime.date(2026, 3, 1)
+        )
+        ClubMember.objects.create(club=club, name="Paid Last Year", membership_last_paid=datetime.date(2025, 3, 1))
+        # Three weeks out from the January 1st those memberships roll over on.
+        december = ClubMember.objects.filter(club=club).filter(membership_expiring_soon_q(datetime.date(2026, 12, 20)))
+        self.assertEqual(list(december), [paid_this_year])
+        # Mid-year there is no January 1st in the next 30 days, so nothing is expiring.
+        midyear = ClubMember.objects.filter(club=club).filter(membership_expiring_soon_q(datetime.date(2026, 6, 1)))
+        self.assertEqual(list(midyear), [])
+
+    def test_club_admin_page_applies_the_expiring_chip(self):
+        admin = User.objects.create_user(username="chip_admin", password="testpass", email="chip@example.com")
+        ClubMember.objects.create(club=self.club, user=admin, name="Chip Admin", permission_add_edit=True)
+        self.client.login(username="chip_admin", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url, {"query": "expiring"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["filter"].qs.values_list("name", flat=True)), [self.expiring.name])
+
+    def test_expires_column_shows_the_derived_date_instead_of_expired(self):
+        from .tables import ClubMemberHTMxTable
+
+        table = ClubMemberHTMxTable([], club_has_fee=True)
+        rendered = table.render_membership_expiration_date(None, self.paid_without_expiration)
+        self.assertIn(self.paid_without_expiration.effective_expiration_date.strftime("%b"), rendered)
+        self.assertNotIn("Expired", rendered)
+
+
+class ClubMemberResendCardTests(TestCase):
+    """The "Resend membership card" action on the member list."""
+
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Resend Card Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+        )
+        self.admin = User.objects.create_user(username="resend_admin", password="testpass", email="ra@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, name="Resend Admin", permission_add_edit=True)
+        self.plain = User.objects.create_user(username="resend_plain", password="testpass", email="rp@example.com")
+        ClubMember.objects.create(club=self.club, user=self.plain, name="Resend Plain")
+        self.member = ClubMember.objects.create(club=self.club, name="John Smith", email="john@example.com")
+        self.confirm_url = reverse("club_member_confirm", kwargs={"pk": self.member.pk, "action": "resend_card"})
+        self.action_url = reverse("club_member_resend_card", kwargs={"pk": self.member.pk})
+
+    def test_the_actions_dropdown_offers_it(self):
+        self.client.login(username="resend_admin", password="testpass")
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Resend membership card")
+        self.assertContains(response, self.confirm_url)
+
+    def test_the_dropdown_hides_it_when_the_club_has_no_membership_cards(self):
+        self.club.show_member_barcode = False
+        self.club.save()
+        self.client.login(username="resend_admin", password="testpass")
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertNotContains(response, "Resend membership card")
+
+    def test_the_confirm_names_the_member_and_their_email(self):
+        self.client.login(username="resend_admin", password="testpass")
+        response = self.client.get(self.confirm_url)
+        self.assertContains(response, "Email John Smith (john@example.com) a link to their membership card")
+
+    def test_sending_emails_the_member_and_records_it(self):
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.tasks.mail.send") as send:
+            response = self.client.post(self.action_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(send.called)
+        self.assertEqual(send.call_args.args[0], "john@example.com")
+        self.assertIn("membership card", send.call_args.kwargs["subject"])
+        self.assertIn(self.member.member_page_url, send.call_args.kwargs["html_message"])
+        self.assertTrue(
+            ClubHistory.objects.filter(
+                club=self.club, action__contains="Emailed membership card to John Smith"
+            ).exists()
+        )
+
+    def test_sending_always_emails_even_for_a_push_subscriber(self):
+        """The admin confirmed an email, so this must not turn into a push notification."""
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.notifications.user_prefers_push", return_value=True):
+            with patch("auctions.tasks.mail.send") as send:
+                self.client.post(self.action_url)
+        self.assertTrue(send.called)
+
+    def test_a_member_with_no_email_is_reported_not_silently_skipped(self):
+        self.member.email = ""
+        self.member.save()
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.tasks.mail.send") as send:
+            response = self.client.post(self.action_url)
+        self.assertFalse(send.called)
+        self.assertContains(response, "no email address on file")
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, action__contains="Emailed membership").exists())
+
+    def test_do_not_contact_members_are_not_emailed(self):
+        self.member.contact_status = "do_not_contact"
+        self.member.save()
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.tasks.mail.send") as send:
+            response = self.client.post(self.action_url)
+        self.assertFalse(send.called)
+        self.assertContains(response, "do-not-contact")
+
+    def test_it_needs_permission_to_edit_members(self):
+        self.client.login(username="resend_plain", password="testpass")
+        self.assertEqual(self.client.get(self.confirm_url).status_code, 403)
+        self.assertEqual(self.client.post(self.action_url).status_code, 403)
+
+    def test_it_is_unreachable_when_the_club_has_no_membership_cards(self):
+        self.club.show_member_barcode = False
+        self.club.save()
+        self.client.login(username="resend_admin", password="testpass")
+        self.assertEqual(self.client.get(self.confirm_url).status_code, 404)
+        self.assertEqual(self.client.post(self.action_url).status_code, 404)
+
+
+@override_settings(
+    GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL="signer@example.iam.gserviceaccount.com",
+    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
+    APPLE_WALLET_CERT_FILE="pass.p12",
+    APPLE_WALLET_WWDR_FILE="wwdr.cer",
+    APPLE_WALLET_PASS_TYPE_IDENTIFIER="pass.com.example.membership",
+    APPLE_WALLET_TEAM_IDENTIFIER="TEAM123",
+)
+class MembershipEmailWalletButtonTests(TestCase):
+    """Membership emails carry the barcode, so they also carry the wallet buttons — but only for
+    the wallets this site is actually configured for."""
+
+    GOOGLE_URL = "https://pay.google.com/gp/v/save/tok"
+
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Wallet Email Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+        )
+        self.member = ClubMember.objects.create(club=self.club, name="Wallet Member", email="wallet@example.com")
+
+    def _send(self):
+        from auctions.tasks import send_club_member_email
+
+        with patch("auctions.templatetags.membership_tags.google_wallet_save_url", return_value=self.GOOGLE_URL):
+            with patch("auctions.tasks.mail.send") as send:
+                send_club_member_email(self.member, "Welcome", "You're in.", email_type="welcome")
+        self.assertTrue(send.called)
+        return send.call_args.kwargs["html_message"], send.call_args.kwargs["message"]
+
+    def test_the_buttons_sit_directly_below_the_barcode(self):
+        html, _ = self._send()
+        barcode_at = html.index(self.member.barcode_image_link_png)
+        google_at = html.index("Add to Google Wallet")
+        apple_at = html.index("Add to Apple Wallet")
+        self.assertLess(barcode_at, google_at)
+        self.assertLess(google_at, apple_at)
+        self.assertIn(self.GOOGLE_URL, html)
+        apple_path = reverse(
+            "club_member_apple_wallet_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid}
+        )
+        self.assertIn(apple_path, html)
+
+    def test_the_plain_text_part_carries_both_links(self):
+        _, text = self._send()
+        self.assertIn(f"Add to Google Wallet: {self.GOOGLE_URL}", text)
+        self.assertIn("Add to Apple Wallet: https://", text)
+
+    def test_only_the_configured_wallets_appear(self):
+        with override_settings(APPLE_WALLET_PASS_TYPE_IDENTIFIER=""):
+            html, text = self._send()
+        self.assertIn("Add to Google Wallet", html)
+        self.assertNotIn("Add to Apple Wallet", html)
+        self.assertNotIn("Add to Apple Wallet", text)
+
+    def test_no_buttons_without_a_membership_card(self):
+        self.club.show_member_barcode = False
+        self.club.save()
+        html, text = self._send()
+        self.assertNotIn("Add to Google Wallet", html)
+        self.assertNotIn("Add to Apple Wallet", html)
+        self.assertNotIn("Add to Google Wallet", text)
+        self.assertNotIn("Add to Apple Wallet", text)
+
+    def test_wallet_links_helper_is_empty_when_nothing_is_configured(self):
+        from auctions.tasks import wallet_links
+
+        with override_settings(
+            GOOGLE_WALLET_ISSUER_ID="",
+            APPLE_WALLET_PASS_TYPE_IDENTIFIER="",
+        ):
+            self.assertEqual(wallet_links(self.member), ("", ""))
+
+    def test_the_email_settings_preview_shows_the_buttons(self):
+        editor = User.objects.create_user(username="wallet_editor", password="testpass", email="we@example.com")
+        ClubMember.objects.create(club=self.club, user=editor, name="Wallet Editor", permission_edit_club=True)
+        self.client.login(username="wallet_editor", password="testpass")
+        response = self.client.get(reverse("club_email_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Add to Google Wallet")
+        self.assertContains(response, "Add to Apple Wallet")
+
+
+class ClubMemberRenewAPITests(TestCase):
+    """The API-key renew action: find the member by email or create them, renew, and hand back the
+    complete member record with the new expiration."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="renew_api_owner", password="testpass", email="ra@example.com")
+        self.club = Club.objects.create(
+            name="Renew API Club", membership_system="rolling", membership_annual_fee=Decimal(25)
+        )
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Website",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+            can_add_club_members=True,
+        )
+        self.raw_key = raw_key
+        self.url = reverse("api_club_member_renew", kwargs={"slug": self.club.slug})
+        self.today = timezone.now().date()
+
+    def _enable(self):
+        self.api_key.can_renew_memberships = True
+        self.api_key.save(update_fields=["can_renew_memberships"])
+
+    def _post(self, payload):
+        return self.client.post(self.url, payload, content_type="application/json", HTTP_X_API_KEY=self.raw_key)
+
+    def test_it_requires_the_renew_permission(self):
+        response = self._post({"email": "someone@example.com"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClubMember.objects.filter(club=self.club).exists())
+
+    def test_it_requires_an_email_to_match_on(self):
+        self._enable()
+        response = self._post({"name": "No Email"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.json())
+
+    def test_it_renews_an_existing_member_matched_by_email(self):
+        self._enable()
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Mike Smith",
+            email="mike@example.com",
+            membership_expiration_date=self.today - datetime.timedelta(days=10),
+        )
+        response = self._post({"email": "MIKE@example.com"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["created"])
+        self.assertEqual(body["id"], member.pk)
+        self.assertEqual(body["membership_expiration_date"], str(self.today + datetime.timedelta(days=365)))
+        self.assertEqual(body["membership_last_paid"], str(self.today))
+        self.assertEqual(body["name"], "Mike Smith")
+        self.assertTrue(body["wallet_link"].endswith(member.member_page_url))
+        member.refresh_from_db()
+        self.assertTrue(member.is_paid_member)
+        self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 1)
+
+    def test_it_creates_the_member_when_the_email_is_new(self):
+        self._enable()
+        response = self._post(
+            {"email": "new@example.com", "first_name": "New", "last_name": "Member", "phone_number": "555-0143"}
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertTrue(body["created"])
+        member = ClubMember.objects.get(club=self.club, email="new@example.com")
+        self.assertEqual(member.name, "New Member")
+        self.assertEqual(member.phone_number, "555-0143")
+        self.assertEqual(member.source, "Website")
+        self.assertEqual(member.membership_expiration_date, self.today + datetime.timedelta(days=365))
+        self.assertEqual(body["membership_expiration_date"], str(member.membership_expiration_date))
+        self.assertTrue(
+            ClubHistory.objects.filter(club=self.club, action__contains="membership renewal").exists(),
+            "creating a member through a renewal should be visible in club history",
+        )
+
+    def test_a_renewal_is_recorded_in_history_and_the_ledger(self):
+        self._enable()
+        ClubMember.objects.create(club=self.club, name="Ledger Member", email="ledger@example.com")
+        self._post({"email": "ledger@example.com"})
+        self.assertTrue(
+            ClubHistory.objects.filter(
+                club=self.club,
+                action__contains=f"Renewed membership for Ledger Member via API key [{self.api_key.prefix}]",
+            ).exists()
+        )
+        money = ClubMoney.objects.get(club=self.club, category=ClubMoney.CATEGORY_MEMBERSHIP)
+        self.assertEqual(money.amount, Decimal(25))
+        self.assertIn("Ledger Member", money.description)
+
+    def test_blank_values_do_not_wipe_details_already_on_file(self):
+        self._enable()
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Keep Me",
+            email="keep@example.com",
+            phone_number="555-1111",
+            address="1 Fish Lane",
+        )
+        response = self._post({"email": "keep@example.com", "name": "", "phone_number": "", "address": ""})
+        self.assertEqual(response.status_code, 200)
+        member.refresh_from_db()
+        self.assertEqual(member.name, "Keep Me")
+        self.assertEqual(member.phone_number, "555-1111")
+        self.assertEqual(member.address, "1 Fish Lane")
+
+    def test_supplied_details_are_applied_before_the_renewal(self):
+        self._enable()
+        member = ClubMember.objects.create(club=self.club, name="Old Name", email="update@example.com")
+        response = self._post({"email": "update@example.com", "name": "New Name", "phone_number": "555-2222"})
+        self.assertEqual(response.status_code, 200)
+        member.refresh_from_db()
+        self.assertEqual(member.name, "New Name")
+        self.assertEqual(member.phone_number, "555-2222")
+        self.assertEqual(response.json()["name"], "New Name")
+
+    def test_it_honors_the_keys_field_mapping(self):
+        self._enable()
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="email_address", internal_field="email")
+        response = self._post({"email_address": "mapped@example.com", "name": "Mapped Member"})
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="mapped@example.com").exists())
+
+    def test_a_january_first_club_lands_on_january_first(self):
+        self._enable()
+        self.club.membership_system = "january_first"
+        self.club.save()
+        ClubMember.objects.create(club=self.club, name="Jan Member", email="jan@example.com")
+        response = self._post({"email": "jan@example.com"})
+        self.assertEqual(response.json()["membership_expiration_date"], str(datetime.date(self.today.year + 1, 1, 1)))
+
+    def test_deactivated_members_are_not_matched(self):
+        self._enable()
+        ClubMember.objects.create(club=self.club, name="Gone", email="gone@example.com", is_deleted=True)
+        response = self._post({"email": "gone@example.com", "name": "Back Again"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, email="gone@example.com").count(), 2)
+
+    def test_the_renewal_confirmation_email_is_sent(self):
+        self._enable()
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        ClubMember.objects.create(club=self.club, name="Confirm Member", email="confirm@example.com")
+        with patch("auctions.tasks.mail.send") as send:
+            self._post({"email": "confirm@example.com"})
+        self.assertTrue(send.called)
+        self.assertIn("renewed", send.call_args.kwargs["subject"])
+
+
+class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
+    """Merging duplicate participants in a club-managed auction must not throw away the
+    membership the surviving record is entitled to.
+
+    The duplicate is frequently the row that was renewed, and dropping its dates left the member
+    reading as unpaid everywhere (the member list, the wallet pass, the membership filters)."""
+
+    def setUp(self):
+        self.club = Club.objects.create(
+            name="Merge Dates Club", membership_system="rolling", membership_annual_fee=Decimal(20)
+        )
+        self.auction = Auction.objects.create(
+            created_by=User.objects.create_user(username="merge_owner", password="testpass", email="mo@example.com"),
+            title="Club Managed Merge Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+            club=self.club,
+            manage_users_through_club="all",
+        )
+        self.location = PickupLocation.objects.create(
+            name="merge location", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=2)
+        )
+        self.today = timezone.now().date()
+
+    def _shadow_tos(self, member):
+        """The AuctionTOS the club-managed auction auto-creates for a new member."""
+        return AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+
+    def test_the_later_membership_dates_survive_the_merge(self):
+        keeper = ClubMember.objects.create(club=self.club, name="Keeper", email="keeper@example.com")
+        renewed = ClubMember.objects.create(
+            club=self.club,
+            name="Renewed Duplicate",
+            email="renewed@example.com",
+            membership_last_paid=self.today,
+            membership_expiration_date=self.today + datetime.timedelta(days=365),
+        )
+        keeper_tos = self._shadow_tos(keeper)
+        duplicate_tos = self._shadow_tos(renewed)
+
+        keeper_tos.merge_duplicate(duplicate_tos, reason="test merge")
+
+        keeper.refresh_from_db()
+        self.assertEqual(keeper.membership_expiration_date, self.today + datetime.timedelta(days=365))
+        self.assertEqual(keeper.membership_last_paid, self.today)
+        self.assertTrue(keeper.is_paid_member)
+
+    def test_an_earlier_duplicate_does_not_shorten_the_membership(self):
+        keeper = ClubMember.objects.create(
+            club=self.club,
+            name="Long Keeper",
+            email="long@example.com",
+            membership_expiration_date=self.today + datetime.timedelta(days=300),
+            membership_last_paid=self.today,
+        )
+        stale = ClubMember.objects.create(
+            club=self.club,
+            name="Stale Duplicate",
+            email="stale@example.com",
+            membership_expiration_date=self.today - datetime.timedelta(days=100),
+            membership_last_paid=self.today - datetime.timedelta(days=465),
+        )
+        keeper_tos = self._shadow_tos(keeper)
+        duplicate_tos = self._shadow_tos(stale)
+
+        keeper_tos.merge_duplicate(duplicate_tos, reason="test merge")
+
+        keeper.refresh_from_db()
+        self.assertEqual(keeper.membership_expiration_date, self.today + datetime.timedelta(days=300))
+        self.assertEqual(keeper.membership_last_paid, self.today)

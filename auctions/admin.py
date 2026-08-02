@@ -25,6 +25,7 @@ from .models import (
     Club,
     ClubAPIKey,
     ClubDiscordRole,
+    ClubEvent,
     ClubHistory,
     ClubMember,
     CommandPalettePage,
@@ -1141,5 +1142,15 @@ class ClubHistoryAdmin(admin.ModelAdmin):
     ordering = ("-timestamp",)
 
 
+class ClubEventAdmin(admin.ModelAdmin):
+    model = ClubEvent
+    list_display = ("title", "club", "date_start", "source", "cancelled", "is_deleted")
+    list_filter = ("source", "cancelled", "is_deleted", "date_start")
+    search_fields = ("title", "location", "club__name")
+    raw_id_fields = ("auction", "created_by")
+    ordering = ("-date_start",)
+
+
 admin.site.register(ClubMember, ClubMemberAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
+admin.site.register(ClubEvent, ClubEventAdmin)

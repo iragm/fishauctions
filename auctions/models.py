@@ -5,7 +5,7 @@ import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import channels.layers
 import pytz
@@ -59,6 +59,11 @@ from .helper_functions import bin_data, get_currency_symbol
 logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
+
+# The privacy policy is a BlogPost (seeded and kept current by migrations) rather than a template,
+# so it can be edited without a deploy. Both /privacy/ and /blog/privacy/ render this slug, and
+# /api/mobile/config/ hands its path to the app, which is required to link it from sign-up.
+PRIVACY_POLICY_SLUG = "privacy"
 
 
 def nearby_auctions(
@@ -851,7 +856,11 @@ class Club(CloudflareImageMixin, models.Model):
     send_membership_renewal_confirmation = models.BooleanField(default=False)
     send_welcome_email_to_new_members = models.BooleanField(default=False)
     membership_email_template = models.TextField(blank=True, default="")
-    include_next_auction_in_emails = models.BooleanField(default=True)
+    include_next_auction_in_emails = models.BooleanField(
+        default=True,
+        verbose_name="Include the next event in membership emails",
+        help_text="Default for email types that don't have their own setting.",
+    )
     welcome_opening = models.TextField(
         blank=True,
         default="Thanks for joining!\n\nYou can view your membership below:",
@@ -860,8 +869,12 @@ class Club(CloudflareImageMixin, models.Model):
     welcome_closing = models.TextField(
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Welcome email closing text"
     )
+    # Named *_include_auction for historical reasons; these now cover the club's next calendar
+    # event of any kind (auction, meeting, swap), not just auctions. See tasks.next_event_fragment.
     welcome_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     renewal_opening = models.TextField(
         blank=True,
@@ -872,7 +885,9 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Renewal email closing text"
     )
     renewal_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     expiring_soon_opening = models.TextField(
         blank=True,
@@ -883,7 +898,9 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Expiring soon email closing text"
     )
     expiring_soon_include_auction = models.BooleanField(
-        default=True, verbose_name="Also include information about the next auction"
+        default=True,
+        verbose_name="Also include information about the next event",
+        help_text="Your next auction, meeting, or anything else on the club calendar.",
     )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
@@ -1059,6 +1076,70 @@ class Club(CloudflareImageMixin, models.Model):
     brevo_last_sync = models.DateTimeField(null=True, blank=True)
     brevo_last_error = models.TextField(blank=True)
 
+    # Google Calendar integration (two-way sync with a secondary calendar this site creates in
+    # the club's own Google account). Connected per-club via OAuth; see auctions/google_calendar.py
+    # and the GoogleCalendar*View classes. Tokens are stored encrypted at rest.
+    google_calendar_refresh_token = EncryptedCharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="OAuth refresh token for the club's Google account (stored encrypted).",
+    )
+    google_calendar_access_token = EncryptedCharField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        help_text="Short-lived OAuth access token, cached until google_calendar_token_expires.",
+    )
+    google_calendar_token_expires = models.DateTimeField(null=True, blank=True)
+    google_calendar_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Calendar id of the secondary calendar we created for this club.",
+    )
+    google_calendar_account_email = models.CharField(
+        max_length=255, blank=True, help_text="The Google account that authorized us, shown on the settings page."
+    )
+    google_calendar_connected_on = models.DateTimeField(null=True, blank=True)
+    google_calendar_connected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The club admin who connected Google Calendar.",
+    )
+    google_calendar_sync_token = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Google's incremental sync token, so each pull only fetches what changed.",
+    )
+    google_calendar_is_public = models.BooleanField(
+        default=False,
+        verbose_name="This calendar is shared publicly",
+        help_text=(
+            "Whether the admin has made the calendar public in Google Calendar. We can't change "
+            "sharing ourselves — that needs a scope granting access to all of their calendars — "
+            "but ticking this box is checked against the calendar's public feed before it sticks. "
+            "It only controls whether the club page advertises the Google subscribe links."
+        ),
+    )
+    google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
+    google_calendar_last_error = models.TextField(blank=True)
+    add_auctions_to_calendar = models.BooleanField(
+        default=True,
+        verbose_name="Add auctions to the calendar",
+        help_text="Automatically add each promoted auction to this club's events and Google Calendar.",
+    )
+    create_discord_events_for_club_events = models.BooleanField(
+        default=True,
+        verbose_name="Create Discord events for calendar events",
+        help_text=(
+            "Create a Discord scheduled event for each club event. Auctions are handled by the "
+            "Discord auction event setting instead, so they are never doubled up."
+        ),
+    )
+
     class Meta:
         ordering = ["name"]
 
@@ -1101,6 +1182,37 @@ class Club(CloudflareImageMixin, models.Model):
     def brevo_connected(self):
         """True when this club has an active Brevo connection (API key) with a list selected."""
         return bool(self.brevo_api_key and self.brevo_list_id)
+
+    @property
+    def google_calendar_connected(self):
+        """True when this club has authorized Google Calendar and we've provisioned its calendar."""
+        return bool(self.google_calendar_refresh_token and self.google_calendar_id)
+
+    @property
+    def google_calendar_public_url(self):
+        """Google's public 'add this calendar' link, or empty when not shareable."""
+        if not (self.google_calendar_connected and self.google_calendar_is_public):
+            return ""
+        return "https://calendar.google.com/calendar/render?cid=" + quote_plus(self.google_calendar_id)
+
+    @property
+    def google_calendar_ical_url_candidate(self):
+        """Where this calendar's public iCal feed would be, shared or not.
+
+        Fetching it anonymously is how ``google_calendar.is_calendar_public()`` checks whether the
+        admin really did share the calendar — the API can't tell us without a scope over all of
+        their calendars.
+        """
+        if not self.google_calendar_connected:
+            return ""
+        return f"https://calendar.google.com/calendar/ical/{quote_plus(self.google_calendar_id)}/public/basic.ics"
+
+    @property
+    def google_calendar_ical_url(self):
+        """Google's public iCal feed for this club's calendar, or empty when not shareable."""
+        if not self.google_calendar_is_public:
+            return ""
+        return self.google_calendar_ical_url_candidate
 
     @property
     def icon_display_url(self):
@@ -1432,6 +1544,15 @@ class ClubMember(ContactRecord):
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     source = models.CharField(max_length=200, default="manually_added")
+    admin_edited = models.BooleanField(
+        default=True,
+        help_text=(
+            "A club admin created or has edited this record, so the club owns it: deleting the "
+            "person's site account only removes the account link and leaves the club's copy of "
+            "their details alone.  Unchecked only for rows a member made about themselves and no "
+            "admin has touched since — those are deleted with the account."
+        ),
+    )
     permission_admin = models.BooleanField(
         default=False, help_text="Full admin access — grants all other permissions.  Use only if absolutely necessary."
     )
@@ -2240,6 +2361,250 @@ class ClubHistory(models.Model):
         verbose_name_plural = "Club history"
 
 
+class ClubEvent(models.Model):
+    """Something on a club's calendar: a meeting, a swap, a talk, or an auction.
+
+    This is the single source of truth behind the club page's event list, the club's Google
+    Calendar, and Discord scheduled events. Events reach it three ways:
+
+    * ``manual``  — an admin filled in the "Add event" form on the club page.
+    * ``auction`` — mirrored from a promoted Auction (see ``sync_auction_events``). These stay
+      in step with the auction's dates and are never editable by hand.
+    * ``google``  — pulled in from the club's Google Calendar, so an admin who adds a meeting
+      in Google Calendar gets it on the club page (and in Discord) for free.
+
+    Pushing to Google and Discord is idempotent: ``google_event_id`` / ``discord_event_id``
+    record what we already created, so a retry updates instead of duplicating.
+    """
+
+    SOURCE_MANUAL = "manual"
+    SOURCE_AUCTION = "auction"
+    SOURCE_PICKUP = "pickup"
+    SOURCE_GOOGLE = "google"
+    SOURCE_CHOICES = (
+        (SOURCE_MANUAL, "Created on this site"),
+        (SOURCE_AUCTION, "From an auction"),
+        (SOURCE_PICKUP, "From an auction pickup time"),
+        (SOURCE_GOOGLE, "From Google Calendar"),
+    )
+    # Sources that are generated from something else and so can't be hand-edited.
+    AUTOMATIC_SOURCES = (SOURCE_AUCTION, SOURCE_PICKUP)
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="events")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+    location = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Where is it? A street address works best — it turns into a map link.",
+    )
+    date_start = models.DateTimeField("Starts")
+    date_end = models.DateTimeField("Ends", null=True, blank=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    auction = models.ForeignKey(
+        "Auction",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="calendar_events",
+        help_text="Set for the event mirroring an auction's bidding window.",
+    )
+    pickup_location = models.ForeignKey(
+        "PickupLocation",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="calendar_events",
+        help_text="Set for events mirroring an online auction's pickup times.",
+    )
+    pickup_slot = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="1 for the location's pickup time, 2 for its second pickup time.",
+    )
+    google_event_id = models.CharField(
+        max_length=1024, blank=True, help_text="Event id in the club's Google Calendar, once pushed."
+    )
+    discord_event_id = models.CharField(
+        max_length=100, blank=True, help_text="Discord scheduled event id, once created."
+    )
+    needs_google_sync = models.BooleanField(
+        default=True,
+        help_text="Set when the event changes on our side and is waiting to be pushed to Google.",
+    )
+    needs_discord_sync = models.BooleanField(
+        default=True,
+        help_text=(
+            "Set when the event changes and is waiting to reach Discord. Cleared once we've tried, "
+            "success or not, so a permanent failure isn't retried every run — the next edit re-arms it."
+        ),
+    )
+    all_day = models.BooleanField(
+        default=False,
+        help_text="An all-day event. date_end is then the exclusive end, the way Google and iCal write it.",
+    )
+    recurrence = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "The repeat rule from Google, one RRULE/EXDATE/RDATE line per row. One event stands "
+            "for the whole series; date_start holds the occurrence that's on now, or next."
+        ),
+    )
+    recurrence_start = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Where the series is anchored — the first occurrence. Only set for repeating events.",
+    )
+    cancelled = models.BooleanField(
+        default=False,
+        verbose_name="This event is cancelled",
+        help_text=(
+            "Keeps the event visible, struck through, instead of removing it. Subscribers are told "
+            "it's off rather than watching it vanish."
+        ),
+    )
+    is_deleted = models.BooleanField(default=False)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["date_start"]
+        indexes = [
+            models.Index(fields=["club", "is_deleted", "date_start"]),
+        ]
+        constraints = [
+            # One mirrored event per auction, and one per pickup slot, so two concurrent syncs
+            # can't double up. Only the relevant source sets these columns at all, and MariaDB
+            # lets a unique index hold any number of NULLs (in a composite index, a NULL in any
+            # column exempts the row), so manual and Google-sourced events are unaffected. A
+            # conditional constraint would say this more explicitly, but MariaDB silently drops
+            # those — see models.W036.
+            models.UniqueConstraint(fields=["auction"], name="unique_auction_event"),
+            models.UniqueConstraint(fields=["pickup_location", "pickup_slot"], name="unique_pickup_event"),
+        ]
+
+    def __str__(self):
+        return self.title
+
+    def get_absolute_url(self):
+        """Auction and pickup events link to the auction; everything else to the club page."""
+        related_auction = self.related_auction
+        if related_auction:
+            return related_auction.get_absolute_url()
+        return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"#event-{self.pk}"
+
+    @property
+    def related_auction(self):
+        """The auction behind this event, whether it's the bidding window or a pickup time."""
+        if self.auction_id:
+            return self.auction
+        if self.pickup_location_id and self.pickup_location:
+            return self.pickup_location.auction
+        return None
+
+    @property
+    def is_editable(self):
+        """Generated events are owned by the auction — edit the auction instead."""
+        return self.source not in self.AUTOMATIC_SOURCES
+
+    @property
+    def is_automatic(self):
+        """True when this event is generated and kept in step by the site, not typed in."""
+        return self.source in self.AUTOMATIC_SOURCES
+
+    @property
+    def effective_end(self):
+        """A usable end time. Google and Discord both require one, and admins often leave it blank."""
+        if self.date_end and self.date_end > self.date_start:
+            return self.date_end
+        return self.date_start + datetime.timedelta(hours=2)
+
+    @property
+    def is_recurring(self):
+        """True for a series. One row stands for all of it — see auctions/recurrence.py."""
+        return bool(self.recurrence and self.recurrence_start)
+
+    @property
+    def recurrence_lines(self):
+        from auctions import recurrence
+
+        return recurrence.from_text(self.recurrence)
+
+    @property
+    def recurrence_summary(self):
+        """ "Repeats monthly on the first Tuesday", for the club page. Empty when it doesn't."""
+        from auctions import recurrence
+
+        return recurrence.describe(self.recurrence_lines) if self.is_recurring else ""
+
+    @property
+    def occurrence_length(self):
+        """How long one occurrence runs. Constant across the series."""
+        return self.effective_end - self.date_start
+
+    def next_occurrence(self, now=None):
+        """When this event next happens (or is happening). None when the rule can't be read."""
+        from auctions import recurrence
+
+        if not self.is_recurring:
+            return self.date_start
+        return recurrence.current_or_next(
+            self.recurrence_start, self.recurrence_lines, self.occurrence_length, now or timezone.now()
+        )
+
+    def refresh_occurrence(self):
+        """Move a series on to the occurrence that's on now, or the next one. True when it moved.
+
+        ``date_start`` is what the rest of the site reads, so this is what keeps a weekly meeting
+        from sitting on the club page showing last Tuesday for ever.
+        """
+        if not self.is_recurring:
+            return False
+        occurrence = self.next_occurrence()
+        if not occurrence or occurrence == self.date_start:
+            return False
+        length = self.occurrence_length
+        self.date_start = occurrence
+        self.date_end = occurrence + length
+        # Google generates the series itself; Discord only ever holds one date.
+        self.needs_discord_sync = True
+        self.save(update_fields=["date_start", "date_end", "needs_discord_sync"])
+        return True
+
+    @property
+    def is_over(self):
+        return self.effective_end < timezone.now()
+
+    @property
+    def map_url(self):
+        """Google Maps search link for the location, or empty when there's no location."""
+        if not self.location:
+            return ""
+        return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(self.location)
+
+    @property
+    def add_to_calendar_url(self):
+        """A 'save this to my calendar' link that works for anyone, with or without the club
+        having connected Google Calendar."""
+        params = {
+            "action": "TEMPLATE",
+            "text": self.title,
+            "dates": (
+                f"{self.date_start.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}/"
+                f"{self.effective_end.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
+            ),
+        }
+        if self.description:
+            params["details"] = self.description
+        if self.location:
+            params["location"] = self.location
+        return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
 class ClubAPIKey(models.Model):
     """API key scoped to a single Club, used by external services to ingest ClubMember records."""
 
@@ -2252,6 +2617,10 @@ class ClubAPIKey(models.Model):
     can_read_club_member_list = models.BooleanField(default=False)
     can_update_club_members = models.BooleanField(default=False)
     can_add_bap_points = models.BooleanField(default=False)
+    can_renew_memberships = models.BooleanField(
+        default=False,
+        help_text="Renew a membership from an external system, creating the member if they're new.",
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -2413,6 +2782,19 @@ class Auction(models.Model):
     first_discord_sent = models.BooleanField(default=False)
     second_discord_sent = models.BooleanField(default=False)
     discord_event_created = models.BooleanField(default=False)
+    discord_event_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text=(
+            "Discord scheduled event id for this auction, once auction_emails has created one. "
+            "Kept so the event can be moved or called off when the auction is."
+        ),
+    )
+    discord_event_needs_update = models.BooleanField(
+        default=False,
+        help_text="Set when something Discord shows about this auction changed and hasn't been sent yet.",
+    )
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
@@ -2435,6 +2817,12 @@ class Auction(models.Model):
             "Requires an associated club and an empty auction (no lots, no invoices). "
             "Changing this deletes existing per-auction participant records."
         ),
+    )
+    allow_self_checkin = models.BooleanField(
+        default=True,
+        blank=True,
+        verbose_name="Allow users to self-check in with the app",
+        help_text="Uncheck if you need to assign bidder numbers",
     )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
@@ -3143,6 +3531,18 @@ class Auction(models.Model):
         """True when this auction adds club members as they are checked in at an event."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
 
+    @property
+    def allows_app_self_checkin(self):
+        """True when attendees may join and check themselves in from the app's proximity prompt.
+
+        Only check-in-mode auctions can turn this off (``allow_self_checkin``): that's the mode where
+        checking in is what hands out a bidder number, so an auction that assigns numbers at the door
+        needs the app to stay out of it. Everywhere else the flag is meaningless and the app's
+        welcome prompt still offers to join."""
+        if not self.use_check_in_mode:
+            return True
+        return self.allow_self_checkin
+
     def in_welcome_window(self, now=None):
         """True during the proximity "welcome to the auction" window: from 3 h before the start
         until the auction has pretty much wrapped up.
@@ -3567,6 +3967,17 @@ class Auction(models.Model):
         # if self.online_bidding == "disable":
         #    return False
         # return True
+
+    @property
+    def users_with_bidding_disabled(self):
+        """How many participants can't currently bid, for the bulk re-enable button on the users page.
+
+        Zero in check-in auctions: there, bidding stays off until the person checks in at the door, so
+        every participant would be counted and enabling them in bulk would defeat the whole mode.
+        """
+        if self.use_check_in_mode:
+            return 0
+        return AuctionTOS.objects.filter(auction=self.pk, bidding_allowed=False).count()
 
     @property
     def show_paypal_csv_link(self):
@@ -5723,6 +6134,14 @@ class AuctionTOS(models.Model):
                         dup_val = getattr(dup_club_member, field, None)
                         if (self_val is None or self_val == "") and dup_val:
                             setattr(self_club_member, field, dup_val)
+                    # Membership dates: keep whichever row is paid through the later date.  The
+                    # duplicate is often the row that was renewed, and a merge must never shorten
+                    # (or silently end) someone's membership.
+                    for field in ("membership_last_paid", "membership_expiration_date"):
+                        self_val = getattr(self_club_member, field, None)
+                        dup_val = getattr(dup_club_member, field, None)
+                        if dup_val and (self_val is None or dup_val > self_val):
+                            setattr(self_club_member, field, dup_val)
                     self_club_member.save()
                     ClubHistory.objects.create(
                         club=self.auction.club,
@@ -7514,6 +7933,68 @@ class Lot(models.Model):
         }
         counts["total"] = sum(counts.values())
         return counts
+
+    # Labels for the ``src`` values the site sets itself, for the seller's page view breakdown.
+    # Anything else (an AuctionCampaign uuid from a promo email, a hand-made link) is shown as the
+    # raw src, which is still the most useful thing we can say about it.
+    PAGE_VIEW_SOURCE_LABELS = {
+        "": "Opened the lot page directly",
+        "ar": '"Open lot page" from lot scanning',
+        "ar_scan": "Scanned this lot's label",
+        "ar_zoom": "Aimed at this label up close while scanning",
+        "ar_zoom_full": "Held on the label until the lot card opened",
+        "qr": "Scanned the printed QR code",
+        "lot_list": "From a lot list",
+        "recommended": "From recommended lots",
+        "feedback": "From the leave-feedback page",
+        "invoice_sold": "From an invoice (sold)",
+        "invoice_bought": "From an invoice (bought)",
+        "userpage": "From a user's page",
+        "ban_page": "From the no-show page",
+    }
+    # The AR sources are one row per (user, lot) rather than one per visit, so "views" and "people"
+    # are the same number by construction and a repeat look never inflates them.
+    AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
+
+    @property
+    def page_view_source_breakdown(self):
+        """Page views on this lot grouped by ``src``, with a unique-viewer count for each.
+
+        Shown to the seller of a lot in an in-person auction so they can see how people are finding
+        it — above all the AR sources, which are events rather than visits (see
+        :attr:`ar_interaction_counts` and ``AR_EVENT_SOURCES`` in ``auctions.mobile.services.ar``).
+
+        A unique viewer is a distinct signed-in user, plus a distinct session for anonymous views, so
+        one person reloading counts once. (Unlike :meth:`Auction.unique_views` this doesn't subtract
+        anonymous sessions that later signed in — per source that's noise, and it would cost a second
+        pass over the rows.) Rows are ordered most views first; one query. Sources of ``None`` and
+        ``""`` are the same thing (no ``src`` on the URL) and are merged.
+        """
+        rows = (
+            PageView.objects.filter(lot_number=self.lot_number)
+            .values("source")
+            .annotate(
+                views=Count("pk"),
+                users=Count("user", distinct=True),
+                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+            )
+        )
+        merged = {}
+        for row in rows:
+            source = row["source"] or ""
+            entry = merged.setdefault(
+                source,
+                {
+                    "source": source,
+                    "label": self.PAGE_VIEW_SOURCE_LABELS.get(source, source),
+                    "is_ar_event": source in self.AR_PAGE_VIEW_SOURCES,
+                    "views": 0,
+                    "unique": 0,
+                },
+            )
+            entry["views"] += row["views"]
+            entry["unique"] += row["users"] + row["sessions"]
+        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     @property
     def number_of_bids(self):
@@ -9523,6 +10004,11 @@ class UserData(models.Model):
     paypal_email_address.help_text = "If different from your email address"
     unsubscribe_link = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     has_unsubscribed = models.BooleanField(default=False, blank=True)
+    account_deletion_requested = models.DateTimeField(null=True, blank=True)
+    account_deletion_requested.help_text = (
+        "When the user asked us to delete their account.  The account keeps working until the grace "
+        "period is up (see auctions.account_deletion); signing in again cancels the request."
+    )
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
@@ -9610,6 +10096,13 @@ class UserData(models.Model):
     never_show_square_connect = models.BooleanField(default=False)
     next_promo_email_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_promo_email_sent_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def account_deletion_due(self):
+        """The day this account's pending deletion runs, or None. Drives the site-wide warning."""
+        from auctions.account_deletion import deletion_due_date
+
+        return deletion_due_date(self)
 
     @property
     def last_auction_created(self):
@@ -10231,6 +10724,20 @@ class UserData(models.Model):
     def has_push_device(self):
         """True when the user has at least one push-enabled device carrying an FCM token."""
         return self.user.mobile_devices.filter(push_enabled=True).exclude(fcm_token="").exists()
+
+    @property
+    def has_app_push(self):
+        """True when a notification can be delivered to this user's app right now.
+
+        Deliberately ignores ``push_notifications_instead_of_email``: that toggle governs mail we
+        would otherwise send by email. Notifications that were never email in the first place (the
+        "a lot you're watching is selling" browser push) route to the app whenever the app can
+        receive them. We can't tell a browser subscription apart from the app on the same phone, so
+        sending both would just buzz the same person twice.
+        """
+        from auctions.notifications import push_configured
+
+        return push_configured() and self.has_push_device
 
     def user_prefers_push(self):
         """Whether notifications for this user should go to the app (FCM) instead of email.

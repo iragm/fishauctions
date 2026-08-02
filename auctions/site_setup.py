@@ -92,6 +92,11 @@ def get_single_club(*, create: bool = False):
 def ensure_single_club_membership_for_user(user):
     if not user or not single_club_mode_enabled():
         return None
+    # A deleted account has had its memberships unlinked on the way out, and the last thing
+    # auctions.account_deletion does is save the User — which lands here. Without this guard that
+    # save creates a brand new membership and links it straight back to the account it just left.
+    if not user.is_active:
+        return None
 
     club = get_single_club(create=False)
     if not club:
@@ -107,6 +112,11 @@ def ensure_single_club_membership_for_user(user):
             name=(user.get_full_name() or user.username or user.email or "").strip(),
             email=user.email or "",
             source="single_club_mode",
+            # Nobody at the club asked for this row: it is created for the person the moment they
+            # sign up, out of what they typed into the signup form. So it is theirs, and it goes
+            # when they delete their account rather than keeping their name and address in the
+            # club's roster forever (see auctions.account_deletion).
+            admin_edited=False,
         )
     else:
         update_fields = []

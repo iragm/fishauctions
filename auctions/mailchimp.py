@@ -432,6 +432,28 @@ def _archive_member(client, member, list_id):
             raise
 
 
+def delete_contact_by_email(club, email):
+    """Permanently delete a contact from *club*'s audience by address, with no member row needed.
+
+    Account deletion, unlike an unsubscribe, has to actually remove the person: the archive an
+    ordinary opt-out leaves behind still holds their address. Mailchimp calls this a permanent
+    delete, and it's irreversible on their side too. Returns True when a call was made.
+    """
+    from mailchimp_marketing.api_client import ApiClientError
+
+    if not email or not club.mailchimp_connected:
+        return False
+    client = get_client(club)
+    if not client:
+        return False
+    try:
+        client.lists.delete_list_member_permanent(club.mailchimp_audience_id, subscriber_hash(email))
+    except ApiClientError as e:
+        if getattr(e, "status_code", None) != 404:
+            raise
+    return True
+
+
 def change_member_email(member, old_email):
     """Move a contact from old_email to the member's current email in Mailchimp."""
     club = member.club

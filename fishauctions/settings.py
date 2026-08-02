@@ -268,6 +268,10 @@ INSTALLED_APPS = [
     "allauth.account",
     "allauth.socialaccount",
     "allauth.socialaccount.providers.google",
+    # Installed unconditionally so the provider classes are always registered; whether a button is
+    # offered depends on the SocialApp config (SOCIALACCOUNT_PROVIDERS below), not on this list.
+    "allauth.socialaccount.providers.apple",
+    "allauth.socialaccount.providers.facebook",
     "django_filters",
     "bootstrap_datepicker_plus",
     "el_pagination",
@@ -500,6 +504,11 @@ POST_OFFICE = {
     },
     "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
+# How long post_office keeps a sent message. It stores the body and the recipient address, so this is
+# also a privacy setting: it's the one place a deleted user's address would outlive their deletion.
+# Long enough to answer "did the site email me?" and to investigate a bounce; see
+# auctions.tasks.cleanup_mail, which runs daily.
+MAIL_RETENTION_DAYS = int(os.environ.get("MAIL_RETENTION_DAYS", "30"))
 # django-ses configuration
 AWS_SES_AUTO_THROTTLE = 0.5
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
@@ -576,6 +585,46 @@ SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 # when behind a reverse proxy
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Sign in with Apple. Two different identifiers, and mixing them up is the classic way a native
+# Apple integration fails: the *web* OAuth flow is a Services ID, while the token the iOS app gets
+# natively is issued to the app's **bundle id**. Both are valid audiences for the same Apple ID, so
+# both are listed. allauth reads client_id as a comma-separated audience list and uses the FIRST
+# entry for outgoing web OAuth calls (AppleOAuth2Client.get_client_id), so the Services ID must
+# come first. The admin setup checklist (/admin-setup-checklist/) says where each value comes from.
+APPLE_SIGN_IN_SERVICES_ID = os.environ.get("APPLE_SIGN_IN_SERVICES_ID", "").strip()
+APPLE_SIGN_IN_BUNDLE_ID = os.environ.get("APPLE_SIGN_IN_BUNDLE_ID", "").strip()
+APPLE_SIGN_IN_TEAM_ID = os.environ.get("APPLE_SIGN_IN_TEAM_ID", "").strip()
+APPLE_SIGN_IN_KEY_ID = os.environ.get("APPLE_SIGN_IN_KEY_ID", "").strip()
+# The .p8 private key Apple issues once, on download. Filename only — the file lives next to .env,
+# like APPLE_WALLET_CERT_FILE. Needed for the web OAuth flow and, more importantly, to revoke the
+# Apple grant when an account is deleted (Apple requires that; see auctions/apple_signin.py).
+APPLE_SIGN_IN_KEY_FILE = os.environ.get("APPLE_SIGN_IN_KEY_FILE", "").strip()
+APPLE_SIGN_IN_PRIVATE_KEY = ""
+if APPLE_SIGN_IN_KEY_FILE:
+    _apple_key_path = BASE_DIR / APPLE_SIGN_IN_KEY_FILE
+    try:
+        APPLE_SIGN_IN_PRIVATE_KEY = _apple_key_path.read_text()
+    except OSError as _apple_key_err:
+        # Same policy as the wallet keys above: a misconfigured box still boots. Sign in with Apple
+        # then works for native sign-in (which only needs the public JWKS) but not for web OAuth or
+        # token revocation, and the warning says which file to fix.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "APPLE_SIGN_IN_KEY_FILE=%s could not be read (%s: %s); Apple web login and token revocation disabled.",
+            _apple_key_path,
+            type(_apple_key_err).__name__,
+            _apple_key_err,
+        )
+# Audiences we accept on a native Apple identity token. Order matters: see the comment above.
+APPLE_ALLOWED_AUDIENCES = [aud for aud in (APPLE_SIGN_IN_SERVICES_ID, APPLE_SIGN_IN_BUNDLE_ID) if aud]
+
+# Facebook Login. Unlike the others, the app id is *also* compiled into the mobile build (the SDKs
+# read it from Info.plist / AndroidManifest.xml at launch and register an fb<app-id> URL scheme), so
+# this value must match what the app was built with — it decides whether the button is offered.
+FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "").strip()
+FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
+
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
         "SCOPE": [
@@ -589,9 +638,58 @@ SOCIALACCOUNT_PROVIDERS = {
         "FETCH_USERINFO": True,
     }
 }
+if APPLE_ALLOWED_AUDIENCES:
+    SOCIALACCOUNT_PROVIDERS["apple"] = {
+        "APP": {
+            "client_id": ",".join(APPLE_ALLOWED_AUDIENCES),
+            # allauth's naming, not Apple's: `secret` is the Key ID, `key` is the Team ID, and the
+            # .p8 contents go in settings["certificate_key"]. It builds the client secret JWT from
+            # the three (AppleOAuth2Client.generate_client_secret).
+            "secret": APPLE_SIGN_IN_KEY_ID,
+            "key": APPLE_SIGN_IN_TEAM_ID,
+            "settings": {"certificate_key": APPLE_SIGN_IN_PRIVATE_KEY},
+        },
+    }
+if FACEBOOK_APP_ID and FACEBOOK_APP_SECRET:
+    SOCIALACCOUNT_PROVIDERS["facebook"] = {
+        "APP": {
+            "client_id": FACEBOOK_APP_ID,
+            "secret": FACEBOOK_APP_SECRET,
+            # Facebook does not attest that a profile email is confirmed, so an address from
+            # Facebook must never authenticate into an existing local account. allauth's Facebook
+            # provider already marks those addresses unverified and authenticate_by_email only
+            # matches verified ones — this is the second layer. It has to live in the *app*
+            # settings, not alongside SCOPE below: the provider-level EMAIL_AUTHENTICATION key can
+            # only turn the feature on (``global or provider``), and the global switch is on for
+            # Google's sake. Only the app-level key can turn it off again.
+            "settings": {"email_authentication": False, "verified_email": False},
+        },
+        "METHOD": "oauth2",
+        "SCOPE": ["email", "public_profile"],
+    }
+# Matching by email is how a user who signed up with a password later signs in with a provider and
+# lands on the same account. Only ever applies to addresses the provider marked *verified*
+# (DefaultSocialAccountAdapter.authenticate_by_email), which is why Facebook is excluded above:
+# trusting an unverified provider email would let someone claim an account by putting another
+# person's address on a social profile.
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
 SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
+# All four already hold implicitly (they're allauth's defaults given ACCOUNT_SIGNUP_FIELDS and
+# ACCOUNT_EMAIL_VERIFICATION above), but the mobile social endpoint depends on every one of them,
+# so they're pinned here rather than left to be inherited by accident:
+#   EMAIL_REQUIRED     — no account without an address; Facebook often supplies none.
+#   EMAIL_VERIFICATION — an unverified provider email cannot sign in until it's confirmed.
+#   AUTO_SIGNUP        — skip the signup form when the provider gave a usable, unique email;
+#                        allauth falls back to the form (and the mobile continuation) when it didn't.
+SOCIALACCOUNT_EMAIL_REQUIRED = True
+SOCIALACCOUNT_EMAIL_VERIFICATION = "mandatory"
+SOCIALACCOUNT_AUTO_SIGNUP = True
+# Keeps the provider's tokens on the SocialAccount. Needed to revoke the Apple grant when an account
+# is deleted, which Apple requires of any app offering Sign in with Apple. Account deletion drops
+# these rows (auctions.account_deletion._delete_sign_in_identities).
+SOCIALACCOUNT_STORE_TOKENS = True
+SOCIALACCOUNT_ADAPTER = "auctions.social_adapter.FishAuctionsSocialAccountAdapter"
 
 INTERNAL_IPS = [
     #    '127.0.0.1', # uncomment this to enable the django debug toolbar
@@ -934,6 +1032,21 @@ MAILCHIMP_CLIENT_ID = os.environ.get("MAILCHIMP_CLIENT_ID", "")
 MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 
 # Brevo integration: each club connects with its own API key (no site-level config needed).
+
+# Google Calendar integration (one global OAuth app; each club authorizes it and gets its own
+# secondary calendar). Create an OAuth 2.0 "Web application" client in the Google Cloud console
+# and add https://<your-domain>/clubs/google-calendar/callback/ as an authorized redirect URI.
+#
+# The default scope is calendar.app.created, which only lets us touch calendars this app itself
+# created. That is all the integration needs, and it keeps the app out of Google's "sensitive
+# scope" verification track. Override GOOGLE_CALENDAR_SCOPE only if you know you need broader
+# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar).
+GOOGLE_CALENDAR_CLIENT_ID = os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "")
+GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "")
+GOOGLE_CALENDAR_SCOPE = (
+    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip()
+    or "https://www.googleapis.com/auth/calendar.app.created https://www.googleapis.com/auth/userinfo.email"
+)
 
 # Discord bot integration settings
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")

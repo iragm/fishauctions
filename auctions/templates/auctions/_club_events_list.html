@@ -1,0 +1,172 @@
+{% comment %}
+The club page's event list: upcoming events, then a little recent history. Shared by both the
+tabbed (BAP enabled) and untabbed layouts of club_detail.html so the two can't drift apart.
+Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club, club_ical_url.
+{% endcomment %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div class="d-flex flex-wrap gap-2">
+    {% if can_manage_auctions %}
+    <a href="{% url 'club_event_add' club.slug %}" class="btn btn-sm btn-primary">
+      <i class="bi bi-calendar-plus"></i> Add event
+    </a>
+    <span class="align-self-center text-muted small" data-bs-toggle="tooltip"
+          title="Promoted auctions are added here on their own, along with a short event for each of an online auction's pickup times. You only need this button for meetings, swaps, talks and the like.">
+      <i class="bi bi-info-circle"></i> Auctions are added automatically
+    </span>
+    {% endif %}
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if has_any_events %}
+    {# Subscribing, not downloading: the plain .ics link is a one-time import that never updates
+       again, so it's the last item rather than the button. #}
+    <div class="btn-group">
+      <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-calendar-week"></i> Subscribe
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        {# One Google entry: the club's own calendar when it's shared, otherwise Google's
+           add-by-URL screen pointed at this feed. Two would be the same events twice. #}
+        <li>
+          <a class="dropdown-item" target="_blank" rel="noopener"
+             href="{% if club.google_calendar_public_url %}{{ club.google_calendar_public_url }}{% else %}{{ club_ical_google_url }}{% endif %}">
+            <i class="bi bi-google"></i> Google Calendar
+          </a>
+        </li>
+        <li><a class="dropdown-item" href="{{ club_ical_subscribe_url }}"><i class="bi bi-calendar-check"></i> Apple Calendar or Outlook</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="{{ club_ical_url }}"><i class="bi bi-download"></i> Download once (no updates)</a></li>
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if upcoming_events %}
+<ul class="list-group mb-3">
+  {% for event in upcoming_events %}
+  <li class="list-group-item" id="event-{{ event.pk }}">
+    <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+      <div>
+        <div>
+          {% if event.related_auction %}
+          <a href="{{ event.related_auction.get_absolute_url }}" {% if event.cancelled %}class="text-decoration-line-through"{% endif %}><strong>{{ event.title }}</strong></a>
+          {% else %}
+          <strong {% if event.cancelled %}class="text-decoration-line-through"{% endif %}>{{ event.title }}</strong>
+          {% endif %}
+          {% if event.cancelled %}<span class="badge bg-danger rounded-pill ms-1">Cancelled</span>{% endif %}
+          {% if event.recurrence_summary %}
+          <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
+                title="This is the next one. The whole series is on your club's Google Calendar and in the subscribe links.">
+            <i class="bi bi-arrow-repeat"></i> {{ event.recurrence_summary }}
+          </span>
+          {% endif %}
+          {% if event.auction and event.auction.pk == current_auction_id %}
+          <span class="badge bg-success text-dark rounded-pill ms-1">Current auction</span>
+          {% endif %}
+          {% if can_manage_auctions and event.is_automatic %}
+          {# Visible label, not just a tooltip — the tooltip only adds detail (style_reference.md). #}
+          <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
+                title="{% if event.source == 'pickup' %}Added automatically from this auction's pickup time. Change the pickup time on the auction and this updates itself.{% else %}Added automatically because this auction is promoted. Edit the auction and this updates itself.{% endif %}">
+            <i class="bi bi-arrow-repeat"></i> Automatic
+          </span>
+          {% endif %}
+        </div>
+        <div class="text-muted small">
+          <i class="bi bi-clock"></i>
+          {{ event.date_start|date:"D, N j, Y" }}
+          {% if event.all_day %}
+          &mdash; all day
+          {% else %}
+          at {{ event.date_start|date:"g:i A" }}{% if event.date_end %} &ndash; {{ event.date_end|date:"g:i A" }}{% endif %}
+          {% endif %}
+        </div>
+        {% if event.location %}
+        <div class="text-muted small">
+          <i class="bi bi-geo-alt"></i>
+          <a href="{{ event.map_url }}" target="_blank" rel="noopener">{{ event.location }}</a>
+        </div>
+        {% endif %}
+        {% if event.description %}
+        <div class="small mt-1">{{ event.description|linebreaksbr }}</div>
+        {% endif %}
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <a href="{{ event.add_to_calendar_url }}" target="_blank" rel="noopener"
+           class="btn btn-sm btn-outline-secondary py-0" title="Save this event to your own calendar">
+          <i class="bi bi-calendar-plus"></i>
+        </a>
+        {% if can_manage_auctions and event.is_editable %}
+        <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-outline-secondary py-0">Edit</a>
+        {% endif %}
+        {% if can_manage_auctions and event.is_automatic %}
+        <a href="{{ event.related_auction.get_edit_url }}" class="btn btn-sm btn-outline-secondary py-0"
+           title="These events are generated from the auction — edit it there">Edit auction</a>
+        {% endif %}
+        {% if can_manage_auctions and event.auction and event.auction.pk != current_auction_id and not event.is_over %}
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="make_current">
+          <input type="hidden" name="auction" value="{{ event.auction.pk }}">
+          <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-muted">
+  No events coming up.
+  {% if can_manage_auctions %}Add one so your members know what's next.{% endif %}
+</p>
+{% endif %}
+
+{% if past_events %}
+<h6 class="text-muted mt-4">Recently</h6>
+<ul class="list-group">
+  {% for event in past_events %}
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <span>
+      {% if event.related_auction %}
+      <a href="{{ event.related_auction.get_absolute_url }}">{{ event.title }}</a>
+      {% else %}
+      {{ event.title }}
+      {% endif %}
+      <span class="text-muted ms-2">{{ event.date_start|date:"N j, Y" }}</span>
+    </span>
+    {% if can_manage_auctions and event.is_editable %}
+    <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-outline-secondary py-0">Edit</a>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if can_manage_auctions and unpromoted_auctions %}
+<h6 class="text-muted mt-4">Not promoted <span class="fw-normal">&mdash; only you can see these</span></h6>
+<ul class="list-group">
+  {% for auction in unpromoted_auctions %}
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <span>
+      <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
+      <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
+    </span>
+    <span class="d-flex align-items-center gap-2">
+      <span class="badge bg-secondary rounded-pill">Not promoted</span>
+      {% if auction.pk == current_auction_id %}
+      <span class="badge bg-success text-dark rounded-pill">Current</span>
+      {% elif auction.date_start > now %}
+      <form method="post" class="d-inline">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="make_current">
+        <input type="hidden" name="auction" value="{{ auction.pk }}">
+        <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+      </form>
+      {% endif %}
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}

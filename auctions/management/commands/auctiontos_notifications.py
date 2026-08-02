@@ -13,6 +13,7 @@ from auctions.models import (
     AuctionTOS,
     Lot,
 )
+from auctions.notifications import CATEGORY_AUCTION_REMINDER, notify_user
 
 _TOS_PUSH_TITLES = {
     "online_auction_welcome": "You're in — {auction}",
@@ -39,8 +40,6 @@ def send_tos_notification(template, tos):
         ctx["reply_to_email"] = tos.auction.created_by.email
 
     # Push for opted-in app users, otherwise email exactly as before.
-    from auctions.notifications import notify_user
-
     title = _TOS_PUSH_TITLES.get(template, str(tos.auction)).format(auction=tos.auction)
     auction_url = f"https://{current_site.domain}{tos.auction.get_absolute_url()}"
     notify_user(
@@ -207,4 +206,15 @@ class Command(BaseCommand):
                 if not email_routing_enabled():
                     campaign_kwargs["headers"] = {"Reply-to": campaign.auction.created_by.email}
                     ctx["reply_to_email"] = campaign.auction.created_by.email
-                mail.send(email, **campaign_kwargs)
+                # A good push: short, time-limited (the auction is about to start or close), and it
+                # only has one thing to say. The URL is the campaign's tracked link, so a tap still
+                # marks the campaign VIEWED exactly like clicking the email would.
+                notify_user(
+                    campaign.user,
+                    category=CATEGORY_AUCTION_REMINDER,
+                    title="Don't miss this auction",
+                    body=f"You looked at lots in {campaign.auction.title} but haven't joined yet.",
+                    url=f"https://{campaign.link}",
+                    send_email=lambda: mail.send(email, **campaign_kwargs),
+                    auction_pk=campaign.auction.pk,
+                )

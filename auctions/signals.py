@@ -6,7 +6,7 @@ import logging
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.db import models, transaction
-from django.db.models.signals import post_delete, post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
@@ -204,6 +204,118 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
     if not current:
         transaction.on_commit(lambda: expire_google_wallet_objects_for_club.delay(instance.pk))
     transaction.on_commit(lambda: notify_apple_wallet_devices_for_club.delay(instance.pk))
+
+
+@receiver(post_save, sender="auctions.Auction")
+def mirror_auction_to_club_calendar(sender, instance, **kwargs):
+    """Keep the auction's entry on its club's calendar in step with the auction itself.
+
+    Deliberately a plain DB write in the same transaction: if the auction save rolls back, so
+    does its calendar entry. Pushing the result on to Google Calendar and Discord is the periodic
+    sync task's job, so no network call happens here.
+    """
+    if not instance.club_id:
+        return
+    from auctions import club_events
+
+    try:
+        club_events.sync_one_auction_event(instance)
+        club_events.sync_pickup_events(instance)
+    except Exception:
+        # Never let a calendar problem be the reason an auction can't be saved.
+        logger.exception("Could not mirror auction %s onto its club calendar", instance.pk)
+
+
+@receiver(post_save, sender="auctions.PickupLocation")
+def refresh_calendar_pickups(sender, instance, **kwargs):
+    """Pickup locations are usually saved after the auction, so the auction's calendar entries
+    start out incomplete. Re-mirror whenever a location or one of its times changes."""
+    if not instance.auction_id:
+        return
+    from auctions import club_events
+
+    try:
+        club_events.sync_one_auction_event(instance.auction)
+        club_events.sync_pickup_events(instance.auction)
+    except Exception:
+        logger.exception("Could not refresh calendar pickups for auction %s", instance.auction_id)
+
+
+# What Discord shows about an auction. Any of these changing makes its scheduled event stale.
+DISCORD_AUCTION_FIELDS = (
+    "title",
+    "slug",
+    "date_start",
+    "date_end",
+    "is_online",
+    "promote_this_auction",
+    "is_deleted",
+)
+
+
+@receiver(pre_save, sender="auctions.Auction")
+def stash_previous_auction_discord_state(sender, instance, **kwargs):
+    """Snapshot what Discord is showing for this auction, so post_save can tell if it's stale.
+
+    Only auctions that actually have a scheduled event pay for the lookup — everything else
+    saves as often as it always did, with no extra query.
+    """
+    instance._previous_discord_state = None
+    if not instance.pk or not instance.discord_event_id:
+        return
+    from .models import Auction
+
+    instance._previous_discord_state = Auction.objects.filter(pk=instance.pk).values(*DISCORD_AUCTION_FIELDS).first()
+
+
+@receiver(post_save, sender="auctions.Auction")
+def flag_stale_auction_discord_event(sender, instance, **kwargs):
+    """Queue a Discord update when an auction with a scheduled event moves, is renamed, or stops
+    being promoted. discord_events.sync_auction_events() sends it on the next sync."""
+    if not instance.discord_event_id:
+        return
+    previous = getattr(instance, "_previous_discord_state", None)
+    if not previous or all(previous[field] == getattr(instance, field) for field in DISCORD_AUCTION_FIELDS):
+        return
+    from .models import Auction
+
+    # A queryset update, not instance.save(): saving here would re-enter this signal.
+    Auction.objects.filter(pk=instance.pk).update(discord_event_needs_update=True)
+
+
+@receiver(pre_delete, sender="auctions.Auction")
+def remove_auction_discord_event(sender, instance, **kwargs):
+    """An auction's own Discord event is tracked on the auction, not on a ClubEvent, so a club
+    that doesn't mirror auctions onto its calendar has nothing else to clean it up."""
+    if not instance.club_id or not instance.club.discord_server_id:
+        return
+    from auctions import discord_events
+    from auctions.models import Auction
+
+    # Re-read: the cascade may already have taken this down via the event's own handler.
+    event_id = Auction.objects.filter(pk=instance.pk).values_list("discord_event_id", flat=True).first()
+    if not event_id:
+        return
+    try:
+        discord_events.cancel_scheduled_event(instance.club.discord_server_id, event_id)
+    except Exception:
+        logger.exception("Could not remove the Discord event for deleted auction %s", instance.pk)
+
+
+@receiver(pre_delete, sender="auctions.ClubEvent")
+def remove_event_from_calendars(sender, instance, **kwargs):
+    """Take an event off Google and Discord before its row goes — once it's gone we'd have no
+    record of what to clean up.
+
+    Deleting a pickup location, an auction or a whole club cascades these rows away, so catching
+    it here covers every one of those without a handler per parent.
+    """
+    from auctions import club_events
+
+    try:
+        club_events._remove_remote(instance)
+    except Exception:
+        logger.exception("Could not remove calendar event %s from Google and Discord", instance.pk)
 
 
 @receiver(pre_save, sender="auctions.ClubMember")
@@ -574,7 +686,23 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
 
 @receiver(user_logged_in)
 def user_logged_in_callback(sender, user, request, **kwargs):
-    """When a user signs in, link unattached AuctionTOS and ClubMember records to their account."""
+    """When a user signs in: cancel a pending account deletion, and link unattached AuctionTOS and
+    ClubMember records to their account."""
+    # Signing in is how a pending account deletion is called off -- coming back is the clearest
+    # statement that they didn't mean it, and it's the only undo there is once the grace period ends.
+    from auctions.account_deletion import cancel_deletion
+
+    if cancel_deletion(user) and request is not None and hasattr(request, "_messages"):
+        # Not every sign-in comes through the message middleware -- the mobile API issues JWTs, and
+        # the WebView handoff logs in on a bare request -- and the cancellation matters more than
+        # telling them about it here (the confirmation email says so too).
+        from django.contrib import messages
+
+        messages.info(
+            request,
+            "Welcome back!  Your account was scheduled to be deleted, and signing in has cancelled that.",
+        )
+
     link_unattached_tos_for_user(user)
 
     from auctions.models import ClubMember

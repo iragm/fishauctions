@@ -131,7 +131,10 @@
         </button>
       </form>
       <form method="post" action="{% url 'brevo_disconnect' club.slug %}" class="d-inline"
-            onsubmit="return confirm('Disconnect Brevo? Your list stays in Brevo, but syncing will stop.');">
+            data-confirm="Your list stays in Brevo, but members will stop syncing to it."
+            data-confirm-title="Disconnect Brevo?"
+            data-confirm-ok="Disconnect"
+            data-confirm-variant="danger">
         {% csrf_token %}
         <button type="submit" class="btn btn-outline-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect

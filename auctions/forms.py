@@ -40,12 +40,14 @@ from .models import (
     ChatSubscription,
     Club,
     ClubBapCategoryOverride,
+    ClubEvent,
     ClubMember,
     ClubMoney,
     Invoice,
     InvoiceAdjustment,
     Lot,
     LotImage,
+    MobileDevice,
     PayPalSeller,
     PickupLocation,
     SquareSeller,
@@ -1571,6 +1573,37 @@ class ChangeInvoiceStatusForm(forms.Form):
         ]
 
 
+class EnableBiddingForAllForm(forms.Form):
+    """Confirmation dialog for the bulk 'enable bidding' action on the auction users page."""
+
+    def __init__(self, auction, user_count, *args, **kwargs):
+        self.auction = auction
+        self.user_count = user_count
+        super().__init__(*args, **kwargs)
+        submit_button_html = ""
+        if user_count:
+            post_url = reverse("auction_enable_bidding_for_all", kwargs={"slug": auction.slug})
+            submit_button_html = (
+                f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" '
+                'class="btn btn-success float-right">Enable bidding</button>'
+            )
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_class = "form"
+        self.helper.form_id = "enable-bidding-form"
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            Div(
+                HTML(
+                    '<button type="button" class="btn btn-secondary float-left" '
+                    'onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(submit_button_html),
+                css_class="modal-footer",
+            ),
+        )
+
+
 class LotRefundForm(forms.ModelForm):
     """Show the status of existing invoices and allow partial or full refunds"""
 
@@ -2091,6 +2124,7 @@ class AuctionEditForm(forms.ModelForm):
             "enable_square_payments",
             "club",
             "manage_users_through_club",
+            "allow_self_checkin",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -2475,6 +2509,12 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "manage_users_through_club",
+                    css_class="col-md-6",
+                ),
+                # Only applies to check-in mode; shown/hidden by update_club_fields() in
+                # auction_edit_form.html as the mode select changes.
+                Div(
+                    "allow_self_checkin",
                     css_class="col-md-6",
                 ),
                 PrependedAppendedText(
@@ -3742,7 +3782,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "show_nearby_auctions",
         )
 
-    def __init__(self, user, *args, **kwargs):
+    def __init__(self, user, *args, is_mobile_app=False, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
         # Convert distances from miles to km for display if user prefers km
@@ -3773,9 +3813,38 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         # device to push to — disabling keeps the stored value unchanged on save.
         if not (self.instance and self.instance.pk and self.instance.has_push_device):
             self.fields["push_notifications_instead_of_email"].disabled = True
-            self.fields["push_notifications_instead_of_email"].help_text = (
-                "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
-                "notifications in the app instead of emails, for everything except account emails."
+            # Someone whose phone has gone quiet needs a different sentence than someone who never
+            # had the app: the box stays ticked (their stored choice is untouched, so reinstalling
+            # just resumes push) and telling them to "enable this" would be nonsense. A device row
+            # outlives an uninstall -- only the token is cleared -- so it's what tells them apart.
+            had_the_app = self.instance and self.instance.pk and MobileDevice.objects.filter(user=user).exists()
+            if had_the_app:
+                self.fields["push_notifications_instead_of_email"].help_text = (
+                    "Your phone isn't receiving notifications right now -- the app was removed, signed "
+                    "out, or has notifications turned off -- so we're emailing you instead. Reinstall "
+                    "the app and sign in to pick up where you left off."
+                )
+            else:
+                self.fields["push_notifications_instead_of_email"].help_text = (
+                    "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
+                    "notifications in the app instead of emails, for everything except account emails."
+                )
+        # The watched-lot "bidding is starting" alert goes to the app whenever the app can receive
+        # it (see notify_watchers_lot_selling_soon), so for those users the browser-subscribe prompt
+        # this field's help text carries would point at the wrong device. There's nothing to
+        # subscribe to inside the app's own WebView either -- it has no Push API.
+        has_app_push = bool(self.instance and self.instance.pk and self.instance.has_app_push)
+        self.can_subscribe_to_webpush = not has_app_push and not is_mobile_app
+        if has_app_push:
+            self.fields["push_notifications_when_lots_sell"].help_text = (
+                "For in-person auctions, get a notification when bidding starts on a lot that you've "
+                "watched.  These go to the app on your phone -- including lots you watch here on the "
+                "website -- so you won't also get a browser notification."
+            )
+        elif is_mobile_app:
+            self.fields["push_notifications_when_lots_sell"].help_text = (
+                "For in-person auctions, get a notification when bidding starts on a lot that you've "
+                "watched.  Allow notifications for this app to receive them."
             )
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
@@ -4050,12 +4119,88 @@ class LabelPrintFieldsForm(forms.Form):
         self.auction.save()
 
 
+class MarksClubMemberAdminEditedMixin:
+    """Saving one of the club admin's member forms hands the record to the club.
+
+    ``ClubMember.admin_edited`` decides what happens to a row when the person deletes their site
+    account: one an admin has created or edited is the club's own record and keeps its details,
+    losing only the account link (see :mod:`auctions.account_deletion`). Every form using this mixin
+    is reachable only with club admin permissions, so a save through one is exactly that event.
+    Deliberately not used by ClubMemberSelfServiceForm, which is the member editing themselves.
+    """
+
+    def save(self, commit=True):
+        self.instance.admin_edited = True
+        return super().save(commit=commit)
+
+
 class ClubMemberSelfServiceForm(forms.ModelForm):
     """Form for club members to update their own contact info."""
 
     class Meta:
         model = ClubMember
         fields = ["name", "phone_number", "address"]
+
+
+class ClubEventForm(forms.ModelForm):
+    """Add or edit an event on a club's calendar.
+
+    Kept deliberately short — title and a start time are the only things required, everything
+    else is optional, so posting a meeting takes a few seconds.
+    """
+
+    class Meta:
+        model = ClubEvent
+        fields = ["title", "date_start", "date_end", "location", "description", "cancelled"]
+        widgets = {
+            "date_start": DateTimePickerInput(),
+            "date_end": DateTimePickerInput(),
+            "location": forms.TextInput(attrs={"placeholder": "123 Main St, Springfield"}),
+            "description": forms.Textarea(attrs={"rows": 4}),
+        }
+        help_texts = {
+            "title": "For example: Monthly meeting, or Spring swap meet.",
+            "date_end": "Optional. Left blank, the event is assumed to run two hours.",
+            "description": "Optional. Shown on your club page, in Google Calendar, and in Discord.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        user_timezone = kwargs.pop("user_timezone", None)
+        if user_timezone:
+            # The form is rendered inside base.html's {% timezone %} block, so an admin sees these
+            # times in their own timezone. Read them back the same way, or every save shifts the
+            # event by the difference between their timezone and the site's.
+            timezone.activate(user_timezone)
+        super().__init__(*args, **kwargs)
+        self.fields["date_end"].required = False
+        is_edit = bool(self.instance and self.instance.pk)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        layout_fields = [
+            "title",
+            Div(
+                Div("date_start", css_class="col-md-6"),
+                Div("date_end", css_class="col-md-6"),
+                css_class="row",
+            ),
+            "location",
+            "description",
+        ]
+        if is_edit:
+            # Only worth offering once the event exists — you don't add an event to call it off.
+            layout_fields.append("cancelled")
+        else:
+            del self.fields["cancelled"]
+        self.helper.layout = Layout(*layout_fields)
+        self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        start = cleaned_data.get("date_start")
+        end = cleaned_data.get("date_end")
+        if start and end and end <= start:
+            self.add_error("date_end", "The end time has to be after the start time.")
+        return cleaned_data
 
 
 class ClubEditForm(forms.ModelForm):
@@ -4603,7 +4748,7 @@ class BapAwardForm(forms.ModelForm):
         self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
 
 
-class ClubMemberAdminForm(forms.ModelForm):
+class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Form for club admins to edit a club member's details.
 
     When ``auctiontos`` is passed the form is rendered in the context of a
@@ -4816,7 +4961,7 @@ class ClubMemberAdminForm(forms.ModelForm):
         return bidder_number
 
 
-class ClubMemberDiscordForm(forms.ModelForm):
+class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Form for managing a club member's Discord integration settings."""
 
     class Meta:
@@ -4911,7 +5056,7 @@ class ClubMemberDiscordForm(forms.ModelForm):
         return role
 
 
-class ClubMemberPermissionsForm(forms.ModelForm):
+class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Admin-only form to set permission bool fields on a ClubMember."""
 
     class Meta:
@@ -5042,7 +5187,7 @@ class ClubMemberMergeTargetForm(forms.Form):
         return target
 
 
-class ClubMemberMergeReviewForm(forms.ModelForm):
+class ClubMemberMergeReviewForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     class Meta:
         model = ClubMember
         fields = ["name", "email", "phone_number", "address"]

@@ -34,6 +34,7 @@ from auctions.models import (
     MobileOfflineOp,
     PickupLocation,
 )
+from auctions.services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member
 
 logger = logging.getLogger(__name__)
 
@@ -282,16 +283,39 @@ class _OpApplier:
         if not pickup:
             return self._conflict("not_found", "This auction has no pickup location to add a user to")
 
-        tos = AuctionTOS(
-            auction=self.auction,
-            pickup_location=pickup,
-            manually_added=True,
-            bidder_number=requested,
+        email = (op.get("email") or "").strip()
+        phone_number = (op.get("phone_number") or "").strip()
+        # A club-managed auction keeps bidder numbers on the ClubMember, so somebody added at the door
+        # needs a member record too — with the number the admin just wrote on their card when it's free
+        # in the club. Creating the member also creates the participant row (signals), so adopt it
+        # rather than adding a second row for the same person.
+        member, _created = ensure_club_member(
+            self.auction,
             name=name,
-            email=(op.get("email") or "").strip(),
-            phone_number=(op.get("phone_number") or "").strip(),
+            email=email,
+            phone_number=phone_number,
+            bidder_number=requested,
         )
+        tos = existing_tos_for_club_member(self.auction, member)
+        if tos is None:
+            tos = AuctionTOS(
+                auction=self.auction,
+                pickup_location=pickup,
+                manually_added=True,
+                bidder_number=requested,
+                name=name,
+                email=email,
+                phone_number=phone_number,
+            )
+        else:
+            tos.name = name or tos.name
+            tos.email = email or tos.email
+            tos.phone_number = phone_number or tos.phone_number
+        apply_club_member_to_tos(self.auction, tos, member)
         tos.save()  # AuctionTOS.save() auto-assigns a free bidder_number when the requested one is blank
+        if requested and tos.bidder_number != requested:
+            # The club number lost to the one being handed out at the door; this auction uses the card.
+            tos.force_set_bidder_number(requested, acting_user=self.user)
         self.auction.create_history(applies_to="USERS", action=f"Added {name}", user=self.user)
         echo = {"bidder_number": tos.bidder_number}
         self._record(op["op_id"], "add_user", tos.pk, echo)

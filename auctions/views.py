@@ -15,7 +15,7 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import randint, sample, uniform
 from time import time
-from urllib.parse import quote_plus, unquote, urlencode, urlparse
+from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
 import qr_code
@@ -109,6 +109,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
+from . import club_events, discord_events
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -145,6 +146,7 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
+    ClubEventForm,
     ClubMemberAdminForm,
     ClubMemberDiscordForm,
     ClubMemberMergeReviewForm,
@@ -162,6 +164,7 @@ from .forms import (
     CreateLotForm,
     DeleteAuctionTOS,
     EditLot,
+    EnableBiddingForAllForm,
     InvoiceAdjustmentForm,
     InvoiceAdjustmentFormSetHelper,
     LabelPrintFieldsForm,
@@ -179,9 +182,11 @@ from .forms import (
     validate_image_url,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .mobile.services.web_session import mark_session_opened_by_app, session_opened_by_app
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
+    PRIVACY_POLICY_SLUG,
     SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
@@ -201,6 +206,7 @@ from .models import (
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
     ClubDiscordRole,
+    ClubEvent,
     ClubHistory,
     ClubMember,
     ClubMoney,
@@ -234,13 +240,14 @@ from .models import (
     nearby_auctions,
     normalize_email,
 )
+from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
-from .services import map_fields
+from .services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member, map_fields
 from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -257,6 +264,7 @@ from .tasks import (
     cancel_invoice_notification,
     maybe_send_membership_renewal_confirmation,
     schedule_invoice_notification,
+    send_push_to_user,
 )
 
 # Distance conversion constant
@@ -464,7 +472,16 @@ def _upsert_clubmember_shadow_tos(
     return tos
 
 
-def close_modal_response(action=None, *, event_name=None, redirect_url=None, table_selector=None, extra_triggers=None):
+def close_modal_response(
+    action=None,
+    *,
+    event_name=None,
+    redirect_url=None,
+    table_selector=None,
+    extra_triggers=None,
+    toast=None,
+    toast_type="success",
+):
     """Ask the active HtmxModal to close (with optional action) after a successful POST.
 
     The response body is a tiny ``<script>`` that calls ``window.closeModal`` — HTMX evaluates
@@ -473,6 +490,9 @@ def close_modal_response(action=None, *, event_name=None, redirect_url=None, tab
 
     Pass ``extra_triggers={"event_name": detail, ...}`` to fire additional HTMX triggers (e.g.
     a separate table-refresh event) in the same response via the ``HX-Trigger`` header.
+
+    Pass ``toast="Something happened"`` to also raise a toast as the modal closes — the modal is
+    gone by the time the user looks, so anything they need to read afterwards goes here.
     """
     detail = {"action": action} if action else {}
     if event_name is not None:
@@ -481,7 +501,11 @@ def close_modal_response(action=None, *, event_name=None, redirect_url=None, tab
         detail["redirectUrl"] = redirect_url
     if table_selector is not None:
         detail["tableSelector"] = table_selector
-    body = f"<script>window.closeModal({json.dumps(detail)});</script>"
+    body = ""
+    if toast:
+        toast_options = json.dumps({"title": toast, "type": toast_type, "delay": 8000})
+        body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
+    body += f"<script>window.closeModal({json.dumps(detail)});</script>"
     headers = {}
     if extra_triggers:
         headers["HX-Trigger"] = json.dumps(extra_triggers)
@@ -1024,6 +1048,8 @@ def _club_points_chart_data(club, member):
 
 
 CLUB_DETAIL_AUCTION_LIMIT = 10
+CLUB_DETAIL_EVENT_LIMIT = 20
+CLUB_DETAIL_PAST_EVENT_LIMIT = 5
 
 
 class ClubViewMixin:
@@ -2475,6 +2501,19 @@ class LotPushTestNotificationView(APIPostView):
         lot = get_object_or_404(Lot, pk=kwargs["pk"], is_deleted=False)
         if not Watch.objects.filter(lot_number=lot, user=request.user).exists():
             return JsonResponse({"result": "error", "message": "You must watch this lot first."}, status=403)
+        # Test the channel the real notification will actually use, otherwise an app user's test
+        # would go to a browser they aren't looking at (or fail) while the real one goes to the app.
+        if user_has_app_push(request.user):
+            send_push_to_user.delay(
+                request.user.pk,
+                title=f"{lot.lot_name} test notification",
+                body=f"Lot {lot.lot_number_display} test notification for this watched lot.",
+                url=f"https://{lot.full_lot_link}",
+                category=CATEGORY_LOT_SELLING,
+                collapse_key=f"lot_sell_notification_test_{lot.pk}",
+                auction_pk=lot.auction_id,
+            )
+            return JsonResponse({"result": "success"})
         if not PushInformation.objects.filter(user=request.user).exists():
             return JsonResponse({"result": "error", "message": "No push subscription found."}, status=400)
 
@@ -2827,7 +2866,9 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                     account_age,
                     data.memo,
                     "Yes" if data.is_club_member else "",
-                    "No" if not data.bidding_allowed else "",
+                    # Spelled out both ways on purpose: this file gets edited and fed back into the user
+                    # importer, where a blank permission cell is ambiguous (it used to mean "no").
+                    "Yes" if data.bidding_allowed else "No",
                     add_to_calendar,
                 ]
             )
@@ -3795,7 +3836,7 @@ class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
         from auctions.mobile.services import ar as ar_service
 
         ar_service.clear_positions(self.auction)
-        messages.success(request, "Cleared all AR lot locations for this auction.")
+        messages.success(request, "Cleared all scanned lot locations for this auction.")
         return redirect(reverse("auction_lot_map", kwargs={"slug": self.auction.slug}))
 
 
@@ -4871,7 +4912,11 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
 
     ``request_user`` (the admin viewing/projecting the lot) is excluded so their own screen doesn't
     light up. Returns True when a push pass actually ran, False when skipped as a dedupe. The
-    transient websocket "about to be sold" chat message is handled by the caller, not here."""
+    transient websocket "about to be sold" chat message is handled by the caller, not here.
+
+    Delivery is per watcher: anyone who can receive an app notification gets it there *only*, and
+    their browser subscription is skipped -- we can't tell a phone's browser apart from the app
+    installed on that same phone, so sending both would buzz one person twice for one lot."""
     if not lot or lot.sold or not lot.auction:
         return False
     coming_up = position is not None and position > 1
@@ -4896,11 +4941,28 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
             f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
             "You're getting this notification because you watched this lot."
         )
-    watchers = Watch.objects.filter(lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True)
+    watchers = Watch.objects.filter(
+        lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
+    ).select_related("user__userdata")
     if request_user is not None:
         # it would be awkward to have notifications pop up when you're projecting an image of the lot
         watchers = watchers.exclude(user=request_user)
+    lot_url = "https://" + lot.full_lot_link
+    # Shared by both delivery paths so the "about to be sold" alert replaces the earlier
+    # "coming up soon" one on the device instead of stacking a second alert.
+    tag = f"lot_sell_notification_{lot.pk}"
     for watch in watchers:
+        if user_has_app_push(watch.user):
+            send_push_to_user.delay(
+                watch.user.pk,
+                title=head,
+                body=body,
+                url=lot_url,
+                category=CATEGORY_LOT_SELLING,
+                collapse_key=tag,
+                auction_pk=lot.auction.pk,
+            )
+            continue
         # does the user actually have a subscription?
         push_info = PushInformation.objects.filter(user=watch.user).first()
         if not push_info:
@@ -4908,8 +4970,8 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
         payload = {
             "head": head,
             "body": body,
-            "url": "https://" + lot.full_lot_link,
-            "tag": f"lot_sell_notification_{lot.pk}",
+            "url": lot_url,
+            "tag": tag,
         }
         if lot.thumbnail:
             payload["icon"] = lot.thumbnail.display_url
@@ -4953,14 +5015,20 @@ def process_queue_notifications(auction):
     Each lot at position 2-10 gets one "coming up soon" push; the head lot (position 1) gets the
     "about to be sold" push, which overwrites the coming-up one. Both dedupe on the per-lot flags
     (Lot.coming_up_push_sent / Lot.selling_push_notification_sent), so re-running this after every
-    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies."""
-    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
-    for index, entry in enumerate(entries, start=1):
-        if index > 10:
-            break
-        if entry.lot.sold:
-            continue
-        notify_watchers_lot_selling_soon(entry.lot, position=index)
+    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies.
+
+    Watcher notifications honour the auction's message_users_when_lots_sell setting, the same gate
+    the set-lot-winners screen uses -- turning it off also hides the opt-in on the lot page, so an
+    auction that opted out must not notify from the queue either. The websocket poke is unrelated to
+    that setting and always fires, otherwise the kiosk would stop following the queue."""
+    if auction.message_users_when_lots_sell:
+        entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
+        for index, entry in enumerate(entries, start=1):
+            if index > 10:
+                break
+            if entry.lot.sold:
+                continue
+            notify_watchers_lot_selling_soon(entry.lot, position=index)
     broadcast_queue_update(auction)
 
 
@@ -5153,17 +5221,39 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
 
 
 def volunteer_eligible_tos(auction):
-    """AuctionTOS rows we can ask for help: real users holding a registered mobile device who are
-    checked in (in check-in-mode auctions) or simply joined (otherwise)."""
+    """AuctionTOS rows we can ask for help: people we can reach in the app *right now*.
+
+    A volunteer request is push-only -- an email asking someone to help carry tanks is useless by
+    the time it's read -- so the audience is exactly the people holding a device with a live push
+    token, not everyone who ever installed the app. Someone who installed it and denied
+    notifications, or signed out (which clears the token), is not reachable and is not counted.
+
+    In check-in-mode auctions this is further limited to people who have checked in, which is the
+    only proximity signal available: auto-check-in fires inside a ~500 ft geofence, so a checked-in
+    person is genuinely at the venue. Without check-in mode there is nothing to tell who is in the
+    room, so everyone who joined and has the app is asked -- the volunteers page warns admins about
+    exactly that."""
+    from auctions.notifications import push_configured
+
+    if not push_configured():
+        # Nothing can be delivered, so nobody is reachable. Being honest here keeps the page's
+        # "N reachable" count from promising an audience that doesn't exist.
+        return AuctionTOS.objects.none()
     qs = AuctionTOS.objects.filter(auction=auction, user__isnull=False)
     if auction.use_check_in_mode:
         qs = qs.filter(checked_in__isnull=False)
-    return qs.filter(user__mobile_devices__isnull=False).distinct()
+    # Exists() rather than a join filter: `.filter(devices__push_enabled=True).exclude(devices__
+    # fcm_token="")` spans two joins and would drop anyone owning *any* tokenless device.
+    live_device = MobileDevice.objects.filter(user=OuterRef("user"), push_enabled=True).exclude(fcm_token="")
+    return qs.filter(Exists(live_device))
 
 
 def volunteer_helper_count(auction):
-    """How many app users can be notified right now (the tooltip count)."""
-    return volunteer_eligible_tos(auction).count()
+    """How many people will actually receive the push (the tooltip count).
+
+    Counted per user, not per TOS row, so a duplicate TOS record can't inflate it -- this has to
+    match what notify_volunteers_of_job really sends."""
+    return volunteer_eligible_tos(auction).values("user").distinct().count()
 
 
 def _volunteer_job_url(job):
@@ -5174,21 +5264,26 @@ def _volunteer_job_url(job):
     return f"https://{domain}{path}"
 
 
+# Fixed and short so it survives the notification tray on both platforms: an auction title in the
+# title pushes "needs help" past the truncation point, which is the one word that has to be read.
+VOLUNTEER_PUSH_TITLE = "Auction help needed"
+
+
 def _volunteer_notification_text(job):
     body = job.description
     if job.bounty:
         body += f" (${job.bounty:.0f} bounty)"
-    return f"{job.auction.title} needs help", body
+    return VOLUNTEER_PUSH_TITLE, body
 
 
 def notify_volunteers_of_job(job):
-    """Fan out a job announcement to every eligible helper through the Part 2 push choke point.
+    """Fan out a job announcement to every helper we can reach in the app.
 
-    While FCM is inert this degrades to the existing email fallback, exactly like every other
-    notification. Uses a per-job collapse tag so the later 'filled' retract can target it."""
-    from post_office import mail
-
-    from auctions.notifications import CATEGORY_AUCTION_ADMIN, notify_user
+    Push-only, with no email fallback: this is a "someone is needed in this room now" message, and
+    an email that lands after the auction is over is worse than nothing. volunteer_eligible_tos
+    already restricts the audience to people who can actually receive it. Uses a per-job collapse
+    tag so the later 'filled' retract can target it."""
+    from auctions.notifications import CATEGORY_VOLUNTEER
 
     title, body = _volunteer_notification_text(job)
     url = _volunteer_job_url(job)
@@ -5199,24 +5294,14 @@ def notify_volunteers_of_job(job):
         if user.pk in seen:
             continue
         seen.add(user.pk)
-
-        def _send_email(u=user):
-            if not u.email:
-                return
-            try:
-                mail.send(u.email, subject=title, message=f"{body}\n\nTap to help: {url}")
-            except Exception:
-                logger.exception("Failed to email volunteer request to %s", u.pk)
-
-        notify_user(
-            user,
-            category=CATEGORY_AUCTION_ADMIN,
+        send_push_to_user.delay(
+            user.pk,
             title=title,
             body=body,
             url=url,
-            send_email=_send_email,
-            auction_pk=job.auction.pk,
+            category=CATEGORY_VOLUNTEER,
             collapse_key=collapse_key,
+            auction_pk=job.auction.pk,
         )
 
 
@@ -5420,6 +5505,31 @@ class CSVContactImportMixin:
             return None
         return CSVContactImportMixin.CONTACT_STATUS_MAP.get(value.strip().lower())
 
+    # Values a yes/no cell may hold.  A cell that matches neither list (including a blank one) is
+    # "unspecified", not False -- see parse_csv_boolean.
+    CSV_TRUE_VALUES = frozenset({"yes", "y", "true", "t", "1", "x", "✓", "checked", "on", "allowed", "enabled"})
+    CSV_FALSE_VALUES = frozenset({"no", "n", "false", "f", "0", "unchecked", "off", "blocked", "disabled"})
+
+    @staticmethod
+    def parse_csv_boolean(value, extra_true=None):
+        """Read a yes/no cell as True/False, or None when the file didn't say either way.
+
+        None means "unspecified": callers use the field's own default when creating a record and leave an
+        existing record alone when updating.  A blank cell must never read as False -- the user CSV export
+        writes an empty "Bidding allowed" cell for everyone who *can* bid, so blank-means-no turned a
+        re-imported export into a mass revocation and locked whole auctions out of bidding.
+        """
+        text = (value or "").strip().lower()
+        if not text:
+            return None
+        if extra_true and text in extra_true:
+            return True
+        if text in CSVContactImportMixin.CSV_TRUE_VALUES:
+            return True
+        if text in CSVContactImportMixin.CSV_FALSE_VALUES:
+            return False
+        return None
+
     @staticmethod
     def parse_flexible_date(value):
         """Parse a date string, supporting incomplete formats: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
@@ -5547,13 +5657,15 @@ class CSVContactImportMixin:
 
     @staticmethod
     def _merge_planned_fields(primary, duplicate):
-        """Fold a later same-key row's data into the primary planned action: fill only blank string fields
-        (so complementary rows combine without loss) while leaving the primary's existing non-empty values,
-        booleans and ints untouched (so a conflicting value can't be silently flipped). Optional-column
-        ``present`` flags are OR-ed so a column that appears in either row still drives an update."""
+        """Fold a later same-key row's data into the primary planned action: fill only unset fields (so
+        complementary rows combine without loss) while leaving the primary's existing non-empty values,
+        booleans and ints untouched (so a conflicting value can't be silently flipped). A tri-state
+        boolean's explicit ``False`` counts as data and fills a primary that left it unspecified.
+        Optional-column ``present`` flags are OR-ed so a column that appears in either row still drives
+        an update."""
         primary_fields = primary.setdefault("fields", {})
         for key, value in duplicate.get("fields", {}).items():
-            if value in (None, "", False):
+            if value in (None, ""):
                 continue
             if primary_fields.get(key) in (None, ""):
                 primary_fields[key] = value
@@ -5853,17 +5965,19 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         return label
 
     def _parse_user_row(self, row):
-        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has."""
+        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has.
+
+        The three permission-ish booleans are tri-state: True/False when the row says so, None when the
+        cell is blank or unreadable.  None means "use the field default" on a create and "leave it alone"
+        on an update, so a column of blank cells can never strip bidding or admin from a whole roster.
+        """
         club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
-        is_club_member = self.extract_csv_field(row, club_member_fields).lower() in [
-            "yes",
-            "true",
-            "member",
-            "club member",
-            self.auction.alternative_split_label.lower(),
-        ]
-        bidding_allowed = self.extract_csv_field(row, self.BIDDING_FIELDS, "yes").lower() in ["yes", "true"]
-        is_admin = self.extract_csv_field(row, self.ADMIN_FIELDS).lower() in ["yes", "true", "1"]
+        is_club_member = self.parse_csv_boolean(
+            self.extract_csv_field(row, club_member_fields),
+            extra_true={"member", "club member", self.auction.alternative_split_label.lower()},
+        )
+        bidding_allowed = self.parse_csv_boolean(self.extract_csv_field(row, self.BIDDING_FIELDS))
+        is_admin = self.parse_csv_boolean(self.extract_csv_field(row, self.ADMIN_FIELDS))
         fields = {
             "bidder_number": self.extract_csv_field(row, self.BIDDER_NUMBER_FIELDS)[:20],
             "name": self.extract_csv_field(row, self.NAME_FIELDS)[:181],
@@ -5876,12 +5990,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             "is_admin": is_admin,
         }
         cols = list(row.keys())
-        present = {
-            "is_club_member": self.csv_columns_exist(cols, club_member_fields),
-            "bidding_allowed": self.csv_columns_exist(cols, self.BIDDING_FIELDS),
-            "memo": self.csv_columns_exist(cols, self.MEMO_FIELDS),
-            "is_admin": self.csv_columns_exist(cols, self.ADMIN_FIELDS),
-        }
+        # Only the non-boolean optional columns need a header-level "present" flag; the booleans carry
+        # their own None-means-unspecified sentinel, which is per row rather than per file.
+        present = {"memo": self.csv_columns_exist(cols, self.MEMO_FIELDS)}
         return fields, present
 
     def plan_row(self, row):
@@ -5918,25 +6029,39 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         bidder_number = fields.get("bidder_number", "")
         if bidder_number and AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exists():
             bidder_number = ""
-        return AuctionTOS.objects.create(
-            auction=self.auction,
-            pickup_location=self.auction.location_qs.first(),
-            manually_added=True,
-            bidder_number=bidder_number,
-            name=fields.get("name", ""),
-            phone_number=fields.get("phone", ""),
-            email=fields.get("email", ""),
-            address=fields.get("address", ""),
-            is_club_member=fields.get("is_club_member", False),
-            bidding_allowed=fields.get("bidding_allowed", True),
-            memo=fields.get("memo", ""),
-            is_admin=fields.get("is_admin", False),
-        )
+        bidding_allowed = fields.get("bidding_allowed")
+        create_kwargs = {
+            "auction": self.auction,
+            "pickup_location": self.auction.location_qs.first(),
+            "manually_added": True,
+            "bidder_number": bidder_number,
+            "name": fields.get("name", ""),
+            "phone_number": fields.get("phone", ""),
+            "email": fields.get("email", ""),
+            "address": fields.get("address", ""),
+            "is_club_member": bool(fields.get("is_club_member")),
+            "memo": fields.get("memo", ""),
+            "is_admin": bool(fields.get("is_admin")),
+        }
+        if bidding_allowed is not None:
+            create_kwargs["bidding_allowed"] = bidding_allowed
+        # When the file said nothing, bidding_allowed is left off entirely so AuctionTOS.save() decides it
+        # from the auction's own rules (only_approved_bidders and the manually-added/past-participant
+        # exemptions) -- exactly what this person would have got had an admin added them by hand.
+        tos = AuctionTOS.objects.create(**create_kwargs)
+        if bidding_allowed is not None and tos.bidding_allowed != bidding_allowed:
+            # Those same rules force-allow bidding for every manually added user in an approval auction,
+            # so an explicit "no" in the file has to be re-applied over the top of them; otherwise a club
+            # that runs its allow/deny list through the importer can never deny anyone.
+            tos.bidding_allowed = bidding_allowed
+            tos.save(update_fields=["bidding_allowed"])
+        return tos
 
     def _update_tos(self, tos, fields, present):
-        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when their
-        column was present in the file; the CSV bidder number wins (when non-conflicting) so the number
-        physically assigned at check-in is the one the scanner resolves to. Returns True if anything changed."""
+        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when the row
+        actually said yes or no (a blank cell leaves the current value alone); the CSV bidder number wins
+        (when non-conflicting) so the number physically assigned at check-in is the one the scanner
+        resolves to. Returns True if anything changed."""
         changed = False
         name = fields.get("name", "")
         if name and tos.name != name:
@@ -5954,19 +6079,22 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         if email and not tos.email:
             tos.email = email
             changed = True
-        if present.get("is_club_member") and tos.is_club_member != fields.get("is_club_member"):
-            tos.is_club_member = fields.get("is_club_member")
+        is_club_member = fields.get("is_club_member")
+        if is_club_member is not None and tos.is_club_member != is_club_member:
+            tos.is_club_member = is_club_member
             changed = True
-        if present.get("bidding_allowed") and tos.bidding_allowed != fields.get("bidding_allowed"):
-            tos.bidding_allowed = fields.get("bidding_allowed")
+        bidding_allowed = fields.get("bidding_allowed")
+        if bidding_allowed is not None and tos.bidding_allowed != bidding_allowed:
+            tos.bidding_allowed = bidding_allowed
             changed = True
         if present.get("memo"):
             memo = fields.get("memo", "")
             if tos.memo != memo:
                 tos.memo = memo
                 changed = True
-        if present.get("is_admin") and tos.is_admin != fields.get("is_admin"):
-            tos.is_admin = fields.get("is_admin")
+        is_admin = fields.get("is_admin")
+        if is_admin is not None and tos.is_admin != is_admin:
+            tos.is_admin = is_admin
             changed = True
         bidder_number = fields.get("bidder_number", "")
         if bidder_number and tos.bidder_number != bidder_number:
@@ -6865,12 +6993,6 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         return checkbox_fields, field_1_fields, dropdown_fields, dropdown_options
 
     @staticmethod
-    def _to_bool(value):
-        if isinstance(value, str):
-            return value.lower() in ["yes", "true", "1", "y", "t"]
-        return bool(value)
-
-    @staticmethod
     def _to_int(value, default=None):
         try:
             return int(value) if value else default
@@ -6894,9 +7016,11 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             "reserve_price": self._to_int(self.extract_csv_field(row, self.RESERVE_PRICE_FIELDS)),
             "buy_now_price": self._to_int(self.extract_csv_field(row, self.BUY_NOW_PRICE_FIELDS)),
             "category_id": category.pk if category else None,
-            "i_bred_this_fish": self._to_bool(self.extract_csv_field(row, self.BRED_FIELDS)),
-            "donation": self._to_bool(self.extract_csv_field(row, self.DONATION_FIELDS)),
-            "custom_checkbox": self._to_bool(self.extract_csv_field(row, checkbox_fields)),
+            # Tri-state: None when the row didn't say, so an update can't silently clear a flag that
+            # changes the invoice (breeder points, donations) just because the column was left blank.
+            "i_bred_this_fish": self.parse_csv_boolean(self.extract_csv_field(row, self.BRED_FIELDS)),
+            "donation": self.parse_csv_boolean(self.extract_csv_field(row, self.DONATION_FIELDS)),
+            "custom_checkbox": self.parse_csv_boolean(self.extract_csv_field(row, checkbox_fields)),
             "custom_field_1": self.extract_csv_field(row, field_1_fields)[:60],
             "custom_dropdown": custom_dropdown,
         }
@@ -6977,9 +7101,12 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             lot.buy_now_price = fields["buy_now_price"]
         if fields.get("category_id"):
             lot.species_category_id = fields["category_id"]
-        lot.i_bred_this_fish = fields.get("i_bred_this_fish", False)
-        lot.donation = fields.get("donation", False)
-        lot.custom_checkbox = fields.get("custom_checkbox", False)
+        # Only when the row actually said yes or no; a blank cell (or a file with no such column at all)
+        # leaves the lot's current flag alone instead of clearing it.
+        for field_name in ("i_bred_this_fish", "donation", "custom_checkbox"):
+            value = fields.get(field_name)
+            if value is not None:
+                setattr(lot, field_name, value)
         if fields.get("custom_field_1"):
             lot.custom_field_1 = fields["custom_field_1"]
         if fields.get("custom_dropdown"):
@@ -6995,13 +7122,24 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             seller = AuctionTOS.objects.filter(pk=seller_pk, auction=self.auction).first()
             if seller:
                 return seller, False
-        seller = AuctionTOS.objects.create(
+        name = fields.get("name", "")
+        email = fields.get("email", "")
+        # In a club-managed auction the club owns the bidder number, so an imported seller needs a
+        # member record like any other participant. Creating it also creates the participant row
+        # (signals), so adopt that instead of adding a second one for the same person.
+        member, _created = ensure_club_member(self.auction, name=name, email=email)
+        adopted = existing_tos_for_club_member(self.auction, member)
+        if adopted is not None:
+            return adopted, True
+        seller = AuctionTOS(
             auction=self.auction,
             pickup_location=self.auction.location_qs.first(),
             manually_added=True,
-            name=fields.get("name", ""),
-            email=fields.get("email", ""),
+            name=name,
+            email=email,
         )
+        apply_club_member_to_tos(self.auction, seller, member)
+        seller.save()
         return seller, True
 
     def _create_lot(self, fields, seller):
@@ -7013,9 +7151,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
                 fields["reserve_price"] if fields.get("reserve_price") is not None else self.auction.minimum_bid
             ),
             buy_now_price=fields.get("buy_now_price"),
-            i_bred_this_fish=fields.get("i_bred_this_fish", False),
-            donation=fields.get("donation", False),
-            custom_checkbox=fields.get("custom_checkbox", False),
+            i_bred_this_fish=bool(fields.get("i_bred_this_fish")),
+            donation=bool(fields.get("donation")),
+            custom_checkbox=bool(fields.get("custom_checkbox")),
             custom_field_1=fields.get("custom_field_1", ""),
             custom_dropdown=fields.get("custom_dropdown", ""),
             auctiontos_seller=seller,
@@ -7172,10 +7310,22 @@ class ViewLot(DetailView):
             else:
                 defaultBidAmount = 0
                 context["viewer_bid"] = None
-            context["has_push_subscription"] = PushInformation.objects.filter(user=self.request.user).exists()
+            # When the app can be reached it is the only channel used (see
+            # notify_watchers_lot_selling_soon), so the browser subscribe UI is replaced by a note
+            # pointing at the phone. Inside the app's own WebView there is nothing to subscribe to
+            # either -- a WebView has no Push API -- so the button is dropped there too.
+            context["has_app_push"] = user_has_app_push(self.request.user)
+            context["can_subscribe_to_webpush"] = not context["has_app_push"] and not getattr(
+                self.request, "is_mobile_app", False
+            )
+            context["has_push_subscription"] = (
+                context["has_app_push"] or PushInformation.objects.filter(user=self.request.user).exists()
+            )
         else:
             defaultBidAmount = 0
             context["viewer_bid"] = None
+            context["has_app_push"] = False
+            context["can_subscribe_to_webpush"] = False
             context["has_push_subscription"] = False
         if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
             defaultBidAmount = lot.buy_now_price
@@ -7242,6 +7392,20 @@ class ViewLot(DetailView):
                 )
             if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
                 context["push_notifications_possible"] = True
+                # Ask the app to offer notifications here, where the offer means something: this is
+                # an in-person auction that pushes "your lot is selling now", the user is looking at
+                # a lot in it, and the auction is still running. The app owns the "at most once per
+                # device" part and simply ignores the call when it has already asked. Deciding it
+                # here is the point -- the app can't tell an in-person lot page from any other, and
+                # won't spend a round trip per lot page guessing.
+                context["offer_push_prompt"] = (
+                    getattr(self.request, "is_mobile_app", False)
+                    and not lot.auction.pretty_much_over
+                    and not (
+                        self.request.user.userdata.push_notifications_when_lots_sell
+                        and self.request.user.userdata.has_push_device
+                    )
+                )
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(
                 self.request,
@@ -7329,12 +7493,21 @@ class ViewLot(DetailView):
                     if _bap_override is not None
                     else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
                 )
-        if lot.use_images_from and self.request.user.is_authenticated:
-            is_lot_creator = (lot.user and lot.user == self.request.user) or (
-                lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
+        is_lot_creator = bool(
+            self.request.user.is_authenticated
+            and (
+                (lot.user and lot.user == self.request.user)
+                or (lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user)
             )
-            if is_lot_creator:
-                context["images_managed_from_lot"] = lot.use_images_from
+        )
+        if lot.use_images_from and is_lot_creator:
+            context["images_managed_from_lot"] = lot.use_images_from
+        # The seller of a lot in an in-person auction gets the per-source view breakdown: the AR
+        # sources only exist there, and how people found the lot in the room is useful to them and
+        # to nobody else. See Lot.page_view_source_breakdown.
+        context["show_page_view_breakdown"] = bool(
+            is_lot_creator and lot.auction and not lot.auction.is_online and not lot.sealed_bid
+        )
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
@@ -8836,6 +9009,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "only_whole_dollar_bids",
                 "club",
                 "manage_users_through_club",
+                "allow_self_checkin",
                 "exact_location_set",
             ]
             for field in fields_to_clone:
@@ -9328,49 +9502,21 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if not obj.address:
                 obj.address = userData.address
             if auction.is_club_managed:
-                club_member = _find_club_member(auction.club, user=self.request.user, email=obj.email)
-                club_member_is_new = False
-                if not club_member:
-                    club_member = ClubMember(
-                        club=auction.club,
-                        user=self.request.user,
-                        name=obj.name or self.request.user.get_full_name() or self.request.user.username,
-                        email=obj.email or self.request.user.email,
-                        phone_number=obj.phone_number or "",
-                        address=obj.address or "",
-                        source=str(auction.title)[:200],
-                        added_by=self.request.user,
-                    )
-                    if auction.only_approved_sellers:
-                        club_member.selling_allowed = False
-                    if auction.only_approved_bidders:
-                        club_member.bidding_allowed = False
-                    club_member.save()
-                    club_member_is_new = True
-                elif not club_member.user_id:
-                    club_member.user = self.request.user
-                    club_member.save(update_fields=["user"])
-                if not club_member.bidder_number:
-                    club_member.generate_bidder_number(save=True)
-                obj.clubmember = club_member
-                obj.bidder_number = club_member.bidder_number
-                if auction.use_check_in_mode and not obj.checked_in:
-                    # Check-in mode: joining never grants bidding on its own. The member has to
-                    # check in at the event (which sets checked_in + bidding_allowed). Mirrors the
-                    # auto-add path in signals.propagate_clubmember_to_shadow_tos.
-                    obj.bidding_allowed = False
-                else:
-                    obj.bidding_allowed = club_member.bidding_allowed
-                obj.selling_allowed = club_member.selling_allowed
-                if club_member_is_new:
-                    from .models import ClubHistory
-
-                    ClubHistory.objects.create(
-                        club=auction.club,
-                        user=self.request.user,
-                        applies_to="MEMBERS",
-                        action=f"{club_member.name} joined via auction '{auction.title}'",
-                    )
+                # The club owns the bidder number and permissions here, so joining has to create or
+                # link the member record. Shared with the app's proximity join — see
+                # auctions.services.ensure_club_member.
+                club_member, _created = ensure_club_member(
+                    auction,
+                    user=self.request.user,
+                    name=obj.name,
+                    email=obj.email,
+                    phone_number=obj.phone_number or "",
+                    address=obj.address or "",
+                    # The user is signing themselves up, same as the app's proximity join: until an
+                    # admin edits it, this row goes with their account.
+                    admin_edited=False,
+                )
+                apply_club_member_to_tos(auction, obj, club_member)
             obj.save()
             # also update userdata to reflect the last auction
             userData.last_auction_used = auction
@@ -10741,6 +10887,75 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
         return context
 
 
+class EnableBiddingForAllUsers(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
+    """Turn bidding back on for every participant in this auction who currently can't bid.
+
+    The repair for a whole auction that lost bidding at once -- a CSV import that read a blank permission
+    column as "no", or "only approved bidders" being switched off after people had already joined (which
+    does not retroactively enable anyone). Without this an admin has to open every user's modal in turn.
+    """
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = EnableBiddingForAllForm
+
+    def get_queryset(self):
+        return AuctionTOS.objects.filter(auction=self.auction, bidding_allowed=False)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_auction_admin
+        if self.auction.use_check_in_mode:
+            # Bidding is meant to be off until each person checks in; enabling everyone would skip it.
+            raise Http404
+        self.user_count = self.get_queryset().count()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs["auction"] = self.auction
+        form_kwargs["user_count"] = self.user_count
+        return form_kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if not self.user_count:
+            context["modal_title"] = "Everyone can already bid"
+            context["tooltip"] = "There aren't any users in this auction with bidding disabled."
+            return context
+        noun = "user" if self.user_count == 1 else "users"
+        context["modal_title"] = f"Enable bidding for {self.user_count} {noun}?"
+        context["tooltip"] = (
+            f"This will let all {self.user_count} {noun} who currently have bidding disabled place bids. "
+            "This cannot be undone -- if some of them were blocked on purpose, you'll have to disable them "
+            "again one at a time."
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        if self.user_count:
+            tos_qs = self.get_queryset()
+            # The participant rows in a club-managed auction are shadows of the club's member records;
+            # leaving the club side saying "no" would show two different answers on two pages, and a
+            # later member edit would push the stale value back down (signals.propagate_clubmember_to_
+            # shadow_tos). Collect the ids before the update, which empties this queryset.
+            member_pks = (
+                [pk for pk in tos_qs.values_list("clubmember_id", flat=True) if pk]
+                if self.auction.is_club_managed
+                else []
+            )
+            tos_qs.update(bidding_allowed=True)
+            if member_pks:
+                ClubMember.objects.filter(pk__in=member_pks).update(bidding_allowed=True)
+            noun = "user" if self.user_count == 1 else "users"
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Enabled bidding for {self.user_count} {noun}",
+                user=request.user,
+            )
+            messages.success(request, f"{self.user_count} {noun} can now bid.")
+        return close_modal_response("reload-page")
+
+
 class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixin):
     model = Lot
     template_name = "auctions/generic_admin_form.html"
@@ -11738,6 +11953,12 @@ class SquareConnectView(LoginRequiredMixin, View):
         if not request.user.userdata.square_enabled:
             messages.error(request, "Square isn't enabled for your account.")
             return redirect(reverse("home"))
+        # Remember, for the callback, that this round trip started inside the app, so it can end
+        # with a "Return to the app" button rather than leaving the merchant on a web page they
+        # have to dismiss themselves. ``?return_to_app=1`` is the app's explicit way to say so when
+        # it opens this URL in an in-app browser view that carries no session of ours.
+        if session_opened_by_app(request) or request.GET.get("return_to_app"):
+            mark_session_opened_by_app(request.session)
         _stash_club_for_payment_oauth(request)
         # Build Square OAuth URL
         # Use the user's unsubscribe_link as state parameter for security
@@ -11880,7 +12101,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
                     request,
                     f"Square account linked to {club.name}. Members can now pay dues directly on this site.",
                 )
-                return redirect(reverse("club_membership_settings", kwargs={"slug": club.slug}))
+                return self._done(request, reverse("club_membership_settings", kwargs={"slug": club.slug}), seller)
 
             messages.success(
                 request,
@@ -11889,10 +12110,12 @@ class SquareCallbackView(LoginRequiredMixin, View):
 
             # Redirect to last auction or home
             if request.user.userdata.last_auction_created:
-                return redirect(
-                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True"
+                return self._done(
+                    request,
+                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True",
+                    seller,
                 )
-            return redirect(reverse("square_seller"))
+            return self._done(request, reverse("square_seller"), seller)
 
         except Exception as e:
             logger.exception("Error during Square OAuth: %s", e)
@@ -11907,6 +12130,23 @@ class SquareCallbackView(LoginRequiredMixin, View):
             else:
                 messages.error(request, "An error occurred connecting your Square account. Please try again.")
             return redirect(reverse("square_seller"))
+
+    @staticmethod
+    def _done(request, web_url, seller):
+        """End a successful connect: back to the app if that's where it started, else ``web_url``.
+
+        Apple's Tap to Pay review guide wants onboarding completed inside the app (requirement 2.2),
+        and the app routes this OAuth through an in-app browser view. That view has no idea the
+        merchant is finished, so without this page they'd sit on a web page and have to work out
+        that the Done button is what comes next. The deep link closes it for them.
+        """
+        if not session_opened_by_app(request):
+            return redirect(web_url)
+        return render(
+            request,
+            "auctions/square_connected_app.html",
+            {"seller": seller, "web_url": web_url},
+        )
 
 
 MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
@@ -12166,6 +12406,447 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
             "tags": ClubMember.MAILCHIMP_TAGS,
         }
         return render(request, "auctions/club_mailchimp_settings.html", context)
+
+
+GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY = "google_calendar_oauth_club_slug"
+GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"  # noqa: S105 - a session key name
+
+
+class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """Full-page Google Calendar settings/status panel for a club."""
+
+    active_tab = "google_calendar"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        upcoming, _ = club_events.upcoming_events(club)
+        context = {
+            "club": club,
+            "view": self,
+            "google_calendar_configured": gcal.is_configured(),
+            "upcoming_count": upcoming.count(),
+            "auction_event_count": club.events.filter(is_deleted=False, source=ClubEvent.SOURCE_AUCTION).count(),
+            "discord_connected": bool(club.discord_server_id),
+        }
+        return render(request, "auctions/club_google_calendar_settings.html", context)
+
+    def post(self, request, slug):
+        """Save the checkboxes on the settings page.
+
+        google_calendar_is_public is the admin telling us they've shared the calendar in Google.
+        We still can't *set* that — it needs a scope over all their calendars — but we can check
+        it, by asking for the calendar the way a member would.
+        """
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
+        club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
+        wants_public = "google_calendar_is_public" in request.POST
+        club.google_calendar_is_public = wants_public
+        # Their word, checked: a shared calendar has a public iCal feed, so fetching it without
+        # credentials tells us whether members can actually subscribe. Advertising links that
+        # 404 for everyone is worse than not advertising them.
+        warning = ""
+        if wants_public and club.google_calendar_connected:
+            try:
+                if not gcal.is_calendar_public(club):
+                    club.google_calendar_is_public = False
+                    warning = (
+                        "That calendar isn't shared publicly yet, so the Google subscribe links stay "
+                        "hidden. Follow the steps below, then tick the box again."
+                    )
+            except gcal.GoogleCalendarError as exc:
+                logger.warning("Could not check calendar sharing for club %s: %s", club.pk, exc)
+                warning = f"We couldn't check the calendar's sharing just now, so we've taken your word for it ({exc})."
+        club.save(
+            update_fields=[
+                "add_auctions_to_calendar",
+                "create_discord_events_for_club_events",
+                "google_calendar_is_public",
+            ]
+        )
+        messages.success(request, "Calendar settings saved.")
+        if warning:
+            messages.warning(request, warning)
+        return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
+
+
+class GoogleCalendarConnectView(LoginRequiredMixin, View):
+    """Start the Google Calendar OAuth flow for a club (requires permission_edit_club)."""
+
+    def get(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_edit_club"):
+            raise PermissionDenied()
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        if not gcal.is_configured():
+            messages.error(request, "Google Calendar is not configured on this site. Contact your site administrator.")
+            return redirect(config_url)
+        # Stash the club so the callback (which has no slug) knows what we're connecting.
+        request.session[GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY] = club.slug
+        # A fresh nonce per attempt, not the per-user unsubscribe UUID: that one is printed in
+        # the footer of every email we send, so anyone holding one could hand this club's admin a
+        # callback URL that connects their calendar to someone else's Google account.
+        state = secrets.token_urlsafe(32)
+        request.session[GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY] = state
+        redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
+        return redirect(gcal.authorize_url(redirect_uri, state))
+
+
+class GoogleCalendarCallbackView(LoginRequiredMixin, View):
+    """Google redirects here after the admin authorizes. Stores the tokens, provisions the
+    calendar, and pushes whatever the club already has on its event list."""
+
+    def get(self, request):
+        from auctions import google_calendar as gcal
+
+        slug = request.session.get(GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY)
+        club = Club.objects.filter(slug=slug).first() if slug else None
+        if not club or not check_club_permission(request.user, club, "permission_edit_club"):
+            messages.error(request, "Your Google Calendar connection session expired. Please try again.")
+            return redirect(reverse("home"))
+
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        error = request.GET.get("error")
+        if error:
+            messages.error(request, f"Google authorization failed: {error}")
+            return redirect(config_url)
+
+        code = request.GET.get("code")
+        state = request.GET.get("state")
+        expected_state = request.session.pop(GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY, "")
+        if not code or not expected_state or not secrets.compare_digest(state or "", expected_state):
+            messages.error(request, "Invalid Google authorization response. Please try again.")
+            return redirect(config_url)
+
+        redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
+        try:
+            refresh_token, access_token, expires_in, account_email = gcal.exchange_code(code, redirect_uri)
+        except gcal.GoogleCalendarError as exc:
+            logger.exception("Google Calendar token exchange failed for club %s", club.pk)
+            messages.error(request, str(exc))
+            return redirect(config_url)
+
+        club.google_calendar_refresh_token = refresh_token
+        club.google_calendar_access_token = access_token
+        club.google_calendar_token_expires = timezone.now() + timedelta(seconds=int(expires_in))
+        club.google_calendar_account_email = account_email
+        club.google_calendar_connected_on = timezone.now()
+        club.google_calendar_connected_by = request.user
+        club.google_calendar_sync_token = ""
+        club.google_calendar_last_error = ""
+        club.save(
+            update_fields=[
+                "google_calendar_refresh_token",
+                "google_calendar_access_token",
+                "google_calendar_token_expires",
+                "google_calendar_account_email",
+                "google_calendar_connected_on",
+                "google_calendar_connected_by",
+                "google_calendar_sync_token",
+                "google_calendar_last_error",
+            ]
+        )
+        request.session.pop(GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY, None)
+
+        try:
+            gcal.ensure_calendar(club)
+        except gcal.GoogleCalendarError as exc:
+            logger.exception("Could not set up the Google calendar for club %s", club.pk)
+            # The calendar id is saved before anything else can fail, so say which half worked
+            # rather than claiming nothing was created.
+            if club.google_calendar_id:
+                messages.warning(request, f"Connected and the calendar exists, but setup didn't finish: {exc}")
+            else:
+                messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
+            return redirect(config_url)
+
+        # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
+        club_events.sync_auction_events(club)
+        gcal.sync_club(club)
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Connected Google Calendar ({account_email or 'account'})",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, "Google Calendar connected! Your events are syncing now.")
+        return redirect(config_url)
+
+
+class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
+    """Run a full sync right now, so an admin doesn't have to wait for the periodic task."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        club = self.club
+        config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
+        if not club.google_calendar_connected:
+            messages.error(request, "Google Calendar is not connected.")
+            return redirect(config_url)
+        club_events.sync_club(club)
+        club.refresh_from_db()
+        if club.google_calendar_last_error:
+            messages.error(request, f"Sync failed: {club.google_calendar_last_error}")
+        else:
+            messages.success(request, "Calendar synced.")
+        return redirect(config_url)
+
+
+class GoogleCalendarDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
+    """Forget the Google connection. The calendar itself stays in the club's Google account."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        from auctions import google_calendar as gcal
+
+        club = self.club
+        gcal.disconnect(club)
+        ClubHistory.objects.create(
+            club=club, user=request.user, action="Disconnected Google Calendar", applies_to="SETTINGS"
+        )
+        messages.success(
+            request,
+            "Google Calendar disconnected. The calendar itself is still in your Google account — "
+            "delete it there if you no longer want it.",
+        )
+        return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
+
+
+class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
+    """The 'Add event' button on the club page."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self._can_manage():
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _can_manage(self):
+        return (
+            self.user_has_club_permission("permission_admin")
+            or self.user_has_club_permission("permission_manage_auctions")
+            or self.user_has_club_permission("permission_edit_club")
+        )
+
+    def get(self, request, slug):
+        form = ClubEventForm(user_timezone=_browser_timezone(request))
+        return render(request, "auctions/club_event_form.html", self._context(form))
+
+    def post(self, request, slug):
+        form = ClubEventForm(request.POST, user_timezone=_browser_timezone(request))
+        if not form.is_valid():
+            return render(request, "auctions/club_event_form.html", self._context(form))
+        event = form.save(commit=False)
+        event.club = self.club
+        event.created_by = request.user
+        event.source = ClubEvent.SOURCE_MANUAL
+        event.save()
+        _push_event_to_integrations(request, event)
+        messages.success(request, f"Added {event.title}.")
+        return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+
+    def _context(self, form):
+        return {"club": self.club, "view": self, "form": form, "is_edit": False}
+
+
+def _browser_timezone(request):
+    """The timezone the admin is actually looking at times in.
+
+    base.html renders every page inside {% timezone user_timezone %}, so a form shows its times
+    in this zone; the form has to parse them back in the same one.
+    """
+    return request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+
+
+class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
+    """Edit or delete one club event."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self._can_manage():
+            raise PermissionDenied()
+        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
+        if not self.event.is_editable:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def _can_manage(self):
+        return (
+            self.user_has_club_permission("permission_admin")
+            or self.user_has_club_permission("permission_manage_auctions")
+            or self.user_has_club_permission("permission_edit_club")
+        )
+
+    def get(self, request, slug, pk):
+        form = ClubEventForm(instance=self.event, user_timezone=_browser_timezone(request))
+        return render(request, "auctions/club_event_form.html", self._context(form))
+
+    def post(self, request, slug, pk):
+        club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        if request.POST.get("action") == "delete":
+            title = self.event.title
+            club_events.retire_event(self.event)
+            messages.success(request, f"Deleted {title}.")
+            return redirect(club_url)
+        was_cancelled = self.event.cancelled
+        previous_start = self.event.date_start
+        form = ClubEventForm(request.POST, instance=self.event, user_timezone=_browser_timezone(request))
+        if not form.is_valid():
+            return render(request, "auctions/club_event_form.html", self._context(form))
+        event = form.save(commit=False)
+        if event.is_recurring and event.date_start != previous_start:
+            # The form edits one occurrence of a series, but the series is what's stored. Moving
+            # the occurrence moves the whole thing by the same amount, which is what an admin who
+            # pushed a weekly meeting an hour later means.
+            event.recurrence_start += event.date_start - previous_start
+        event.needs_google_sync = True
+        event.needs_discord_sync = True
+        event.save()
+        _push_event_to_integrations(request, event)
+        if event.cancelled and not was_cancelled:
+            messages.success(request, f"{event.title} is marked cancelled. Everyone subscribed has been told.")
+        else:
+            messages.success(request, f"Updated {event.title}.")
+        return redirect(club_url)
+
+    def _context(self, form):
+        return {"club": self.club, "view": self, "form": form, "is_edit": True, "event": self.event}
+
+
+def _push_event_to_integrations(request, event):
+    """Send a just-saved event to Google Calendar and Discord.
+
+    Done inline so an admin sees the result immediately rather than waiting for the periodic
+    task. Failures are reported but never block the save — the event is already on the club page,
+    and the periodic task retries the push.
+    """
+    from auctions import google_calendar as gcal
+
+    club = event.club
+    if club.google_calendar_connected:
+        try:
+            gcal.push_event(event)
+        except gcal.GoogleCalendarError as exc:
+            logger.warning("Could not push event %s to Google Calendar: %s", event.pk, exc)
+            messages.warning(request, f"Saved, but Google Calendar didn't accept it yet: {exc}")
+    # Creates it, moves it, or takes it back down if the event was just called off.
+    discord_events.sync_one_event(club, event)
+
+
+class ClubEventsICalView(View):
+    """A public iCal feed of a club's events, at /clubs/<slug>/events.ics.
+
+    Works whether or not the club has connected Google Calendar, so any club can hand members a
+    subscribe link. Anyone with the URL can read it — the same events are already on the public
+    club page.
+    """
+
+    def get(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not club.enable_club_page:
+            raise Http404
+        upcoming, past = club_events.upcoming_events(club, include_past=True, past_limit=25)
+        domain = Site.objects.get_current().domain
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            f"PRODID:-//{domain}//Club events//EN",
+            "CALSCALE:GREGORIAN",
+            "METHOD:PUBLISH",
+            f"X-WR-CALNAME:{_ical_escape(club.name)} events",
+            # Without a timezone, all-day events and floating times land on the wrong day for
+            # anyone reading the feed from elsewhere.
+            f"X-WR-TIMEZONE:{settings.TIME_ZONE}",
+            # Both spellings of "check back in an hour": the standard one and Outlook/Google's.
+            "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+            "X-PUBLISHED-TTL:PT1H",
+        ]
+        for event in list(past) + list(upcoming):
+            lines += [
+                "BEGIN:VEVENT",
+                f"UID:{event.uuid}@{domain}",
+                f"DTSTAMP:{_ical_datetime(event.updated_at)}",
+                # Clients keep the copy they already imported unless the sequence goes up, so an
+                # edit here would never reach them. Seconds since the epoch is monotonic and fits
+                # the 32-bit integer the spec asks for.
+                f"SEQUENCE:{int(event.updated_at.timestamp())}",
+                *_ical_event_times(event),
+                # The rule itself, so a subscriber's calendar repeats the event the way Google
+                # does instead of receiving one copy of it.
+                *event.recurrence_lines,
+                f"SUMMARY:{_ical_escape(event.title)}",
+                f"URL:https://{domain}{event.get_absolute_url()}",
+                "STATUS:CANCELLED" if event.cancelled else "STATUS:CONFIRMED",
+            ]
+            if event.description:
+                lines.append(f"DESCRIPTION:{_ical_escape(event.description)}")
+            if event.location:
+                lines.append(f"LOCATION:{_ical_escape(event.location)}")
+            lines.append("END:VEVENT")
+        lines.append("END:VCALENDAR")
+        response = HttpResponse("\r\n".join(lines), content_type="text/calendar; charset=utf-8")
+        response["Content-Disposition"] = f'inline; filename="{club.slug}-events.ics"'
+        return response
+
+
+def _ical_event_times(event):
+    """DTSTART/DTEND for one event.
+
+    A repeating event starts where its series is anchored, not at the occurrence the club page
+    happens to be showing — the RRULE that follows is measured from DTSTART, so anything else
+    would hand subscribers a different set of dates than Google has.
+
+    All-day events are dates, not times, or a calendar shows them as a midnight-to-midnight
+    appointment instead of a day.
+    """
+    start = event.recurrence_start if event.is_recurring else event.date_start
+    end = start + event.occurrence_length
+    if not event.all_day:
+        return [f"DTSTART:{_ical_datetime(start)}", f"DTEND:{_ical_datetime(end)}"]
+    start_day = timezone.localtime(start).date()
+    end_day = timezone.localtime(end).date()
+    if end_day <= start_day:
+        end_day = start_day + timedelta(days=1)
+    return [f"DTSTART;VALUE=DATE:{start_day:%Y%m%d}", f"DTEND;VALUE=DATE:{end_day:%Y%m%d}"]
+
+
+def _ical_datetime(value):
+    return f"{value.astimezone(date_tz.utc):%Y%m%dT%H%M%SZ}"
+
+
+def _ical_escape(value):
+    """Escape the characters iCal treats as structure. Long-line folding is not needed here —
+    every consumer we care about handles long lines, and folding is easy to get wrong."""
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+    )
 
 
 class MailchimpWebhookView(View):
@@ -12797,6 +13478,88 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         return context
 
 
+class AccountDeleteView(TemplateView):
+    """Delete your account, from inside the app or the website.
+
+    Required by both app stores for an app that offers sign-up (App Store Review 5.1.1(v)), and it
+    has to be doable without emailing support. It's a web page rather than anything native because
+    account lifecycle is server business logic — the app already renders /preferences/, which links
+    here, so no app release is involved.
+
+    Confirmation is typing the username: it works for accounts that signed up with Google and have
+    no password, and it can't be done by accident. The request is then reversible for
+    ``GRACE_PERIOD_DAYS`` by signing in again, and the session ends at /logout/, which the app
+    intercepts to clear its own JWT, cached profile, cookies and push token — without that the app
+    would sit on a signed-in shell for an account on its way out.
+    """
+
+    template_name = "account_delete.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions.account_deletion import GRACE_PERIOD_DAYS, deletion_due_date, deletion_summary
+
+        context = super().get_context_data(**kwargs)
+        context["active_tab"] = "delete"
+        context["grace_period_days"] = GRACE_PERIOD_DAYS
+        context["deletion_due"] = deletion_due_date(self.request.user.userdata)
+        context["summary"] = deletion_summary(self.request.user)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        from django.contrib.auth import logout
+        from post_office import mail
+
+        from auctions.account_deletion import cancel_deletion, request_deletion
+
+        if request.POST.get("action") == "cancel":
+            if cancel_deletion(request.user):
+                messages.success(request, "Your account will not be deleted.")
+            return redirect(reverse("preferences"))
+
+        typed = (request.POST.get("confirm_username") or "").strip()
+        if typed.casefold() != request.user.username.casefold():
+            messages.error(request, "Type your username exactly as it's shown to confirm.")
+            return redirect(reverse("account_delete"))
+
+        email = request.user.email
+        due = request_deletion(request.user)
+        if email:
+            # Always email, never push: this is account correspondence, and the phone it would go to
+            # is about to stop being signed in.
+            mail.send(
+                email,
+                subject="Your account is scheduled to be deleted",
+                message=(
+                    f"You asked us to delete your {Site.objects.get_current().domain} account.\n\n"
+                    f"It will be deleted on {due:%B %d, %Y}. If you change your mind before then, "
+                    "just sign in again and the deletion is cancelled.\n\n"
+                    "If this wasn't you, sign in now to cancel it and change your password."
+                ),
+            )
+        logout(request)
+        # The confirmation page is public and the session is gone by the time it loads, so whether we
+        # managed to email anyone has to travel in the URL — an account with no address on it must
+        # not be told to go and check their inbox.
+        target = f"{reverse('account_deleted')}?emailed=1" if email else reverse("account_deleted")
+        # End at /logout/ so the app turns this into a full native sign-out; it redirects an already
+        # signed-out visitor straight on to the confirmation page.
+        return redirect(f"{reverse('account_logout')}?next={quote(target)}")
+
+
+class AccountDeletedView(TemplateView):
+    """Shown after requesting deletion — public, because the session is gone by the time it loads."""
+
+    template_name = "account_deleted.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions.account_deletion import GRACE_PERIOD_DAYS
+
+        context = super().get_context_data(**kwargs)
+        context["grace_period_days"] = GRACE_PERIOD_DAYS
+        context["emailed"] = self.request.GET.get("emailed") == "1"
+        return context
+
+
 class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     template_name = "user_preferences.html"
     model = UserData
@@ -12833,6 +13596,7 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
+        kwargs["is_mobile_app"] = bool(getattr(self.request, "is_mobile_app", False))
         return kwargs
 
 
@@ -13056,6 +13820,247 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
     @staticmethod
     def _yes_no(value):
         return "True" if value else "False"
+
+    @staticmethod
+    def _apple_sign_in_items(base_url, site_host):
+        """Sign in with Apple: the app half, the web half, and the two things Apple requires of both.
+
+        Split into three because they fail independently and a deployment can legitimately stop
+        after the first. The bundle id alone is a complete, working native sign-in — verifying an
+        Apple identity token only needs Apple's public keys.
+        """
+        from auctions.apple_signin import revocation_configured
+
+        section = "Sign in with Apple"
+        callback = reverse("apple_callback")
+        return [
+            {
+                "section": section,
+                "name": "Sign in with Apple in the mobile app",
+                "configured": bool(settings.APPLE_SIGN_IN_BUNDLE_ID),
+                "what_it_does": (
+                    "Adds &ldquo;Sign in with Apple&rdquo; to the app's login screen. Apple requires this on iOS for any "
+                    "app that offers another social login. This one value is enough on its own &mdash; verifying an "
+                    "Apple token only needs Apple's public keys, which the server fetches automatically."
+                ),
+                "where_to_get_it": (
+                    "Your app's <strong>Bundle ID</strong>. Not the Services ID below &mdash; they are different "
+                    "strings, and confusing the two is the most common way an Apple integration fails."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; Identifiers</strong> and click your app's App ID.",
+                    "Tick <strong>Sign in with Apple</strong>, then <strong>Save</strong>.",
+                    "Copy the Bundle ID exactly as shown.",
+                ],
+                "snippets": [{"code": 'APPLE_SIGN_IN_BUNDLE_ID="com.fishauctions.app"'}],
+                "links": [{"label": "Apple Developer — Identifiers", "url": "https://developer.apple.com/account"}],
+            },
+            {
+                "section": section,
+                "name": "Sign in with Apple on the website",
+                "configured": bool(
+                    settings.APPLE_SIGN_IN_SERVICES_ID
+                    and settings.APPLE_SIGN_IN_KEY_ID
+                    and settings.APPLE_SIGN_IN_PRIVATE_KEY
+                ),
+                "what_it_does": (
+                    "Adds the same button to the website, so someone who created their account in the app can sign in "
+                    "on a computer and land on the same account. Optional: skip it and the app button still works."
+                ),
+                "where_to_get_it": (
+                    "A <strong>Services ID</strong> (a second identifier, separate from the bundle id above) plus your "
+                    "Team ID, a Key ID, and the <code>.p8</code> private key. Put the <code>.p8</code> file next to "
+                    "<code>.env</code> and give just its filename."
+                ),
+                "setup_steps": [
+                    "<strong>Identifiers &rarr; +</strong> &rarr; <strong>Services IDs</strong>. Pick a reverse-DNS "
+                    "identifier that is <em>not</em> your bundle id, e.g. <code>fish.auction.signin</code>.",
+                    "Open it, tick <strong>Sign in with Apple</strong> &rarr; <strong>Configure</strong>. Set the "
+                    "Primary App ID, add your domain, and set the return URL to "
+                    f"<code>{base_url}{callback}</code>. "
+                    "<strong>Note the path</strong> &mdash; there is no <code>/accounts/</code> prefix on this site, "
+                    "unlike most allauth documentation. Getting it wrong gives an <code>invalid_client</code> error "
+                    "from Apple with no explanation. Apple also rejects <code>http://</code>, so this can't be tested "
+                    "on localhost.",
+                    "<strong>Keys &rarr; +</strong>, tick <strong>Sign in with Apple</strong>, configure it against "
+                    "your App ID, and register. <strong>Download the <code>.p8</code> &mdash; Apple lets you do that "
+                    "exactly once.</strong> Note the Key ID shown on that page; your Team ID is top-right of the "
+                    "developer site.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'APPLE_SIGN_IN_SERVICES_ID="fish.auction.signin"\n'
+                            'APPLE_SIGN_IN_TEAM_ID="ABCDE12345"\n'
+                            'APPLE_SIGN_IN_KEY_ID="FGHIJ67890"\n'
+                            'APPLE_SIGN_IN_KEY_FILE="AuthKey_FGHIJ67890.p8"'
+                        )
+                    }
+                ],
+                "links": [{"label": "Apple Developer — Keys", "url": "https://developer.apple.com/account"}],
+            },
+            {
+                "section": section,
+                "name": "Account deletion & Hide My Email",
+                "configured": revocation_configured(),
+                "what_it_does": (
+                    "Two things Apple requires of any site offering Sign in with Apple. Both fail <em>silently</em>, "
+                    "which is why they get their own entry:"
+                    "<ul class='mb-0'>"
+                    "<li><strong>Deleting an account must revoke the Apple grant.</strong> That call needs the team "
+                    "key above, so set those values even if you skip the website button. Without it, deletion is "
+                    "incomplete by Apple's rules and is an App Review item.</li>"
+                    "<li><strong>Hide My Email needs your sending domain registered with Apple.</strong> Until it is, "
+                    "every message to a <code>@privaterelay.appleid.com</code> address is <strong>discarded without a "
+                    "bounce or an error</strong> &mdash; no confirmation email, no invoice, no outbid notice. The user "
+                    "simply never hears from the site again.</li>"
+                    "</ul>"
+                ),
+                "where_to_get_it": (
+                    "The revocation half is checked automatically above. The email domain can't be checked from here "
+                    "&mdash; register it and send yourself a test."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; More &rarr; Configure Sign in with "
+                    "Apple for Email Communication</strong>.",
+                    f"Under <strong>Email Sources</strong> add your domain (<code>{site_host}</code>) and the exact "
+                    f"<code>DEFAULT_FROM_EMAIL</code> address (<code>{settings.DEFAULT_FROM_EMAIL}</code>).",
+                    "Click <strong>Verify</strong> &mdash; Apple checks SPF. Fix SPF first if it fails.",
+                    "Test it: sign in with Apple choosing <em>Hide My Email</em>, and confirm the email arrives.",
+                ],
+                "links": [
+                    {
+                        "label": "Apple — Configure email communication",
+                        "url": "https://developer.apple.com/account/resources/services/configure",
+                    }
+                ],
+            },
+        ]
+
+    @staticmethod
+    def _facebook_login_items(base_url):
+        section = "Facebook Login"
+        callback = reverse("facebook_callback")
+        return [
+            {
+                "section": section,
+                "name": "Facebook Login",
+                "configured": bool(settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET),
+                "what_it_does": (
+                    "Adds &ldquo;Continue with Facebook&rdquo; to the app and the website. "
+                    "<strong>Expect most Facebook users to arrive without an email address</strong> &mdash; Facebook "
+                    "often supplies none, and never confirms the one it does supply. Those users are asked to choose "
+                    "an address and confirm it. That is deliberate: trusting an unconfirmed Facebook address would let "
+                    "someone claim an existing account by putting that address on a Facebook profile."
+                ),
+                "where_to_get_it": (
+                    "The App ID and App Secret from your Facebook app's <strong>Basic settings</strong>. "
+                    "<strong>Facebook is the one provider a fork can't configure from <code>.env</code> alone</strong>: "
+                    "the mobile SDKs read the app id from <code>Info.plist</code> / <code>AndroidManifest.xml</code> at "
+                    "launch, so it is also compiled into the app build. The value here decides whether the button is "
+                    "<em>offered</em> and must match what the app was built with."
+                ),
+                "setup_steps": [
+                    "Create an app, use case <strong>Authenticate and request data from users with Facebook Login</strong>.",
+                    "<strong>App settings &rarr; Basic</strong>: copy the App ID and reveal the App Secret. Fill in the "
+                    "Privacy Policy URL and User data deletion URL &mdash; Facebook won't let the app go live without them.",
+                    "<strong>Use cases &rarr; Authentication</strong>: make sure <code>email</code> and "
+                    "<code>public_profile</code> are added. <code>email</code> needs no App Review.",
+                    "<strong>Facebook Login &rarr; Settings</strong>: add "
+                    f"<code>{base_url}{callback}</code> to Valid OAuth Redirect URIs "
+                    "(again, no <code>/accounts/</code> prefix).",
+                    "Flip the app <strong>Live</strong>. While it is in Development mode only accounts listed under "
+                    "App roles can sign in.",
+                ],
+                "snippets": [
+                    {
+                        "code": 'FACEBOOK_APP_ID="1234567890123456"\nFACEBOOK_APP_SECRET="0123456789abcdef0123456789abcdef"'
+                    }
+                ],
+                "links": [{"label": "Facebook — My Apps", "url": "https://developers.facebook.com/apps"}],
+            },
+        ]
+
+    @staticmethod
+    def _tap_to_pay_items():
+        """Tap to Pay on iPhone: the Apple-side steps that sit on top of a working Square connection.
+
+        Only shown once Square is set up, because Tap to Pay charges through Square and none of this
+        means anything without it.
+        """
+        from post_office.models import EmailTemplate
+
+        from auctions.management.commands.tap_to_pay_launch_announcement import EMAIL_TEMPLATE_NAME
+
+        if not settings.SQUARE_APPLICATION_ID:
+            return []
+        section = "Tap to Pay on iPhone"
+        return [
+            {
+                "section": section,
+                "name": "Apple's publishing entitlement",
+                # Not a .env value — an Apple-side request. "Done" here means "nothing to configure
+                # in this file", the same way the branding item does.
+                "configured": True,
+                "what_it_does": (
+                    "<strong>Nothing to configure here, and this page can't tell whether Apple has granted it.</strong> "
+                    "Lets merchants take card payments by tapping the card on an iPhone, charging through their "
+                    "connected Square account. <strong>This is an App Store step, not a setting on this page.</strong> "
+                    "The <em>development</em> entitlement does not cover distribution: TestFlight and the App Store "
+                    "need the separate <em>publishing</em> entitlement, which Apple grants only after reviewing the app "
+                    "against its Tap to Pay requirements. Apple asks for a screen recording of onboarding and a checkout."
+                ),
+                "where_to_get_it": "Request it from Apple; the review is on their side and takes time.",
+                "links": [
+                    {
+                        "label": "Request the entitlement",
+                        "url": "https://developer.apple.com/contact/request/tap-to-pay-on-iphone/",
+                    }
+                ],
+            },
+            {
+                "section": section,
+                "name": "Launch email & push notification",
+                "configured": EmailTemplate.objects.filter(name=EMAIL_TEMPLATE_NAME).exists(),
+                "what_it_does": (
+                    "Apple's marketing requirements ask for a launch email and an in-app push to every eligible "
+                    "merchant, due <strong>once the feature is generally available</strong> &mdash; not at first "
+                    "release. The wording and artwork for both <strong>must</strong> come from Apple's Tap to Pay "
+                    "Marketing Guide and Toolkit; the guide forbids writing your own. The command below therefore "
+                    "refuses to send until that copy is in place, rather than sending something that would fail review."
+                ),
+                "where_to_get_it": (
+                    "The toolkit's access page and password are on <strong>page 23 of the review guide PDF</strong> "
+                    "Apple sends with the development entitlement."
+                ),
+                "setup_steps": [
+                    "Download the &ldquo;Launch email&rdquo; template and the &ldquo;Value Proposition&rdquo; "
+                    "push-notification copy from Apple's toolkit.",
+                    f"Create an email template named <code>{EMAIL_TEMPLATE_NAME}</code> in the admin and paste the "
+                    "launch email into it.",
+                    "Run the command below with the push copy. Re-running is safe &mdash; nobody is contacted twice.",
+                ],
+                "snippets": [
+                    {
+                        "label": "Check who would be contacted, without sending:",
+                        "code": "docker exec -it django python3 manage.py tap_to_pay_launch_announcement --dry-run",
+                    },
+                    {
+                        "label": "Send it:",
+                        "code": (
+                            "docker exec -it django python3 manage.py tap_to_pay_launch_announcement \\\n"
+                            '  --push-title "<from the toolkit>" --push-body "<from the toolkit>"'
+                        ),
+                    },
+                ],
+                "links": [
+                    {
+                        "label": "Email templates",
+                        "url": "/admin/post_office/emailtemplate/",
+                    }
+                ],
+            },
+        ]
 
     def get_context_data(self, **kwargs):
         from urllib.parse import urlsplit
@@ -13421,6 +14426,12 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     },
                 ],
             },
+            # -- Sign in with Apple -----------------------------------------------
+            *self._apple_sign_in_items(base_url, site_host),
+            # -- Facebook Login ---------------------------------------------------
+            *self._facebook_login_items(base_url),
+            # -- Tap to Pay on iPhone ---------------------------------------------
+            *self._tap_to_pay_items(),
             # -- Mobile push notifications ---------------------------------------
             {
                 "section": "Mobile push notifications",
@@ -13532,6 +14543,52 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 ],
                 "links": [
                     {"label": "Register a Mailchimp OAuth app", "url": "https://admin.mailchimp.com/account/oauth2/"},
+                ],
+            },
+            # -- Google Calendar --------------------------------------------------
+            {
+                "section": "Google Calendar",
+                "name": "Google Calendar",
+                "hide_title": True,
+                "configured": env_has_real_value(settings.GOOGLE_CALENDAR_CLIENT_ID)
+                and env_has_real_value(settings.GOOGLE_CALENDAR_CLIENT_SECRET),
+                "what_it_does": (
+                    "Lets clubs connect a Google account so their auctions and events sync to a shared "
+                    "Google calendar, both ways. Each club connects its own account from its club settings "
+                    "page once these keys are set. Club event lists and the iCal feed work without this."
+                ),
+                "where_to_get_it": (
+                    "Enable the Google Calendar API, then create an OAuth 2.0 <strong>Web application</strong> "
+                    "client and copy its client ID and secret."
+                ),
+                "setup_steps": [
+                    "In the Google Cloud console, enable the <strong>Google Calendar API</strong> for your project.",
+                    "Create an OAuth 2.0 Client ID of type <strong>Web application</strong>.",
+                    (
+                        "Add <code>"
+                        f"{base_url}/google-calendar/callback/</code> as an "
+                        "<strong>Authorized redirect URI</strong>."
+                    ),
+                    (
+                        "The default scope is <code>calendar.app.created</code>, which only grants access to "
+                        "calendars this site creates — so the app avoids Google's sensitive-scope verification "
+                        "review. Leave <code>GOOGLE_CALENDAR_SCOPE</code> blank unless you need more."
+                    ),
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'GOOGLE_CALENDAR_CLIENT_ID="your-client-id.apps.googleusercontent.com"\n'
+                            'GOOGLE_CALENDAR_CLIENT_SECRET="your-client-secret"'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "Google Cloud credentials", "url": "https://console.cloud.google.com/apis/credentials"},
+                    {
+                        "label": "Enable the Calendar API",
+                        "url": "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com",
+                    },
                 ],
             },
             # -- Discord ----------------------------------------------------------
@@ -14422,6 +15479,20 @@ class BlogPostView(DetailView):
         # this is to allow the chart# syntax
         context["formatted_contents"] = re.sub(r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered)
         return context
+
+
+class PrivacyPolicyView(BlogPostView):
+    """The privacy policy at a stable, obvious path.
+
+    Same content as /blog/privacy/ (one BlogPost, seeded by migration), rendered here rather than
+    redirected: the app opens this URL inside the signed-out signup WebView against an allow-list of
+    exactly the paths /api/mobile/config/ hands it, so a redirect elsewhere would bounce the user out
+    to the system browser mid-signup. Apple requires a privacy policy linked from inside the app, and
+    Google Play's data-deletion policy wants a URL — both point here.
+    """
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(BlogPost, slug=PRIVACY_POLICY_SLUG)
 
 
 class UnsubscribeView(TemplateView):
@@ -17264,14 +18335,28 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["club_map_directions_url"] = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(
                 directions_query
             )
+        # The club page shows a calendar, not a bare auction list: auctions are mirrored into
+        # ClubEvents (by signal, and by the periodic task) alongside meetings, swaps, and
+        # anything pulled in from the club's Google Calendar.
+        upcoming, past = club_events.upcoming_events(
+            self.club, limit=CLUB_DETAIL_EVENT_LIMIT, include_past=True, past_limit=CLUB_DETAIL_PAST_EVENT_LIMIT
+        )
+        context["upcoming_events"] = upcoming
+        context["past_events"] = past
+        context["has_any_events"] = bool(upcoming or past)
+        ical_path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        context["club_ical_url"] = ical_path
+        # A relative link only downloads the file — a one-time import that never updates. These
+        # are the two links that actually *subscribe*: webcal:// hands the feed to the desktop
+        # or phone calendar app, and Google takes the https URL through its "add by URL" screen.
+        absolute_ical_url = self.request.build_absolute_uri(ical_path)
+        context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
+        context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
         if can_manage_auctions:
-            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("-date_start")[
-                :CLUB_DETAIL_AUCTION_LIMIT
-            ]
-        else:
-            context["club_auctions"] = Auction.objects.filter(
-                club=self.club, promote_this_auction=True, is_deleted=False
-            ).order_by("-date_start")[:CLUB_DETAIL_AUCTION_LIMIT]
+            # Admins still get the unpromoted auctions, which never become calendar events.
+            context["unpromoted_auctions"] = Auction.objects.filter(
+                club=self.club, is_deleted=False, promote_this_auction=False
+            ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 
@@ -17327,6 +18412,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 name=f"{request.user.first_name} {request.user.last_name}".strip(),
                 email=request.user.email,
                 source="joined",
+                # The member made this row about themselves: until an admin edits it, it goes away
+                # with their account rather than staying in the club's records.
+                admin_edited=False,
             )
             ClubHistory.objects.create(
                 club=self.club,
@@ -18337,6 +19425,51 @@ class ClubMemberCreateView(APIView):
         return render(request, "auctions/generic_admin_form.html", context)
 
 
+def renew_club_member(member, *, acting_user=None, actor="", money_description=""):
+    """Extend a membership by one period and record it, returning the member.
+
+    Shared by the Renew button on the member list and the API-key renew endpoint so the two
+    can't drift: same expiration math, same club history, same ledger entry, same confirmation
+    email.  ``actor`` names a non-user actor (an API key) for the history line.
+    """
+    today = timezone.now().date()
+    member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
+    member.membership_last_paid = today
+    member.save(
+        update_fields=[
+            "membership_last_paid",
+            "membership_expiration_date",
+            "membership_expiration_reminder_30_days_due",
+            "membership_expiration_reminder_due",
+        ]
+    )
+    member.update_last_club_activity()
+    new_exp_str = (
+        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+    )
+    via = f" via {actor}" if actor else ""
+    ClubHistory.objects.create(
+        club=member.club,
+        user=acting_user,
+        action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
+        applies_to="MEMBERSHIP",
+    )
+    if member.club.membership_annual_fee:
+        ClubMoney.objects.create(
+            club=member.club,
+            created_by=acting_user,
+            date=today,
+            amount=member.club.membership_annual_fee,
+            description=money_description or f"Membership renewal for {member}{via}",
+            category=ClubMoney.CATEGORY_MEMBERSHIP,
+        )
+    try:
+        maybe_send_membership_renewal_confirmation(member)
+    except Exception:
+        logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
+    return member
+
+
 class ClubMemberRenewView(APIView):
     """Renew a club member's membership, extending the current expiration by one year."""
 
@@ -18368,40 +19501,7 @@ class ClubMemberRenewView(APIView):
 
     def post(self, request, pk):
         member = self._get_member(pk, request)
-        today = timezone.now().date()
-        member.membership_expiration_date = self._new_expiration(member, today)
-        member.membership_last_paid = today
-        member.save(
-            update_fields=[
-                "membership_last_paid",
-                "membership_expiration_date",
-                "membership_expiration_reminder_30_days_due",
-                "membership_expiration_reminder_due",
-            ]
-        )
-        member.update_last_club_activity()
-        new_exp_str = (
-            member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
-        )
-        ClubHistory.objects.create(
-            club=member.club,
-            user=request.user,
-            action=f"Renewed membership for {member}; new expiration {new_exp_str}",
-            applies_to="MEMBERSHIP",
-        )
-        if member.club.membership_annual_fee:
-            ClubMoney.objects.create(
-                club=member.club,
-                created_by=request.user,
-                date=today,
-                amount=member.club.membership_annual_fee,
-                description=f"Manual membership renewal for {member}",
-                category=ClubMoney.CATEGORY_MEMBERSHIP,
-            )
-        try:
-            maybe_send_membership_renewal_confirmation(member)
-        except Exception:
-            logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
+        renew_club_member(member, acting_user=request.user, money_description=f"Manual membership renewal for {member}")
         return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
 
@@ -18440,6 +19540,57 @@ class ClubMembershipNumberView(APIView):
             applies_to="MEMBERS",
         )
         return render(request, "auctions/club_membership_number.html", {"member": member})
+
+
+class ClubMemberResendCardView(APIView):
+    """Email a member a fresh link to their membership card."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_member(self, pk, request):
+        try:
+            member = ClubMember.objects.get(pk=pk, is_deleted=False)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if not member.club.show_member_barcode:
+            # No membership cards for this club — admin endpoint should not be reachable.
+            raise Http404
+        return member
+
+    def post(self, request, pk):
+        from auctions.tasks import send_membership_card_email
+
+        member = self._get_member(pk, request)
+        # Rather than hiding the action for members we can't email, say why on click.
+        if not member.email:
+            return close_modal_response(
+                toast=f"{member.display_name} has no email address on file.", toast_type="danger"
+            )
+        if member.contact_status == "do_not_contact":
+            return close_modal_response(
+                toast=f"{member.display_name} is marked do-not-contact, so no email was sent.",
+                toast_type="danger",
+            )
+        try:
+            sent = send_membership_card_email(member)
+        except Exception:
+            logger.exception("Failed to send membership card email to club member %s", member.pk)
+            sent = False
+        if not sent:
+            return close_modal_response(
+                toast=f"Couldn't email {member.display_name} — check the site's email settings.",
+                toast_type="danger",
+            )
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Emailed membership card to {member} ({member.email})",
+            applies_to="MEMBERS",
+        )
+        return close_modal_response(toast=f"Membership card emailed to {member.email}.")
 
 
 class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
@@ -18947,6 +20098,20 @@ class ClubMemberConfirmView(APIView):
                 "body": "This cannot be undone.",
                 "action_url": action_url,
                 "confirm_button_label": "Delete",
+            }
+        elif action == "resend_card":
+            if member.is_deleted or not member.club.show_member_barcode:
+                raise Http404
+            context = {
+                "title": "Resend membership card",
+                "body": format_html(
+                    "Email {} ({}) a link to their membership card",
+                    member.display_name,
+                    member.email or "no email address on file",
+                ),
+                "action_url": reverse("club_member_resend_card", kwargs={"pk": pk}),
+                "confirm_button_label": "Send email",
+                "confirm_button_class": "btn-primary",
             }
         else:
             raise Http404
@@ -19523,7 +20688,6 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return kwargs
 
     def get_context_data(self, **kwargs):
-        from django.utils import timezone
 
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -19548,40 +20712,20 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
         context["membership_numbers_enabled"] = self.club.show_member_barcode
+        # Wallet buttons ride along under the barcode in the real emails, but only for the
+        # wallets this site is actually set up for.
+        from auctions import apple_wallet, google_wallet
 
-        today = timezone.localdate()
-        next_auction = (
-            Auction.objects.filter(
-                club=self.club,
-                promote_this_auction=True,
-                is_deleted=False,
-                date_start__date__gte=today,
-            )
-            .order_by("date_start")
-            .first()
-        )
-        context["next_auction"] = next_auction
-        directions_link = ""
-        if next_auction:
-            physical = list(next_auction.physical_location_qs)
-            if len(physical) == 1 and physical[0].directions_link:
-                directions_link = physical[0].directions_link
-        context["next_auction_directions_link"] = directions_link
+        context["google_wallet_enabled"] = google_wallet.is_configured()
+        context["apple_wallet_enabled"] = apple_wallet.is_configured()
 
-        # Build the next-auction HTML fragment exactly once on the server so the
-        # JS preview just toggles visibility (no client-side templating).
-        next_auction_html = ""
-        if next_auction:
-            from django.utils.html import escape as _escape
+        # Build the next-event HTML fragment exactly once on the server so the JS preview just
+        # toggles visibility (no client-side templating). Uses the same builder as the real
+        # emails, with as_links=False so a preview never contains working links.
+        from auctions.tasks import next_event_fragment
 
-            date_str = next_auction.date_start.strftime("%B %-d, %Y") if next_auction.date_start else ""
-            parts = [f"Our next auction will be {_escape(next_auction.title)}"]
-            if date_str:
-                parts.append(f"on {_escape(date_str)}")
-            next_auction_html = " ".join(parts).rstrip() + "."
-            if directions_link:
-                next_auction_html += " <span class='text-info'>Get directions</span>."
-            next_auction_html += " <span class='text-info'>Read the auction's rules</span>."
+        context["next_event"] = club_events.next_member_facing_event(self.club)
+        _, next_event_html = next_event_fragment(self.club, Site.objects.get_current(), as_links=False)
 
         club_icon_url = ""
         if self.club.icon:
@@ -19598,7 +20742,7 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             "preview_barcode_url": preview_barcode_url,
             "membership_numbers_enabled": context["membership_numbers_enabled"],
             "payments_enabled": self.club.membership_payment_emails_enabled,
-            "next_auction_html": next_auction_html,
+            "next_event_html": next_event_html,
         }
         return context
 
@@ -20209,6 +21353,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                     "can_read_club_member_list": False,
                     "can_update_club_members": False,
                     "can_add_bap_points": False,
+                    "can_renew_memberships": False,
                 },
             },
         )
@@ -20226,6 +21371,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             "can_read_club_member_list": checkbox_value("can_read_club_member_list"),
             "can_update_club_members": checkbox_value("can_update_club_members"),
             "can_add_bap_points": checkbox_value("can_add_bap_points"),
+            "can_renew_memberships": checkbox_value("can_renew_memberships"),
         }
         if not name:
             return render(
@@ -20244,6 +21390,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             can_read_club_member_list=form_values["can_read_club_member_list"],
             can_update_club_members=form_values["can_update_club_members"],
             can_add_bap_points=form_values["can_add_bap_points"],
+            can_renew_memberships=form_values["can_renew_memberships"],
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -20279,6 +21426,12 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["site_domain"] = Site.objects.get_current().domain
         ctx["example_member_id"] = (
             self.club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
+        )
+        # Dates in the renew example, so it shows what this club's renewal actually returns.
+        today = timezone.now().date()
+        ctx["example_last_paid"] = today
+        ctx["example_new_expiration"] = _compute_member_renewal_expiration(
+            self.club, ClubMember(club=self.club, membership_expiration_date=None), today
         )
         return ctx
 
@@ -20474,14 +21627,10 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return dt.date().strftime("%b %-d, %Y")
 
     def _paid_member_filter(self):
-        today = timezone.now().date()
-        if self.club.membership_system == "january_first":
-            paid_cutoff = date_type(today.year, 1, 1)
-        else:
-            paid_cutoff = today - timedelta(days=365)
-        return Q(membership_expiration_date__gte=today) | (
-            Q(membership_expiration_date__isnull=True) & Q(membership_last_paid__gte=paid_cutoff)
-        )
+        """One definition of "paid member" for the whole site — see filters.membership_paid_q."""
+        from .filters import membership_paid_q
+
+        return membership_paid_q(timezone.now().date())
 
     def _get_cached_club_stats(self, auction):
         cached_stats = auction.cached_stats or {}
@@ -21015,6 +22164,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
     def _update_member(self, member, fields):
         """Apply CSV fields onto an existing member. Only overwrites with non-empty values so a merge of a
         sparse walk-in row never blanks existing contact details."""
+        # An admin importing their roster owns these rows now; the account-deletion rules follow.
+        member.admin_edited = True
         if fields.get("name"):
             member.name = fields["name"]
         if fields.get("phone"):
@@ -21368,6 +22519,84 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             user=self.request.user,
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
+        )
+
+
+class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
+    """Renew a membership from an external system (a club's own website, a payment form, ...).
+
+    POST the member's info; the member is looked up by email within the club and created if they
+    are new, then their membership is renewed exactly as the Renew button on the member list does
+    (same expiration math, club history, ledger entry, and confirmation email).  Responds with the
+    full member record, including the new ``membership_expiration_date``.
+
+    Any club member field the key is allowed to write may be sent along and is applied before the
+    renewal, so a renewal doubles as a details refresh.  Blank values are ignored rather than
+    wiping details already on file.
+    """
+
+    def _actor(self):
+        if self.is_api_key_request():
+            return f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
+        return "API"
+
+    def post(self, request, slug):
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_renew_memberships",
+            "You do not have permission to renew memberships for this club.",
+        )
+        data = self.get_mapped_request_data()
+        email = (data.get("email") or "").strip().lower()
+        if not email:
+            return Response({"email": ["An email address is required to look up or create the member."]}, status=400)
+        # Blanks would otherwise overwrite details already on file (the CSV import's merge rule).
+        data = {key: value for key, value in data.items() if value not in ("", None)}
+        member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).order_by("pk").first()
+        created = member is None
+        serializer = ClubMemberAPIKeySerializer(instance=member, data=data, partial=not created)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            # Same diagnostics as member create: an admin can see the rejected payload later.
+            try:
+                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                ClubHistory.objects.create(
+                    club=club,
+                    user=None,
+                    action=(
+                        f"Failed to renew membership via {self._actor()} — validation errors: "
+                        f"{serializer.errors} — POST data: {field_dump}"
+                    ),
+                    applies_to="MEMBERSHIP",
+                )
+            except Exception:
+                pass  # Never let the history write mask the original error
+            raise
+        save_kwargs = {}
+        if created:
+            save_kwargs = {"club": club}
+            if self.is_api_key_request():
+                save_kwargs["added_by"] = None
+                save_kwargs["source"] = self.request.api_key.name
+            else:
+                save_kwargs["added_by"] = request.user
+        member = serializer.save(**save_kwargs)
+        if created:
+            ClubHistory.objects.create(
+                club=club,
+                user=None if self.is_api_key_request() else request.user,
+                action=f"Added member {member} via {self._actor()} (membership renewal)",
+                applies_to="MEMBERS",
+            )
+        member = renew_club_member(
+            member,
+            acting_user=None if self.is_api_key_request() else request.user,
+            actor=self._actor(),
+        )
+        return Response(
+            {"created": created, **ClubMemberSerializer(member).data},
+            status=201 if created else 200,
         )
 
 

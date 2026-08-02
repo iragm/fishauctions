@@ -19,7 +19,15 @@ GET /api/mobile/config/
           "square_application_id":   "sq0idp-xxxx",
           "square_environment":      "sandbox",   // or "production"
           "google_server_client_id": "xxxx.apps.googleusercontent.com",
+          // Which social sign-in buttons to draw. A provider whose key is empty/absent is hidden
+          // entirely; configure none and the app just shows the password form.
+          "apple_sign_in_enabled":   true,
+          "facebook_app_id":         "1234567890",
           "brand_name":              "auction.fish",
+          "terms_url":               "/tos/",
+          // Omitted when this deployment has no privacy policy page; the app then draws no
+          // privacy link rather than a dead one.
+          "privacy_policy_url":      "/privacy/",
           // Optional; present only for platforms whose Firebase config file is set. Public values.
           "firebase": {
             "android": {"package_name": "...", "api_key": "...", "app_id": "...",
@@ -66,6 +74,62 @@ POST /api/mobile/auth/google/
 
         { "detail": "Invalid ID token." }
         { "detail": "Google account email is not verified." }
+
+POST /api/mobile/auth/social/
+    Sign in with Apple, Google or Facebook — one endpoint, allauth's provider ids. Supersedes
+    auth/google/ (which stays alive until older installs age out). Verifies the provider credential
+    and then runs allauth's own social-login pipeline, so connecting to an existing account, the
+    unique-email rules and the email-verification gate all behave exactly as they do on the web.
+
+    Request::
+
+        {
+          "provider": "apple" | "google" | "facebook",
+          "id_token": "...",             // google, apple, facebook Limited Login (iOS)
+          "access_token": "...",         // facebook classic (Android)
+          "authorization_code": "...",   // apple only — redeemed so deletion can revoke the grant
+          "nonce": "<raw nonce>",        // apple + facebook limited; we check sha256(raw) == claim
+          "email": "...",                // apple, FIRST authorization only — unauthenticated hint
+          "first_name": "...",
+          "last_name": "..."
+        }
+
+    Response 200 (signed in)::
+
+        { "access": "<jwt>", "refresh": "<jwt>" }
+
+    Response 200 (finish this on the web — Facebook gave no email, or the address needs
+    confirming). The app opens ``continue_url`` in its restricted allauth WebView; that URL carries
+    its own single-use credential because the WebView has neither a JWT nor a session yet::
+
+        { "continue_url": "https://auction.fish/api/mobile/auth/social/continue/?t=...",
+          "pending_token": "<opaque, single-use, ~15 min>",
+          "detail": "Choose an email address to finish signing in." }
+
+    Response 401::
+
+        { "detail": "Invalid ID token." }
+
+POST /api/mobile/auth/social/complete/
+    Exchange a pending token for a JWT pair once the web continuation has finished. Whether the
+    user may be signed in is re-derived from the database on every call (active, verified address,
+    still connected to the provider account the flow started from) — the token only says which
+    flow to look at.
+
+    Request::  { "pending_token": "..." }
+    Response 200:: { "access": "<jwt>", "refresh": "<jwt>" }
+    Response 400:: { "detail": "..." }   // not finished / expired → the app asks them to retry
+
+GET /api/mobile/auth/social/continue/?t=<token>
+    Loaded by the WebView itself. Burns the token, rebuilds allauth's pending state in this
+    browsing context's session, and redirects into the real allauth page (``/social/signup/`` or
+    ``/confirm-email/``). Signs out anyone already signed in here first, so the done view below can
+    only ever see an account this flow authenticated.
+
+GET /api/mobile/auth/social/done/
+    Where the web continuation ends (it's the ``next`` baked into the social login's state). The
+    app watches for this exact path, closes the WebView and POSTs to complete/ — the path is a
+    constant in the app, so it must not change.
 
 POST /api/mobile/auth/refresh/
     Rotate a refresh token (old token is blacklisted).
@@ -136,6 +200,28 @@ POST /api/mobile/devices/register/
           "created_at": "2024-01-01T00:00:00Z",
           "last_seen":  "2024-06-01T12:00:00Z"
         }
+
+Notifications
+-------------
+GET /api/mobile/notifications/prefs/
+    The caller's two push toggles.
+
+    Response 200::
+
+        { "push_instead_of_email": false, "push_when_lots_sell": false }
+
+PATCH /api/mobile/notifications/prefs/
+    Partial update — only the keys sent are written; the response is the stored state.
+
+    Request::
+
+        { "push_instead_of_email": true, "push_when_lots_sell": true }
+
+    The write is never refused because push isn't configured or the account has no live device
+    token: the preference is intent, exactly as on the web form. The app calls this as the last
+    step of its opt-in gesture (OS permission → ``devices/register/`` → this PATCH), so a 404 here
+    means a backend older than the endpoint and the app falls back to sending the user to
+    /preferences/.
 
 Clubs
 -----
@@ -296,11 +382,42 @@ The Flutter app uses Square's Mobile Payments SDK (Tap to Pay): it charges the c
 and returns a completed Square payment_id. There is no nonce and the server never calls
 payments.create — confirm re-fetches the payment from Square and verifies it before recording.
 
-Both endpoints are restricted to the merchant collecting payment — the auction creator, a
+All three endpoints are restricted to the merchant collecting payment — the auction creator, a
 superuser, anyone with an is_admin AuctionTOS on the auction (so a Square auction needs no club),
 or a club admin / money manager / auction manager for the invoice's club. The buyer is never
 authorized: the device authorizes with the *seller's* Square account, so the access token must
 not reach a buyer.
+
+GET /api/mobile/payments/authorization/
+    Seller credentials for warming up the reader before any invoice exists. Apple requires Tap to
+    Pay to start preparing when the app foregrounds and its UI to appear within a second; the SDK
+    only prepares once authorized, and authorizing per invoice inside ``create`` happens at the
+    moment the cashier presses the button. ``can_accept_terms`` answers Apple's rule that only an
+    administrator may accept the Tap to Pay terms.
+
+    Always 200 for a signed-in user. ``access_token``/``location_id`` appear only when the user
+    could charge right now — ``eligible: true`` with no credentials is normal (no Square account
+    yet, or one that needs reconnecting) and means "show the setup UI, skip the warm-up".
+
+    Response 200 (merchant)::
+
+        {
+          "eligible": true,
+          "can_accept_terms": true,
+          "access_token": "EAAA...",
+          "location_id": "LXXXXXXXXXXXXXXXX",
+          "seller_name": "Capital Cichlid Association"
+        }
+
+    Response 200 (signed in, not a merchant)::
+
+        {
+          "eligible": false,
+          "can_accept_terms": false,
+          "message": "Only an auction admin with a connected Square account can set up Tap to Pay."
+        }
+
+    ``message`` is rendered verbatim by the app, so the wording can change without an app release.
 
 POST /api/mobile/payments/create/
     Validate an invoice and return the parameters needed to authorize the Mobile Payments SDK.
@@ -343,7 +460,10 @@ POST /api/mobile/payments/confirm/
         {
           "payment_id": "GQTFp1ZlXdpoW4o6eGiZhbjosiDFf",
           "status": "COMPLETED",
-          "receipt_number": "FXRE"
+          "receipt_number": "FXRE",
+          // Square's hosted receipt; null when Square didn't supply one. The app shares it through
+          // the OS share sheet so the customer gets a real receipt, not just a reference number.
+          "receipt_url": "https://squareup.com/receipt/preview/GQTFp1ZlXdpoW4o6eGiZhbjosiDFf"
         }
 
     Response 409: the charge could not be verified against Square (status/amount/currency/location/
@@ -409,8 +529,9 @@ import hashlib
 import json
 import logging
 
+from allauth.socialaccount.helpers import complete_social_login
 from django.conf import settings
-from django.contrib.auth import login
+from django.contrib.auth import login, logout
 from django.http import HttpResponse, HttpResponseRedirect
 from django.templatetags.static import static
 from django.urls import reverse
@@ -423,7 +544,19 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions.models import Auction, Club, ClubMember, Lot, ThermalPrinterProfile, UserLabelPrefs, Watch
+from auctions.account_deletion import cancel_deletion
+from auctions.models import (
+    PRIVACY_POLICY_SLUG,
+    Auction,
+    BlogPost,
+    Club,
+    ClubMember,
+    Lot,
+    ThermalPrinterProfile,
+    UserData,
+    UserLabelPrefs,
+    Watch,
+)
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
 from .permissions import IsMobileAuthenticated
@@ -442,8 +575,11 @@ from .serializers import (
     MobileLabelPrefsSerializer,
     MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
+    MobileNotificationPrefsSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
+    MobileSocialAuthSerializer,
+    MobileSocialCompleteSerializer,
     MobileUserSerializer,
     MobileWatchSerializer,
     OfflineSyncSerializer,
@@ -462,7 +598,15 @@ from .services.payments import (
     PaymentVerificationError,
     SquareReconnectRequired,
 )
-from .services.web_session import WebSessionService
+from .services.social_auth import (
+    PENDING_TOKEN_SESSION_KEY,
+    PROVIDER_APPLE,
+    PendingSocialLogin,
+    SocialAuthError,
+    build_sociallogin,
+    resolve_completed_user,
+)
+from .services.web_session import WebSessionService, mark_session_opened_by_app
 
 # The allauth backend is what the web login uses; logging the handoff in under the same backend
 # keeps the resulting session indistinguishable from a normal web sign-in.
@@ -497,6 +641,10 @@ class MobileLoginView(APIView):
         if user is None:
             return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # Signing in calls off a pending account deletion, exactly as it does on the web (where the
+        # user_logged_in signal does it) -- the deletion page tells people that, and someone who
+        # deleted from inside the app is most likely to come back through this endpoint.
+        cancel_deletion(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -551,6 +699,8 @@ class MobileGoogleAuthView(APIView):
         if user is None:
             return Response({"detail": "Unable to authenticate."}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # As in MobileLoginView: coming back cancels a pending deletion.
+        cancel_deletion(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {"access": str(refresh.access_token), "refresh": str(refresh)},
@@ -602,6 +752,272 @@ class MobileGoogleAuthView(APIView):
         )
 
         return user if user.is_active else None
+
+
+class MobileSocialAuthView(APIView):
+    """POST /api/mobile/auth/social/ — sign in with Apple, Google or Facebook.
+
+    Verifies the provider credential (see ``services.social_auth`` for what "verified" means per
+    provider) and then hands the result to allauth's own social-login pipeline. allauth decides
+    whether that identity connects to an existing account, creates a new one, or needs the user to
+    finish something first; this view only translates allauth's outcome into either a JWT pair or a
+    pointer to the web continuation.
+
+    Deliberately does *not* find-or-create users itself. Doing so means reimplementing
+    ``SOCIALACCOUNT_EMAIL_AUTHENTICATION``, the unique-email conflict rules and the
+    email-verification gate — and two of these three providers have materially weaker email
+    guarantees than Google, so a second implementation is where an account-takeover bug would live.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileSocialAuthSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+
+        # allauth works on the Django request: it reads/writes the session and sets request.user on
+        # login. DRF's wrapper caches its own (anonymous) user, so everything below goes through the
+        # underlying request rather than `request`.
+        django_request = request._request
+
+        try:
+            sociallogin = build_sociallogin(django_request, data)
+        except SocialAuthError as exc:
+            logger.info("Mobile social sign-in rejected: %s", exc)
+            return Response(
+                {"detail": "Unable to complete social sign-in."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        provider = sociallogin.account.provider
+        uid = sociallogin.account.uid
+        response = complete_social_login(django_request, sociallogin)
+        user = getattr(django_request, "user", None)
+
+        if user is not None and user.is_authenticated:
+            # Last line of defence, and a no-op in a correctly configured deployment: allauth's
+            # mandatory-verification gate should already have stopped an unverified address from
+            # reaching a signed-in state. Re-checking here means a settings change can't silently
+            # turn this endpoint into a weaker door than the web login.
+            if not MobileAuthService.email_verification_satisfied(user):
+                logger.warning("Social sign-in produced a session for unverified user %s; refusing.", user.pk)
+                return Response({"detail": "Please verify your email address first."}, status=status.HTTP_403_FORBIDDEN)
+            self._store_apple_refresh_token(sociallogin, provider, uid, data)
+            # As in MobileLoginView: coming back cancels a pending deletion.
+            cancel_deletion(user)
+            refresh = RefreshToken.for_user(user)
+            return Response(
+                {"access": str(refresh.access_token), "refresh": str(refresh)},
+                status=status.HTTP_200_OK,
+            )
+
+        # allauth resolved the identity to a real account but wouldn't sign it in, and the account
+        # is disabled. Say so rather than sending them off to a signup form that can't help: the
+        # web and password logins refuse a deactivated account the same way.
+        resolved = getattr(sociallogin, "user", None)
+        if resolved is not None and resolved.pk and not resolved.is_active:
+            logger.info("Social sign-in refused for inactive user %s.", resolved.pk)
+            return Response(
+                {"detail": "This account can't be signed in to."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return self._pending(request, django_request, response, sociallogin, provider, uid)
+
+    @staticmethod
+    def _store_apple_refresh_token(sociallogin, provider, uid, data):
+        """Redeem Apple's ``authorization_code`` so the account can be revoked when it's deleted.
+
+        Apple hands out a refresh token only in exchange for that one-shot code, and only revocation
+        makes deletion complete by Apple's rules. Sign-in itself does not depend on any of this, so
+        every failure path here is a log line, not an error.
+        """
+        from allauth.socialaccount.models import SocialAccount
+
+        from auctions.apple_signin import redeem_authorization_code, store_tokens
+
+        code = (data.get("authorization_code") or "").strip()
+        if provider != PROVIDER_APPLE or not code:
+            return
+        token_data = redeem_authorization_code(code)
+        if not token_data:
+            return
+        account = SocialAccount.objects.filter(provider=provider, uid=uid).first()
+        if account is None:
+            logger.warning("Apple sign-in completed but no SocialAccount for uid %s; not storing tokens.", uid)
+            return
+        try:
+            store_tokens(account, token_data)
+        except Exception:
+            logger.exception("Failed to store Apple tokens for social account %s.", account.pk)
+
+    @staticmethod
+    def _pending(request, django_request, response, sociallogin, provider, uid):
+        """allauth couldn't finish unattended — park the flow and point the app at the web.
+
+        This is the routine case, not an error: Facebook usually supplies no email at all, so the
+        user has to pick one on allauth's signup form; and a fresh, unverified address has to be
+        confirmed before it can sign in. Both are real allauth pages, so the app opens them rather
+        than reimplementing them.
+        """
+        session = django_request.session
+        serialized_login = session.get("socialaccount_sociallogin")
+        # Set when allauth created or connected a real account but stopped short of signing them in
+        # -- an unconfirmed address, essentially always. (Not request.user: allauth blocks at the
+        # verification stage *before* it logs anyone in, so that's still anonymous here.) Recording
+        # it lets the app finish with a plain retry once they click the link in their inbox, and
+        # gives ``resolve_completed_user`` something to cross-check the SocialAccount against.
+        resolved_user_pk = getattr(getattr(sociallogin, "user", None), "pk", None)
+        pending_token, continue_token = PendingSocialLogin.create(
+            provider=provider,
+            uid=uid,
+            serialized_login=serialized_login,
+            user_pk=resolved_user_pk,
+        )
+        # The pending state now lives in the cache record, so drop this request's copy: the app
+        # carries no cookies into the WebView, and a stale half-finished login on a session the app
+        # might reuse would race with the continuation.
+        session.flush()
+
+        continue_url = request.build_absolute_uri(f"{reverse('mobile-auth-social-continue')}?t={continue_token}")
+        return Response(
+            {
+                "continue_url": continue_url,
+                "pending_token": pending_token,
+                "detail": MobileSocialAuthView._pending_detail(response),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @staticmethod
+    def _pending_detail(response):
+        """What to tell the user, based on where allauth was heading next."""
+        location = response.get("Location", "") if hasattr(response, "get") else ""
+        if location and reverse("account_email_verification_sent") in location:
+            return "Check your email to confirm your address, then try again."
+        return "Choose an email address to finish signing in."
+
+
+class MobileSocialCompleteView(APIView):
+    """POST /api/mobile/auth/social/complete/ — pick up a login the user finished on the web.
+
+    The pending token says *which* flow to look at. Whether its user may actually be signed in is
+    re-derived from the database every time (active, verified address, still connected to the
+    provider account the flow started from) — see ``resolve_completed_user``.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileSocialCompleteSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        pending_token = serializer.validated_data["pending_token"]
+        user = resolve_completed_user(pending_token)
+        if user is None:
+            return Response(
+                {"detail": "That sign-in isn't finished yet. Complete it in the browser, then try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Single use: the JWT pair is the durable credential from here on.
+        PendingSocialLogin.discard(pending_token)
+        cancel_deletion(user)
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {"access": str(refresh.access_token), "refresh": str(refresh)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class MobileSocialContinueView(APIView):
+    """GET /api/mobile/auth/social/continue/?t=<token> — hand an unfinished login to the WebView.
+
+    Loaded by the WebView itself, which has no JWT and no session, so the single-use token in the
+    query string *is* the credential (the same shape as the web-session handoff). It rebuilds
+    allauth's pending-signup state in this browsing context's own session and redirects into the
+    real allauth page.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        claimed = PendingSocialLogin.consume_continue_token(request.GET.get("t", ""))
+        if claimed is None:
+            return HttpResponseRedirect(reverse("account_login"))
+        pending_token, record = claimed
+
+        # Anyone already signed in here is not who this flow is about, and leaving them signed in
+        # would let the done view below bind the wrong account to this record. allauth's own
+        # _authenticate does the same thing for the same reason.
+        #
+        # request._request, not request: this view sets authentication_classes = [], so DRF's own
+        # request.user is AnonymousUser no matter who holds the session cookie. Only the underlying
+        # Django request has been through AuthenticationMiddleware and knows.
+        if request._request.user.is_authenticated:
+            logout(request._request)
+
+        serialized_login = record.get("sociallogin")
+        if serialized_login:
+            # Exactly where allauth's redirect_to_signup puts it, so its signup view picks it up as
+            # if the flow had never left the browser. The /social/ alias (auctions/urls.py) rather
+            # than allauth's own /3rdparty/ path, because the app's WebView allowlist is built
+            # around /social/... and would refuse to load the other one.
+            request.session["socialaccount_sociallogin"] = serialized_login
+            target = reverse("mobile_socialaccount_signup")
+        else:
+            # Nothing to resume: the account exists and is waiting on email confirmation.
+            target = reverse("account_email_verification_sent")
+        request.session[PENDING_TOKEN_SESSION_KEY] = pending_token
+        return HttpResponseRedirect(target)
+
+
+class MobileSocialDoneView(APIView):
+    """GET /api/mobile/auth/social/done/ — where the web continuation ends.
+
+    allauth redirects here once the flow finishes (it's the ``next`` baked into the social login's
+    state). The app watches for this exact path, closes the WebView and POSTs to ``complete/``. The
+    path is a constant in the app, so it must not change.
+
+    Binds whoever is signed in *in this browsing context* to the pending record. That's safe
+    because the continue view above signs out any pre-existing user, so the only account that can
+    be seen here is one this flow authenticated.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        pending_token = request.session.pop(PENDING_TOKEN_SESSION_KEY, "")
+        # request._request, not request: authentication_classes is empty, so DRF's request.user is
+        # always anonymous. The session user is on the underlying Django request.
+        user = request._request.user
+        finished = bool(pending_token) and user.is_authenticated
+        if finished:
+            PendingSocialLogin.bind_user(pending_token, user.pk)
+        # A human-readable page, not JSON: the app closes the WebView the instant it sees this path
+        # and never reads the body, so the only person who ever sees this is someone whose WebView
+        # didn't close — and raw JSON is a poor thing to leave them looking at.
+        message = (
+            "You're all set. You can close this window."
+            if finished
+            else "This sign-in isn't finished. Please close this window and try again."
+        )
+        return HttpResponse(f"<!doctype html><meta charset='utf-8'><title>Signed in</title><p>{message}</p>")
 
 
 class MobileTokenRefreshView(TokenRefreshView):
@@ -665,6 +1081,8 @@ class MobileWebSessionConsumeView(APIView):
         # login() cycles the session key and rotates the CSRF token; SessionMiddleware /
         # CsrfViewMiddleware then set sessionid (+ csrftoken) on this redirect, with all cookie flags.
         login(request, user, backend=_ALLAUTH_BACKEND)
+        # Set after login(), which cycles the session key and would otherwise drop this.
+        mark_session_opened_by_app(request.session)
         return HttpResponseRedirect(self._safe_next(request))
 
     @staticmethod
@@ -692,8 +1110,9 @@ class MobileConfigView(APIView):
     PUBLIC VALUES ONLY. Everything returned here is shipped to every device and is safe to expose
     publicly — these same values already appear in the web app's client-side code: the Square
     *application* id (NOT the secret), the Square environment name, the Google OAuth *client* id
-    (NOT a client secret), and the navbar brand. NEVER add secrets here: no OAuth access tokens,
-    client secrets, API keys, signing keys, or anything else that must stay server-side.
+    (NOT a client secret), the navbar brand, and the paths of the public terms and privacy pages.
+    NEVER add secrets here: no OAuth access tokens, client secrets, API keys, signing keys, or
+    anything else that must stay server-side.
     """
 
     authentication_classes = []
@@ -711,7 +1130,26 @@ class MobileConfigView(APIView):
             "brand_name": settings.NAVBAR_BRAND,
             # Absolute URL so the app can load the site icon without knowing the static layout.
             "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
+            # Legal pages the app links natively from its login and sign-up screens (Apple requires
+            # both to be reachable from inside the app at the point of sign-up). Server-relative:
+            # the app rejects an off-host URL, since these open inside the signed-out login trap.
+            "terms_url": reverse("tos"),
+            # Which social sign-in buttons to draw. The app hides a provider entirely when its key
+            # is absent, so a deployment that configures none of them simply shows the password
+            # form. Note the deliberate asymmetry: Apple is a boolean because the native flow's
+            # audience is the app's own bundle id and it needs nothing at runtime, whereas Google
+            # needs its web client id above. Facebook's id is only half the story — the SDKs read it
+            # from Info.plist / AndroidManifest.xml at launch and register an fb<app-id> URL scheme,
+            # so it is *also* compiled into the build. This key decides whether to offer the button
+            # and must agree with the compiled-in value, which is why Facebook is the one provider
+            # where a fork needs its own build.
+            "apple_sign_in_enabled": bool(settings.APPLE_ALLOWED_AUDIENCES),
+            "facebook_app_id": settings.FACEBOOK_APP_ID,
         }
+        # Omitted rather than pointing at a 404 if the page is missing on this deployment — the app
+        # then draws no privacy link at all, which is the honest state.
+        if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
+            data["privacy_policy_url"] = reverse("privacy_policy")
         # Public Firebase client config per platform, parsed from the mobile config files. Only the
         # platforms whose file is configured appear; the whole key is omitted when neither is set.
         # Public values only (api key, app id, sender id, project id, package/bundle id) — no secrets.
@@ -1017,6 +1455,45 @@ class MobileLabelPrefsView(APIView):
 
 
 # ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+
+class MobileNotificationPrefsView(APIView):
+    """GET/PATCH /api/mobile/notifications/prefs/ — the two push toggles, for the app's opt-in flow.
+
+    The app raises the OS notification permission only where the answer means something, and
+    "Enable" is one gesture: permission, then ``devices/register/``, then this PATCH. Without it the
+    app could only get the permission and send the user to /preferences/ to finish — where the
+    checkbox is greyed out until the page is reloaded with a live device.
+
+    Stores intent, deliberately: a write is never refused because push isn't configured or the
+    account has no device yet. That matches the web form, which keeps a stored value it can't honour
+    right now, and it's the ordering the app relies on (registration is awaited before this PATCH,
+    but a token can still be rejected later).
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    @staticmethod
+    def _userdata(request):
+        userdata, _ = UserData.objects.get_or_create(user=request.user)
+        return userdata
+
+    def get(self, request):
+        return Response(MobileNotificationPrefsSerializer(self._userdata(request)).data)
+
+    def patch(self, request):
+        serializer = MobileNotificationPrefsSerializer(self._userdata(request), data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
 # Payments
 # ---------------------------------------------------------------------------
 
@@ -1057,6 +1534,26 @@ class MobilePaymentCreateView(APIView):
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class MobilePaymentAuthorizationView(APIView):
+    """GET /api/mobile/payments/authorization/ — seller credentials for warming up Tap to Pay.
+
+    Always 200 for a signed-in user; ``eligible`` says whether they can take payments at all. See
+    ``PaymentService.get_payment_authorization`` for what each field means and when credentials are
+    (and aren't) issued.
+
+    Hands out the seller's merchant-wide OAuth token, so it carries the same JWT-only auth as
+    ``create``/``confirm`` and the same "must be an auction/club admin" gate — a buyer reaching this
+    would be handed a credential that can charge cards.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request):
+        return Response(PaymentService.get_payment_authorization(request.user), status=status.HTTP_200_OK)
 
 
 class MobilePaymentConfirmView(APIView):
@@ -1432,8 +1929,10 @@ class MobileCheckinPingView(APIView):
 class MobileCheckinJoinView(APIView):
     """POST /api/mobile/checkin/join/ — join the auction from the welcome prompt (no scrolling rules).
 
-    Idempotent; auto-checks-in on check-in-mode auctions. No distance re-check (the offer already
-    required it and phones drift), but the auction must still be inside the welcome window.
+    Idempotent; auto-checks-in on check-in-mode auctions and returns the bidder number that check-in
+    assigned. No distance re-check (the offer already required it and phones drift), but the auction
+    must still be inside the welcome window, and 403s when the auction has app self-check-in turned
+    off (``Auction.allow_self_checkin``) — those auctions hand out bidder numbers at the door.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1451,8 +1950,20 @@ class MobileCheckinJoinView(APIView):
             return Response(
                 {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
             )
-        _tos, checked_in = checkin_service.join_auction(request.user, auction)
-        return Response({"joined": True, "checked_in": checked_in, "rules_url": auction.get_absolute_url()})
+        tos, checked_in = checkin_service.join_auction(request.user, auction)
+        if tos is None:
+            return Response(
+                {"detail": "Check in with an auction volunteer to get your bidder number."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response(
+            {
+                "joined": True,
+                "checked_in": checked_in,
+                "bidder_number": tos.bidder_number or "",
+                "rules_url": auction.get_absolute_url(),
+            }
+        )
 
 
 class MobileCheckinSetLocationView(APIView):

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Square connected{% endblock %}
+{% comment %}
+  Shown instead of the usual redirect when the Square OAuth round trip started inside the app (see
+  SquareCallbackView._done). The app opens this flow in an in-app browser view, which has no way to
+  know the merchant is finished, so we close it for them with a deep link the app already handles.
+  The web link below is the page the browser would otherwise have been redirected to -- it keeps
+  this page from being a dead end if the deep link doesn't fire.
+{% endcomment %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Square account connected</h1>
+  <p>
+    {% if seller.payer_email %}<strong>{{ seller.payer_email }}</strong> is{% else %}Your Square account is{% endif %}
+    now linked. You can take payments on this device.
+  </p>
+  <a href="fishauctions://square-connected" class="btn btn-primary btn-lg w-100 my-2">Return to the app</a>
+  <p class="mt-3 mb-0"><a href="{{ web_url }}">Or keep going here on the website</a></p>
+</div>
+{% endblock %}

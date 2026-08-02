@@ -1044,6 +1044,49 @@ def get_recommended_lots(
     return qs[:qty]
 
 
+def membership_paid_q(today):
+    """Q matching members whose dues are current.
+
+    Mirrors ``ClubMember.is_paid_member`` (and the treasurer report's ``_paid_member_filter``)
+    in SQL: an explicit ``membership_expiration_date`` wins, and when there isn't one the club's
+    membership system derives the expiration from ``membership_last_paid``.  Members imported
+    from CSV, renewed through an auction invoice, or migrated from an older roster routinely
+    have only a last-paid date, and filtering on the expiration column alone called every one of
+    them expired.
+    """
+    january_cutoff = datetime.date(today.year, 1, 1)
+    rolling_cutoff = today - datetime.timedelta(days=365)
+    derived = Q(membership_expiration_date__isnull=True) & (
+        Q(club__membership_system="january_first", membership_last_paid__gte=january_cutoff)
+        | ~Q(club__membership_system="january_first") & Q(membership_last_paid__gte=rolling_cutoff)
+    )
+    return Q(membership_expiration_date__gte=today) | derived
+
+
+def membership_expiring_soon_q(today, days=30):
+    """Q matching members whose (possibly derived) expiration lands in the next ``days`` days.
+
+    The derived half is the SQL form of ``ClubMember.effective_expiration_date``: rolling clubs
+    expire a year after the last payment, January-1st clubs on the January 1st following it.
+    """
+    soon = today + datetime.timedelta(days=days)
+    explicit = Q(membership_expiration_date__gte=today, membership_expiration_date__lte=soon)
+    rolling = ~Q(club__membership_system="january_first") & Q(
+        membership_last_paid__gte=today - datetime.timedelta(days=365),
+        membership_last_paid__lte=soon - datetime.timedelta(days=365),
+    )
+    # A January-1st membership derived from a payment in year Y expires on Jan 1 of Y+1, so the
+    # window only ever contains such a member when a January 1st itself falls inside it.
+    january_years = {year for year in (today.year, soon.year) if today <= datetime.date(year, 1, 1) <= soon}
+    derived = rolling
+    if january_years:
+        january = Q()
+        for year in january_years:
+            january |= Q(membership_last_paid__year=year - 1)
+        derived = rolling | (Q(club__membership_system="january_first") & january)
+    return explicit | (Q(membership_expiration_date__isnull=True, membership_last_paid__isnull=False) & derived)
+
+
 class ClubMemberFilter(django_filters.FilterSet):
     """Filter for club members admin view"""
 
@@ -1139,16 +1182,14 @@ class ClubMemberFilter(django_filters.FilterSet):
         if status_filter:
             today = timezone.now().date()
             if status_filter == "current":
-                queryset = queryset.filter(membership_expiration_date__gte=today)
+                queryset = queryset.filter(membership_paid_q(today))
             elif status_filter == "expired":
-                queryset = queryset.filter(
-                    Q(membership_expiration_date__lt=today) | Q(membership_expiration_date__isnull=True)
-                )
+                # "Unpaid" is the complement of paid, so it keeps covering members who never paid.
+                queryset = queryset.exclude(membership_paid_q(today))
             elif status_filter == "expiring":
-                soon = today + datetime.timedelta(days=30)
-                queryset = queryset.filter(membership_expiration_date__gte=today, membership_expiration_date__lte=soon)
+                queryset = queryset.filter(membership_expiring_soon_q(today))
             elif status_filter == "never_paid":
-                queryset = queryset.filter(membership_expiration_date__isnull=True)
+                queryset = queryset.filter(membership_expiration_date__isnull=True, membership_last_paid__isnull=True)
 
         text = " ".join(remaining)
         if text:

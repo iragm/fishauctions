@@ -52,6 +52,7 @@ def club_sidebar(context):
         "email_settings",
         "bap_settings",
         "discord",
+        "google_calendar",
         "mailchimp",
         "brevo",
         "api_keys",

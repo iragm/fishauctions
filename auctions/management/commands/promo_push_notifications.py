@@ -16,6 +16,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from auctions.models import Auction, PushNotificationSent
+from auctions.templatetags.distance_filters import distance_display
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +89,18 @@ class Command(BaseCommand):
                 max_distance = userdata.email_me_about_new_in_person_auctions_distance
             if max_distance is not None and distance > max_distance:
                 continue
+            # Fixed short title: an auction name in the title is cut off on both platforms, taking
+            # the "this is a new auction" part with it. Name and distance go in the body, where
+            # there's room for them and where they're what decides whether the person taps.
+            body = f"{auction.title} — {kind}"
+            # "" when the distance rounds to zero, i.e. nothing worth saying.
+            distance_text = distance_display(distance, user)
+            if distance_text:
+                body += f", {distance_text} away"
             send_push_to_user.delay(
                 user.pk,
-                title=auction.title,
-                body=f"A promoted {kind} near you — tap for details.",
+                title="New auction",
+                body=body,
                 url=auction_url,
                 category="promo",
                 auction_pk=auction.pk,

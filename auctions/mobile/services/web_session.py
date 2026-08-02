@@ -14,6 +14,33 @@ HANDOFF_TTL_SECONDS = 60
 # Namespaced so these never collide with other cache users. The token itself is the rest of the key.
 _CACHE_PREFIX = "mobile_web_session_handoff:"
 
+# Marks a browsing context the app opened. Set when a handoff token is consumed, which is the only
+# way a session is created from inside the app, and read by pages that finish an OAuth round trip
+# (Square onboarding) to offer a "Return to the app" button instead of a dead end.
+#
+# The User-Agent can't answer this question: the app hands Square/PayPal OAuth to an in-app browser
+# view (SFSafariViewController / Chrome Custom Tabs), which sends Safari's/Chrome's User-Agent, not
+# ours -- so ``request.is_mobile_app`` is False for the whole OAuth round trip even though the user
+# never left the app. The session is what survives it.
+APP_ORIGINATED_SESSION_KEY = "opened_by_mobile_app"
+
+
+def mark_session_opened_by_app(session) -> None:
+    """Record that this session belongs to a browsing context the app opened."""
+    session[APP_ORIGINATED_SESSION_KEY] = True
+
+
+def session_opened_by_app(request) -> bool:
+    """True when this request's browsing context came from the app (see the key's docstring).
+
+    Also true for a request carrying the app's own User-Agent, which covers the app's WebView
+    reaching a page directly without a handoff.
+    """
+    if getattr(request, "is_mobile_app", False):
+        return True
+    session = getattr(request, "session", None)
+    return bool(session and session.get(APP_ORIGINATED_SESSION_KEY))
+
 
 class WebSessionService:
     """Bridges a native JWT session into a real Django/allauth session cookie.

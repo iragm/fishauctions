@@ -41,6 +41,7 @@ pycparser
 PyJWT
 pyOpenSSL
 pyparsing
+python-dateutil
 pytz
 requests
 requests-oauthlib

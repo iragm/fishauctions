@@ -118,6 +118,13 @@
 {% endif %}
 {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href="{% url 'auction_quick_checkout' slug=auction.slug %}"><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
 {% if not auction.is_online %}<a class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
+{% if auction.users_with_bidding_disabled %}
+  <a href="#" class="btn btn-sm mt-2 mb-2 btn-primary"
+     hx-get="{% url 'auction_enable_bidding_for_all' slug=auction.slug %}"
+     hx-target="#modals-here"
+     hx-trigger="click"
+     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-cash-coin"></i> Enable bidding for all users</a>
+{% endif %}
 {% if auction.show_invoice_ready_button %}
   <a href="#" class="btn btn-sm mt-2 mb-2 btn-primary d-none d-md-inline-block"
      hx-get="{% url 'auction_invoices_ready' auction.slug %}"

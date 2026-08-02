@@ -118,7 +118,7 @@ cd fishauctions
 ```
 `./update.sh` will initialize the environment for you, including generating secure secrets.
 
-After the site starts, sign in as a superuser (username=admin, password=example, make sure to change these!) and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Discord, and digital membership cards.
+After the site starts, sign in as a superuser (username=admin, password=example, make sure to change these!) and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Google Calendar, Discord, and digital membership cards.
 
 Work through that page, at a minimum you'll need Gmail for email, Google Maps and Recaptcha v2, everything else is optional (but recommended).
 

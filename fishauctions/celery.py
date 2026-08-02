@@ -53,6 +53,11 @@ app.conf.beat_schedule = {
         "task": "post_office.tasks.send_queued_mail",
         "schedule": 600.0,  # Run every 10 minutes
     },
+    # Two-way Google Calendar sync + Discord events for club events - every 15 minutes
+    "sync_club_calendars": {
+        "task": "auctions.tasks.sync_club_calendars",
+        "schedule": 900.0,  # Run every 15 minutes
+    },
     # Send auction emails - every 4 minutes
     "auction_emails": {
         "task": "auctions.tasks.auction_emails",
@@ -116,6 +121,16 @@ app.conf.beat_schedule = {
     # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
     "flush_expired_tokens": {
         "task": "auctions.tasks.flush_expired_tokens",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Delete accounts whose deletion grace period has expired - every 24 hours
+    "delete_pending_accounts": {
+        "task": "auctions.tasks.delete_pending_accounts",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Delete sent mail older than settings.MAIL_RETENTION_DAYS - every 24 hours
+    "cleanup_mail": {
+        "task": "auctions.tasks.cleanup_mail",
         "schedule": 86400.0,  # Run every 24 hours
     },
     # Move one local image to Cloudflare Images - every minute (no-op unless CLOUDFLARE_IMAGES_* is set in .env)

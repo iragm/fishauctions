@@ -5,7 +5,7 @@
 {% block modal_footer %}
 <div class="modal-footer">
   <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
-  <button id="confirm-action-btn" type="button" class="btn btn-danger"
+  <button id="confirm-action-btn" type="button" class="btn {{ confirm_button_class|default:'btn-danger' }}"
     hx-post="{{ action_url }}"
     hx-target="#modals-here">{{ confirm_button_label|default:"Confirm" }}</button>
 </div>

@@ -29,6 +29,10 @@ AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off schedul
 # Constants for BAP recalculation scheduling
 BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 
+# One club-calendar sync at a time; see sync_club_calendars.
+CALENDAR_SYNC_LOCK_KEY = "sync_club_calendars_running"
+CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,46 +53,146 @@ def _greeting_name(member):
     return name or "Member"
 
 
-def _next_auction_fragment(club, current_site, include_auction=True):
-    """Return (text, html) for the 'next promoted auction' line, or ('', '')."""
-    from django.utils import timezone
+# Inline style for the wallet buttons in membership emails.  Email clients strip <style> blocks
+# and know nothing about Bootstrap, so this hand-rolls what btn-dark looks like on the web
+# membership card (see partials/club_member_uuid_card.html).
+_WALLET_BUTTON_STYLE = (
+    "display:inline-block;padding:10px 16px;margin:0 8px 8px 0;background:#303030;color:#ffffff;"
+    "text-decoration:none;border-radius:6px;font-family:sans-serif;font-size:14px;"
+)
 
-    from auctions.models import Auction
 
-    if not include_auction:
+def wallet_links(member, current_site=None):
+    """Return (google_url, apple_url) for adding this member's card to a phone wallet.
+
+    Either is "" when that wallet isn't configured on this site, or when the club has member
+    barcodes turned off (there is no card to add).  Both links are UUID-keyed capability URLs,
+    so they work from an email without the recipient being logged in.
+    """
+    if not member.club.show_member_barcode:
         return "", ""
-    today = timezone.localdate()
-    auction = (
-        Auction.objects.filter(
-            club=club,
-            promote_this_auction=True,
-            is_deleted=False,
-            date_start__date__gte=today,
+    from django.urls import reverse
+
+    from auctions import apple_wallet
+    from auctions.templatetags.membership_tags import google_wallet_save_url
+
+    current_site = current_site or Site.objects.get_current()
+    google_url = google_wallet_save_url(member) or ""
+    apple_url = ""
+    if apple_wallet.is_configured():
+        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.slug, "uuid": member.uuid})
+        apple_url = f"https://{current_site.domain}{path}"
+    return google_url, apple_url
+
+
+def _wallet_buttons_html(google_url, apple_url):
+    """The "Add to Google/Apple Wallet" buttons that sit under the barcode in membership emails."""
+    buttons = []
+    if google_url:
+        buttons.append(f"<a href='{escape(google_url)}' style='{_WALLET_BUTTON_STYLE}'>Add to Google Wallet</a>")
+    if apple_url:
+        buttons.append(f"<a href='{escape(apple_url)}' style='{_WALLET_BUTTON_STYLE}'>Add to Apple Wallet</a>")
+    if not buttons:
+        return ""
+    return f"<div>{''.join(buttons)}</div>"
+
+
+def next_event_fragment(club, current_site, *, include_event=True, as_links=True):
+    """Return (text, html) for the "our next event" line, or ('', '').
+
+    Covers auctions and anything else on the club's calendar — meetings, swaps, talks. Shared by
+    the real emails and the settings-page preview so the two can't drift; the preview passes
+    ``as_links=False`` because a preview shouldn't contain working links.
+    """
+    from auctions import club_events
+
+    if not include_event:
+        return "", ""
+    event = club_events.next_member_facing_event(club)
+    if not event:
+        return "", ""
+
+    auction = event.auction
+    when = event.date_start
+    show_time = True
+    if auction and auction.is_online:
+        # An online auction runs for days, so a start time next to the date is just noise.
+        show_time = False
+    elif auction:
+        # An in-person auction gathers at its pickup location's time, which is the time members
+        # actually need; the auction's own date_start is only "when bidding opens".
+        when = _in_person_auction_time(auction) or event.date_start
+    date_str = f"{when:%B %-d, %Y}"
+    if show_time:
+        date_str = f"{date_str} at {when:%-I:%M %p}"
+
+    details_url = f"https://{current_site.domain}{event.get_absolute_url()}"
+    details_label = "Read the auction's rules" if auction else "See the details"
+    directions_url = _event_directions_url(event)
+
+    text_parts = [f"Our next event is {event.title}", f"on {date_str}"]
+    text = " ".join(text_parts).rstrip() + "."
+    if directions_url:
+        text += f" Get directions: {directions_url}"
+    text += f" {details_label}: {details_url}"
+
+    html = " ".join(escape(part) for part in text_parts).rstrip() + "."
+    if directions_url:
+        html += (
+            f" <a href='{escape(directions_url)}'>Get directions</a>."
+            if as_links
+            else " <span class='text-info'>Get directions</span>."
         )
-        .order_by("date_start")
-        .first()
-    )
-    if not auction:
-        return "", ""
-    date_str = auction.date_start.strftime("%B %-d, %Y") if auction.date_start else ""
-    rules_url = f"https://{current_site.domain}{auction.get_absolute_url()}"
-    text_parts = [f"Our next auction will be {auction.title}"]
-    if date_str:
-        text_parts.append(f"on {date_str}")
-    location_text = ""
-    location_html = ""
-    locations = list(auction.physical_location_qs)
-    if len(locations) == 1 and locations[0].directions_link:
-        location_text = f" Get directions: {locations[0].directions_link}"
-        location_html = f" <a href='{escape(locations[0].directions_link)}'>Get directions</a>."
-    text = " ".join(text_parts).rstrip() + "." + (location_text or "") + f" Read the rules here: {rules_url}"
-    html = (
-        " ".join(escape(p) for p in text_parts).rstrip()
-        + "."
-        + location_html
-        + f" <a href='{escape(rules_url)}'>Read the auction's rules</a>."
+    html += (
+        f" <a href='{escape(details_url)}'>{escape(details_label)}</a>."
+        if as_links
+        else f" <span class='text-info'>{escape(details_label)}</span>."
     )
     return text, html
+
+
+def _real_physical_locations(auction):
+    """The auction's physical locations, ignoring placeholders.
+
+    Switching an auction to in-person auto-creates a location with no address or coordinates.
+    It isn't somewhere anyone can go, so it must not count when deciding whether an auction has
+    a single location.
+    """
+    return [
+        location
+        for location in auction.physical_location_qs
+        if (location.address or "").strip() or location.has_coordinates
+    ]
+
+
+def _in_person_auction_time(auction):
+    """When an in-person auction actually gathers, or None.
+
+    Only meaningful with a single location — with several there's no one time to advertise.
+    """
+    locations = [location for location in _real_physical_locations(auction) if location.pickup_time]
+    if len(locations) == 1:
+        return locations[0].pickup_time
+    return None
+
+
+def _event_directions_url(event):
+    """A map link for the event, falling back to the auction's single location.
+
+    Online auction events carry no location of their own — the addresses live on the pickup
+    events — but a member reading "our next event is the Spring Auction" still wants directions.
+    Only ever offered when the auction has exactly one real location: with several, a single
+    "Get directions" link would send people to the wrong one.
+    """
+    if event.location:
+        return event.map_url
+    auction = event.related_auction
+    if not auction:
+        return ""
+    locations = _real_physical_locations(auction)
+    if len(locations) == 1:
+        return locations[0].directions_link
+    return ""
 
 
 def _render_membership_email_html(
@@ -98,9 +202,10 @@ def _render_membership_email_html(
     membership_link,
     club_icon_url,
     barcode_url,
-    next_auction_html,
+    next_event_html,
     opening_text="",
     closing_text="",
+    wallet_buttons_html="",
 ):
     html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
     if opening_text:
@@ -114,10 +219,13 @@ def _render_membership_email_html(
     if barcode_url:
         html_parts.append(
             f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
-            "style='max-width:320px;width:100%;height:auto;'></div><br>"
+            "style='max-width:320px;width:100%;height:auto;'></div>"
         )
-    if next_auction_html:
-        html_parts.append(f"{next_auction_html}<br><br>")
+        if wallet_buttons_html:
+            html_parts.append(wallet_buttons_html)
+        html_parts.append("<br>")
+    if next_event_html:
+        html_parts.append(f"{next_event_html}<br><br>")
     if closing_text:
         html_parts.append(escape(closing_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
@@ -132,34 +240,41 @@ def _render_membership_email_html(
     return "".join(html_parts)
 
 
-def send_club_member_email(member, subject, message_text, email_type="welcome"):
+def send_club_member_email(member, subject, message_text, email_type="welcome", force_email=False):
+    """Send one of the club's membership emails.
+
+    ``force_email`` skips the push-notification path in notify_user; use it when an admin has
+    explicitly asked for an email to go out (the resend-membership-card action), where silently
+    turning it into a push would not be what they confirmed.
+    """
     if not member.email or member.contact_status == "do_not_contact":
         return False
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
     intro_text = ""
     barcode_url = member.barcode_image_link_png if member.club.show_member_barcode else ""
+    google_wallet_url, apple_wallet_url = wallet_links(member, current_site=current_site)
 
     opening_text = ""
     closing_text = ""
-    include_auction = member.club.include_next_auction_in_emails
+    include_event = member.club.include_next_auction_in_emails
 
     if email_type == "welcome":
         opening_text = member.club.welcome_opening
         closing_text = member.club.welcome_closing
-        include_auction = member.club.welcome_include_auction
+        include_event = member.club.welcome_include_auction
     elif email_type == "renewal":
         opening_text = member.club.renewal_opening
         closing_text = member.club.renewal_closing
-        include_auction = member.club.renewal_include_auction
+        include_event = member.club.renewal_include_auction
     elif email_type == "expiring_soon":
         opening_text = member.club.expiring_soon_opening
         closing_text = member.club.expiring_soon_closing
-        include_auction = member.club.expiring_soon_include_auction
+        include_event = member.club.expiring_soon_include_auction
 
     next_text, next_html = "", ""
-    if include_auction:
-        next_text, next_html = _next_auction_fragment(member.club, current_site, include_auction=include_auction)
+    if include_event:
+        next_text, next_html = next_event_fragment(member.club, current_site, include_event=include_event)
 
     text_parts = [f"Dear {_greeting_name(member)},", ""]
     if opening_text:
@@ -168,6 +283,10 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
     text_parts.extend([message_text, "", f"View your membership here: {membership_link}"])
     if barcode_url:
         text_parts.extend(["", f"Membership barcode: {barcode_url}"])
+        if google_wallet_url:
+            text_parts.append(f"Add to Google Wallet: {google_wallet_url}")
+        if apple_wallet_url:
+            text_parts.append(f"Add to Apple Wallet: {apple_wallet_url}")
     if next_text:
         text_parts.extend(["", next_text])
     if closing_text:
@@ -183,9 +302,10 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
         membership_link=membership_link,
         club_icon_url=club_icon_url,
         barcode_url=barcode_url,
-        next_auction_html=next_html,
+        next_event_html=next_html,
         opening_text=opening_text,
         closing_text=closing_text,
+        wallet_buttons_html=_wallet_buttons_html(google_wallet_url, apple_wallet_url),
     )
 
     def _send_membership_email():
@@ -197,6 +317,10 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
             html_message=html_message,
             headers={"Reply-to": _membership_email_reply_to(member.club)},
         )
+
+    if force_email:
+        _send_membership_email()
+        return True
 
     # A member may or may not be a linked site user; notify_user pushes only when that user opted in
     # (and has a live device), otherwise it emails — so guest members always get the email.
@@ -211,6 +335,31 @@ def send_club_member_email(member, subject, message_text, email_type="welcome"):
         send_email=_send_membership_email,
     )
     return True
+
+
+def send_membership_card_email(member):
+    """Email a member a link to their membership card (admin-triggered resend).
+
+    Returns True when the email was queued, False when the member can't be emailed.
+    """
+    expiration_text = ""
+    expiration = member.effective_expiration_date
+    if expiration and member.club.membership_annual_fee:
+        if member.is_paid_member:
+            expiration_text = f"  Your membership is paid through {expiration.strftime('%B %-d, %Y')}."
+        else:
+            expiration_text = f"  Your membership expired on {expiration.strftime('%B %-d, %Y')}."
+    message_text = (
+        f"Here's the link to your {member.club.name} membership card."
+        f"{expiration_text}  Scan it at club events, or add it to your phone's wallet."
+    )
+    return send_club_member_email(
+        member,
+        subject=f"Your {member.club.name} membership card",
+        message_text=message_text,
+        email_type="membership_card",
+        force_email=True,
+    )
 
 
 def maybe_send_membership_renewal_confirmation(member):
@@ -279,6 +428,66 @@ def flush_expired_tokens(self):
     call_command("flushexpiredtokens")
 
 
+@shared_task(bind=True, ignore_result=True)
+def delete_pending_accounts(self):
+    """
+    Delete accounts whose deletion grace period has expired.
+
+    Daily. Nothing happens on the day someone asks (see auctions.account_deletion); this is the task
+    that makes it real, so it must keep running for the site to keep its promise.
+    """
+    call_command("delete_pending_accounts")
+
+
+@shared_task(bind=True, ignore_result=True, retry_backoff=True, retry_backoff_max=600, max_retries=5)
+def delete_marketing_contact(self, club_pk, email):
+    """Remove one address from a club's Mailchimp audience and Brevo list.
+
+    Account deletion only: an ordinary unsubscribe archives the contact (which still holds the
+    address), so it can't be reused here. Takes the address rather than a member pk because by the
+    time this runs the member row has been emptied or unlinked.
+
+    Each provider gets its own attempt and the retry is driven by hand rather than by
+    ``autoretry_for``. Both of them raise their own exception type for an API error (mailchimp's
+    ApiClientError, brevo's BrevoApiError) and neither descends from requests.RequestException, so a
+    provider-class list is the thing most likely to quietly stop matching. Whatever goes wrong, the
+    other provider still gets called and the whole task is retried — deleting an already-deleted
+    contact is a 404 both helpers swallow.
+    """
+    from auctions import brevo
+    from auctions import mailchimp as mc
+    from auctions.models import Club
+
+    club = Club.objects.filter(pk=club_pk).first()
+    if not club or not email:
+        return
+    failures = []
+    for provider, delete_contact in (
+        ("Mailchimp", mc.delete_contact_by_email),
+        ("Brevo", brevo.delete_contact_by_email),
+    ):
+        try:
+            delete_contact(club, email)
+        except Exception as e:
+            logger.exception("Could not delete a deleted user's contact from %s for club %s", provider, club_pk)
+            failures.append(f"{provider}: {e}")
+    if failures:
+        raise self.retry(exc=RuntimeError("; ".join(failures)))
+
+
+@shared_task(bind=True, ignore_result=True)
+def cleanup_mail(self):
+    """
+    Delete sent mail (and its attachments) older than MAIL_RETENTION_DAYS.
+
+    post_office keeps every message it has ever sent, body and recipient address included, which
+    makes it the one place a deleted user's address would otherwise survive their deletion — and an
+    ever-growing table nobody reads. Recent mail is worth keeping: it's how a bounce, a missing
+    invoice or a "did the site email me?" question gets answered.
+    """
+    call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
+
+
 @shared_task
 def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
     """Send a push notification to every push-enabled device of a user; prune dead tokens.
@@ -287,6 +496,12 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
     token the offending device's token is cleared. One ``PushNotificationSent`` row is logged per
     successful device send (dedupe + stats). ``collapse_key`` folds chatty categories so a phone
     that was off shows one notification, not many.
+
+    If nothing reaches a device, the notification is emailed instead rather than dropped. That
+    matters most the moment someone uninstalls the app: the send that *discovers* the dead token is
+    the one that would otherwise vanish, and by then the caller has already recorded the
+    notification as delivered (invoice.email_sent, tos.confirm_email_sent, ...) so nothing would
+    ever retry it. Categories in PUSH_ONLY_CATEGORIES have no email form and are dropped instead.
     """
     from django.contrib.auth.models import User
 
@@ -323,7 +538,27 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
                 invoice_id=invoice_pk,
             )
             sent_count += 1
+    if not sent_count:
+        _email_undelivered_push(user, title=title, body=body, url=url, category=category)
     return sent_count
+
+
+def _email_undelivered_push(user, *, title, body, url, category):
+    """Last-resort email for a push that reached no device (dead token, or FCM was down).
+
+    Plain text rather than the caller's original template -- by the time we get here the caller is
+    long gone and only the notification's own title/body/url survive. An unstyled email that arrives
+    beats a silent drop.
+    """
+    from auctions import notifications
+
+    if category in notifications.PUSH_ONLY_CATEGORIES or not user.email:
+        return
+    try:
+        mail.send(user.email, subject=title, message=f"{body}\n\n{url}")
+        logger.info("Push to user %s was undeliverable (%s); emailed instead", user.pk, category)
+    except Exception:
+        logger.exception("Could not email the undelivered %s push for user %s", category, user.pk)
 
 
 def get_invoice_notification_task_name(invoice_pk):
@@ -662,6 +897,33 @@ def update_expired_membership_discord_roles(self):
     for club in brevo_clubs:
         if club.brevo_connected:
             brevo.backfill(club)
+
+
+@shared_task(bind=True, ignore_result=True)
+def sync_club_calendars(self):
+    """Keep every club's events, Google Calendar, and Discord scheduled events in step.
+
+    Does three things per club: mirror promoted auctions into events, exchange changes with
+    Google Calendar (push ours, pull theirs), and reconcile Discord scheduled events. Each club
+    is isolated, so one broken connection doesn't stop the rest.
+
+    Only one run at a time: this is scheduled every 15 minutes but a slow Google or a big club
+    can take longer than that, and two runs racing would push the same event twice and could
+    provision two calendars for one club.
+    """
+    from django.core.cache import cache
+
+    from auctions import club_events
+
+    # Times out well past the beat interval, so a worker that dies mid-run can't wedge the lock.
+    if not cache.add(CALENDAR_SYNC_LOCK_KEY, "1", timeout=CALENDAR_SYNC_LOCK_SECONDS):
+        logger.info("Club calendar sync is already running; skipping this run.")
+        return
+    try:
+        count = club_events.sync_all()
+        logger.info("Synced calendars for %s club(s)", count)
+    finally:
+        cache.delete(CALENDAR_SYNC_LOCK_KEY)
 
 
 @shared_task(bind=True, ignore_result=True)

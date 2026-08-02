@@ -5,10 +5,15 @@
 {% load webpush_notifications %}
 
 {% block extra_head %}
-    {% webpush_header %}
+    {% comment %}
+    webpush.js dereferences the subscribe button on load, so only load it when we're actually
+    offering the browser subscription.
+    {% endcomment %}
+    {% if form.can_subscribe_to_webpush %}{% webpush_header %}{% endif %}
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();
+    {% if form.can_subscribe_to_webpush %}
     $('#subscribe_message_area').html(`. <span class=''>This will only work if you {% webpush_button with_class="btn btn-link btn-sm" %} on this device</span>`);
     if (Notification.permission !== "granted") {
         $('#subscribe_message_area').removeClass("d-none");
@@ -31,6 +36,58 @@
         // Start observing the target node for configured mutations
         observer.observe(targetNode, config);
     }
+    {% endif %}
+
+    {% if request.is_mobile_app %}
+    // Notification controls for the app. The web form can only offer a disabled checkbox until the
+    // account has a device with a live token, which is a dead end for someone reading this page on
+    // the phone that would receive the notifications -- so ask the app what state this phone is in
+    // and offer the opt-in right here. `pushEnable` does the whole gesture (OS permission, device
+    // registration, then the prefs write), so a reload afterwards renders the form enabled with
+    // both toggles already on.
+    (function () {
+        const bridge = window.flutter_inappwebview;
+        const area = document.getElementById('app-push-controls');
+        if (!bridge || !bridge.callHandler || !area) { return; }
+
+        function render(state) {
+            // supported=false means this build has no push config at all: there is nothing to
+            // allow, and the form's "install the app" help text is already the right thing to say.
+            if (!state || !state.supported) {
+                area.classList.add('d-none');
+                area.innerHTML = '';
+                return;
+            }
+            area.classList.remove('d-none');
+            if (state.permitted) {
+                area.innerHTML = '<div class="alert alert-success mb-0">' +
+                    '<i class="bi bi-bell-fill"></i> Notifications are on for this phone.</div>';
+                return;
+            }
+            area.innerHTML = '<div class="alert alert-info mb-0 d-flex flex-wrap align-items-center gap-2">' +
+                '<span><i class="bi bi-bell"></i> Notifications are turned off for this phone.</span>' +
+                '<button type="button" id="app-push-enable" class="btn btn-primary btn-sm">Allow notifications</button></div>';
+            document.getElementById('app-push-enable').addEventListener('click', function () {
+                const button = this;
+                button.disabled = true;
+                bridge.callHandler('pushEnable', 'preferences').then(function (newState) {
+                    if (newState && newState.permitted) {
+                        // This page was rendered before the device existed, so its checkboxes are
+                        // still disabled; reload to pick up what the app just turned on.
+                        window.location.reload();
+                        return;
+                    }
+                    button.disabled = false;
+                    render(newState);
+                }).catch(function () {
+                    button.disabled = false;
+                });
+            });
+        }
+
+        bridge.callHandler('pushGetState').then(render).catch(function () {});
+    })();
+    {% endif %}
 
     // Handle distance unit conversion
     const MILES_TO_KM = 1.60934;
@@ -86,5 +143,11 @@
 {% block content %}
 {% include "preferences_ribbon.html" %}
 <br>
+{% comment %}
+Filled in by the app (see extra_js): a real notification control instead of a checkbox that's
+greyed out with no explanation. Stays empty and hidden in a browser, and in the app until the
+bridge answers.
+{% endcomment %}
+{% if request.is_mobile_app %}<div id="app-push-controls" class="d-none mb-3"></div>{% endif %}
 {% crispy form form.helper %}
 {% endblock %}

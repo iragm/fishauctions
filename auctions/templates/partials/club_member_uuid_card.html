@@ -29,18 +29,30 @@
   <p class="mb-3 text-muted small">Member since: {{ member.createdon|date:"M j, Y" }}</p>
 
   {% google_wallet_save_url member as wallet_url %}
+  {% comment %}
+  In the app, only the wallet that phone actually has: the Google Wallet save URL opens in the
+  system browser, so on an iPhone it's a button that leaves the app to do nothing, and an Apple
+  Wallet download on Android is the same in reverse. On the web both are offered, since the browser
+  could be on either platform.
+  {% endcomment %}
   <div class="d-flex flex-wrap justify-content-center gap-2 mb-3">
-    {% if wallet_url %}
+    {% if wallet_url and request.mobile_app_platform != 'ios' %}
       <a class="btn btn-dark btn-sm" href="{{ wallet_url }}" target="_blank" rel="noopener">
         <i class="bi bi-google"></i> Add to Google Wallet
       </a>
     {% endif %}
     {% if apple_wallet_enabled and member.club.show_member_barcode %}
+      {% if request.mobile_app_platform != 'android' %}
       <a class="btn btn-dark btn-sm" href="{% url 'club_member_apple_wallet_by_uuid' slug=club.slug uuid=member.uuid %}">
         <i class="bi bi-apple"></i> Add to Apple Wallet
       </a>
-    {% elif wallet_url %}
-      {# Google Wallet is configured but Apple isn't — show a stub that explains why. #}
+      {% endif %}
+    {% elif wallet_url and not request.is_mobile_app %}
+      {% comment %}
+      Google Wallet is configured but Apple isn't — show a stub that explains why. Web only: the
+      explainer's "or just take a screenshot" is written for someone reading on a computer, and it
+      reads as nonsense on the phone that would have held the pass.
+      {% endcomment %}
       <button class="btn btn-dark btn-sm" type="button"
         data-bs-toggle="collapse" data-bs-target="#apple-wallet-explainer"
         aria-expanded="false" aria-controls="apple-wallet-explainer">
@@ -49,7 +61,7 @@
     {% endif %}
   </div>
 
-  {% if not apple_wallet_enabled and wallet_url %}
+  {% if not apple_wallet_enabled and wallet_url and not request.is_mobile_app %}
   <div id="apple-wallet-explainer" class="collapse mb-3">
     <div class="alert alert-info mb-0">
       Apple wants a hundred bucks to add passes, which is crazy given everything else is completely free.
