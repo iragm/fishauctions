@@ -655,6 +655,11 @@ urlpatterns = [
         views.InvoiceRenewalNeededToggleView.as_view(),
         name="invoice_renewal_toggle",
     ),
+    path(
+        "api/users/<slug:slug>/enable-bidding",
+        views.EnableBiddingForAllUsers.as_view(),
+        name="auction_enable_bidding_for_all",
+    ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
         "api/lots/<slug:slug>/sell-to-highest-bidder",

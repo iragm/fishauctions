@@ -164,6 +164,7 @@ from .forms import (
     CreateLotForm,
     DeleteAuctionTOS,
     EditLot,
+    EnableBiddingForAllForm,
     InvoiceAdjustmentForm,
     InvoiceAdjustmentFormSetHelper,
     LabelPrintFieldsForm,
@@ -6992,12 +6993,6 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         return checkbox_fields, field_1_fields, dropdown_fields, dropdown_options
 
     @staticmethod
-    def _to_bool(value):
-        if isinstance(value, str):
-            return value.lower() in ["yes", "true", "1", "y", "t"]
-        return bool(value)
-
-    @staticmethod
     def _to_int(value, default=None):
         try:
             return int(value) if value else default
@@ -7021,9 +7016,11 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             "reserve_price": self._to_int(self.extract_csv_field(row, self.RESERVE_PRICE_FIELDS)),
             "buy_now_price": self._to_int(self.extract_csv_field(row, self.BUY_NOW_PRICE_FIELDS)),
             "category_id": category.pk if category else None,
-            "i_bred_this_fish": self._to_bool(self.extract_csv_field(row, self.BRED_FIELDS)),
-            "donation": self._to_bool(self.extract_csv_field(row, self.DONATION_FIELDS)),
-            "custom_checkbox": self._to_bool(self.extract_csv_field(row, checkbox_fields)),
+            # Tri-state: None when the row didn't say, so an update can't silently clear a flag that
+            # changes the invoice (breeder points, donations) just because the column was left blank.
+            "i_bred_this_fish": self.parse_csv_boolean(self.extract_csv_field(row, self.BRED_FIELDS)),
+            "donation": self.parse_csv_boolean(self.extract_csv_field(row, self.DONATION_FIELDS)),
+            "custom_checkbox": self.parse_csv_boolean(self.extract_csv_field(row, checkbox_fields)),
             "custom_field_1": self.extract_csv_field(row, field_1_fields)[:60],
             "custom_dropdown": custom_dropdown,
         }
@@ -7104,9 +7101,12 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             lot.buy_now_price = fields["buy_now_price"]
         if fields.get("category_id"):
             lot.species_category_id = fields["category_id"]
-        lot.i_bred_this_fish = fields.get("i_bred_this_fish", False)
-        lot.donation = fields.get("donation", False)
-        lot.custom_checkbox = fields.get("custom_checkbox", False)
+        # Only when the row actually said yes or no; a blank cell (or a file with no such column at all)
+        # leaves the lot's current flag alone instead of clearing it.
+        for field_name in ("i_bred_this_fish", "donation", "custom_checkbox"):
+            value = fields.get(field_name)
+            if value is not None:
+                setattr(lot, field_name, value)
         if fields.get("custom_field_1"):
             lot.custom_field_1 = fields["custom_field_1"]
         if fields.get("custom_dropdown"):
@@ -7151,9 +7151,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
                 fields["reserve_price"] if fields.get("reserve_price") is not None else self.auction.minimum_bid
             ),
             buy_now_price=fields.get("buy_now_price"),
-            i_bred_this_fish=fields.get("i_bred_this_fish", False),
-            donation=fields.get("donation", False),
-            custom_checkbox=fields.get("custom_checkbox", False),
+            i_bred_this_fish=bool(fields.get("i_bred_this_fish")),
+            donation=bool(fields.get("donation")),
+            custom_checkbox=bool(fields.get("custom_checkbox")),
             custom_field_1=fields.get("custom_field_1", ""),
             custom_dropdown=fields.get("custom_dropdown", ""),
             auctiontos_seller=seller,
@@ -10885,6 +10885,75 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
         else:
             context["modal_title"] = f"Set {self.invoice_count} ready invoices to paid"
         return context
+
+
+class EnableBiddingForAllUsers(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
+    """Turn bidding back on for every participant in this auction who currently can't bid.
+
+    The repair for a whole auction that lost bidding at once -- a CSV import that read a blank permission
+    column as "no", or "only approved bidders" being switched off after people had already joined (which
+    does not retroactively enable anyone). Without this an admin has to open every user's modal in turn.
+    """
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = EnableBiddingForAllForm
+
+    def get_queryset(self):
+        return AuctionTOS.objects.filter(auction=self.auction, bidding_allowed=False)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_auction_admin
+        if self.auction.use_check_in_mode:
+            # Bidding is meant to be off until each person checks in; enabling everyone would skip it.
+            raise Http404
+        self.user_count = self.get_queryset().count()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs["auction"] = self.auction
+        form_kwargs["user_count"] = self.user_count
+        return form_kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if not self.user_count:
+            context["modal_title"] = "Everyone can already bid"
+            context["tooltip"] = "There aren't any users in this auction with bidding disabled."
+            return context
+        noun = "user" if self.user_count == 1 else "users"
+        context["modal_title"] = f"Enable bidding for {self.user_count} {noun}?"
+        context["tooltip"] = (
+            f"This will let all {self.user_count} {noun} who currently have bidding disabled place bids. "
+            "This cannot be undone -- if some of them were blocked on purpose, you'll have to disable them "
+            "again one at a time."
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        if self.user_count:
+            tos_qs = self.get_queryset()
+            # The participant rows in a club-managed auction are shadows of the club's member records;
+            # leaving the club side saying "no" would show two different answers on two pages, and a
+            # later member edit would push the stale value back down (signals.propagate_clubmember_to_
+            # shadow_tos). Collect the ids before the update, which empties this queryset.
+            member_pks = (
+                [pk for pk in tos_qs.values_list("clubmember_id", flat=True) if pk]
+                if self.auction.is_club_managed
+                else []
+            )
+            tos_qs.update(bidding_allowed=True)
+            if member_pks:
+                ClubMember.objects.filter(pk__in=member_pks).update(bidding_allowed=True)
+            noun = "user" if self.user_count == 1 else "users"
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Enabled bidding for {self.user_count} {noun}",
+                user=request.user,
+            )
+            messages.success(request, f"{self.user_count} {noun} can now bid.")
+        return close_modal_response("reload-page")
 
 
 class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixin):

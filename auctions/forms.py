@@ -1573,6 +1573,37 @@ class ChangeInvoiceStatusForm(forms.Form):
         ]
 
 
+class EnableBiddingForAllForm(forms.Form):
+    """Confirmation dialog for the bulk 'enable bidding' action on the auction users page."""
+
+    def __init__(self, auction, user_count, *args, **kwargs):
+        self.auction = auction
+        self.user_count = user_count
+        super().__init__(*args, **kwargs)
+        submit_button_html = ""
+        if user_count:
+            post_url = reverse("auction_enable_bidding_for_all", kwargs={"slug": auction.slug})
+            submit_button_html = (
+                f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" '
+                'class="btn btn-success float-right">Enable bidding</button>'
+            )
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_class = "form"
+        self.helper.form_id = "enable-bidding-form"
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            Div(
+                HTML(
+                    '<button type="button" class="btn btn-secondary float-left" '
+                    'onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(submit_button_html),
+                css_class="modal-footer",
+            ),
+        )
+
+
 class LotRefundForm(forms.ModelForm):
     """Show the status of existing invoices and allow partial or full refunds"""
 

@@ -3969,6 +3969,17 @@ class Auction(models.Model):
         # return True
 
     @property
+    def users_with_bidding_disabled(self):
+        """How many participants can't currently bid, for the bulk re-enable button on the users page.
+
+        Zero in check-in auctions: there, bidding stays off until the person checks in at the door, so
+        every participant would be counted and enabling them in bulk would defeat the whole mode.
+        """
+        if self.use_check_in_mode:
+            return 0
+        return AuctionTOS.objects.filter(auction=self.pk, bidding_allowed=False).count()
+
+    @property
     def show_paypal_csv_link(self):
         if self.is_online:
             return True

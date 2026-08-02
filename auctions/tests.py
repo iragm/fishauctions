@@ -4015,6 +4015,112 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
         self.assertNotIn("", values)
 
 
+class EnableBiddingForAllUsersTests(StandardTestCase):
+    """The bulk repair on the users page for an auction that lost bidding for everyone at once."""
+
+    def _url(self):
+        return reverse("auction_enable_bidding_for_all", kwargs={"slug": self.online_auction.slug})
+
+    def _disable_bidding_for_everyone(self):
+        AuctionTOS.objects.filter(auction=self.online_auction).update(bidding_allowed=False)
+
+    def test_button_is_hidden_when_everyone_can_bid(self):
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 0)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertNotContains(response, "Enable bidding for all users")
+
+    def test_button_appears_once_someone_cannot_bid(self):
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 1)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertContains(response, "Enable bidding for all users")
+
+    def test_check_in_auctions_never_offer_it(self):
+        """Bidding off until you check in at the door is the point of that mode, not a fault to repair."""
+        club = Club.objects.create(name="Bidding Repair Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = "checkin"
+        self.online_auction.save()
+        self._disable_bidding_for_everyone()
+        self.assertEqual(self.online_auction.users_with_bidding_disabled, 0)
+        self.client.login(username="admin_user", password="testpassword")
+        self.assertEqual(self.client.get(self._url()).status_code, 404)
+
+    def test_modal_names_the_number_of_affected_users(self):
+        self._disable_bidding_for_everyone()
+        count = self.online_auction.users_with_bidding_disabled
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"Enable bidding for {count} users?")
+        self.assertContains(response, "cannot be undone")
+
+    def test_post_enables_bidding_and_records_history(self):
+        self._disable_bidding_for_everyone()
+        count = self.online_auction.users_with_bidding_disabled
+        self.assertTrue(count)
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.post(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            AuctionTOS.objects.filter(auction=self.online_auction, bidding_allowed=False).exists(),
+        )
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        self.assertIn(f"Enabled bidding for {count} users", history.action)
+
+    def test_the_user_who_could_not_bid_can_bid_afterwards(self):
+        """End to end: the fix has to clear the actual 'requires admin approval' bid error."""
+        from auctions.bidding import check_bidding_permissions
+
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        self.unsoldLot.active = True
+        self.unsoldLot.date_end = self.online_auction.date_end
+        self.unsoldLot.save()
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+        self.assertEqual(
+            check_bidding_permissions(self.unsoldLot, self.userB),
+            "This auction requires admin approval before you can bid",
+        )
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(self._url())
+        self.tosB.refresh_from_db()
+        self.assertTrue(self.tosB.bidding_allowed)
+        self.assertNotEqual(
+            check_bidding_permissions(self.unsoldLot, self.userB),
+            "This auction requires admin approval before you can bid",
+        )
+
+    def test_non_admin_cannot_use_it(self):
+        self._disable_bidding_for_everyone()
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.post(self._url())
+        self.assertIn(response.status_code, [302, 403])
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, bidding_allowed=False).exists())
+
+    def test_club_managed_auction_also_fixes_the_member_records(self):
+        """Otherwise the club page still says 'no' and a later member edit pushes it back down."""
+        club = Club.objects.create(name="Managed Bidding Club")
+        self.online_auction.club = club
+        self.online_auction.manage_users_through_club = "all"
+        self.online_auction.save()
+        member = ClubMember.objects.create(club=club, name="Managed Member", email="managed@example.com")
+        tos = AuctionTOS.objects.filter(auction=self.online_auction, clubmember=member).first()
+        self.assertIsNotNone(tos, "creating a member should have created its shadow participant record")
+        ClubMember.objects.filter(pk=member.pk).update(bidding_allowed=False)
+        AuctionTOS.objects.filter(pk=tos.pk).update(bidding_allowed=False)
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(self._url())
+        tos.refresh_from_db()
+        member.refresh_from_db()
+        self.assertTrue(tos.bidding_allowed)
+        self.assertTrue(member.bidding_allowed)
+
+
 class CSVImportPreviewTests(StandardTestCase):
     """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
 
@@ -11310,6 +11416,47 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
         assert "lots_import.csv" in history.action
         assert "1 lots created" in history.action
+
+    def _import_lot_csv(self, csv_content):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        return self.run_csv_import(url, csv_file)
+
+    def test_update_without_a_donation_column_keeps_the_flags(self):
+        """These feed the invoice, so an unrelated column update must not silently clear them."""
+        self.lot.donation = True
+        self.lot.i_bred_this_fish = True
+        self.lot.custom_checkbox = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name\n{self.lot.lot_number_int},Renamed Lot\n")
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.lot_name, "Renamed Lot")
+        self.assertTrue(self.lot.donation)
+        self.assertTrue(self.lot.i_bred_this_fish)
+        self.assertTrue(self.lot.custom_checkbox)
+
+    def test_update_with_a_blank_donation_cell_keeps_the_flag(self):
+        self.lot.donation = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name,Donation\n{self.lot.lot_number_int},Renamed Lot,\n")
+        self.lot.refresh_from_db()
+        self.assertTrue(self.lot.donation)
+
+    def test_update_with_an_explicit_no_clears_the_flag(self):
+        self.lot.donation = True
+        self.lot.save()
+        self._import_lot_csv(f"Lot Number,Lot Name,Donation\n{self.lot.lot_number_int},Renamed Lot,no\n")
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.donation)
+
+    def test_new_lot_defaults_to_off_when_the_file_says_nothing(self):
+        self._import_lot_csv("Name,Email,Lot Name\nBlank Flags,blankflags@example.com,Blank Flag Lot\n")
+        new_lot = Lot.objects.filter(lot_name="Blank Flag Lot", auction=self.online_auction).first()
+        self.assertIsNotNone(new_lot)
+        self.assertFalse(new_lot.donation)
+        self.assertFalse(new_lot.i_bred_this_fish)
 
 
 class SquarePaymentTests(StandardTestCase):
