@@ -65,6 +65,7 @@ from django.http import (
     HttpResponseForbidden,
     HttpResponseRedirect,
     JsonResponse,
+    StreamingHttpResponse,
 )
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
@@ -4923,34 +4924,50 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
+    def find_lot(self, lot_number):
+        """Look a lot up the way this auction numbers its lots.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
+        finds lots by exactly the same rule the Undo button does.
+        """
+        if not lot_number:
+            return None
+        if self.auction.use_seller_dash_lot_numbering:
+            return self.auction.lots_qs.filter(custom_lot_number=lot_number).first()
+        return self.auction.lots_qs.filter(lot_number_int=lot_number).first()
+
+    def unsell(self, undo_lot):
+        """Clear the winner on a lot and record why. Returns the view's own result dict.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
+        produces the identical database change and history entry as the Undo button.
+        """
+        result = {
+            "hide_undo_button": "true",
+            "last_sold_lot_number": "",
+            "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
+        }
+        undo_lot.winner = None
+        undo_lot.auctiontos_winner = None
+        undo_lot.winning_price = None
+        if not self.auction.is_online:
+            undo_lot.date_end = None
+            # this might need changing for online auctions
+            # but as it is now, this view is only ever called for in-person auctions
+        undo_lot.active = True
+        undo_lot.admin_validated = False
+        undo_lot.save()
+        undo_lot.auction.create_history(
+            applies_to="LOTS",
+            action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
+            user=self.request.user,
+        )
+        return result
+
     def post(self, request, *args, **kwargs):
-        undo_lot = request.POST.get("lot_number", None)
+        undo_lot = self.find_lot(request.POST.get("lot_number", None))
         if undo_lot:
-            if self.auction.use_seller_dash_lot_numbering:
-                undo_lot = self.auction.lots_qs.filter(custom_lot_number=undo_lot).first()
-            else:
-                undo_lot = self.auction.lots_qs.filter(lot_number_int=undo_lot).first()
-        if undo_lot:
-            result = {
-                "hide_undo_button": "true",
-                "last_sold_lot_number": "",
-                "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
-            }
-            undo_lot.winner = None
-            undo_lot.auctiontos_winner = None
-            undo_lot.winning_price = None
-            if not self.auction.is_online:
-                undo_lot.date_end = None
-                # this might need changing for online auctions
-                # but as it is now, this view is only ever called for in-person auctions
-            undo_lot.active = True
-            undo_lot.admin_validated = False
-            undo_lot.save()
-            undo_lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
-                user=self.request.user,
-            )
+            result = self.unsell(undo_lot)
         else:
             result = {"message": "No lot found"}
         return JsonResponse(result)
@@ -14177,9 +14194,17 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         from urllib.parse import urlsplit
 
+        from auctions import palette_assist
+        from auctions.llm import assist_enabled
         from fishauctions._env import env_has_real_value
 
         context = super().get_context_data(**kwargs)
+
+        # Asked through the same helper the palette itself uses, so the checklist can never claim
+        # the assistant is on while the palette quietly treats it as off.
+        llm_configured = assist_enabled()
+        llm_window_max = palette_assist.WINDOW_MAX_CALLS
+        llm_window_minutes = palette_assist.WINDOW_SECONDS // 60
 
         server_ip = get_server_public_ip()
         if server_ip:
@@ -14636,6 +14661,57 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {"label": "Google Analytics", "url": "https://analytics.google.com/"},
                     {"label": "Google Tag Manager", "url": "https://tagmanager.google.com/"},
                     {"label": "Google AdSense", "url": "https://www.google.com/adsense/"},
+                ],
+            },
+            # -- Natural-language command palette ---------------------------------
+            {
+                "section": "Command palette assistant",
+                "name": "Command palette assistant",
+                "hide_title": True,
+                "configured": llm_configured,
+                "what_it_does": (
+                    "Lets people type or say what they want in the command palette "
+                    "(<kbd>Ctrl</kbd>/<kbd>&#8984;</kbd>+<kbd>K</kbd>) instead of searching for the page: "
+                    "&ldquo;add a lot of blue shrimp&rdquo;, &ldquo;check in bob&rdquo;, &ldquo;lot 101 sold to "
+                    "bidder 14 for 25&rdquo;. Anything that writes to the database shows a five second countdown "
+                    "with a cancel button first, and every action re-runs the same permission checks the web page "
+                    "does.<br><br>"
+                    "<strong>This is the only setting here that costs money per use.</strong> Each request is one "
+                    "or more calls to the model you configure, billed by that provider. The palette throttles to "
+                    f"{llm_window_max} calls per {llm_window_minutes} minutes per user, and "
+                    "<a href='" + reverse("command_palette_analytics") + "'>command palette analytics</a> shows "
+                    "the running token total, what it's being used for, and the queries it couldn't answer.<br><br>"
+                    "Leave <code>OPENAI_API_KEY</code> empty and the palette behaves exactly as it did before this "
+                    "feature existed: ordinary search, no microphone button, no model calls."
+                ),
+                "where_to_get_it": (
+                    "An API key from your model provider. <code>LLM_MODEL</code> is a one-line model swap and "
+                    "<code>LLM_BASE_URL</code> points at any OpenAI-compatible endpoint &mdash; a proxy, "
+                    "OpenRouter, or a model running on your own hardware &mdash; so the key doesn't have to be "
+                    "OpenAI's. The default model is a small, cheap one; a smarter model gets more commands right "
+                    "and costs more per use."
+                ),
+                "setup_steps": [
+                    "Create an API key with your provider and paste it into <code>OPENAI_API_KEY</code>.",
+                    "Restart the site, then press <kbd>Ctrl</kbd>/<kbd>&#8984;</kbd>+<kbd>K</kbd> and type "
+                    "something like &ldquo;take me to my invoice&rdquo; to check it responds.",
+                    "Watch the analytics page for the first few days &mdash; the token total tells you what this "
+                    "is actually costing, and the &ldquo;couldn't answer&rdquo; list tells you what people expected "
+                    "it to do.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'LLM_PROVIDER="openai"\n'
+                            f'LLM_MODEL="{settings.LLM_MODEL or "gpt-5-nano"}"\n'
+                            'OPENAI_API_KEY="sk-..."\n'
+                            'LLM_BASE_URL=""'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "OpenAI API keys", "url": "https://platform.openai.com/api-keys"},
+                    {"label": "Command palette analytics", "url": reverse("command_palette_analytics")},
                 ],
             },
             # -- Mailchimp --------------------------------------------------------
@@ -23862,10 +23938,20 @@ class CommandPaletteAssistBase(View):
 class CommandPaletteAssistView(CommandPaletteAssistBase):
     """Turn a natural-language command palette query into results, a navigation, or an action.
 
-    POST JSON: ``{"q": "...", "context": [...]}``. Returns one of the assist response kinds
-    (results / navigate / countdown / clarify / done / error). Nothing that changes the database
-    happens here -- confirm-tier actions come back as a countdown and are run by the execute
-    endpoint.
+    POST JSON: ``{"q": "...", "context": [...], "path": "/where/the/user/is/"}``.
+
+    Streams **newline-delimited JSON**: zero or more ``{"kind": "progress"}`` objects while the
+    assist loop works, then exactly one final response (results / navigate / countdown / clarify /
+    done / error). One object per line, so the client can render each as it lands and doesn't need
+    an incremental JSON parser.
+
+    NDJSON over ``fetch`` rather than server-sent events because this is a POST with a body and a
+    CSRF token; ``EventSource`` is GET-only. A client that can't read a stream still gets a valid
+    body it can parse line by line at the end, so the streaming is an enhancement, not a
+    requirement.
+
+    Nothing that changes the database happens here -- confirm-tier actions come back as a countdown
+    and are run by the execute endpoint.
     """
 
     def post(self, request, *args, **kwargs):
@@ -23875,8 +23961,29 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
         if throttled:
             return throttled
         data = self.load_json(request)
-        response = palette_assist.assist(request, data.get("q", ""), data.get("context"))
-        return JsonResponse(response)
+        query = data.get("q", "")
+        context = data.get("context")
+        path = data.get("path", "")
+
+        if not data.get("stream", True):
+            return JsonResponse(palette_assist.assist(request, query, context, path))
+
+        def lines():
+            try:
+                for event in palette_assist.assist_stream(request, query, context, path):
+                    yield json.dumps(event, default=str) + "\n"
+            except Exception:
+                # A traceback must not reach the user as a half-written stream, and by this point
+                # the status line is long gone, so the only thing left is to end with a usable
+                # final object.
+                logger.exception("Command palette assist stream failed")
+                yield json.dumps({"kind": "error", "message": "Something went wrong working that out."}) + "\n"
+
+        response = StreamingHttpResponse(lines(), content_type="application/x-ndjson")
+        response["Cache-Control"] = "private, no-store"
+        # Without this nginx buffers the whole response and the streaming does nothing at all.
+        response["X-Accel-Buffering"] = "no"
+        return response
 
 
 class CommandPaletteExecuteView(CommandPaletteAssistBase):
@@ -23894,7 +24001,7 @@ class CommandPaletteExecuteView(CommandPaletteAssistBase):
         if throttled:
             return throttled
         data = self.load_json(request)
-        response = palette_assist.execute(request, data.get("action", ""), data.get("params"))
+        response = palette_assist.execute(request, data.get("action", ""), data.get("params"), data.get("path", ""))
         return JsonResponse(response)
 
 
@@ -23908,6 +24015,8 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     template_name = "command_palette_analytics.html"
 
     def get_context_data(self, **kwargs):
+        from auctions import palette_assist
+
         context = super().get_context_data(**kwargs)
         base = CommandPaletteSearch.objects.exclude(search="")
 
@@ -23940,5 +24049,15 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             .values("action")
             .annotate(count=Count("id"), tokens=Sum("total_tokens"))
             .order_by("-count")[:10]
+        )
+        # The queries the assistant couldn't answer, most repeated first. This is the closest thing
+        # to a feature backlog the palette has: a phrase that keeps showing up here is somebody
+        # asking, over and over, for a skill that doesn't exist yet.
+        context["llm_gave_up"] = list(
+            usage.filter(response_kind__in=palette_assist.FAILURE_KINDS)
+            .exclude(query="")
+            .values("query", "response_kind")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:15]
         )
         return context

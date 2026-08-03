@@ -15,11 +15,19 @@ voice goes through the identical gauntlet as one added by clicking:
                          ``validate_price`` / ``validate_winner`` / ``cross_check_price_and_winner``
                          / ``commit_winner`` methods, on a real instance of the view
   ``check_in``        -> ``services.check_in_auctiontos`` (extracted from ``views.AuctionCheckIn``)
+  ``undo_sale``       -> :class:`auctions.views.AuctionUnsellLot`'s own ``find_lot`` / ``unsell``
   ``find_person`` /   -> the palette's own scoped search helpers in ``command_palette``
+  ``find_lot`` /
   ``my_context``
-  ``open_page``       -> ``command_palette.resolve_page`` and ``command_palette.search``
+  ``go_to_page`` /    -> ``palette_routes``, the catalog of every page on the site
+  ``find_page``
   ``print_labels`` /  -> navigate only; they resolve a URL and never perform the action
   ``renew_membership``
+
+**Navigation is one skill, not three hundred.** Every page the site has is a
+:class:`~auctions.palette_routes.Route`, and ``go_to_page`` reaches all of them. Adding a URL to
+``urls.py`` without either cataloguing it or writing down why it isn't a destination fails
+``auctions/test_palette_routes.py``, so the assistant can't silently fall behind the UI.
 
 Danger levels:
 
@@ -47,7 +55,7 @@ from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from django.urls import reverse
 
-from . import command_palette
+from . import command_palette, palette_routes
 from .models import AuctionTOS, ClubMember, Lot
 from .services import (
     check_in_auctiontos,
@@ -162,14 +170,31 @@ def _decimal(params: dict[str, Any], key: str) -> Decimal | None:
         return None
 
 
-def resolve_auction(user, hint: str = ""):
-    """Find the auction the user means, or fall back to their most recent one.
+def _page(request) -> dict[str, Any]:
+    """What the user is currently looking at, as worked out by ``palette_routes``.
 
-    Scoped to auctions the user has actually joined or created (``_joined_auctions``), so a hint
-    can never reach an auction they have no relationship with. Returns ``(auction, error_or_None)``.
+    Attached to the request by ``palette_assist`` before any resolver runs. Always a dict, so
+    resolvers can read it without checking whether the client sent a path.
+    """
+    return getattr(request, "palette_page", None) or {}
+
+
+def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None):
+    """Find the auction the user means, in order: what they said, what they're looking at, last used.
+
+    Scoped to auctions the user has actually joined or created (``_joined_auctions``), so neither a
+    hint nor a page they claim to be on can reach an auction they have no relationship with.
+    Returns ``(auction, error_or_None)``.
     """
     joined = command_palette._joined_auctions(user)
     if not hint:
+        # The page they're on beats the stickier ``last_auction_used``: someone standing in one
+        # auction's lot list and saying "add a lot" means this auction, whatever they touched last.
+        page_slug = (page or {}).get("auction")
+        if page_slug:
+            current = joined.filter(slug=page_slug).first()
+            if current:
+                return current, None
         auction = command_palette._last_auction(user)
         if not auction:
             return None, "I don't know which auction you mean, and you don't have a recent one."
@@ -236,7 +261,7 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     from .forms import quick_add_lot_form_class
 
     user = request.user
-    auction, error = resolve_auction(user, _str(params, "auction"))
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
     if error:
         return _error(error)
 
@@ -343,7 +368,7 @@ def set_lot_winner(request, params: dict[str, Any]) -> dict[str, Any]:
     from .views import DynamicSetLotWinner
 
     user = request.user
-    auction, error = resolve_auction(user, _str(params, "auction"))
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
     if error:
         return _error(error)
     if not _is_auction_admin(user, auction):
@@ -390,7 +415,7 @@ def check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     from .views import user_can_add_edit_people
 
     user = request.user
-    auction, error = resolve_auction(user, _str(params, "auction"))
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
     if error:
         return _error(error)
     # Same question AuctionViewMixin.can_add_edit_people asks, in the same order.
@@ -451,14 +476,15 @@ def find_person(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def my_context(request, params: dict[str, Any]) -> dict[str, Any]:
     """Who the user is and what they're currently working on: clubs, last auction, role."""
-    return user_context(request.user)
+    return user_context(request.user, _page(request))
 
 
-def user_context(user) -> dict[str, Any]:
+def user_context(user, page: dict[str, Any] | None = None) -> dict[str, Any]:
     """The compact context block handed to the model with every assist request.
 
     Deliberately small: a username, the palette club, the last auction and the user's role in it,
-    and their memberships. Enough for "renew my membership" to know which club is meant.
+    their memberships, and the page they're looking at right now. Enough for "renew my membership"
+    to know which club is meant, and for "add a lot" to mean the auction on screen.
     """
     auction = command_palette._last_auction(user)
     club = command_palette._palette_club(user)
@@ -481,6 +507,8 @@ def user_context(user) -> dict[str, Any]:
         "memberships": memberships,
         "admin_clubs": [c.name for c in command_palette._admin_clubs(user)],
     }
+    if page:
+        data["looking_at_right_now"] = page
     if auction:
         tos = _own_tos(user, auction)
         data["last_auction"] = {
@@ -510,7 +538,9 @@ def print_labels(request, params: dict[str, Any]) -> dict[str, Any]:
     resolves to, via the lot id carried in the conversation context).
     """
     user = request.user
-    lot_id = _int(params, "lot_id")
+    # A lot named in the request wins; otherwise the lot whose page they're standing on, which is
+    # what "print this label" means when you're looking at a lot.
+    lot_id = _int(params, "lot_id") or _page(request).get("lot_id")
     if lot_id:
         lot = Lot.objects.filter(pk=lot_id, is_deleted=False).first()
         if not lot:
@@ -519,7 +549,7 @@ def print_labels(request, params: dict[str, Any]) -> dict[str, Any]:
             f"Opening the label for {lot.lot_name}.",
             url=reverse("single_lot_label", kwargs={"pk": lot.pk}),
         )
-    auction, error = resolve_auction(user, _str(params, "auction"))
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
     if error:
         return _error(error)
     scope = (_str(params, "scope") or "mine").lower()
@@ -572,22 +602,167 @@ def renew_membership(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def open_page(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Resolve a "take me to X" request against the palette's own Go-To matchers.
+def go_to_page(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open any page on the site, by route key from the catalog in the prompt.
 
-    Runs ``command_palette.search`` and returns the first page-ish destination, so the model can
-    never invent a URL -- it can only pick from what the palette itself would have offered.
+    Three ways in, tried in order, so a slightly-wrong answer from the model still lands somewhere
+    sensible instead of erroring:
+
+    1. ``page`` is a key from :data:`auctions.palette_routes.ROUTES` -- the normal case.
+    2. ``page`` is free text ("treasurer report") -- matched against the catalog, and an ambiguous
+       match comes back as ``more_info_needed`` with the candidates.
+    3. Nothing matches -- fall back to the ordinary palette search, which knows about lots,
+       people and ``CommandPalettePage`` rows that aren't URLs at all.
+
+    The model never supplies a URL or a primary key: it names a destination, and
+    ``palette_routes.resolve_route`` works out the parameters from the user's own scoped objects.
     """
     query = _str(params, "page") or _str(params, "query")
     if not query:
         return _error("Where would you like to go?")
+
+    route = palette_routes.get_route(query)
+    if route is None:
+        matches = palette_routes.match_routes(query, request.user, limit=4)
+        if len(matches) == 1:
+            route = matches[0]
+        elif matches:
+            # Several plausible destinations: ask rather than guess, but keep the keys so the
+            # answer comes back as a route rather than another round of free text.
+            top = matches[0]
+            second = matches[1]
+            if top.search_text.count(query.lower()) or len(matches) > 3:
+                route = top
+            else:
+                return _need(
+                    f"Did you want {top.label.lower()} or {second.label.lower()}?",
+                    [{"label": match.label, "value": match.key} for match in matches],
+                )
+
+    if route is not None:
+        result = palette_routes.resolve_route(request, route, params)
+        if "error" not in result:
+            return result
+        if result.get("denied"):
+            # "You aren't allowed in there" is the answer, not a reason to go looking for somewhere
+            # else to put them. Guessing past a refusal would land them on a page they didn't ask
+            # for and hide the fact that they don't have access.
+            return _error(result["error"])
+        problem = result["error"]
+    else:
+        problem = ""
+
+    # Last resort: the ordinary palette search, which reaches objects (a lot, a person, an invoice)
+    # that have no place in a catalog of pages.
     groups = command_palette.search(request, query)
     preferred = [g for g in groups if g["label"] == "Go to"] or groups
     for group in preferred:
         for item in group["items"]:
             if item.get("url"):
                 return _ok(f"Opening {item['title']}.", url=item["url"], title=item["title"])
-    return _error(f"I couldn't find a page for “{query}”.")
+    return _error(problem or f"I couldn't find a page for “{query}”.")
+
+
+# --- lookups over lots and pages ---------------------------------------------
+
+
+def find_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Look a lot up by number or name, within the auctions the user is part of.
+
+    The counterpart to ``find_person``: turns "the blue shrimp lot" into a lot id the other
+    actions can use, without the model ever guessing a primary key.
+    """
+    from django.db.models import Q
+
+    user = request.user
+    query = _str(params, "lot") or _str(params, "query") or _str(params, "name")
+    if not query:
+        return _error("Give me a lot number or name to look for.")
+    auction = None
+    hint = _str(params, "auction")
+    if hint:
+        auction, error = resolve_auction(user, hint)
+        if error:
+            return _error(error)
+    lots = Lot.objects.filter(is_deleted=False)
+    if not user.is_superuser:
+        lots = lots.filter(Q(user=user) | Q(auction__in=command_palette._joined_auctions(user)))
+    if auction:
+        lots = lots.filter(auction=auction)
+    matches = list(
+        lots.filter(Q(custom_lot_number__iexact=query) | Q(lot_name__icontains=query)).select_related("auction")[
+            : AMBIGUOUS_LIMIT + 1
+        ]
+    )
+    if not matches:
+        return {"found": False, "lots": [], "summary": f"No lot matching “{query}”."}
+    return {
+        "found": True,
+        "lots": [
+            {
+                "lot_id": lot.pk,
+                "lot_number": lot.lot_number_display,
+                "name": lot.lot_name,
+                "auction": lot.auction.title if lot.auction else None,
+                "sold": bool(lot.winner or lot.auctiontos_winner),
+                "price": str(lot.winning_price) if lot.winning_price else None,
+            }
+            for lot in matches[:AMBIGUOUS_LIMIT]
+        ],
+        "summary": f"{len(matches)} lot(s) matching “{query}”.",
+    }
+
+
+def find_page(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Search the page catalog. A safety net for when the prompt's catalog wasn't enough."""
+    query = _str(params, "query") or _str(params, "page")
+    if not query:
+        return _error("What page are you looking for?")
+    matches = palette_routes.match_routes(query, request.user, limit=6)
+    if not matches:
+        return {"found": False, "pages": [], "summary": f"No page matching “{query}”."}
+    return {
+        "found": True,
+        "pages": [{"page": route.key, "label": route.label, "section": route.section} for route in matches],
+        "summary": f"{len(matches)} page(s) matching “{query}”.",
+    }
+
+
+# --- undo a sale -------------------------------------------------------------
+
+
+def undo_sale(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Un-sell a lot in an in-person auction.
+
+    Wraps :class:`auctions.views.AuctionUnsellLot`'s own ``unsell`` helper, so the invoice
+    recalculation and history entry are exactly the ones the Undo button produces.
+    """
+    from .views import AuctionUnsellLot
+
+    user = request.user
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
+    if error:
+        return _error(error)
+    if not _is_auction_admin(user, auction):
+        return _error(f"You don't have permission to change sales in {auction.title}.")
+    if auction.is_online:
+        return _error(f"{auction.title} is an online auction — winners come from the bids automatically.")
+
+    lot_hint = _str(params, "lot")
+    if not lot_hint:
+        return _need("Which lot number should I un-sell?")
+
+    view = AuctionUnsellLot()
+    view.request = request
+    view.auction = auction
+    view.kwargs = {}
+    lot = view.find_lot(lot_hint)
+    if not lot:
+        return _error(f"I couldn't find lot {lot_hint} in {auction.title}.")
+    if not (lot.winner or lot.auctiontos_winner):
+        return _error(f"Lot {lot.lot_number_display} hasn't been sold, so there's nothing to undo.")
+    result = view.unsell(lot)
+    return _ok(str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}."), lot_id=lot.pk)
 
 
 # --- registry ----------------------------------------------------------------
@@ -719,16 +894,77 @@ register(
 
 register(
     Action(
-        name="open_page",
+        name="go_to_page",
         description=(
-            "Navigate to a page on the site. Use for anything that is just 'take me to X' — "
-            "invoices, settings, a club page, an auction page, adding users, and so on."
+            "Open any page on the site. 'page' must be one of the destination keys listed under "
+            "'Pages you can open' below — that list is every page this site has. Use 'target' when "
+            "the page is about a particular thing: an auction name, a bidder, a lot, a club. This "
+            "is the right answer for anything phrased as 'take me to', 'open', 'show me' or 'where "
+            "is', and it is also the correct last resort when no other action fits."
         ),
-        params={"page": "string, required. What the user wants to reach, in their words."},
+        params={
+            "page": "string, required. A destination key from the list below.",
+            "target": (
+                "string, optional. Which auction / club / lot / person the page is about. "
+                "Omit to use whatever the user is currently looking at."
+            ),
+            "tab": "string, optional, only for club_detail_tab: bap, hap, culture or my-points.",
+        },
         danger=DANGER_NAVIGATE,
-        resolver=open_page,
-        aliases={"query"},
-        examples=["take me to my invoice", "auction rules"],
+        resolver=go_to_page,
+        aliases={"query", "club", "lot_id"},
+        examples=["take me to my invoice", "auction rules", "open the treasurer report"],
+    )
+)
+
+register(
+    Action(
+        name="find_page",
+        description=(
+            "Search the list of pages when you aren't sure which destination key to use. Returns "
+            "keys you can pass straight to go_to_page."
+        ),
+        params={"query": "string, required. What the user is trying to reach, in their words."},
+        danger=DANGER_SAFE,
+        resolver=find_page,
+        aliases={"page"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="find_lot",
+        description=(
+            "Look up a lot by its number or name, in auctions this user is part of. Use this to "
+            "turn 'the blue shrimp' into a lot number before acting on it."
+        ),
+        params={
+            "lot": "string, required. Lot number or part of the lot's name.",
+            "auction": "string, optional. Defaults to searching every auction the user is in.",
+        },
+        danger=DANGER_SAFE,
+        resolver=find_lot,
+        aliases={"query", "name"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="undo_sale",
+        description=(
+            "Clear the winner and price on a lot that was sold by mistake in an in-person "
+            "auction, putting it back up for sale. Auction admins only."
+        ),
+        params={
+            "lot": "string, required. The lot number to un-sell.",
+            "auction": "string, optional. Defaults to the user's last auction.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=undo_sale,
+        confirm_template="Undo a sale",
+        examples=["undo lot 14", "that last one was wrong, unsell it"],
     )
 )
 

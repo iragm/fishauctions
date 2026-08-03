@@ -338,19 +338,111 @@
       }
     }
 
-    function showThinking() {
-      results.innerHTML = "";
-      clearNav();
-      var wrap = document.createElement("div");
-      wrap.className = "cp-thinking text-muted d-flex align-items-center gap-2 px-2 py-3";
-      var spinner = document.createElement("span");
-      spinner.className = "spinner-border spinner-border-sm";
-      spinner.setAttribute("role", "status");
-      wrap.appendChild(spinner);
-      var label = document.createElement("span");
-      label.textContent = "Working out what you mean…";
-      wrap.appendChild(label);
-      results.appendChild(wrap);
+    // The progress strip. Unlike the old version this does NOT clear the results: whatever the
+    // user could already click stays on screen, dimmed, for the several seconds the model takes.
+    // Losing a usable result list to a spinner is worse than waiting next to one.
+    var thinkingEl = null;
+    var thinkingLabel = null;
+    var thinkingSteps = null;
+
+    function showThinking(text) {
+      if (!thinkingEl) {
+        thinkingEl = document.createElement("div");
+        thinkingEl.className = "cp-thinking px-2 py-2 mb-2";
+        thinkingEl.setAttribute("aria-live", "polite");
+
+        var current = document.createElement("div");
+        current.className = "d-flex align-items-center gap-2 text-body";
+        var spinner = document.createElement("span");
+        spinner.className = "spinner-border spinner-border-sm flex-shrink-0";
+        spinner.setAttribute("role", "status");
+        current.appendChild(spinner);
+        thinkingLabel = document.createElement("span");
+        current.appendChild(thinkingLabel);
+
+        thinkingSteps = document.createElement("div");
+        thinkingSteps.className = "cp-thinking-steps text-muted small ps-4";
+
+        thinkingEl.appendChild(thinkingSteps);
+        thinkingEl.appendChild(current);
+        results.classList.add("cp-dimmed");
+        results.insertBefore(thinkingEl, results.firstChild);
+      }
+      // The line that was current becomes a completed step, so the user can see the path it took
+      // rather than just the latest frame.
+      if (thinkingLabel.textContent && thinkingLabel.textContent !== text) {
+        var done = document.createElement("div");
+        done.className = "cp-thinking-step";
+        done.textContent = thinkingLabel.textContent;
+        thinkingSteps.appendChild(done);
+      }
+      thinkingLabel.textContent = text || "Working…";
+    }
+
+    function clearThinking() {
+      if (thinkingEl && thinkingEl.parentNode) {
+        thinkingEl.parentNode.removeChild(thinkingEl);
+      }
+      results.classList.remove("cp-dimmed");
+      thinkingEl = null;
+      thinkingLabel = null;
+      thinkingSteps = null;
+    }
+
+    // Read a newline-delimited JSON stream, handing each complete object to `onEvent`.
+    // Falls back to reading the whole body when the browser has no streaming reader, in which
+    // case the progress lines simply all arrive at once at the end — same final answer.
+    function readNdjson(response, onEvent) {
+      function handleChunkText(text, buffer) {
+        buffer += text;
+        var lines = buffer.split("\n");
+        buffer = lines.pop(); // last piece may be a partial line
+        lines.forEach(function (line) {
+          if (!line.trim()) {
+            return;
+          }
+          try {
+            onEvent(JSON.parse(line));
+          } catch (err) {
+            /* a truncated or malformed line is skipped rather than breaking the stream */
+          }
+        });
+        return buffer;
+      }
+
+      if (!response.body || !response.body.getReader) {
+        return response.text().then(function (text) {
+          var rest = handleChunkText(text, "");
+          if (rest.trim()) {
+            try {
+              onEvent(JSON.parse(rest));
+            } catch (err) {
+              /* ignore a trailing partial line */
+            }
+          }
+        });
+      }
+
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      return (function pump() {
+        return reader.read().then(function (chunk) {
+          if (chunk.done) {
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+              try {
+                onEvent(JSON.parse(buffer));
+              } catch (err) {
+                /* ignore a trailing partial line */
+              }
+            }
+            return null;
+          }
+          buffer = handleChunkText(decoder.decode(chunk.value, { stream: true }), buffer);
+          return pump();
+        });
+      })();
     }
 
     // A plain message block. `type` follows the site's message-type standard: info for neutral
@@ -488,12 +580,16 @@
     }
 
     function runExecute(query, response) {
-      showThinking();
+      showThinking((response.summary || "Doing that") + "…");
       fetch(executeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         credentials: "same-origin",
-        body: JSON.stringify({ action: response.action, params: response.params }),
+        body: JSON.stringify({
+          action: response.action,
+          params: response.params,
+          path: window.location.pathname,
+        }),
       })
         .then(function (resp) {
           return resp.json();
@@ -507,9 +603,15 @@
     }
 
     function renderAssist(query, response) {
+      clearThinking();
       var kind = response && response.kind;
       if (kind === "results") {
         render(response.groups || []);
+        // The server sends a note when these results are a fallback rather than a real answer, so
+        // the user is told we guessed instead of being left to assume we understood.
+        if (response.note) {
+          results.insertBefore(renderNote(response.note, "warning", "bi-question-circle"), results.firstChild);
+        }
         return;
       }
       if (kind === "navigate" && response.url) {
@@ -559,23 +661,39 @@
       }
       assistInFlight = true;
       finalized = true; // this query ends in an assist result, not an abandoned search
-      showThinking();
+      showThinking("Working out what you mean…");
+      var answered = false;
       fetch(assistUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         credentials: "same-origin",
-        body: JSON.stringify({ q: query, context: loadContext() }),
+        // `path` lets the server work out which auction/club/lot we're looking at. It resolves the
+        // path through its own URLconf and re-checks every object, so this is a hint, not a claim.
+        body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname }),
       })
         .then(function (resp) {
-          return resp.json();
-        })
-        .then(function (data) {
-          renderAssist(query, data);
+          return readNdjson(resp, function (event) {
+            if (event && event.kind === "progress") {
+              showThinking(event.message);
+              return;
+            }
+            answered = true;
+            renderAssist(query, event);
+          });
         })
         .catch(function () {
-          renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
+          // A dropped connection mid-stream: the last thing on screen would otherwise be a
+          // spinner that never resolves.
+          if (!answered) {
+            answered = true;
+            renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
+          }
         })
         .then(function () {
+          // The stream ended without a final object (truncated response, server restart).
+          if (!answered) {
+            renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
+          }
           assistInFlight = false;
         });
     }

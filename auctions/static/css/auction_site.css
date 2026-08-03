@@ -344,7 +344,56 @@ a.ad:hover {
     transition: width 0.1s linear;
 }
 
-/* "Thinking" line while an assist request is in flight. */
+/* Progress strip while an assist request is in flight.
+
+   An assist call can take the better part of twenty seconds, so this narrates what the server is
+   actually doing (each step arrives from the stream) instead of showing one frozen line. Completed
+   steps stay above the current one, muted, so the path taken is visible.
+
+   The results underneath are dimmed rather than removed: whatever was already clickable stays
+   clickable, which matters because the assistant may well come back with nothing better. */
 #command-palette-results .cp-thinking {
     font-size: 0.9rem;
+    border-left: 2px solid var(--bs-border-color);
+}
+
+#command-palette-results .cp-thinking-step {
+    line-height: 1.6;
+}
+
+#command-palette-results .cp-thinking-step::before {
+    content: "\2713";  /* check mark: this step finished */
+    margin-right: 0.4rem;
+    opacity: 0.7;
+}
+
+/* Each new line fades in, which reads as progress rather than as a flicker. */
+#command-palette-results .cp-thinking-step,
+#command-palette-results .cp-thinking > div:last-child {
+    animation: cp-thinking-in 0.25s ease-out;
+}
+
+@keyframes cp-thinking-in {
+    from { opacity: 0; transform: translateY(0.15rem); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Results stay on screen and stay clickable while we think — see "Unavailable actions stay
+   clickable" in style_reference.md. This is a visual de-emphasis only, not pointer-events: none. */
+#command-palette-results.cp-dimmed .cp-item,
+#command-palette-results.cp-dimmed .list-group {
+    opacity: 0.45;
+    transition: opacity 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #command-palette-results .cp-thinking-step,
+    #command-palette-results .cp-thinking > div:last-child {
+        animation: none;
+    }
+
+    #command-palette-results.cp-dimmed .cp-item,
+    #command-palette-results.cp-dimmed .list-group {
+        transition: none;
+    }
 }

@@ -16,7 +16,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import llm, palette_actions, palette_assist
+from auctions import llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult
 from auctions.models import AuctionTOS, LLMUsage, Lot
 from auctions.tests import StandardTestCase
@@ -45,6 +45,37 @@ class FakeProvider(LLMProvider):
     @property
     def call_count(self):
         return len(self.calls)
+
+
+class AssistResponse:
+    """A drained NDJSON assist response.
+
+    The endpoint streams, so a test can't just call ``.json()`` on it. This collects every event
+    and exposes the final one as ``.json()``, so assertions read the same as they did before the
+    endpoint streamed, plus ``.progress`` for the narration itself.
+    """
+
+    def __init__(self, response):
+        self.status_code = response.status_code
+        self.raw = response
+        if response.streaming:
+            body = b"".join(response.streaming_content).decode("utf-8")
+            self.events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        else:
+            # Throttled requests (429) and the non-streaming opt-out come back as plain JSON.
+            self.events = [json.loads(response.content.decode("utf-8"))]
+
+    @property
+    def progress(self):
+        return [event for event in self.events if event.get("kind") == "progress"]
+
+    @property
+    def progress_messages(self):
+        return [event.get("message", "") for event in self.progress]
+
+    def json(self):
+        finals = [event for event in self.events if event.get("kind") != "progress"]
+        return finals[-1] if finals else {}
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -90,25 +121,32 @@ class PaletteAssistTestCase(StandardTestCase):
         self.provider.replies = list(replies)
         self.provider.calls = []
 
-    def _assist(self, query, context=None, user=None, skip_throttle_reset=False):
-        """POST to the assist endpoint as ``user`` (defaults to self.user)."""
+    def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path=""):
+        """POST to the assist endpoint as ``user`` (defaults to self.user).
+
+        The endpoint streams NDJSON, so this returns an :class:`AssistResponse` that drains the
+        stream. ``.json()`` still gives the final answer, which keeps every assertion below reading
+        the way it did before streaming existed; ``.progress`` exposes the narration.
+        """
         user = user or self.user
         if not skip_throttle_reset:
             cache.delete(f"palette_assist_cooldown_{user.pk}")
         self.client.force_login(user)
-        return self.client.post(
-            reverse("command_palette_assist"),
-            data=json.dumps({"q": query, "context": context or []}),
-            content_type="application/json",
+        return AssistResponse(
+            self.client.post(
+                reverse("command_palette_assist"),
+                data=json.dumps({"q": query, "context": context or [], "path": path}),
+                content_type="application/json",
+            )
         )
 
-    def _execute(self, action, params, user=None):
+    def _execute(self, action, params, user=None, path=""):
         user = user or self.user
         cache.delete(f"palette_assist_cooldown_{user.pk}")
         self.client.force_login(user)
         return self.client.post(
             reverse("command_palette_execute"),
-            data=json.dumps({"action": action, "params": params}),
+            data=json.dumps({"action": action, "params": params, "path": path}),
             content_type="application/json",
         )
 
@@ -117,7 +155,7 @@ class HeuristicTests(PaletteAssistTestCase):
     """Obvious queries must never reach the model."""
 
     def test_short_query_with_a_match_skips_the_llm(self):
-        self._script({"action": "open_page", "params": {"page": "nope"}})
+        self._script({"action": "go_to_page", "params": {"page": "nope"}})
         response = self._assist("This auction is in-person")
         data = response.json()
         self.assertEqual(data["kind"], "results")
@@ -192,9 +230,17 @@ class UntrustedOutputTests(PaletteAssistTestCase):
     """Whatever the model returns is input, not instruction."""
 
     def test_malformed_reply_is_rejected(self):
+        """Four off-contract replies must never be acted on -- but must not dead-end either.
+
+        The old behaviour here was a flat "I couldn't work out how to do that". Now the loop gives
+        up and hands over to the fallback ladder, so the answer is search results, a guessed page,
+        or an error, and never an action.
+        """
         self._script({"nonsense": True}, {"also": "wrong"}, [], "not even a dict")
         response = self._assist("do something impossible with several words")
-        self.assertEqual(response.json()["kind"], "error")
+        self.assertIn(response.json()["kind"], {"error", "results", "clarify", "navigate"})
+        self.assertEqual(Lot.objects.filter(lot_name="do something impossible").count(), 0)
+        self.assertTrue(LLMUsage.objects.filter(response_kind=palette_assist.FAIL_INVALID).exists())
 
     def test_unknown_action_is_rejected(self):
         self._script({"action": "delete_everything", "params": {}}, {"error": "gave up"})
@@ -266,7 +312,7 @@ class DangerTierTests(PaletteAssistTestCase):
         self.assertIn("print-my-labels", data["url"])
 
     def test_execute_refuses_non_confirm_actions(self):
-        response = self._execute("open_page", {"page": "invoice"})
+        response = self._execute("go_to_page", {"page": "my_invoices"})
         self.assertEqual(response.json()["kind"], "error")
 
 
@@ -552,8 +598,20 @@ class UsageLoggingTests(PaletteAssistTestCase):
         LLMUsage.objects.all().delete()
         self._script()  # no replies -> the provider raises LLMError
         response = self._assist("do something that needs the model and several words")
-        self.assertEqual(response.json()["kind"], "error")
+        self.assertNotEqual(response.json()["kind"], "done")
         self.assertTrue(LLMUsage.objects.filter(success=False).exists())
+
+    def test_provider_outage_is_recorded_separately_from_a_model_refusal(self):
+        """These used to be indistinguishable, which made the analytics page useless for triage."""
+        LLMUsage.objects.all().delete()
+        self._script()  # no replies -> LLMError, i.e. the provider is unreachable
+        self._assist("something the provider will never see because it is down")
+        self.assertTrue(LLMUsage.objects.filter(response_kind=palette_assist.FAIL_PROVIDER).exists())
+
+        LLMUsage.objects.all().delete()
+        self._script({"error": "this site doesn't do that"})
+        self._assist("please launch a rocket into orbit for me")
+        self.assertTrue(LLMUsage.objects.filter(response_kind=palette_assist.FAIL_MODEL_ERROR).exists())
 
     def test_analytics_page_shows_usage(self):
         LLMUsage.objects.create(user=self.user, model="fake-model", total_tokens=42, response_kind="done")
@@ -606,3 +664,199 @@ class RegistryTests(PaletteAssistTestCase):
         for action in palette_actions.ACTIONS.values():
             if action.lookup:
                 self.assertEqual(action.danger, palette_actions.DANGER_SAFE, action.name)
+
+    def test_prompt_lists_every_page_the_user_can_reach(self):
+        """The catalog in the prompt is generated, so a new route teaches the model automatically."""
+        prompt = palette_assist.build_system_prompt(self.user)
+        for key in ("my_invoices", "print_my_labels", "auction_lot_list", "watched"):
+            self.assertIn(key, prompt)
+
+    def test_prompt_does_not_offer_site_admin_pages_to_ordinary_users(self):
+        prompt = palette_assist.build_system_prompt(self.member)
+        self.assertNotIn("admin_setup_checklist", prompt)
+
+
+class StreamingTests(PaletteAssistTestCase):
+    """Progress narration. The feature is slow; saying nothing for 20s reads as broken."""
+
+    def test_the_endpoint_streams_ndjson(self):
+        self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
+        response = self._assist("take me to where I can see what I owe")
+        self.assertTrue(response.raw.streaming)
+        self.assertEqual(response.raw["Content-Type"], "application/x-ndjson")
+        # Without this nginx buffers the whole body and the streaming does nothing at all.
+        self.assertEqual(response.raw["X-Accel-Buffering"], "no")
+
+    def test_progress_arrives_before_the_answer(self):
+        self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
+        response = self._assist("take me to where I can see what I owe")
+        self.assertTrue(response.progress, "expected at least one progress event")
+        self.assertEqual(response.events[-1]["kind"], "navigate")
+        self.assertEqual(response.events[0]["kind"], "progress")
+
+    def test_a_lookup_round_is_narrated_by_name(self):
+        """ "Searching for “555”…" — the point is that it names the thing being looked up."""
+        self._script(
+            {"lookup": "find_person", "params": {"name": "555"}},
+            {"action": "go_to_page", "params": {"page": "auction_tos_list"}, "summary": "Opening people"},
+        )
+        response = self._assist("who is bidder 555 in this auction anyway")
+        self.assertTrue(
+            any("555" in message for message in response.progress_messages),
+            f"expected the lookup to be narrated with its target, got {response.progress_messages}",
+        )
+
+    def test_the_opening_line_reflects_what_was_typed(self):
+        self.assertEqual(palette_assist.opening_line("add a lot of blue shrimp"), "Adding that…")
+        self.assertEqual(palette_assist.opening_line("lot 12 sold to bidder 4 for 25"), "Recording that sale…")
+        self.assertEqual(palette_assist.opening_line("print my labels"), "Finding the right labels…")
+        self.assertEqual(palette_assist.opening_line("take me to my account"), "Finding that page…")
+        self.assertEqual(palette_assist.opening_line("qwerty asdf"), "Working out what you mean…")
+
+    def test_obvious_matches_still_answer_without_any_progress(self):
+        """A query answered by search alone shouldn't grow a fake thinking animation."""
+        response = self._assist("This auction is in-person")
+        self.assertEqual(response.progress, [])
+        self.assertEqual(response.json()["kind"], "results")
+
+    def test_non_streaming_clients_still_get_a_plain_json_answer(self):
+        self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
+        self.client.force_login(self.user)
+        raw = self.client.post(
+            reverse("command_palette_assist"),
+            data=json.dumps({"q": "take me to where I can see what I owe", "stream": False}),
+            content_type="application/json",
+        )
+        self.assertFalse(raw.streaming)
+        self.assertEqual(json.loads(raw.content)["kind"], "navigate")
+
+
+class FallbackTests(PaletteAssistTestCase):
+    """What happens when the assistant can't work it out. Never a dead end."""
+
+    def test_running_out_of_rounds_falls_back_to_search(self):
+        self._script(*[{"nonsense": True}] * 4)
+        response = self._assist("This auction is in-person but phrased as a long command please")
+        data = response.json()
+        self.assertNotEqual(data["kind"], "done")
+        if data["kind"] == "results":
+            self.assertIn("wasn't sure", data.get("note", ""))
+
+    def test_a_model_error_still_shows_the_user_something(self):
+        self._script({"error": "I have no idea what that means"})
+        response = self._assist("show me the treasurer report for the club please")
+        self.assertIn(response.json()["kind"], {"results", "navigate", "clarify"})
+
+    def test_giving_up_is_recorded_under_its_own_kind(self):
+        LLMUsage.objects.all().delete()
+        self._script(*[{"nonsense": True}] * 4)
+        self._assist("some entirely unmatchable phrase zzzz qqqq")
+        self.assertTrue(LLMUsage.objects.filter(response_kind=palette_assist.FAIL_GAVE_UP).exists())
+
+    def test_a_genuinely_meaningless_query_still_ends_in_an_error(self):
+        """The ladder has a bottom: don't invent a destination for gibberish."""
+        self._script({"error": "no"})
+        response = self._assist("zzzqqq wwwxxx yyyvvv uuuttt")
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_keyword_stripping_rescues_a_wordy_query(self):
+        self.assertEqual(palette_assist._keywords("can you take me to where i pay my dues"), "pay dues")
+
+    def test_the_analytics_page_lists_what_it_could_not_answer(self):
+        LLMUsage.objects.create(
+            user=self.user, query="book me a flight", response_kind=palette_assist.FAIL_GAVE_UP, success=False
+        )
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("command_palette_analytics"))
+        self.assertContains(response, "book me a flight")
+
+
+class NavigationCoverageTests(PaletteAssistTestCase):
+    """go_to_page is the one skill that stands in for every page on the site."""
+
+    def _go(self, params):
+        request = self.client.request().wsgi_request
+        request.user = self.user
+        request.palette_page = {}
+        return palette_actions.run_action(request, "go_to_page", params)
+
+    def test_a_route_key_resolves_straight_to_a_url(self):
+        result = self._go({"page": "my_invoices"})
+        self.assertEqual(result["url"], reverse("my_invoices"))
+
+    def test_free_text_still_finds_the_page(self):
+        result = self._go({"page": "lots I am watching"})
+        self.assertEqual(result["url"], reverse("watched"))
+
+    def test_an_auction_page_fills_in_the_slug_itself(self):
+        result = self._go({"page": "auction_lot_list"})
+        self.assertEqual(result["url"], reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug}))
+
+    def test_a_made_up_page_key_is_refused(self):
+        result = self._go({"page": "delete_the_database"})
+        self.assertIn("error", result)
+
+    def test_a_non_admin_cannot_navigate_to_an_admin_page(self):
+        request = self.client.request().wsgi_request
+        request.user = self.member
+        request.palette_page = {}
+        result = palette_actions.run_action(request, "go_to_page", {"page": "auction_tos_list"})
+        self.assertIn("error", result)
+        self.assertIn("admin", result["error"].lower())
+
+    def test_a_refusal_is_not_quietly_turned_into_a_different_page(self):
+        """The fallback ladder must not run after a permission refusal.
+
+        Guessing past "you aren't an admin" would drop the user on some other page without saying
+        why, which reads as the request having worked.
+        """
+        request = self.client.request().wsgi_request
+        request.user = self.member
+        request.palette_page = {}
+        result = palette_actions.run_action(request, "go_to_page", {"page": "auction_tos_list"})
+        self.assertIn("error", result)
+        self.assertNotIn("url", result)
+
+    def test_navigation_never_leaves_the_site(self):
+        """A URL from this action is always a path we generated with reverse()."""
+        for page in ("my_invoices", "watched", "account", "faq"):
+            result = self._go({"page": page})
+            self.assertTrue(result["url"].startswith("/"), result)
+
+
+class PageAwarenessTests(PaletteAssistTestCase):
+    """The auction on screen beats the stickier 'last auction used'."""
+
+    def test_add_lot_uses_the_auction_the_user_is_looking_at(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._script(
+            {
+                "action": "add_lot",
+                "params": {"name": "context shrimp"},
+                "summary": "Add a lot of context shrimp",
+            }
+        )
+        path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
+        response = self._assist("add a lot of context shrimp for me please", path=path)
+        data = response.json()
+        self.assertEqual(data["kind"], "countdown")
+        self._execute("add_lot", data["params"], path=path)
+        lot = Lot.objects.filter(lot_name="context shrimp").first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(lot.auction.pk, self.in_person_auction.pk)
+
+    def test_the_prompt_tells_the_model_what_is_on_screen(self):
+        path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        prompt = palette_assist.build_system_prompt(self.user, page)
+        self.assertIn("looking_at_right_now", prompt)
+        self.assertIn(self.in_person_auction.title, prompt)
+
+    def test_a_forged_path_cannot_reach_an_auction_the_user_is_not_in(self):
+        path = reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug})
+        page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
+        self.assertNotIn("auction", page)

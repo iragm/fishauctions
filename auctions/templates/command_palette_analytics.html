@@ -21,6 +21,31 @@
   {% endif %}
 </div>
 {% endif %}
+{% if llm_gave_up %}
+<div class="alert alert-warning text-dark">
+  <h5 class="mb-2"><i class="bi bi-question-circle"></i> Queries the assistant couldn't answer</h5>
+  {% comment %} This is the feature backlog: a phrase repeated here is somebody asking for a skill that doesn't exist. {% endcomment %}
+  <p class="small mb-2">
+    Each of these fell through to search results or a guess. A phrase that shows up repeatedly is
+    a request for an action that isn't in <code>auctions/palette_actions.py</code> yet, or a page
+    missing keywords in <code>auctions/palette_routes.py</code>.
+  </p>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0">
+      <thead><tr><th>Query</th><th>Outcome</th><th class="text-end">Count</th></tr></thead>
+      <tbody>
+        {% for row in llm_gave_up %}
+        <tr>
+          <td>{{ row.query }}</td>
+          <td><small class="text-muted">{{ row.response_kind }}</small></td>
+          <td class="text-end">{{ row.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 <div class="row">
   <div class="col-lg-6 mb-4">
     <h5>Top searches</h5>
