@@ -10,17 +10,19 @@ do, and that the execute endpoint is a real gate rather than a rubber stamp on t
 
 import datetime
 import json
+from io import StringIO
 from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
+from django.core.management import call_command
 from django.test import Client, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions import llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult
-from auctions.models import AuctionTOS, LLMUsage, Lot
+from auctions.models import AuctionTOS, CommandPalettePage, LLMUsage, Lot
 from auctions.tests import StandardTestCase
 
 
@@ -827,6 +829,201 @@ class OpenAIProviderTests(SimpleTestCase):
     def test_the_token_budget_leaves_room_for_reasoning(self):
         """800 was not enough: a moderately hard query spent all of it before writing any JSON."""
         self.assertGreaterEqual(llm.DEFAULT_MAX_TOKENS, 2000)
+
+
+class RoundCostTests(PaletteAssistTestCase):
+    """How many model calls one query is allowed to cost.
+
+    Every round re-sends the whole ~3k-token system prompt, so rounds *are* the bill. These guard
+    the two ways the loop used to spend four of them and arrive nowhere.
+    """
+
+    def test_an_off_contract_reply_is_corrected_once_and_then_given_up_on(self):
+        """Four rubbish replies used to mean four full-price calls."""
+        self._script(*[{"nonsense": True}] * 4)
+        self._assist("something long enough to need the model and get nowhere at all")
+        self.assertEqual(self.provider.call_count, palette_assist.MAX_CORRECTIONS + 1)
+
+    def test_a_repeated_lookup_is_not_run_again(self):
+        """The model asking for the same thing twice will not get a different answer."""
+        same = {"lookup": "find_person", "params": {"name": "nobody at all"}}
+        self._script(same, same, same)
+        self._assist("who on earth is nobody at all and what did they buy")
+        self.assertEqual(self.provider.call_count, 2, "the repeat should end the loop, not run again")
+
+    def test_a_lookup_followed_by_the_action_it_enabled_still_works(self):
+        """The guard is about repeats, not about lookups.
+
+        This is the deep path that justifies a second round at all, and the only shape measured to
+        need one: look a person up, then act on what came back.
+        """
+        self._script(
+            {"lookup": "find_person", "params": {"name": "555"}},
+            {"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"},
+        )
+        response = self._assist("who is bidder 555 and then take me to my invoices")
+        self.assertEqual(self.provider.call_count, 2)
+        self.assertEqual(response.json()["kind"], "navigate")
+
+    def test_the_round_cap_is_the_ceiling_on_what_one_query_can_cost(self):
+        self._script(*[{"lookup": "find_person", "params": {"name": f"person {i}"}} for i in range(10)])
+        self._assist("find me somebody, anybody, and keep looking until you do")
+        self.assertLessEqual(self.provider.call_count, palette_assist.MAX_ROUNDS)
+
+
+class TokenAccountingTests(PaletteAssistTestCase):
+    """What the analytics page reports it costs."""
+
+    def test_cached_prompt_tokens_are_recorded(self):
+        """The system prompt is identical on every call, so most of it is a cache hit.
+
+        Billed at a fraction of the normal input rate -- a total that ignores this reads as several
+        times the real bill and makes the feature look unaffordable when it isn't.
+        """
+
+        class CachingProvider(FakeProvider):
+            def complete_json(self, system, messages, max_tokens=800):
+                self.calls.append({"system": system, "messages": messages})
+                return LLMResult(
+                    data={"action": "my_context", "params": {}, "summary": "ok"},
+                    model="fake-model",
+                    prompt_tokens=3100,
+                    cached_prompt_tokens=2816,
+                    completion_tokens=22,
+                )
+
+        LLMUsage.objects.all().delete()
+        llm.set_provider_override(CachingProvider())
+        self._assist("tell me about my current auction situation please")
+        row = LLMUsage.objects.get()
+        self.assertEqual(row.prompt_tokens, 3100)
+        self.assertEqual(row.cached_prompt_tokens, 2816)
+
+    def test_the_analytics_page_separates_cached_from_charged_tokens(self):
+        LLMUsage.objects.all().delete()
+        LLMUsage.objects.create(
+            user=self.user, model="m", prompt_tokens=3100, cached_prompt_tokens=2816, total_tokens=3122
+        )
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(response.context["llm_cached_prompt_tokens"], 2816)
+        self.assertEqual(response.context["llm_uncached_prompt_tokens"], 284)
+        self.assertEqual(response.context["llm_cached_percent"], 91)
+
+    def test_the_provider_reads_cached_tokens_off_the_wire(self):
+        provider = llm.OpenAIProvider(model="gpt-5-nano", api_key="k")
+        result = provider._parse(
+            {
+                "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+                "model": "gpt-5-nano",
+                "usage": {
+                    "prompt_tokens": 3089,
+                    "completion_tokens": 26,
+                    "prompt_tokens_details": {"cached_tokens": 2816},
+                },
+            }
+        )
+        self.assertEqual(result.cached_prompt_tokens, 2816)
+
+
+class ShortcutMiningTests(PaletteAssistTestCase):
+    """Turning repeated assistant answers into shortcuts that cost nothing.
+
+    The economics of the whole feature: a phrase the model has answered identically N times is one
+    it never has to be asked about again.
+    """
+
+    def _usage(self, query, destination, count=1, success=True):
+        for _ in range(count):
+            LLMUsage.objects.create(
+                user=self.user,
+                model="fake-model",
+                query=query,
+                destination=destination,
+                response_kind="navigate",
+                action="go_to_page",
+                success=success,
+            )
+
+    def _mine(self, *args):
+        out = StringIO()
+        call_command("mine_palette_shortcuts", *args, stdout=out)
+        return out.getvalue()
+
+    def test_a_navigation_records_where_it_landed(self):
+        """Without this the miner has no ground truth and the whole thing is guesswork."""
+        LLMUsage.objects.all().delete()
+        self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
+        self._assist("take me to where I can see what I owe")
+        self.assertEqual(LLMUsage.objects.get(action="go_to_page").destination, "my_invoices")
+
+    def test_a_consistently_answered_phrase_becomes_a_shortcut(self):
+        LLMUsage.objects.all().delete()
+        self._usage("Where do I see my watched lots?", "watched", count=5)
+        self._mine("--apply")
+        page = CommandPalettePage.objects.get(target="route:watched")
+        self.assertEqual(page.search_term, "where do i see my watched lots")
+
+    def test_a_phrase_that_resolves_two_ways_is_left_alone(self):
+        """Ambiguity means context matters, and a fixed shortcut would be wrong some of the time."""
+        LLMUsage.objects.all().delete()
+        self._usage("show me the invoices", "my_invoices", count=4)
+        self._usage("show me the invoices", "auction_invoices", count=4)
+        output = self._mine("--apply")
+        self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
+        self.assertIn("resolved inconsistently", output)
+
+    def test_an_uncommon_phrase_is_left_alone(self):
+        LLMUsage.objects.all().delete()
+        self._usage("some one-off thing somebody typed once", "watched", count=2)
+        self._mine("--apply")
+        self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
+
+    def test_it_reports_without_writing_unless_asked(self):
+        LLMUsage.objects.all().delete()
+        self._usage("where do I see my watched lots", "watched", count=5)
+        output = self._mine()
+        self.assertIn("watched", output)
+        self.assertIn("Re-run with --apply", output)
+        self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
+
+    def test_a_mined_shortcut_then_answers_without_any_model_call(self):
+        """The point of the exercise, end to end."""
+        LLMUsage.objects.all().delete()
+        self._usage("where do I see my watched lots", "watched", count=5)
+        self._mine("--apply")
+
+        self._script()  # no scripted replies: touching the provider at all would raise
+        response = self._assist("where do I see my watched lots")
+        self.assertEqual(response.json()["kind"], "results")
+        self.assertEqual(self.provider.call_count, 0, "a mined shortcut must not cost a model call")
+        self.assertEqual(response.progress, [], "and must not narrate work it isn't doing")
+
+    def test_a_shortcut_is_matched_exactly_not_fuzzily(self):
+        """Exactness is what makes a long-query short-circuit safe. Fuzzy matching measured badly."""
+        CommandPalettePage.objects.create(search_term="my watched lots", target="route:watched")
+        request = self._request_for(self.user)
+        self.assertIsNotNone(palette_assist.shortcut_match(request, "My Watched Lots!"))
+        self.assertIsNone(palette_assist.shortcut_match(request, "my watched lots for the spring auction"))
+
+    def test_a_shortcut_still_resolves_per_user_and_re_checks_permissions(self):
+        """A written-down phrase is not a written-down URL: the route resolves for whoever asks."""
+        CommandPalettePage.objects.create(search_term="site setup", target="route:admin_setup_checklist")
+        self.assertIsNone(palette_assist.shortcut_match(self._request_for(self.member), "site setup"))
+
+    def test_an_unknown_route_target_resolves_to_nothing(self):
+        CommandPalettePage.objects.create(search_term="nowhere at all", target="route:not_a_real_route")
+        self.assertIsNone(palette_assist.shortcut_match(self._request_for(self.user), "nowhere at all"))
+
+    def _request_for(self, user):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user
+        return request
 
 
 class AssistDisabledTests(PaletteAssistTestCase):

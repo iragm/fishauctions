@@ -77,6 +77,10 @@ class LLMResult:
     data: dict[str, Any] = field(default_factory=dict)
     model: str = ""
     prompt_tokens: int = 0
+    #: The part of ``prompt_tokens`` the provider served from its own cache, billed at a fraction
+    #: of the normal input rate. Worth recording because the palette's system prompt is a large,
+    #: byte-identical prefix on every call, so this is most of it.
+    cached_prompt_tokens: int = 0
     completion_tokens: int = 0
 
     @property
@@ -229,10 +233,12 @@ class OpenAIProvider(LLMProvider):
             msg = "Language model returned JSON that was not an object"
             raise LLMError(msg)
         usage = body.get("usage") or {}
+        details = usage.get("prompt_tokens_details") or {}
         return LLMResult(
             data=data,
             model=str(body.get("model") or self.model),
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            cached_prompt_tokens=int(details.get("cached_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
         )
 

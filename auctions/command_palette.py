@@ -17,6 +17,7 @@ from ``filters.rhyming_name_q`` so the palette stays consistent with the rest of
 
 import re
 from datetime import timedelta
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django.db.models import F, Q
@@ -681,9 +682,35 @@ DYNAMIC_TARGETS = {
 }
 
 
+ROUTE_TARGET_PREFIX = "route:"
+
+
+def _resolve_route_target(user, key):
+    """Resolve a ``route:<key>`` target through the palette route catalog.
+
+    Lets a shortcut point at any page the assistant knows about without needing a hand-written
+    builder in :data:`DYNAMIC_TARGETS` -- which is what makes the mined shortcuts from
+    ``manage.py mine_palette_shortcuts`` storable as data. The route is resolved per user and
+    re-runs its own permission checks, so a shortcut can never open a page its owner may not see;
+    one that resolves to a refusal simply produces no item.
+    """
+    from . import palette_routes
+
+    route = palette_routes.get_route(key)
+    if route is None:
+        return []
+    request = SimpleNamespace(user=user, palette_page={})
+    result = palette_routes.resolve_route(request, route, {})
+    if "error" in result or not result.get("url"):
+        return []
+    return [{"url": result["url"], "title": result.get("title", ""), "description": "", "icon": ""}]
+
+
 def resolve_page(page, user):
     """Return a list of renderable item dicts for a CommandPalettePage (may be empty)."""
-    if page.target:
+    if page.target.startswith(ROUTE_TARGET_PREFIX):
+        resolved = _resolve_route_target(user, page.target[len(ROUTE_TARGET_PREFIX) :])
+    elif page.target:
         builder = DYNAMIC_TARGETS.get(page.target)
         resolved = builder(user) if builder else []
     elif page.url:

@@ -24059,13 +24059,30 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         totals = usage.aggregate(
             calls=Count("id"),
             prompt=Sum("prompt_tokens"),
+            cached=Sum("cached_prompt_tokens"),
             completion=Sum("completion_tokens"),
             total=Sum("total_tokens"),
         )
         context["llm_calls"] = totals["calls"] or 0
         context["llm_prompt_tokens"] = totals["prompt"] or 0
+        context["llm_cached_prompt_tokens"] = totals["cached"] or 0
         context["llm_completion_tokens"] = totals["completion"] or 0
         context["llm_total_tokens"] = totals["total"] or 0
+        # The number that actually drives the bill. The system prompt is the same on every call, so
+        # most of the prompt total is a cache hit charged at a fraction of the normal input rate --
+        # reading the raw prompt total as the cost overstates it several times over.
+        context["llm_uncached_prompt_tokens"] = context["llm_prompt_tokens"] - context["llm_cached_prompt_tokens"]
+        context["llm_cached_percent"] = (
+            round(100 * context["llm_cached_prompt_tokens"] / context["llm_prompt_tokens"])
+            if context["llm_prompt_tokens"]
+            else 0
+        )
+        # Rounds per request: the multiplier on everything above, and the thing worth tuning.
+        context["llm_rounds_per_query"] = (
+            round(context["llm_calls"] / usage.values("query").distinct().count(), 2)
+            if usage.values("query").distinct().count()
+            else 0
+        )
         context["llm_failures"] = usage.filter(success=False).count()
         context["llm_by_action"] = list(
             usage.exclude(action="")

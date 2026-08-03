@@ -14,6 +14,21 @@
     {{ llm_calls }} model call{{ llm_calls|pluralize }} · {{ llm_total_tokens }} tokens
     ({{ llm_prompt_tokens }} prompt / {{ llm_completion_tokens }} completion){% if llm_failures %} · {{ llm_failures }} failed{% endif %}.
   </p>
+  {% comment %}
+    The prompt total on its own reads as far more expensive than it is. The system prompt is the
+    same few thousand tokens on every call, so the provider serves nearly all of it from cache at a
+    fraction of the normal input rate. Rounds-per-query is the number worth watching: it multiplies
+    everything above, and a figure well over 1 means the model is being asked again and again.
+  {% endcomment %}
+  <p class="mb-1"><small>
+    {{ llm_cached_prompt_tokens }} of those prompt tokens ({{ llm_cached_percent }}%) were served
+    from the provider's cache and are billed at a fraction of the normal input rate — only
+    <strong>{{ llm_uncached_prompt_tokens }}</strong> were charged at full price.
+  </small></p>
+  <p class="mb-1"><small>
+    <strong>{{ llm_rounds_per_query }}</strong> model calls per query on average. Each round re-sends
+    the whole system prompt, so this is the multiplier on everything above.
+  </small></p>
   {% if llm_by_action %}
   <p class="mb-0"><small>
     {% for row in llm_by_action %}<code>{{ row.action }}</code> ×{{ row.count }}{% if not forloop.last %} · {% endif %}{% endfor %}

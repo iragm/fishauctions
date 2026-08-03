@@ -54,16 +54,28 @@ import time
 from typing import Any
 
 from django.core.cache import cache
+from django.db.models import F
 
 from . import command_palette, palette_actions, palette_routes
 from .llm import LLMError, assist_enabled, get_provider
-from .models import CommandPaletteSearch, LLMUsage
+from .models import CommandPalettePage, CommandPaletteSearch, LLMUsage
 
 logger = logging.getLogger(__name__)
 
 # Agent loop bounds. A palette command is a one-liner; anything needing more than a few rounds is
 # a sign the model is lost, and the user is waiting.
-MAX_ROUNDS = 4
+#
+# Every round is a fresh call carrying the whole ~3k-token system prompt, so rounds are what this
+# feature costs -- two rounds is twice the price of one.
+#
+# Two, from measuring it rather than from a hunch: over a spread of realistic commands, eleven of
+# the thirteen that produced a usable answer did it in one round and the other two took two (a
+# lookup, then the action it enabled). Nothing needed a third. A third round only helps the query
+# that replies off-contract *and* then needs a lookup, which is rare enough not to be worth adding
+# 50% to the worst-case cost of every command that goes wrong.
+MAX_ROUNDS = 2
+#: How many times a reply that doesn't fit the contract is worth correcting. See the loop.
+MAX_CORRECTIONS = 1
 TOTAL_BUDGET_SECONDS = 20.0
 
 # Recent exchanges kept for context ("print that label" -> the lot we just added).
@@ -202,6 +214,43 @@ def _looks_like_a_command(query: str) -> bool:
         "go to",
     )
     return any(lowered.startswith(verb) or f" {verb}" in lowered for verb in verbs)
+
+
+def normalize_query(query: str) -> str:
+    """The form a query is stored and matched under: lowercase, depunctuated, single-spaced.
+
+    Shared by the shortcut short-circuit and ``manage.py mine_palette_shortcuts`` so the phrase the
+    miner writes down is exactly the phrase the palette will later match.
+    """
+    return " ".join(re.findall(r"[a-z0-9']+", (query or "").lower()))
+
+
+def shortcut_match(request, query: str) -> list[dict[str, Any]] | None:
+    """Answer from a curated shortcut, without a model call, when one matches the query exactly.
+
+    This is the only path that costs nothing at all, and the one the shortcut miner exists to feed.
+    Deliberately an **exact** match on the normalized phrase rather than the substring matching the
+    ordinary palette search uses, and with no length limit: an exact hit on a curated phrase is not
+    a guess, so it is safe at any length, where a fuzzy one at seven words is not. Measured on real
+    commands, scoring routes locally and taking the best agreed with the model on well under half
+    of the queries it fired on -- which is why nothing here scores anything.
+
+    Returns search-result groups (so the answer looks like any other), or ``None`` to carry on to
+    the model.
+    """
+    normalized = normalize_query(query)
+    if not normalized:
+        return None
+    for page in CommandPalettePage.objects.filter(is_active=True):
+        if normalized not in {normalize_query(phrase) for phrase in command_palette._page_phrases(page)}:
+            continue
+        # resolve_page re-checks permissions and returns nothing for a page this user can't open,
+        # in which case we fall through to the model rather than answering with an empty list.
+        items = command_palette.resolve_page(page, request.user)
+        if items:
+            CommandPalettePage.objects.filter(pk=page.pk).update(hits=F("hits") + 1)
+            return [{"label": "Go to", "items": items}]
+    return None
 
 
 def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
@@ -448,13 +497,23 @@ def parse_reply(data: Any) -> dict[str, Any]:
 # --- usage logging -----------------------------------------------------------
 
 
-def record_usage(user, result, query: str, response_kind: str, action_name: str = "", success: bool = True) -> None:
+def record_usage(
+    user,
+    result,
+    query: str,
+    response_kind: str,
+    action_name: str = "",
+    success: bool = True,
+    destination: str = "",
+) -> None:
     """Write one :class:`LLMUsage` row. Never allowed to break the request."""
     try:
         LLMUsage.objects.create(
+            destination=(destination or "")[:100],
             user=user,
             model=(result.model if result else "")[:100],
             prompt_tokens=result.prompt_tokens if result else 0,
+            cached_prompt_tokens=result.cached_prompt_tokens if result else 0,
             completion_tokens=result.completion_tokens if result else 0,
             total_tokens=result.total_tokens if result else 0,
             query=(query or "")[:600],
@@ -567,6 +626,8 @@ def _result_to_response(action, params: dict[str, Any], result: dict[str, Any], 
             "url": result["url"],
             "message": result.get("summary", ""),
             "action": action.name,
+            # Not sent to the client; recorded, so the miner can see where this query landed.
+            "route": result.get("route", ""),
         }
     return {
         "kind": KIND_DONE,
@@ -699,6 +760,13 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         yield {"kind": KIND_RESULTS, "groups": command_palette.search(request, "")}
         return
 
+    # A curated shortcut answers before anything else, including the enabled check: it is the same
+    # answer the model gave the last N times this exact phrase was typed, for none of the cost.
+    groups = shortcut_match(request, query)
+    if groups is not None:
+        yield {"kind": KIND_RESULTS, "groups": groups}
+        return
+
     # With no provider configured the palette must behave exactly as it did before this feature.
     if not assist_enabled():
         yield {"kind": KIND_RESULTS, "groups": command_palette.search(request, query)}
@@ -716,6 +784,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     system = build_system_prompt(user, request.palette_page)
     messages = build_messages(query, entries)
     started = time.monotonic()
+    corrections = 0
+    lookups_run: set[tuple[str, str]] = set()
 
     for round_number in range(MAX_ROUNDS):
         if time.monotonic() - started > TOTAL_BUDGET_SECONDS:
@@ -745,6 +815,15 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         if kind == "invalid":
             record_usage(user, result, query, FAIL_INVALID, success=False)
             logger.info("Assist got an invalid reply: %s", reply.get("reason"))
+            corrections += 1
+            if corrections > MAX_CORRECTIONS:
+                # Correcting the model a second time does not work. Measured on real traffic: once
+                # a reply comes back off-contract, the rounds that follow return another
+                # off-contract reply far more often than a good one, and each one is a full
+                # ~3k-token call. The search fallback is cheaper, faster, and usually more use to
+                # the person waiting than a fourth guess.
+                logger.info("Assist giving up after %s corrections", corrections)
+                break
             # Another whole model call, so say so. Without this the strip sits on one line for the
             # length of a round and reads as a hang -- which is the state the retry is meant to fix.
             yield _progress("Not quite — trying that again…")
@@ -762,6 +841,15 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
         if kind == "lookup":
             action = reply["action"]
+            # The same lookup, with the same parameters, asked for twice. The answer will not have
+            # changed, and in practice the model then asks a third and fourth time and runs the
+            # request out of rounds -- four full calls to learn one thing that wasn't there.
+            signature = (action.name, json.dumps(reply["params"], sort_keys=True, default=str))
+            if signature in lookups_run:
+                logger.info("Assist repeated the %s lookup; stopping", action.name)
+                record_usage(user, result, query, "lookup", action.name)
+                break
+            lookups_run.add(signature)
             yield _progress(narrate_lookup(action, reply["params"]))
             record_usage(user, result, query, "lookup", action.name)
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
@@ -812,7 +900,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             log_assist(user, query, KIND_ERROR)
             yield response
             return
-        record_usage(user, result, query, response["kind"], action.name)
+        record_usage(user, result, query, response["kind"], action.name, destination=response.get("route", ""))
         log_assist(user, query, response["kind"])
         yield response
         return

@@ -1411,7 +1411,10 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     except NoReverseMatch:
         logger.exception("Palette route %s could not be reversed with %s", route.key, kwargs)
         return {"error": "I know that page but couldn't work out the link to it."}
-    return {"ok": True, "url": url, "summary": f"Opening {route.label}.", "title": route.label}
+    # ``route`` travels back so the caller can record *which* destination was chosen, not just that
+    # a navigation happened. That is the ground truth the shortcut miner runs on: a query that
+    # resolves to the same route every time is one the model never needs to be asked about again.
+    return {"ok": True, "url": url, "summary": f"Opening {route.label}.", "title": route.label, "route": route.key}
 
 
 # --- where the user currently is ---------------------------------------------

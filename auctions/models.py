@@ -11688,6 +11688,15 @@ class LLMUsage(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
     model = models.CharField(max_length=100, blank=True, help_text="Model string reported by the provider.")
     prompt_tokens = models.PositiveIntegerField(default=0)
+    cached_prompt_tokens = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many of the prompt tokens the provider served from its own cache. Billed at a "
+            "fraction of the normal input rate, so a total that ignores this badly overstates the "
+            "bill: the system prompt is the same ~3k tokens on every call and 90%+ of it is a "
+            "cache hit."
+        ),
+    )
     completion_tokens = models.PositiveIntegerField(default=0)
     total_tokens = models.PositiveIntegerField(default=0)
     query = models.CharField(max_length=600, blank=True, help_text="What the user typed or said.")
@@ -11697,6 +11706,16 @@ class LLMUsage(models.Model):
         help_text="navigate, countdown, clarify, done, error, or lookup for an intermediate round.",
     )
     action = models.CharField(max_length=50, blank=True, help_text="Registry action name, when one was chosen.")
+    destination = models.CharField(
+        max_length=100,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "For a navigation, the palette_routes key it landed on. This is what "
+            "`manage.py mine_palette_shortcuts` reads: a query that resolves to the same "
+            "destination every time never needs to be asked about again."
+        ),
+    )
     success = models.BooleanField(default=True)
 
     class Meta:
