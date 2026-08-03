@@ -365,6 +365,14 @@
 
         thinkingEl.appendChild(thinkingSteps);
         thinkingEl.appendChild(current);
+      }
+      // Re-attach every time, not just on the first call. A debounced search that lands while we
+      // are waiting calls render(), which empties the results container and takes the strip out of
+      // the DOM with it — but this variable still points at the now-detached node, so every later
+      // progress line would update something nobody can see and the palette would look frozen
+      // until the answer arrived. The voice path hits this every single time: the interim
+      // transcript arms a search, the final transcript submits the assist request.
+      if (thinkingEl.parentNode !== results) {
         results.classList.add("cp-dimmed");
         results.insertBefore(thinkingEl, results.firstChild);
       }
@@ -661,6 +669,9 @@
       }
       assistInFlight = true;
       finalized = true; // this query ends in an assist result, not an abandoned search
+      // A search armed by the last keystroke (or by the interim speech transcript) is about to be
+      // answered by this request instead, so don't let it land on top of the assist result.
+      clearTimeout(debounceTimer);
       showThinking("Working out what you mean…");
       var answered = false;
       fetch(assistUrl, {

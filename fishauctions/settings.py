@@ -773,6 +773,9 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 # Optional: point at any OpenAI-compatible endpoint (proxy, local model) instead of OpenAI.
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
+# How hard a reasoning model thinks before answering: minimal / low / medium / high, or blank to
+# leave the parameter off. Defaults to minimal -- see llm.DEFAULT_REASONING_EFFORT for why.
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [

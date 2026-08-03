@@ -10,9 +10,11 @@ do, and that the execute endpoint is a real gate rather than a rubber stamp on t
 
 import datetime
 import json
+from unittest.mock import patch
 
+from asgiref.sync import async_to_sync
 from django.core.cache import cache
-from django.test import Client, override_settings
+from django.test import Client, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -47,19 +49,29 @@ class FakeProvider(LLMProvider):
         return len(self.calls)
 
 
+async def drain_async_stream(response):
+    """Every chunk of an async streaming response, as a list of bytes."""
+    return [chunk async for chunk in response]
+
+
 class AssistResponse:
     """A drained NDJSON assist response.
 
     The endpoint streams, so a test can't just call ``.json()`` on it. This collects every event
     and exposes the final one as ``.json()``, so assertions read the same as they did before the
     endpoint streamed, plus ``.progress`` for the narration itself.
+
+    The body is an async generator (it has to be -- see ``CommandPaletteAssistView``), and the test
+    client is synchronous, so it gets drained through ``async_to_sync`` rather than plain
+    iteration.
     """
 
     def __init__(self, response):
         self.status_code = response.status_code
         self.raw = response
         if response.streaming:
-            body = b"".join(response.streaming_content).decode("utf-8")
+            chunks = async_to_sync(drain_async_stream)(response) if response.is_async else response.streaming_content
+            body = b"".join(chunks).decode("utf-8")
             self.events = [json.loads(line) for line in body.splitlines() if line.strip()]
         else:
             # Throttled requests (429) and the non-streaming opt-out come back as plain JSON.
@@ -259,6 +271,65 @@ class UntrustedOutputTests(PaletteAssistTestCase):
     def test_non_lookup_action_cannot_be_used_as_a_lookup(self):
         parsed = palette_assist.parse_reply({"lookup": "add_lot", "params": {}})
         self.assertEqual(parsed["kind"], "invalid")
+
+    def test_a_page_key_in_the_action_slot_becomes_a_navigation(self):
+        """gpt-5-nano's most common near-miss: a real destination, in the wrong slot.
+
+        Discarding these is what made the palette answer "I'm not sure what you meant" to requests
+        it had in fact understood. ``print_my_labels`` is a page key; ``print_labels`` is the action.
+        """
+        parsed = palette_assist.parse_reply({"action": "print_my_labels", "params": {"scope": "mine"}})
+        self.assertEqual(parsed["kind"], "action")
+        self.assertEqual(parsed["action"].name, "go_to_page")
+        self.assertEqual(parsed["params"], {"page": "print_my_labels"})
+
+    def test_a_page_key_in_the_lookup_slot_becomes_a_navigation(self):
+        parsed = palette_assist.parse_reply({"lookup": "watched"})
+        self.assertEqual(parsed["kind"], "action")
+        self.assertEqual(parsed["action"].name, "go_to_page")
+        self.assertEqual(parsed["params"], {"page": "watched"})
+
+    def test_a_misplaced_page_key_keeps_only_parameters_go_to_page_accepts(self):
+        """``run_action`` refuses parameters an action never advertised, so drop the leftovers."""
+        parsed = palette_assist.parse_reply(
+            {"action": "auction_tos_list", "params": {"target": "spring", "bidder_number": "14"}}
+        )
+        self.assertEqual(parsed["params"], {"target": "spring", "page": "auction_tos_list"})
+
+    def test_a_name_that_is_neither_an_action_nor_a_page_is_still_rejected(self):
+        parsed = palette_assist.parse_reply({"action": "delete_everything", "params": {}})
+        self.assertEqual(parsed["kind"], "invalid")
+
+    def test_an_action_named_by_its_own_key_is_understood(self):
+        """``{"go_to_page": {...}}`` -- the other JSON convention for writing a call."""
+        parsed = palette_assist.parse_reply({"go_to_page": {"page": "club_membership_pay", "target": None}})
+        self.assertEqual(parsed["kind"], "action")
+        self.assertEqual(parsed["action"].name, "go_to_page")
+        # "target": null means no target, not the string "None".
+        self.assertEqual(parsed["params"], {"page": "club_membership_pay"})
+
+    def test_a_lookup_named_by_its_own_key_is_understood(self):
+        parsed = palette_assist.parse_reply({"find_person": {"name": "bob"}})
+        self.assertEqual(parsed["kind"], "lookup")
+        self.assertEqual(parsed["action"].name, "find_person")
+
+    def test_a_key_that_names_nothing_is_still_rejected(self):
+        self.assertEqual(palette_assist.parse_reply({"drop_all_tables": {}})["kind"], "invalid")
+        self.assertEqual(palette_assist.parse_reply({"a": {}, "b": {}})["kind"], "invalid")
+        self.assertEqual(palette_assist.parse_reply({"go_to_page": "not an object"})["kind"], "invalid")
+
+    def test_a_named_key_cannot_smuggle_in_parameters_an_action_never_advertised(self):
+        """The envelope is what gets fixed up. Everything downstream is unchanged."""
+        parsed = palette_assist.parse_reply({"add_lot": {"name": "shrimp", "sudo": True}})
+        self.assertEqual(parsed["kind"], "action")
+        result = palette_actions.run_action(self._request_for(self.user), "add_lot", parsed["params"])
+        self.assertIn("error", result)
+
+    def test_a_misplaced_page_key_does_not_skip_the_permission_check(self):
+        """The rewrite changes which key the name arrived under, not what the user may reach."""
+        self._script({"action": "admin_setup_checklist", "params": {}}, {"error": "gave up"})
+        response = self._assist("open the site setup checklist for me please", user=self.member)
+        self.assertNotEqual(response.json().get("kind"), "navigate")
 
     def _request_for(self, user):
         from django.test import RequestFactory
@@ -624,6 +695,140 @@ class UsageLoggingTests(PaletteAssistTestCase):
         self.assertContains(response, "42")
 
 
+class OpenAIProviderTests(SimpleTestCase):
+    """The wire format, against a stubbed endpoint.
+
+    These guard the two things a reasoning model does differently from the chat models this
+    provider was first written for: it charges hidden reasoning tokens against the completion
+    budget, and it can spend all of them and reply with nothing at all.
+    """
+
+    def _provider(self, **kwargs):
+        return llm.OpenAIProvider(model="gpt-5-nano", api_key="test-key", **kwargs)
+
+    def _respond(self, status_code=200, body=None, text=""):
+        """A stubbed ``httpx.Client`` that records the payload it was given."""
+        sent = {}
+
+        class Response:
+            def __init__(self):
+                self.status_code = status_code
+                self.text = text or json.dumps(body or {})
+
+            def json(self):
+                return body or {}
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                sent.update(json or {})
+                return Response()
+
+        return patch("auctions.llm.httpx.Client", Client), sent
+
+    def _answer(self, content, finish_reason="stop"):
+        return {
+            "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
+            "model": "gpt-5-nano",
+            "usage": {"prompt_tokens": 3089, "completion_tokens": 23},
+        }
+
+    def test_reasoning_effort_is_sent(self):
+        """Left off, gpt-5-nano spends 6-8s and several hundred tokens reasoning about a one-liner."""
+        client, sent = self._respond(body=self._answer('{"action": "go_to_page"}'))
+        with client:
+            self._provider(reasoning_effort="minimal").complete_json("sys", [{"role": "user", "content": "hi"}])
+        self.assertEqual(sent["reasoning_effort"], "minimal")
+
+    def test_reasoning_effort_is_omitted_when_blank(self):
+        client, sent = self._respond(body=self._answer('{"action": "go_to_page"}'))
+        with client:
+            self._provider(reasoning_effort="").complete_json("sys", [{"role": "user", "content": "hi"}])
+        self.assertNotIn("reasoning_effort", sent)
+
+    def test_an_endpoint_that_rejects_a_parameter_is_retried_without_it(self):
+        """LLM_BASE_URL can point at a server that has never heard of these parameters."""
+        for rejected, expected_replacement in (
+            ("reasoning_effort", None),
+            ("max_completion_tokens", "max_tokens"),
+        ):
+            with self.subTest(rejected=rejected):
+                attempts = self._stub_endpoint_rejecting(rejected)
+                result = self._provider(reasoning_effort="minimal").complete_json("sys", [])
+                self.assertEqual(result.data, {"action": "go_to_page"})
+                self.assertEqual(len(attempts), 2, "expected exactly one retry")
+                self.assertNotIn(rejected, attempts[1])
+                if expected_replacement:
+                    self.assertIn(expected_replacement, attempts[1])
+
+    def _stub_endpoint_rejecting(self, unsupported):
+        """Patch httpx so the endpoint 400s any request carrying ``unsupported``.
+
+        Returns the list of payloads it was sent, which is what the assertions are about.
+        """
+        attempts = []
+        answer = self._answer('{"action": "go_to_page"}')
+
+        class Response:
+            def __init__(self, payload):
+                self.status_code = 400 if unsupported in payload else 200
+                self.text = f"Unrecognized request argument supplied: {unsupported}"
+
+            def json(self):
+                return answer
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def post(self, url, headers=None, **kwargs):
+                payload = kwargs["json"]
+                attempts.append(dict(payload))
+                return Response(payload)
+
+        patcher = patch("auctions.llm.httpx.Client", Client)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return attempts
+
+    def test_a_reply_truncated_by_the_token_budget_is_an_error_not_an_empty_object(self):
+        """The bug this exists for.
+
+        A reasoning model that burns its whole budget thinking returns HTTP 200 with an empty
+        string. That used to parse as ``{}``, which the assist loop read as "the model replied
+        off-contract", so it explained the contract and asked again -- several more seconds, for
+        the identical empty answer, until it ran out of rounds and told the user it wasn't sure
+        what they meant.
+        """
+        client, _sent = self._respond(body=self._answer("", finish_reason="length"))
+        with client, self.assertRaises(LLMError) as caught:
+            self._provider().complete_json("sys", [{"role": "user", "content": "hi"}])
+        self.assertIn("completion budget", str(caught.exception))
+
+    def test_an_empty_reply_is_an_error(self):
+        client, _sent = self._respond(body=self._answer("   "))
+        with client, self.assertRaises(LLMError):
+            self._provider().complete_json("sys", [{"role": "user", "content": "hi"}])
+
+    def test_the_token_budget_leaves_room_for_reasoning(self):
+        """800 was not enough: a moderately hard query spent all of it before writing any JSON."""
+        self.assertGreaterEqual(llm.DEFAULT_MAX_TOKENS, 2000)
+
+
 class AssistDisabledTests(PaletteAssistTestCase):
     """With no provider configured the palette is exactly what it was before."""
 
@@ -686,6 +891,48 @@ class StreamingTests(PaletteAssistTestCase):
         self.assertEqual(response.raw["Content-Type"], "application/x-ndjson")
         # Without this nginx buffers the whole body and the streaming does nothing at all.
         self.assertEqual(response.raw["X-Accel-Buffering"], "no")
+
+    def test_the_response_body_is_an_async_iterator(self):
+        """The one property that decides whether any of this reaches the browser.
+
+        Handed a *sync* iterator, Django's ASGI handler runs ``sync_to_async(list)`` over the whole
+        thing before writing a byte, so every progress line arrives bundled with the answer at the
+        end and the user watches a motionless box for twenty seconds. Everything else in this class
+        still passed while that was happening, because the events are all present in the finished
+        body either way -- this is the assertion that tells the two apart.
+        """
+        self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
+        response = self._assist("take me to where I can see what I owe")
+        self.assertTrue(response.raw.is_async)
+
+    def test_the_first_progress_line_is_written_before_the_model_is_asked(self):
+        """Progress must be *emitted* early, not merely present in the finished body."""
+        seen = []
+
+        class SlowProvider(FakeProvider):
+            def complete_json(self, system, messages, max_tokens=800):
+                seen.append("model called")
+                return super().complete_json(system, messages, max_tokens)
+
+        self.provider = SlowProvider([{"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Go"}])
+        llm.set_provider_override(self.provider)
+        self.client.force_login(self.user)
+        raw = self.client.post(
+            reverse("command_palette_assist"),
+            data=json.dumps({"q": "take me to where I can see what I owe"}),
+            content_type="application/json",
+        )
+
+        async def first_chunk(response):
+            chunks = response.__aiter__()
+            try:
+                return await chunks.__anext__()
+            finally:
+                await chunks.aclose()
+
+        chunk = async_to_sync(first_chunk)(raw)
+        self.assertEqual(json.loads(chunk)["kind"], "progress")
+        self.assertEqual(seen, [], "the opening line should be on screen before the slow part starts")
 
     def test_progress_arrives_before_the_answer(self):
         self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})

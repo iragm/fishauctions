@@ -34,8 +34,24 @@ logger = logging.getLogger(__name__)
 # doesn't eat the whole budget.
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
-# Hard cap on completion size. Actions are small JSON objects; anything bigger is a runaway.
-DEFAULT_MAX_TOKENS = 800
+# Hard cap on completion size. Actions are small JSON objects, but on a reasoning model this
+# budget covers the hidden reasoning tokens too, and running out of it produces an *empty*
+# reply rather than a short one. Only tokens actually generated are billed, so headroom here
+# is free and running short is not.
+DEFAULT_MAX_TOKENS = 2000
+
+# How hard a reasoning model should think before answering. This is a one-line command with a
+# person waiting on it, and the whole job is picking one entry out of a list that is already in
+# the prompt -- measured on gpt-5-nano, "minimal" answers correctly in ~1s where the default
+# spends 6-8s and several hundred tokens reasoning its way to the same JSON. Set
+# LLM_REASONING_EFFORT to "low"/"medium"/"high" to trade that latency back for accuracy, or to
+# "" to leave the parameter off entirely.
+DEFAULT_REASONING_EFFORT = "minimal"
+
+# Payload keys that not every model generation or OpenAI-compatible server understands. We send
+# the modern shape and step back a key at a time when the endpoint says it doesn't know one, so
+# LLM_MODEL and LLM_BASE_URL stay free to point at something older.
+OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort")
 
 
 class LLMError(Exception):
@@ -44,6 +60,14 @@ class LLMError(Exception):
     Callers are expected to catch this and degrade gracefully -- the palette falls back to
     ordinary search rather than showing the user a traceback.
     """
+
+
+class UnsupportedParameter(Exception):
+    """The endpoint rejected one of :data:`OPTIONAL_PARAMETERS`. Internal to this module."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
 
 
 @dataclass
@@ -65,11 +89,19 @@ class LLMProvider:
 
     name = "base"
 
-    def __init__(self, model: str = "", api_key: str = "", base_url: str = "", timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "",
+        api_key: str = "",
+        base_url: str = "",
+        timeout: float | None = None,
+        reasoning_effort: str = "",
+    ) -> None:
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
+        self.reasoning_effort = reasoning_effort
 
     def is_configured(self) -> bool:
         """True when this provider has everything it needs to make a call.
@@ -128,16 +160,26 @@ class OpenAIProvider(LLMProvider):
             # to the old one if the endpoint rejects it, so both generations work unchanged.
             "max_completion_tokens": max_tokens,
         }
-        data = self._post(payload)
-        if data is None:
-            payload.pop("max_completion_tokens")
-            payload["max_tokens"] = max_tokens
-            data = self._post(payload, retry_on_param_error=False)
-        return self._parse(data)
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        # One attempt per optional parameter we might have to give up on, plus the real one.
+        for _attempt in range(len(OPTIONAL_PARAMETERS) + 1):
+            try:
+                return self._parse(self._post(payload))
+            except UnsupportedParameter as rejected:
+                logger.info("%s does not accept %s; retrying without it", self.model, rejected.name)
+                payload.pop(rejected.name, None)
+                if rejected.name == "max_completion_tokens":
+                    payload["max_tokens"] = max_tokens
+        msg = "Language model rejected every form of the request"
+        raise LLMError(msg)
 
-    def _post(self, payload: dict[str, Any], retry_on_param_error: bool = True) -> dict[str, Any] | None:
-        """POST the payload. Returns ``None`` (only when ``retry_on_param_error``) if the
-        endpoint rejected an unsupported parameter, so the caller can retry with the older name."""
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST the payload and return the parsed response body.
+
+        Raises :class:`UnsupportedParameter` when the endpoint rejected one of the optional keys,
+        so the caller can drop it and try the older shape.
+        """
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -145,8 +187,10 @@ class OpenAIProvider(LLMProvider):
         except httpx.HTTPError as error:
             msg = f"Could not reach the language model: {error}"
             raise LLMError(msg) from error
-        if response.status_code == 400 and retry_on_param_error and "max_completion_tokens" in response.text:
-            return None
+        if response.status_code == 400:
+            for name in OPTIONAL_PARAMETERS:
+                if name in payload and name in response.text:
+                    raise UnsupportedParameter(name)
         if response.status_code != 200:
             logger.warning("LLM provider returned %s: %s", response.status_code, response.text[:500])
             msg = f"Language model returned HTTP {response.status_code}"
@@ -160,10 +204,22 @@ class OpenAIProvider(LLMProvider):
     def _parse(self, body: dict[str, Any]) -> LLMResult:
         """Pull the JSON object and token usage out of a chat-completions response body."""
         try:
-            content = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             msg = "Language model response was missing its content"
             raise LLMError(msg) from error
+        if not (content or "").strip():
+            # A reasoning model that spends its entire completion budget thinking replies with an
+            # empty string and finish_reason "length" -- a 200, with nothing in it. Parsing that as
+            # `{}` made it look like the model had answered off-contract, so the assist loop
+            # "corrected" it and asked again, burning another several seconds per round on the
+            # identical empty answer. Fail here instead, with the reason.
+            if choice.get("finish_reason") == "length":
+                msg = "Language model used its whole completion budget before answering"
+                raise LLMError(msg)
+            msg = "Language model returned an empty reply"
+            raise LLMError(msg)
         try:
             data = json.loads(content or "{}")
         except ValueError as error:
@@ -207,10 +263,13 @@ def get_provider() -> LLMProvider:
         return _provider_override
     name = (getattr(settings, "LLM_PROVIDER", "") or OpenAIProvider.name).lower()
     provider_class = _PROVIDERS.get(name, OpenAIProvider)
+    effort = getattr(settings, "LLM_REASONING_EFFORT", None)
     return provider_class(
         model=getattr(settings, "LLM_MODEL", "") or "gpt-5-nano",
         api_key=getattr(settings, "OPENAI_API_KEY", "") or "",
         base_url=getattr(settings, "LLM_BASE_URL", "") or "",
+        # An unset setting takes the default; an explicitly empty one means "don't send it".
+        reasoning_effort=DEFAULT_REASONING_EFFORT if effort is None else effort,
     )
 
 

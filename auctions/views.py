@@ -20,7 +20,7 @@ from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 import channels.layers
 import qr_code
 import requests
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from chartjs.colors import next_color
 from chartjs.views.columns import BaseColumnsHighChartsView
 from chartjs.views.lines import BaseLineChartView
@@ -23935,6 +23935,16 @@ class CommandPaletteAssistBase(View):
         return None
 
 
+#: Returned by :func:`next_or_done` instead of raising ``StopIteration``, which cannot cross the
+#: sync/async boundary (it is swallowed by the coroutine machinery and never reaches the caller).
+STREAM_DONE = object()
+
+
+def next_or_done(iterator):
+    """One item from a sync iterator, or :data:`STREAM_DONE` when it's exhausted."""
+    return next(iterator, STREAM_DONE)
+
+
 class CommandPaletteAssistView(CommandPaletteAssistBase):
     """Turn a natural-language command palette query into results, a navigation, or an action.
 
@@ -23949,6 +23959,13 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
     CSRF token; ``EventSource`` is GET-only. A client that can't read a stream still gets a valid
     body it can parse line by line at the end, so the streaming is an enhancement, not a
     requirement.
+
+    The body has to be an **async** generator. Handed a sync one, Django's ASGI handler consumes
+    the whole thing with ``sync_to_async(list)`` before writing a single byte
+    (``django/http/response.py``, ``StreamingHttpResponse.__aiter__``), which silently turns this
+    endpoint back into a slow plain-JSON one: no progress reaches the browser and the answer lands
+    all at once twenty seconds later. ``assist_stream`` itself stays sync -- it is full of ORM
+    calls -- so each event is pulled through ``sync_to_async``.
 
     Nothing that changes the database happens here -- confirm-tier actions come back as a countdown
     and are run by the execute endpoint.
@@ -23968,16 +23985,22 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
         if not data.get("stream", True):
             return JsonResponse(palette_assist.assist(request, query, context, path))
 
-        def lines():
-            try:
-                for event in palette_assist.assist_stream(request, query, context, path):
-                    yield json.dumps(event, default=str) + "\n"
-            except Exception:
-                # A traceback must not reach the user as a half-written stream, and by this point
-                # the status line is long gone, so the only thing left is to end with a usable
-                # final object.
-                logger.exception("Command palette assist stream failed")
-                yield json.dumps({"kind": "error", "message": "Something went wrong working that out."}) + "\n"
+        events = palette_assist.assist_stream(request, query, context, path)
+
+        async def lines():
+            while True:
+                try:
+                    event = await sync_to_async(next_or_done)(events)
+                except Exception:
+                    # A traceback must not reach the user as a half-written stream, and by this
+                    # point the status line is long gone, so the only thing left is to end with a
+                    # usable final object.
+                    logger.exception("Command palette assist stream failed")
+                    yield json.dumps({"kind": "error", "message": "Something went wrong working that out."}) + "\n"
+                    return
+                if event is STREAM_DONE:
+                    return
+                yield json.dumps(event, default=str) + "\n"
 
         response = StreamingHttpResponse(lines(), content_type="application/x-ndjson")
         response["Cache-Control"] = "private, no-store"

@@ -314,11 +314,79 @@ def build_messages(query: str, context: list[dict[str, Any]]) -> list[dict[str, 
 # --- validating what the model said ------------------------------------------
 
 
+#: Parameters ``go_to_page`` accepts, for rewriting a misplaced page key. Anything else the model
+#: sent alongside it is dropped: ``run_action`` refuses parameters an action never advertised.
+_PAGE_PARAMS = ("target", "tab")
+
+
+def _page_in_the_wrong_slot(name: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    """Rewrite a page key that arrived in the ``action`` or ``lookup`` slot as ``go_to_page``.
+
+    The model reliably answers ``{"action": "print_my_labels"}`` or ``{"lookup": "watched"}``: it
+    has picked a real destination out of the catalog in the prompt and put it in the wrong slot,
+    because the two lists sit next to each other and both look like names of things to call. That
+    was thrown away as off-contract, and the retry usually produced another near-miss, so a request
+    the model had actually understood ended at "I'm not sure what you meant".
+
+    This widens nothing. ``go_to_page`` already accepts any page name the model cares to send, and
+    the URL is still built by :func:`palette_routes.resolve_route`, which re-runs every permission
+    check. The only thing that changes is which key the name arrived under.
+    """
+    if palette_routes.get_route(name) is None:
+        return None
+    action = palette_actions.get_action("go_to_page")
+    if action is None:  # pragma: no cover - go_to_page is registered at import time
+        return None
+    page_params = {key: params[key] for key in _PAGE_PARAMS if key in params}
+    page_params["page"] = name
+    return {"kind": "action", "action": action, "params": page_params, "summary": ""}
+
+
+#: Keys that belong to the reply envelope itself, so they never name the thing being called.
+_ENVELOPE_KEYS = frozenset({"lookup", "action", "params", "summary", "clarify", "options", "error", "message"})
+
+
+def _call_named_by_its_key(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Read ``{"go_to_page": {"page": "club_membership_pay"}}`` -- the name used as the key.
+
+    The other common convention for writing a call as JSON, and one the model falls into often
+    enough to matter: the destination is right, the parameters are right, and only the envelope is
+    missing. Rejecting it cost a whole extra round, and the round after a correction is markedly
+    worse than the first, so a request that was understood on the first try ended up as
+    "I'm not sure what you meant".
+
+    Resolved through the same registry as any other reply, so nothing new becomes reachable:
+    ``run_action`` still refuses parameters the action never advertised and the resolver still
+    checks permissions.
+    """
+    named = [key for key in data if isinstance(key, str) and key not in _ENVELOPE_KEYS]
+    if len(named) != 1:
+        return None
+    name = named[0]
+    params = data[name]
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return None
+    # "target": null is common in these replies and means "no target", not the string "None".
+    params = {key: value for key, value in params.items() if value is not None}
+    action = palette_actions.get_action(name)
+    if action is None:
+        return _page_in_the_wrong_slot(name, params)
+    if action.lookup:
+        return {"kind": "lookup", "action": action, "params": params}
+    return {"kind": "action", "action": action, "params": params, "summary": ""}
+
+
 def parse_reply(data: Any) -> dict[str, Any]:
     """Schema-check one model reply. Returns a normalized dict with a ``kind``.
 
     Anything that doesn't match the contract exactly comes back as ``{"kind": "invalid"}`` so the
-    loop can tell the model it got the shape wrong rather than acting on a guess.
+    loop can tell the model it got the shape wrong rather than acting on a guess. Two near-misses
+    are read rather than discarded -- see :func:`_page_in_the_wrong_slot` and
+    :func:`_call_named_by_its_key` -- because both name a real destination the server was going to
+    re-check anyway, and throwing them away was the main reason this feature said it didn't
+    understand things it plainly had.
     """
     if not isinstance(data, dict):
         return {"kind": "invalid", "reason": "not an object"}
@@ -332,13 +400,19 @@ def parse_reply(data: Any) -> dict[str, Any]:
     if isinstance(data.get("lookup"), str):
         action = palette_actions.get_action(data["lookup"])
         if action is None or not action.lookup:
-            return {"kind": "invalid", "reason": f"unknown lookup {data['lookup']!r}"}
+            return _page_in_the_wrong_slot(data["lookup"], params) or {
+                "kind": "invalid",
+                "reason": f"unknown lookup {data['lookup']!r}",
+            }
         return {"kind": "lookup", "action": action, "params": params}
 
     if isinstance(data.get("action"), str):
         action = palette_actions.get_action(data["action"])
         if action is None:
-            return {"kind": "invalid", "reason": f"unknown action {data['action']!r}"}
+            return _page_in_the_wrong_slot(data["action"], params) or {
+                "kind": "invalid",
+                "reason": f"unknown action {data['action']!r}",
+            }
         summary = data.get("summary")
         return {
             "kind": "action",
@@ -363,6 +437,10 @@ def parse_reply(data: Any) -> dict[str, Any]:
 
     if isinstance(data.get("error"), str) and data["error"].strip():
         return {"kind": "error", "message": data["error"].strip()[:400]}
+
+    named = _call_named_by_its_key(data)
+    if named is not None:
+        return named
 
     return {"kind": "invalid", "reason": "no recognized key"}
 
@@ -667,6 +745,9 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         if kind == "invalid":
             record_usage(user, result, query, FAIL_INVALID, success=False)
             logger.info("Assist got an invalid reply: %s", reply.get("reason"))
+            # Another whole model call, so say so. Without this the strip sits on one line for the
+            # length of a round and reads as a hang -- which is the state the retry is meant to fix.
+            yield _progress("Not quite — trying that again…")
             messages.append({"role": "assistant", "content": json.dumps(result.data)[:1000]})
             messages.append(
                 {
