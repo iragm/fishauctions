@@ -275,3 +275,85 @@ def recalculate_seller_invoice(auction, tos):
         invoice = Invoice.objects.create(auctiontos_user=tos, auction=auction)
     invoice.recalculate()
     return invoice
+
+
+# ---------------------------------------------------------------------------
+# Copying a lot ("Copy to new lot")
+# ---------------------------------------------------------------------------
+#
+# The button on the lot page (``view_lot_images.html``) links to ``new_lot?copy=<pk>``, which
+# pre-fills the form from the old lot (``forms.CreateLotForm.__init__``) and then copies its images
+# once the new lot is saved (``views.LotValidation.form_valid``). The palette's ``add_lot`` does the
+# same thing without a form in between -- it creates the lot outright -- so the field list, the
+# ownership rule and the image copy live here rather than in either caller. Change what "copy"
+# means once and both paths change together.
+
+
+#: The lot fields "Copy to new lot" carries over. Read by ``CreateLotForm`` to pre-fill the form and
+#: by the palette's ``add_lot`` to seed a lot directly.
+CLONE_LOT_FIELDS = (
+    "lot_name",
+    "quantity",
+    "species_category",
+    "summernote_description",
+    "i_bred_this_fish",
+    "reserve_price",
+    "buy_now_price",
+    "reference_link",
+    "donation",
+    "custom_checkbox",
+    "custom_field_1",
+    "custom_dropdown",
+)
+
+
+def user_can_clone_lot(user, lot) -> bool:
+    """Whether *user* may copy *lot*. You can only clone your own lots (superusers, anything)."""
+    if not (user and lot):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return bool(lot.user_id and lot.user_id == user.pk)
+
+
+def clone_lot_values(lot) -> dict:
+    """The values from *lot* that a copy starts out with, keyed by field name.
+
+    Permission is the caller's job -- call :func:`user_can_clone_lot` first.
+    """
+    return {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
+
+
+def copy_lot_images(original_lot, new_lot):
+    """Copy every image from *original_lot* onto the already-saved *new_lot*. Returns the new rows.
+
+    Extracted verbatim from ``views.LotValidation.form_valid``. Both rows point at the same file, so
+    they share the same Cloudflare image rather than re-uploading it, and a picture of an item that
+    has already sold is demoted from "the exact item" to "representative" -- because it isn't.
+
+    Only images are copied, not watchers, views, or any other related model. Permission is the
+    caller's job (:func:`user_can_clone_lot`).
+    """
+    from easy_thumbnails.files import get_thumbnailer
+
+    from .models import LotImage
+
+    copies = []
+    for original_image in LotImage.objects.filter(lot_number=original_lot.lot_number):
+        new_image = LotImage.objects.create(
+            createdon=original_image.createdon,
+            lot_number=new_lot,
+            image_source=original_image.image_source,
+            is_primary=original_image.is_primary,
+            url=original_image.url,
+        )
+        if original_image.image:
+            new_image.image = get_thumbnailer(original_image.image)
+            # both rows share the same file, so they share the same Cloudflare image
+            new_image.cloudflare_image_id = original_image.cloudflare_image_id
+        # if the original lot sold, this picture sure isn't of the actual item
+        if original_lot.winner and original_image.image_source == "ACTUAL":
+            new_image.image_source = "REPRESENTATIVE"
+        new_image.save()
+        copies.append(new_image)
+    return copies

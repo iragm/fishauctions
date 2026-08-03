@@ -45,7 +45,9 @@ Resolvers return one of the JSON shapes the front end understands::
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -54,14 +56,20 @@ from typing import Any
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from django.urls import reverse
+from django.utils.html import strip_tags
+from django.utils.http import urlencode
+from django.utils.text import Truncator
 
 from . import command_palette, palette_routes
 from .models import AuctionTOS, ClubMember, Lot
 from .services import (
     check_in_auctiontos,
+    clone_lot_values,
+    copy_lot_images,
     lot_add_block,
     recalculate_seller_invoice,
     save_new_lot,
+    user_can_clone_lot,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,6 +257,82 @@ def _lot_label_followup(lot) -> dict[str, str]:
     return {"label": f"Print label for {lot.lot_name}", "url": reverse("single_lot_label", kwargs={"pk": lot.pk})}
 
 
+def plain_text(value: str, limit: int = 1500) -> str:
+    """Rich text (a summernote field) as something worth putting in a prompt.
+
+    Auction rules and club descriptions are stored as HTML. Handed to the model raw they are mostly
+    markup, which costs tokens and reads badly; this strips the tags, unescapes the entities,
+    collapses the whitespace and truncates. Long rules get cut off rather than dropped -- the
+    opening paragraphs are where the rules people ask about actually live.
+    """
+    text = html.unescape(strip_tags(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return Truncator(text).chars(limit, truncate="…")
+
+
+#: Words that stay lowercase inside a lot name unless they start it.
+_LOWERCASE_WORDS = frozenset({"a", "an", "and", "of", "or", "the", "with", "in", "on", "for", "to", "x", "per"})
+
+#: A letter or two followed by digits: the plec/catfish codes (L134, LDA08) that must stay uppercase.
+_CODE = re.compile(r"^[a-z]{1,3}\d+[a-z]?$")
+
+
+def tidy_lot_name(name: str) -> str:
+    """Give a spoken or all-lowercase lot name the casing a person would have typed.
+
+    "blue shrimp" becomes "Blue Shrimp", and "l134" becomes "L134". Only ever applied to text with
+    no capitals of its own: the moment the user (or the model) has capitalised anything, that is a
+    decision, and re-casing it would wreck species names, breeder initials and deliberate ALL CAPS.
+    """
+    name = (name or "").strip()
+    if not name or name != name.lower():
+        return name
+    words = []
+    for index, word in enumerate(name.split()):
+        if _CODE.match(word):
+            words.append(word.upper())
+        elif index and word in _LOWERCASE_WORDS:
+            words.append(word)
+        else:
+            words.append(word[:1].upper() + word[1:])
+    return " ".join(words)
+
+
+def find_lot_to_copy(seller_user, name: str, exclude_auction=None):
+    """The seller's own most recent lot of this thing, so a re-listing keeps its photos.
+
+    Someone selling blue shrimp every month has already written the description and taken the
+    photo; "add blue shrimp" should not throw that away and produce a bare, pictureless lot. An
+    exact name match wins, and a partial one is accepted only when it is unambiguous, because
+    attaching the wrong photo to a lot is worse than attaching none.
+
+    Scoped to lots ``seller_user`` owns, and re-checked with ``services.user_can_clone_lot`` -- the
+    same rule the "Copy to new lot" button enforces.
+
+    Returns ``(lot_or_None, name_was_exact)``. The second value decides whether the old lot's
+    *name* is reused as well as its contents: on an exact match it is strictly better than anything
+    we would generate, but on a partial one ("add shrimp" finding "Blue Dream Shrimp") adopting it
+    would rename the lot to something the user never said.
+    """
+    name = (name or "").strip()
+    if not seller_user or not name:
+        return None
+    owned = Lot.objects.filter(user=seller_user, is_deleted=False).exclude(auction__is_deleted=True)
+    if exclude_auction:
+        # A lot already in this auction is the thing being added, not a previous listing of it.
+        owned = owned.exclude(auction=exclude_auction)
+    match = owned.filter(lot_name__iexact=name).order_by("-date_posted").first()
+    exact = match is not None
+    if match is None:
+        partial = list(owned.filter(lot_name__icontains=name).order_by("-date_posted")[:2])
+        # Two different past lots contain these words, so we can't tell which one they mean.
+        if len(partial) == 1:
+            match = partial[0]
+    if match is None or not user_can_clone_lot(seller_user, match):
+        return None, False
+    return match, exact
+
+
 # --- add_lot -----------------------------------------------------------------
 
 
@@ -287,28 +371,51 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     if not lot_name:
         return _need("What should the lot be called?")
 
+    # A previous listing of the same thing is the best source for everything the user didn't say:
+    # its photos, its description, and — when they named it exactly — its capitalisation.
+    previous, name_was_exact = find_lot_to_copy(tos.user, lot_name, exclude_auction=auction)
+    if previous:
+        data = clone_lot_values(previous)
+        data["species_category"] = previous.species_category_id
+        if not name_was_exact:
+            # A partial match reuses the old lot's contents but not its name: "add shrimp" must not
+            # come out as a lot called "Blue Dream Shrimp — F1 juveniles".
+            data["lot_name"] = tidy_lot_name(lot_name)
+    else:
+        data = {"lot_name": tidy_lot_name(lot_name), "species_category": _category_pk()}
+
     reserve = _decimal(params, "reserve_price")
     if reserve is None:
         reserve = _decimal(params, "price")
-    data = {
-        "lot_name": lot_name[:40],
-        "quantity": _int(params, "quantity", 1),
-        # The page submits this from a hidden input pre-filled with the auction minimum, so a
-        # request that doesn't mention a price behaves the same way here.
-        "reserve_price": reserve if reserve is not None else auction.minimum_bid,
-        "buy_now_price": _decimal(params, "buy_now_price"),
-        "donation": bool(params.get("donation")),
-        "i_bred_this_fish": bool(params.get("i_bred_this_fish")),
-        "custom_field_1": _str(params, "custom_field_1"),
-        "custom_dropdown": _str(params, "custom_dropdown"),
-        "species_category": _category_pk(),
-    }
+    quantity = _int(params, "quantity")
+    buy_now = _decimal(params, "buy_now_price")
+    # Anything the user actually asked for overrides what the old lot happened to say.
+    data["lot_name"] = str(data.get("lot_name") or lot_name)[:40]
+    if quantity is not None:
+        data["quantity"] = quantity
+    data.setdefault("quantity", 1)
+    if reserve is not None:
+        data["reserve_price"] = reserve
+    # The page submits this from a hidden input pre-filled with the auction minimum, so a
+    # request that doesn't mention a price behaves the same way here.
+    if data.get("reserve_price") is None:
+        data["reserve_price"] = auction.minimum_bid
+    if buy_now is not None:
+        data["buy_now_price"] = buy_now
+    for key in ("donation", "i_bred_this_fish"):
+        if key in params:
+            data[key] = bool(params.get(key))
+    for key in ("custom_field_1", "custom_dropdown"):
+        if params.get(key):
+            data[key] = _str(params, key)
+
     form = quick_add_lot_form_class()(data, auction=auction, tos=tos, is_admin=is_admin)
     if not form.is_valid():
         return _form_problem(form)
 
     lot = form.save(commit=False)
     save_new_lot(lot, auction=auction, tos=tos, added_by=user)
+    copied_images = copy_lot_images(previous, lot) if previous else []
     recalculate_seller_invoice(auction, tos)
     auction.create_history(
         applies_to="LOTS",
@@ -316,13 +423,21 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
     )
     who = "you" if for_self else (tos.name or f"bidder {tos.bidder_number}")
+    summary = f"Added “{lot.lot_name}” to {auction.title} for {who}."
+    if previous:
+        # Never silent: copying someone's old photos onto a new lot is a decision they get to see
+        # and undo, and the Edit followup is how they undo it.
+        reused = "description and photos" if copied_images else "description"
+        whose = "the last one you listed" if for_self else "the last one they listed"
+        summary += f" Reused the {reused} from {whose}."
     return _ok(
-        f"Added “{lot.lot_name}” to {auction.title} for {who}.",
+        summary,
         lot_id=lot.pk,
         lot_name=lot.lot_name,
         followups=[
-            _lot_label_followup(lot),
             {"label": "View this lot", "url": lot.get_absolute_url()},
+            _lot_label_followup(lot),
+            *([{"label": "Edit this lot", "url": reverse("edit_lot", kwargs={"pk": lot.pk})}] if previous else []),
         ],
     )
 
@@ -433,6 +548,111 @@ def check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     if already:
         return _ok(f"{who} was already checked in to {auction.title}.")
     return _ok(f"Checked {who} in to {auction.title} as bidder {tos.bidder_number}.")
+
+
+# --- add_person --------------------------------------------------------------
+
+
+def add_person(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add a person to an auction (admins / club staff only).
+
+    The counterpart to ``add_lot``, and the reason "add mike smith" doesn't become a lot called
+    "Mike Smith": without this the model's only "add" verb was ``add_lot``, so a person's name had
+    nowhere else to go.
+
+    Validation is entirely :class:`auctions.forms.QuickAddTOS` -- the bulk-add page's own form,
+    built through ``quick_add_tos_form_class`` with the same fields -- so the duplicate-bidder-number
+    and duplicate-email rules are the page's rules, not a second copy of them.
+    """
+    from .forms import quick_add_tos_form_class
+    from .views import user_can_add_edit_people
+
+    user = request.user
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
+    if error:
+        return _error(error)
+    if not (_is_auction_admin(user, auction) or user_can_add_edit_people(user, auction)):
+        return _error(f"You don't have permission to add people to {auction.title}.")
+
+    name = _str(params, "name") or _str(params, "person")
+    if not name:
+        return _need("What's their name?")
+
+    existing = AuctionTOS.objects.filter(auction=auction, name__iexact=name).first()
+    if existing:
+        return _error(
+            f"{existing.name} is already in {auction.title} as bidder {existing.bidder_number}."
+            if existing.bidder_number
+            else f"{existing.name} is already in {auction.title}."
+        )
+
+    location = auction.location_qs.first()
+    if not location:
+        return _error(f"{auction.title} doesn't have a pickup location yet, so nobody can be added to it.")
+    data = {
+        "name": name,
+        "email": _str(params, "email"),
+        "phone_number": _str(params, "phone_number"),
+        "address": _str(params, "address"),
+        "bidder_number": _str(params, "bidder_number"),
+        "pickup_location": location.pk,
+    }
+    form = quick_add_tos_form_class()(data, auction=auction, bidder_numbers_on_this_form=[])
+    if not form.is_valid():
+        return _form_problem(form)
+    tos = form.save(commit=False)
+    tos.auction = auction
+    tos.manually_added = True
+    tos.save()
+    auction.create_history(
+        applies_to="USERS",
+        action=f"Added {tos.name} (command palette)",
+        user=user,
+    )
+    followups = [
+        {"label": f"Everyone in {auction.title}", "url": reverse("auction_tos_list", kwargs={"slug": auction.slug})}
+    ]
+    if tos.bidder_number:
+        # Adding somebody at the door is almost always followed by taking their lots.
+        followups.insert(
+            0,
+            {
+                "label": f"Add lots for {tos.name}",
+                "url": reverse("bulk_add_lots", kwargs={"slug": auction.slug, "bidder_number": tos.bidder_number}),
+            },
+        )
+    return _ok(f"Added {tos.name} to {auction.title} as bidder {tos.bidder_number}.", followups=followups)
+
+
+# --- searching lots ----------------------------------------------------------
+
+
+def search_lots(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open the lot list filtered to what the user is looking for.
+
+    "find shrimp in this auction" wants to *see* the shrimp, not be told how many there are. This
+    builds the same URL the search box on the lot list produces (``?q=`` plus ``?auction=``, both
+    read by :class:`auctions.filters.LotFilter`), so the answer is the real, filterable,
+    sortable page rather than a list the palette has to re-implement.
+    """
+    term = _str(params, "query") or _str(params, "q") or _str(params, "name")
+    if not term:
+        return _error("What should I search for?")
+    query: dict[str, str] = {"q": term}
+    where = ""
+    # Only scope to an auction when the user meant one. "find shrimp" across the whole site is a
+    # perfectly good search, and defaulting it to their last auction would silently hide results.
+    hint = _str(params, "auction")
+    if hint or params.get("this_auction") or (_page(request).get("auction") and not params.get("everywhere")):
+        auction, error = resolve_auction(request.user, hint, _page(request))
+        if error:
+            return _error(error)
+        query["auction"] = auction.slug
+        where = f" in {auction.title}"
+    return _ok(
+        f"Searching for “{term}”{where}.",
+        url=reverse("allLots") + "?" + urlencode(query),
+    )
 
 
 # --- read-only lookups -------------------------------------------------------
@@ -713,6 +933,284 @@ def find_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# --- describing things -------------------------------------------------------
+#
+# The lookups above turn a name into an id so an action can run. These answer questions instead:
+# "what are the rules for this auction", "how do I earn BAP points", "how many people are coming".
+#
+# Two rules hold everywhere in this section:
+#
+#   1. **Scope first.** Every object is fetched through the same scoped querysets the rest of the
+#      palette uses (``_visible_auctions``, ``_joined_auctions``, ``_admin_clubs``), so a lookup can
+#      never describe something the user couldn't already open.
+#   2. **Public fields, then admin fields.** ``_admin`` blocks are only added once
+#      ``_is_auction_admin`` / ``_can_manage_members`` has said yes. Everything outside them is
+#      what any visitor to the page would see anyway.
+
+
+def _settings_block(obj, names: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Describe a handful of a model's settings using the model's own ``help_text``.
+
+    The help text on these fields is already a plain-English explanation of the rule -- "Minimum
+    days between awarding BAP points for lots with the same name" says it better than anything
+    restated here would, and it is the same sentence the club admin read when they set it. Reading
+    it out of ``_meta`` rather than copying it means the answer follows the field: change the rule
+    or its wording and this follows along, with no second copy to forget about.
+    """
+    block = []
+    for name in names:
+        try:
+            field = obj._meta.get_field(name)
+        except Exception:  # pragma: no cover - a renamed field shouldn't break an answer
+            continue
+        value = getattr(obj, name, None)
+        block.append(
+            {
+                "setting": str(field.verbose_name),
+                "value": value,
+                "means": str(getattr(field, "help_text", "") or ""),
+            }
+        )
+    return block
+
+
+#: How a club awards points. Every one of these carries its own explanation in ``help_text``.
+_CLUB_BAP_SETTINGS = (
+    "enable_breeder_award_program",
+    "points_per_lot",
+    "min_quantity",
+    "days_between_same_name_lots",
+    "points_for_custom_checkbox",
+    "only_donation_lots",
+    "only_sold_lots",
+    "auto_add_points",
+    "only_active_members_can_participate",
+    "separate_hap",
+    "separate_cap",
+)
+
+#: The auction settings people actually ask about ("can I use buy now", "how many lots can I bring").
+_AUCTION_SETTINGS = (
+    "minimum_bid",
+    "buy_now",
+    "max_lots_per_user",
+    "allow_additional_lots_as_donation",
+    "lot_entry_fee",
+    "winning_bid_percent_to_club",
+    "registration_fee",
+    "unsold_lot_fee",
+    "only_approved_sellers",
+    "only_approved_bidders",
+    "allow_bulk_adding_lots",
+    "use_check_in_mode",
+)
+
+
+def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
+    """An auction to describe, scoped to what this user can see rather than what they've joined.
+
+    Wider than ``resolve_auction`` on purpose: asking "what are the rules for the spring auction"
+    is the question you ask *before* joining, and refusing to answer it until you have joined is
+    backwards. Still scoped -- ``_visible_auctions`` excludes anything not published to this user.
+    """
+    visible = command_palette._visible_auctions(user)
+    if hint:
+        match = visible.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
+        if not match:
+            match = visible.filter(title__icontains=hint).first()
+        if not match:
+            return None, f"I couldn't find an auction called “{hint}”."
+        return match, None
+    page_slug = (page or {}).get("auction")
+    if page_slug:
+        current = visible.filter(slug=page_slug).first()
+        if current:
+            return current, None
+    auction = command_palette._last_auction(user)
+    if not auction:
+        return None, "I don't know which auction you mean."
+    return auction, None
+
+
+def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Everything knowable about one auction: dates, rules text, fees, and (for admins) its stats.
+
+    This is what answers "what are the rules", "when does lot submission close", "how much does the
+    club take" and "how many people have signed up" -- questions whose answer is on the page but
+    which nobody wants to go and read.
+    """
+    user = request.user
+    auction, error = _resolve_described_auction(user, _str(params, "auction") or _str(params, "name"), _page(request))
+    if error:
+        return _error(error)
+    is_admin = _is_auction_admin(user, auction)
+    tos = _own_tos(user, auction)
+    data: dict[str, Any] = {
+        "title": auction.title,
+        "club": auction.club.name if auction.club else None,
+        "is_online": auction.is_online,
+        "starts": auction.date_start,
+        "ends": auction.date_end,
+        "lot_submission_opens": auction.lot_submission_start_date,
+        "lot_submission_closes": auction.lot_submission_end_date,
+        "lot_submission_open_now": bool(auction.can_submit_lots),
+        "over": bool(auction.pretty_much_over),
+        "uses_check_in": bool(auction.use_check_in_mode),
+        "you_have_joined": bool(tos),
+        "your_bidder_number": tos.bidder_number if tos else None,
+        "you_are_an_admin": is_admin,
+        "pickup_locations": [location.name for location in auction.location_qs[:10]],
+        # The rules are a summernote field; the model is given the words, not the markup.
+        "rules": plain_text(auction.summernote_description),
+        "settings": _settings_block(auction, _AUCTION_SETTINGS),
+    }
+    if is_admin or auction.make_stats_public:
+        lots = Lot.objects.filter(auction=auction, is_deleted=False)
+        data["participants"] = AuctionTOS.objects.filter(auction=auction).count()
+        data["lots"] = lots.count()
+        data["lots_sold"] = lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
+    if is_admin:
+        data["_admin"] = {
+            "checked_in": AuctionTOS.objects.filter(auction=auction, checked_in__isnull=False).count(),
+            "cached_stats": auction.cached_stats,
+            "stats_last_updated": auction.last_stats_update,
+        }
+    return {"found": True, "auction": data}
+
+
+def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """A club: what it is, what membership costs, and exactly how its points are awarded.
+
+    The points rules come out of the model's own help text (see :func:`_settings_block`), which is
+    what makes "how do I earn BAP points in my club?" answerable at all -- the rules are a dozen
+    interacting settings, not a paragraph anybody wrote down.
+    """
+    from .models import Club
+
+    user = request.user
+    hint = _str(params, "club") or _str(params, "name")
+    club = palette_routes._club_from_hint(user, hint or (_page(request).get("club") or ""))
+    if club is None and hint:
+        club = Club.objects.filter(active=True).filter(Q(name__icontains=hint) | Q(abbreviation__iexact=hint)).first()
+    if club is None:
+        return _error("I couldn't work out which club you mean.")
+    can_manage = command_palette._can_manage_members(user, club)
+    membership = ClubMember.objects.filter(user=user, club=club, is_deleted=False).first()
+    data: dict[str, Any] = {
+        "name": club.name,
+        "abbreviation": club.abbreviation,
+        "description": plain_text(club.description),
+        "contact_email": club.contact_email,
+        "membership_enabled": club.enable_membership,
+        "annual_membership_fee": club.membership_annual_fee,
+        "your_membership_expires": membership.membership_expiration_date if membership else None,
+        "you_are_a_member": bool(membership),
+        "you_can_manage_members": can_manage,
+        "points_program": _settings_block(club, _CLUB_BAP_SETTINGS),
+        "category_point_overrides": [
+            {"category": str(override.category), "points": override.points}
+            for override in club.bap_category_overrides.select_related("category")[:25]
+        ],
+    }
+    if can_manage:
+        members = ClubMember.objects.filter(club=club, is_deleted=False)
+        data["_admin"] = {
+            "members": members.count(),
+            "members_with_an_account": members.filter(user__isnull=False).count(),
+            "points_last_recalculated": club.last_bap_recalculation,
+        }
+    return {"found": True, "club": data}
+
+
+def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """One lot in detail: what it is, what it went for, and (for the auction's admins) who sold it.
+
+    Scoped exactly like ``find_lot`` -- the user's own lots plus the auctions they're part of.
+    """
+    user = request.user
+    found = find_lot(request, params)
+    if "error" in found:
+        return found
+    if not found.get("found"):
+        return found
+    lots = found["lots"]
+    if len(lots) > 1:
+        return {
+            "found": True,
+            "ambiguous": True,
+            "lots": lots,
+            "note": "More than one lot matches; ask which one, or pass a lot number.",
+        }
+    lot = Lot.objects.filter(pk=lots[0]["lot_id"], is_deleted=False).select_related("auction").first()
+    if not lot:
+        return {"found": False, "summary": "That lot doesn't exist any more."}
+    is_admin = _is_auction_admin(user, lot.auction)
+    data: dict[str, Any] = {
+        "name": lot.lot_name,
+        "lot_number": lot.lot_number_display,
+        "auction": lot.auction.title if lot.auction else None,
+        "quantity": lot.quantity,
+        "description": plain_text(lot.summernote_description, limit=600),
+        "category": str(lot.species_category) if lot.species_category_id else None,
+        "reserve_price": lot.reserve_price,
+        "buy_now_price": lot.buy_now_price,
+        "donation": lot.donation,
+        "breeder_points": lot.i_bred_this_fish,
+        "sold": bool(lot.winner or lot.auctiontos_winner),
+        "winning_price": lot.winning_price,
+        "images": lot.image_count,
+        "yours": bool(lot.user_id and lot.user_id == user.pk),
+    }
+    if is_admin:
+        seller = lot.auctiontos_seller
+        data["_admin"] = {
+            "seller": seller.name if seller else None,
+            "seller_bidder_number": seller.bidder_number if seller else None,
+            "winner_bidder_number": lot.auctiontos_winner.bidder_number if lot.auctiontos_winner else None,
+        }
+    return {"found": True, "lot": data}
+
+
+def describe_person(request, params: dict[str, Any]) -> dict[str, Any]:
+    """One participant in an auction, for the people running it.
+
+    Admin-only by construction: it goes through ``resolve_person``, which is scoped to a single
+    auction, and refuses outright unless the caller administers that auction. A participant asking
+    about another participant gets nothing -- the room's names, numbers and invoices are not public.
+    """
+    user = request.user
+    auction, error = resolve_auction(user, _str(params, "auction"), _page(request))
+    if error:
+        return _error(error)
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can look up someone's details.")
+    tos, problem = resolve_person(user, auction, _str(params, "name") or _str(params, "person"))
+    if problem:
+        return problem
+    lots = Lot.objects.filter(auctiontos_seller=tos, is_deleted=False)
+    won = Lot.objects.filter(auctiontos_winner=tos, is_deleted=False)
+    invoice = tos.invoice
+    return {
+        "found": True,
+        "person": {
+            "name": tos.name,
+            "bidder_number": tos.bidder_number,
+            "auction": auction.title,
+            "email": tos.email,
+            "checked_in": bool(tos.checked_in),
+            "bidding_allowed": tos.bidding_allowed,
+            "selling_allowed": tos.selling_allowed,
+            "pickup_location": tos.pickup_location.name if tos.pickup_location else None,
+            "lots_brought": lots.count(),
+            "lots_sold": lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count(),
+            "lots_won": won.count(),
+            "invoice_status": invoice.get_status_display() if invoice else None,
+            "invoice_total": str(invoice.rounded_net) if invoice else None,
+            "has_an_account": bool(tos.user_id),
+        },
+    }
+
+
 def find_page(request, params: dict[str, Any]) -> dict[str, Any]:
     """Search the page catalog. A safety net for when the prompt's catalog wasn't enough."""
     query = _str(params, "query") or _str(params, "page")
@@ -771,12 +1269,14 @@ register(
     Action(
         name="add_lot",
         description=(
-            "Add one lot to an auction. Defaults to the user's most recent auction and to the "
-            "user themselves as the seller. Only auction admins may pass 'bidder' to add a lot "
-            "for someone else."
+            "Add one lot — an item for sale — to an auction. Defaults to the user's most recent "
+            "auction and to the user themselves as the seller. Only auction admins may pass "
+            "'bidder' to add a lot for someone else. A lot is a thing: fish, plants, shrimp, food, "
+            "equipment. If what they want to add is a PERSON (a first name and a surname, 'add "
+            "mike smith'), they mean add_person, not a lot called Mike Smith."
         ),
         params={
-            "name": "string, required. What the lot is, e.g. 'blue shrimp'.",
+            "name": "string, required. What the item is, e.g. 'blue shrimp'. Never a person's name.",
             "auction": "string, optional. Auction slug or title; omit for the user's last auction.",
             "quantity": "integer, optional, default 1.",
             "bidder": "string, optional, ADMINS ONLY. Bidder number or name to add the lot for.",
@@ -828,6 +1328,122 @@ register(
         aliases={"bidder"},
         confirm_template="Check someone in",
         examples=["check in bob", "check in bidder 22"],
+    )
+)
+
+register(
+    Action(
+        name="add_person",
+        description=(
+            "Add a person to an auction so they can bid and sell. For auction admins and club "
+            "staff only. This is what 'add mike smith' means: a person's name is a person, not a "
+            "lot. Use check_in instead when they are already in the auction and are arriving."
+        ),
+        params={
+            "name": "string, required. The person's name.",
+            "auction": "string, optional. Defaults to the user's last auction.",
+            "email": "string, optional.",
+            "phone_number": "string, optional.",
+            "bidder_number": "string, optional. Omit to let the auction assign the next one.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_person,
+        aliases={"person", "address"},
+        confirm_template="Add someone to the auction",
+        examples=["add mike smith", "add a new bidder called Jane Doe"],
+    )
+)
+
+register(
+    Action(
+        name="search_lots",
+        description=(
+            "Show the user lots matching what they're looking for, by opening the lot list "
+            "filtered to their search. This is the right answer for 'find shrimp', 'what plants "
+            "are in this auction', 'any cichlids?' — anything where they want to SEE lots. Do not "
+            "use find_lot for this; find_lot is for turning a name into a lot number before "
+            "acting on it."
+        ),
+        params={
+            "query": "string, required. What to search lot names for, in the user's words.",
+            "auction": "string, optional. Omit to search the auction they're looking at.",
+            "everywhere": "boolean, optional. True to search the whole site rather than one auction.",
+        },
+        danger=DANGER_NAVIGATE,
+        resolver=search_lots,
+        aliases={"q", "name", "this_auction"},
+        examples=["find shrimp in this auction", "show me the plants", "any pleco lots?"],
+    )
+)
+
+register(
+    Action(
+        name="describe_auction",
+        description=(
+            "Get the full details of an auction: its dates, whether lot submission is open, its "
+            "pickup locations, its fees and settings, and the full text of its rules. Use this to "
+            "ANSWER questions about how an auction works — what the rules say, when things close, "
+            "how much the club takes, how many lots there are."
+        ),
+        params={"auction": "string, optional. Auction title; omit for the one they're looking at."},
+        danger=DANGER_SAFE,
+        resolver=describe_auction,
+        aliases={"name"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="describe_club",
+        description=(
+            "Get the full details of a club: what it is, what membership costs, and exactly how "
+            "its breeder award (BAP/HAP/CAP) points are awarded, including the per-category "
+            "overrides. Every point setting comes back with an explanation of what it does, so "
+            "use this to ANSWER 'how do I earn points', not to guess."
+        ),
+        params={"club": "string, optional. Club name; omit for the club they're looking at."},
+        danger=DANGER_SAFE,
+        resolver=describe_club,
+        aliases={"name"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="describe_lot",
+        description=(
+            "Get the full details of one lot: its description, category, prices, whether it sold "
+            "and for how much. Use this to answer questions about a specific lot."
+        ),
+        params={
+            "lot": "string, required. Lot number or name.",
+            "auction": "string, optional.",
+        },
+        danger=DANGER_SAFE,
+        resolver=describe_lot,
+        aliases={"query", "name"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="describe_person",
+        description=(
+            "Get everything about one participant in an auction: their bidder number, whether "
+            "they've checked in, how many lots they brought, won and sold, and their invoice "
+            "status. Auction admins only."
+        ),
+        params={
+            "name": "string, required. Their name or bidder number.",
+            "auction": "string, optional. Defaults to the user's last auction.",
+        },
+        danger=DANGER_SAFE,
+        resolver=describe_person,
+        aliases={"person", "query"},
+        lookup=True,
     )
 )
 
@@ -967,6 +1583,33 @@ register(
         examples=["undo lot 14", "that last one was wrong, unsell it"],
     )
 )
+
+
+def action_context(request, action: Action, params: dict[str, Any]) -> str:
+    """Which auction (or club, or lot) an action is about to touch, phrased for the user.
+
+    "Adding a lot" is not enough to check before a countdown runs out -- to *which* auction is the
+    part worth catching, and the palette knows the answer before it acts. Read-only and best-effort:
+    this runs to decorate a message, so anything it can't work out comes back as an empty string
+    rather than an error.
+    """
+    try:
+        # Which object matters is read off the action's own parameters rather than a list kept here,
+        # so a new action gets a context line the moment it declares it works on an auction.
+        if action.accepts("club") and not action.accepts("auction"):
+            club = palette_routes._club_from_hint(request.user, _str(params, "club") or _str(params, "name"))
+            return club.name if club else ""
+        wants_auction = action.accepts("auction") or (
+            # go_to_page takes any page in the catalog, so ask the route instead of the action.
+            action.name == "go_to_page" and palette_routes.route_needs_an_auction(_str(params, "page"))
+        )
+        if wants_auction:
+            hint = _str(params, "auction") or (_str(params, "target") if action.name == "go_to_page" else "")
+            auction, error = resolve_auction(request.user, hint, _page(request))
+            return auction.title if not error else ""
+    except Exception:  # pragma: no cover - never let a label break the request
+        logger.exception("Could not describe the context for %s", action.name)
+    return ""
 
 
 def run_action(request, name: str, params: dict[str, Any]) -> dict[str, Any]:

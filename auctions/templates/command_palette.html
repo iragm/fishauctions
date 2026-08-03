@@ -52,6 +52,7 @@ Most-of-the-page on desktop; fullscreen on mobile.
      data-log-url="{% url 'command_palette_log' %}"
      data-assist-url="{% url 'command_palette_assist' %}"
      data-execute-url="{% url 'command_palette_execute' %}"
+     data-cancel-url="{% url 'command_palette_cancel' %}"
      data-assist-enabled="{% if palette_assist_enabled %}1{% else %}0{% endif %}"
      data-csrf="{{ csrf_token }}">
   <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down command-palette-dialog">

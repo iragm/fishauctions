@@ -27,6 +27,7 @@
     var logUrl = modalEl.dataset.logUrl;
     var assistUrl = modalEl.dataset.assistUrl;
     var executeUrl = modalEl.dataset.executeUrl;
+    var cancelUrl = modalEl.dataset.cancelUrl;
     var assistEnabled = modalEl.dataset.assistEnabled === "1";
     var csrfToken = modalEl.dataset.csrf;
     var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -37,8 +38,16 @@
     var CONTEXT_MAX = 5;
     var assistInFlight = false;
     var countdownTimer = null;
+    // Bumped whenever we start an assist request. A plain search fired by an earlier keystroke is
+    // still in flight at that point, and when it lands it calls render() -- which used to wipe the
+    // progress strip and print "No results found." over the top of a request that was working fine.
+    // Stale responses compare this and drop themselves instead.
+    var renderGeneration = 0;
 
     var DEBOUNCE_MS = 300;
+    // How long "Taking you to the lot list…" stays on screen before the page actually changes.
+    // Long enough to read the destination, short enough that nobody would call it a delay.
+    var NAVIGATE_DELAY_MS = 700;
     var debounceTimer = null;
     var currentSearchId = null; // pk of the in-progress CommandPaletteSearch row
     var lastQuery = ""; // last query we ran a search for
@@ -212,11 +221,27 @@
       if (!groups || !groups.length) {
         var empty = document.createElement("p");
         empty.className = "text-muted small px-2 py-3 mb-0";
-        empty.textContent = input.value.trim() ? "No results found." : "Start typing to search.";
+        if (assistInFlight) {
+          // Still working. Saying "no results" here is not just unhelpful, it's wrong: the answer
+          // is on its way and this is the frame the user reads while waiting for it.
+          empty.textContent = "Searching…";
+        } else {
+          empty.textContent = input.value.trim() ? "No results found." : "Start typing to search.";
+        }
         results.appendChild(empty);
         return;
       }
-      groups.forEach(function (group) {
+      renderInto(groups);
+    }
+
+    // Append result groups to whatever is already on screen, registering each one for keyboard
+    // navigation. Used on its own to put clickable results *underneath* an answer or a question,
+    // where clearing the box first would throw away the thing they are attached to.
+    function renderInto(groups) {
+      (groups || []).forEach(function (group) {
+        if (!group.items || !group.items.length) {
+          return;
+        }
         var label = document.createElement("div");
         label.className = "cp-group-label text-muted px-2 pt-3 pb-1";
         label.textContent = group.label;
@@ -255,6 +280,12 @@
     }
 
     function fetchResults(query, onCount) {
+      var generation = renderGeneration;
+      // An assist request started after this search did owns the screen; a late search result must
+      // not paint over its progress strip or its answer.
+      function isStale() {
+        return generation !== renderGeneration;
+      }
       fetch(searchUrl + "?q=" + encodeURIComponent(query), {
         headers: { "X-Requested-With": "XMLHttpRequest" },
         credentials: "same-origin",
@@ -264,13 +295,18 @@
         })
         .then(function (data) {
           var groups = data.groups || [];
+          if (isStale()) {
+            return;
+          }
           render(groups);
           if (onCount) {
             onCount(countItems(groups));
           }
         })
         .catch(function () {
-          render([]);
+          if (!isStale()) {
+            render([]);
+          }
         });
     }
 
@@ -328,6 +364,18 @@
     function clearNav() {
       items = [];
       activeIndex = -1;
+    }
+
+    // A navigation waiting out its "Taking you to X…" message. Held so closing the palette can
+    // call it off: dismissing the box and then being moved to another page a moment later is not
+    // something anyone asked for.
+    var pendingNavigation = null;
+
+    function cancelPendingNavigation() {
+      if (pendingNavigation) {
+        window.clearTimeout(pendingNavigation);
+        pendingNavigation = null;
+      }
     }
 
     // Stop a pending countdown without running it. Safe to call at any time.
@@ -526,6 +574,21 @@
       heading.appendChild(summary);
       body.appendChild(heading);
 
+      // Which auction (or club) this is about to write to, worked out by the server rather than
+      // taken from the model's own summary. This is the line that lets someone notice we picked
+      // the wrong auction while the countdown is still running.
+      if (response.context) {
+        var context = document.createElement("div");
+        context.className = "mb-2 small";
+        var icon = document.createElement("i");
+        icon.className = "bi bi-signpost-split me-1";
+        context.appendChild(icon);
+        var contextText = document.createElement("span");
+        contextText.textContent = "In " + response.context;
+        context.appendChild(contextText);
+        body.appendChild(context);
+      }
+
       var hint = document.createElement("p");
       hint.className = "text-muted small mb-2";
       hint.textContent = "Starting in a moment — cancel if that's not what you meant.";
@@ -581,10 +644,27 @@
       cancel.addEventListener("click", function () {
         done = true;
         cancelCountdown();
+        reportCancelled(response);
         results.innerHTML = "";
         clearNav();
         results.appendChild(renderNote("Cancelled — nothing was changed.", "info", "bi-info-circle"));
       });
+    }
+
+    // Tell the server the user stopped this one. Nothing was written, so there is nothing to undo;
+    // this exists purely so a command we understood as the wrong thing leaves a trace. Fire and
+    // forget — a failed beacon must never be something the user sees.
+    function reportCancelled(response) {
+      if (!cancelUrl || !response || !response.usage_id) {
+        return;
+      }
+      fetch(cancelUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+        credentials: "same-origin",
+        keepalive: true,
+        body: JSON.stringify({ usage_id: response.usage_id }),
+      }).catch(function () {});
     }
 
     function runExecute(query, response) {
@@ -626,7 +706,31 @@
         rememberExchange(query, response.message || "Opened a page", "navigate", {});
         navigatedByClick = true;
         finalized = true;
-        window.location.href = response.url;
+        // Say where we're going before going there. Navigating instantly gets the destination right
+        // and still feels like the palette ignored you — by the time the new page paints there has
+        // been nothing on screen that named it, so a wrong guess is indistinguishable from a right
+        // one. The pause is short enough not to be a wait and long enough to be read.
+        results.innerHTML = "";
+        clearNav();
+        results.appendChild(
+          renderNote(response.message || "Taking you there…", "info", "bi-box-arrow-up-right")
+        );
+        cancelPendingNavigation();
+        pendingNavigation = window.setTimeout(function () {
+          pendingNavigation = null;
+          window.location.href = response.url;
+        }, NAVIGATE_DELAY_MS);
+        return;
+      }
+      if (kind === "answer") {
+        rememberExchange(query, response.message || "Answered", "answer", {});
+        results.innerHTML = "";
+        clearNav();
+        results.appendChild(renderNote(response.message || "", "info", "bi-chat-left-quote"));
+        // Whatever the answer was about is usually one click away; the answer alone is a dead end.
+        if (response.groups && response.groups.length) {
+          renderInto(response.groups);
+        }
         return;
       }
       if (kind === "countdown") {
@@ -639,6 +743,10 @@
         results.appendChild(renderNote(response.message || "Which one did you mean?", "info", "bi-question-circle"));
         if (response.options && response.options.length) {
           results.appendChild(renderOptions(query, response.message, response.options));
+        } else if (response.groups && response.groups.length) {
+          // The model asked without offering choices. Rather than leaving a question with nothing
+          // to click — unusable by voice, annoying by keyboard — show what search found for it.
+          renderInto(response.groups);
         }
         return;
       }
@@ -668,6 +776,7 @@
         return;
       }
       assistInFlight = true;
+      renderGeneration += 1; // any search already in flight is now stale
       finalized = true; // this query ends in an assist result, not an abandoned search
       // A search armed by the last keystroke (or by the interim speech transcript) is about to be
       // answered by this request instead, so don't let it land on top of the assist result.
@@ -867,9 +976,11 @@
       fetchResults("");
     });
     modalEl.addEventListener("hidden.bs.modal", function () {
-      // Never leave the microphone running, or a countdown pending, once the palette is hidden.
+      // Never leave the microphone running, a countdown pending, or a navigation about to fire
+      // once the palette is hidden.
       stopListening();
       cancelCountdown();
+      cancelPendingNavigation();
       flushFinal();
     });
 

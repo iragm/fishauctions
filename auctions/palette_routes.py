@@ -1049,6 +1049,7 @@ EXCLUDED: dict[str, str] = {
     "command_palette_log": _INFRA,
     "command_palette_assist": _INFRA,
     "command_palette_execute": _INFRA,
+    "command_palette_cancel": _INFRA,
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",
@@ -1226,6 +1227,16 @@ def get_route(key: str) -> Route | None:
     return ROUTES.get(key.strip().lower())
 
 
+def route_needs_an_auction(key: str) -> bool:
+    """True when this destination is about one particular auction.
+
+    Used to decide whether "Opening the lot list" is worth expanding to "Opening the lot list for
+    the Spring Auction" -- see ``palette_actions.action_context``.
+    """
+    route = get_route(key)
+    return bool(route and route.scope in (SCOPE_AUCTION, SCOPE_AUCTION_BIDDER, SCOPE_AUCTION_USERNAME))
+
+
 # --- resolving a route to a URL ----------------------------------------------
 
 
@@ -1302,6 +1313,10 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     user = request.user
     kwargs: dict[str, Any] = dict(route.fixed)
     hint = str(params.get("target") or "").strip()
+    # What the destination is *about*, filled in as we resolve it. Navigating somewhere without
+    # saying where is the complaint this answers: "Opening the lot list" is not enough to tell
+    # whether we understood, and "Opening the lot list for the Spring Auction" is.
+    about = ""
 
     page = palette_actions._page(request)
     if route.scope in (SCOPE_AUCTION, SCOPE_AUCTION_BIDDER, SCOPE_AUCTION_USERNAME):
@@ -1311,6 +1326,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
         if route.admin == ADMIN_AUCTION and not palette_actions._is_auction_admin(user, auction):
             return _denied(f"Only admins of {auction.title} can open that page.")
         kwargs["slug"] = auction.slug
+        about = auction.title
         if route.scope == SCOPE_AUCTION_BIDDER:
             tos, problem = palette_actions.resolve_person(user, auction, hint)
             if problem:
@@ -1318,6 +1334,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             if not tos.bidder_number:
                 return {"error": f"{tos.name or 'That person'} doesn't have a bidder number yet."}
             kwargs[route.param or "bidder_number"] = tos.bidder_number
+            about = f"{tos.name or tos.bidder_number} in {auction.title}"
         if route.scope == SCOPE_AUCTION_USERNAME:
             tos, problem = palette_actions.resolve_person(user, auction, hint)
             if problem:
@@ -1325,6 +1342,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             if not (tos.user and tos.user.username):
                 return {"error": f"{tos.name or 'That person'} doesn't have an account, so they have no user page."}
             kwargs["username"] = tos.user.username
+            about = f"{tos.name or tos.user.username} in {auction.title}"
 
     elif route.scope in (SCOPE_CLUB, SCOPE_CLUB_TAB):
         club = _club_from_hint(user, hint or (page.get("club") or ""))
@@ -1336,6 +1354,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             if not command_palette._can_manage_members(user, club):
                 return _denied(f"Only admins of {club.name} can open that page.")
         kwargs["slug"] = club.slug
+        about = club.name
         if route.scope == SCOPE_CLUB_TAB:
             tab = str(params.get("tab") or "bap").strip().lower()
             if tab not in {"bap", "hap", "culture", "my-points"}:
@@ -1348,6 +1367,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
         if not lot:
             return {"error": "I couldn't work out which lot you mean — give me a lot number or name."}
         kwargs[route.param or "pk"] = lot.pk
+        about = lot.lot_name
 
     elif route.scope == SCOPE_INVOICE:
         from . import command_palette
@@ -1370,6 +1390,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
         if not location:
             return {"error": f"I couldn't find a pickup location for {auction.title}."}
         kwargs["pk"] = location.pk
+        about = f"{location.name} in {auction.title}"
 
     elif route.scope == SCOPE_MEMBER:
         from .models import ClubMember
@@ -1386,6 +1407,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             return {"error": f"I couldn't find a member called “{hint}” in {club.name}."}
         kwargs["slug"] = club.slug
         kwargs["pk"] = member.pk
+        about = f"{member.name} in {club.name}"
 
     elif route.scope == SCOPE_USER:
         from django.contrib.auth.models import User
@@ -1394,6 +1416,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
         if not target:
             return {"error": f"I couldn't find a user called “{hint}”."}
         kwargs["slug"] = target.username
+        about = "" if target.pk == user.pk else target.username
 
     elif route.scope == SCOPE_BLOG:
         from .models import BlogPost
@@ -1402,6 +1425,7 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
         if not post:
             return {"error": "I couldn't find a blog post like that."}
         kwargs["slug"] = post.slug
+        about = post.title
 
     if route.admin == ADMIN_SUPERUSER and not user.is_superuser:
         return _denied("That page is only for site administrators.")
@@ -1411,10 +1435,15 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     except NoReverseMatch:
         logger.exception("Palette route %s could not be reversed with %s", route.key, kwargs)
         return {"error": "I know that page but couldn't work out the link to it."}
+    # Name the destination *and* what it's about, so the user can tell we understood before the page
+    # replaces the palette. The title is what the client shows them on the way there.
+    title = f"{route.label} — {about}" if about else route.label
+    summary = f"Taking you to {route.label.lower()}"
+    summary += f" — {about}." if about else "."
     # ``route`` travels back so the caller can record *which* destination was chosen, not just that
     # a navigation happened. That is the ground truth the shortcut miner runs on: a query that
     # resolves to the same route every time is one the model never needs to be asked about again.
-    return {"ok": True, "url": url, "summary": f"Opening {route.label}.", "title": route.label, "route": route.key}
+    return {"ok": True, "url": url, "summary": summary, "title": title, "route": route.key}
 
 
 # --- where the user currently is ---------------------------------------------

@@ -58,6 +58,7 @@ from .models import (
     VolunteerJob,
     sanitize_summernote_html,
 )
+from .services import clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
 from .validators import validate_username_no_at_symbol
 
@@ -187,6 +188,21 @@ def clean_summernote(html, max_length=16383):
     if len(html) > max_length:
         html = re.sub(r"(?!<br\s*/?>)<.*?>", "", html)[:max_length]
     return html
+
+
+# The AuctionTOS fields the quick-add form edits. ``QuickAddTOS.__init__`` configures
+# ``is_club_member``, which its own Meta.fields leaves out, so the form is only usable when built
+# with exactly this list. Shared by the bulk-add page's formset factory and by the command palette's
+# add_person action, so both build the identical form.
+QUICK_ADD_TOS_FIELDS = (
+    "bidder_number",
+    "name",
+    "email",
+    "phone_number",
+    "address",
+    "pickup_location",
+    "is_club_member",
+)
 
 
 class QuickAddTOS(forms.ModelForm):
@@ -494,6 +510,16 @@ def quick_add_lot_form_class():
     the fields its ``__init__`` configures, and raises ``KeyError``.
     """
     return modelform_factory(Lot, form=QuickAddLot, fields=QUICK_ADD_LOT_FIELDS)
+
+
+def quick_add_tos_form_class():
+    """The concrete quick-add participant form, as the bulk-add page's formset builds it.
+
+    The counterpart to :func:`quick_add_lot_form_class`, and required for the same reason:
+    :class:`QuickAddTOS` configures ``is_club_member``, which its ``Meta.fields`` leaves out, so
+    instantiating it directly raises ``KeyError``.
+    """
+    return modelform_factory(AuctionTOS, form=QuickAddTOS, fields=QUICK_ADD_TOS_FIELDS)
 
 
 class TOSFormSetHelper(FormHelper):
@@ -3100,26 +3126,10 @@ class CreateLotForm(forms.ModelForm):
         else:
             if self.cloned_from:
                 clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
-                if clone_from_lot and (
-                    (clone_from_lot.user and clone_from_lot.user.pk == self.user.pk) or self.user.is_superuser
-                ):
-                    # you can only clone your lots
-                    cloneFields = [
-                        "lot_name",
-                        "quantity",
-                        "species_category",
-                        "summernote_description",
-                        "i_bred_this_fish",
-                        "reserve_price",
-                        "buy_now_price",
-                        "reference_link",
-                        "donation",
-                        "custom_checkbox",
-                        "custom_field_1",
-                        "custom_dropdown",
-                    ]
-                    for field in cloneFields:
-                        self.fields[field].initial = getattr(clone_from_lot, field)
+                # you can only clone your lots
+                if user_can_clone_lot(self.user, clone_from_lot):
+                    for field, value in clone_lot_values(clone_from_lot).items():
+                        self.fields[field].initial = value
                     self.fields["cloned_from"].initial = int(self.cloned_from)
             # default to making new lots part of a club auction
             self.fields["part_of_auction"].initial = "True"

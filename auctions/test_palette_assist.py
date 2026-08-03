@@ -22,7 +22,7 @@ from django.utils import timezone
 
 from auctions import llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult
-from auctions.models import AuctionTOS, CommandPalettePage, LLMUsage, Lot
+from auctions.models import Auction, AuctionTOS, Club, CommandPalettePage, LLMUsage, Lot, LotImage
 from auctions.tests import StandardTestCase
 
 
@@ -1304,3 +1304,463 @@ class PageAwarenessTests(PaletteAssistTestCase):
         path = reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug})
         page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
         self.assertNotIn("auction", page)
+
+
+class LotNamingTests(SimpleTestCase):
+    """Casing, for lots that arrive as speech or as all-lowercase typing."""
+
+    def test_an_all_lowercase_name_is_capitalised(self):
+        self.assertEqual(palette_actions.tidy_lot_name("blue shrimp"), "Blue Shrimp")
+
+    def test_small_words_stay_small_unless_they_lead(self):
+        self.assertEqual(palette_actions.tidy_lot_name("a pair of angelfish"), "A Pair of Angelfish")
+
+    def test_catfish_codes_are_uppercased(self):
+        self.assertEqual(palette_actions.tidy_lot_name("l134 pleco"), "L134 Pleco")
+
+    def test_a_name_the_user_capitalised_is_left_exactly_alone(self):
+        """Any capital at all means somebody made a decision; re-casing would undo it."""
+        for name in ("Blue Shrimp", "CPD", "Corydoras sp. CW010", "pH test kit"):
+            self.assertEqual(palette_actions.tidy_lot_name(name), name)
+
+    def test_empty_input_is_harmless(self):
+        self.assertEqual(palette_actions.tidy_lot_name(""), "")
+        self.assertEqual(palette_actions.tidy_lot_name(None), "")
+
+
+class HumanizeTests(PaletteAssistTestCase):
+    """Slugs, route keys and ids are for the model. Users get names."""
+
+    def test_an_auction_slug_becomes_its_title(self):
+        text = f"I found lots in {self.in_person_auction.slug} for you."
+        self.assertIn(self.in_person_auction.title, palette_assist.humanize(text))
+        self.assertNotIn(self.in_person_auction.slug, palette_assist.humanize(text))
+
+    def test_a_route_key_becomes_its_label(self):
+        self.assertIn("all lots in an auction", palette_assist.humanize("Try auction_lot_list next."))
+
+    def test_ordinary_hyphenated_english_is_left_alone(self):
+        """Nothing is replaced on the strength of its shape — only real slugs and real route keys."""
+        for text in ("Use check-in mode.", "That is a sign-up page.", "e-mail them", "a well-known no-show"):
+            self.assertEqual(palette_assist.humanize(text), text)
+
+    def _auction(self, title):
+        return Auction.objects.create(
+            created_by=self.user,
+            title=title,
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+    def test_a_short_two_word_slug_is_caught_too(self):
+        """One hyphen is still a slug — the check is whether it exists, not how it looks."""
+        auction = self._auction("Spring Sale")
+        self.assertEqual(auction.slug, "spring-sale")
+        self.assertEqual(palette_assist.humanize("Look in spring-sale."), "Look in Spring Sale.")
+
+    def test_a_title_is_never_treated_as_a_regex_template(self):
+        """Titles are arbitrary user text; one containing backreference syntax must survive intact."""
+        auction = self._auction(r"Spring \1 Sale")
+        self.assertIn(r"\1", palette_assist.humanize(f"Look in {auction.slug}."))
+
+    def test_a_club_slug_becomes_its_name(self):
+        club = Club.objects.create(name="Humanized Aquarium Society", active=True)
+        self.assertIn("Humanized Aquarium Society", palette_assist.humanize(f"Try {club.slug}."))
+
+    def test_a_model_answer_is_scrubbed_on_the_way_out(self):
+        self._script({"answer": f"The rules for {self.in_person_auction.slug} say no plants."})
+        data = self._assist("what are the rules about plants in this auction").json()
+        self.assertEqual(data["kind"], "answer")
+        self.assertNotIn(self.in_person_auction.slug, data["message"])
+        self.assertIn(self.in_person_auction.title, data["message"])
+
+
+class AnswerTests(PaletteAssistTestCase):
+    """Questions get answered, not navigated."""
+
+    def test_an_answer_comes_back_as_its_own_kind(self):
+        self._script({"answer": "Lot submission closes tomorrow."})
+        data = self._assist("when does lot submission close for this auction").json()
+        self.assertEqual(data["kind"], "answer")
+        self.assertEqual(data["message"], "Lot submission closes tomorrow.")
+
+    def test_an_answer_is_recorded_as_an_answer(self):
+        self._script({"answer": "Twenty five percent."})
+        self._assist("how much does the club take in this auction")
+        usage = LLMUsage.objects.filter(response_kind="answer").first()
+        self.assertIsNotNone(usage)
+        self.assertTrue(usage.success)
+
+    def test_the_prompt_offers_the_answer_shape(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        self.assertIn('"answer"', prompt)
+        self.assertIn("describe_auction", prompt)
+
+
+class DescribeTests(PaletteAssistTestCase):
+    """The read-only lookups behind an answer, and their scoping."""
+
+    def _run(self, name, params, user=None):
+        request = self.client.request().wsgi_request
+        request.user = user or self.user
+        request.palette_page = {}
+        return palette_actions.run_action(request, name, params)
+
+    def test_describe_auction_includes_the_rules_as_plain_text(self):
+        self.in_person_auction.summernote_description = "<p>No <b>plants</b> please.</p>"
+        self.in_person_auction.save()
+        result = self._run("describe_auction", {"auction": self.in_person_auction.title})
+        self.assertEqual(result["auction"]["rules"], "No plants please.")
+        self.assertNotIn("<p>", result["auction"]["rules"])
+
+    def test_describe_auction_explains_its_settings(self):
+        """Each setting arrives with the model's own help text, so the answer can't drift."""
+        result = self._run("describe_auction", {"auction": self.in_person_auction.title})
+        settings_block = {row["setting"]: row for row in result["auction"]["settings"]}
+        self.assertIn("minimum bid", str(settings_block.keys()).lower())
+        self.assertTrue(any(row["means"] for row in result["auction"]["settings"]))
+
+    def test_describe_auction_hides_admin_stats_from_a_participant(self):
+        self.in_person_auction.make_stats_public = False
+        self.in_person_auction.save()
+        result = self._run("describe_auction", {"auction": self.in_person_auction.title}, user=self.member)
+        self.assertNotIn("_admin", result["auction"])
+        self.assertFalse(result["auction"]["you_are_an_admin"])
+
+    def test_describe_auction_gives_admins_their_stats(self):
+        result = self._run("describe_auction", {"auction": self.in_person_auction.title})
+        self.assertIn("_admin", result["auction"])
+        self.assertIn("checked_in", result["auction"]["_admin"])
+
+    def test_describe_person_refuses_a_participant(self):
+        """The room's names, numbers and invoices are not public to the room."""
+        result = self._run("describe_person", {"name": "555"}, user=self.member)
+        self.assertIn("error", result)
+        self.assertIn("admin", result["error"].lower())
+
+    def test_describe_person_answers_an_admin(self):
+        result = self._run("describe_person", {"name": "555", "auction": self.in_person_auction.title})
+        self.assertTrue(result["found"])
+        self.assertEqual(result["person"]["bidder_number"], "555")
+
+    def test_describe_lot_is_scoped_like_find_lot(self):
+        result = self._run("describe_lot", {"lot": self.lot.lot_name}, user=self.user_who_does_not_join)
+        self.assertFalse(result.get("found"))
+
+    def test_describe_club_explains_how_points_are_awarded(self):
+        club = Club.objects.create(
+            name="Describable Aquarium Society",
+            active=True,
+            enable_breeder_award_program=True,
+            points_per_lot=5,
+            min_quantity=6,
+        )
+        result = self._run("describe_club", {"club": club.name})
+        settings_block = result["club"]["points_program"]
+        self.assertTrue(settings_block)
+        # The point of this lookup: every setting carries an explanation of what it does, taken
+        # from the model field itself, so the answer can never drift from the rule.
+        self.assertTrue(any("BAP" in (row["means"] or "") for row in settings_block))
+        by_name = {row["setting"]: row["value"] for row in settings_block}
+        self.assertIn(5, by_name.values())
+
+    def test_describe_club_hides_member_counts_from_a_non_admin(self):
+        club = Club.objects.create(name="Private Aquarium Society", active=True)
+        result = self._run("describe_club", {"club": club.name}, user=self.member)
+        self.assertNotIn("_admin", result["club"])
+
+
+class SearchLotsTests(PaletteAssistTestCase):
+    """'find shrimp in this auction' shows the shrimp."""
+
+    def test_it_navigates_to_a_filtered_lot_list(self):
+        self._script({"action": "search_lots", "params": {"query": "shrimp"}, "summary": "Search"})
+        path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
+        data = self._assist("find shrimp in this auction", path=path).json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertIn("q=shrimp", data["url"])
+        self.assertIn(f"auction={self.in_person_auction.slug}", data["url"])
+
+    def test_it_says_where_it_is_taking_you(self):
+        self._script({"action": "search_lots", "params": {"query": "shrimp"}, "summary": ""})
+        path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
+        data = self._assist("find shrimp in this auction", path=path).json()
+        self.assertIn("shrimp", data["message"])
+        self.assertIn(self.in_person_auction.title, data["message"])
+
+    def test_searching_everywhere_is_not_scoped_to_an_auction(self):
+        self._script({"action": "search_lots", "params": {"query": "shrimp", "everywhere": True}, "summary": ""})
+        data = self._assist("find every shrimp lot on the whole site").json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertNotIn("auction=", data["url"])
+
+
+class LotReuseTests(PaletteAssistTestCase):
+    """Re-listing something you've sold before keeps its photos and description."""
+
+    def setUp(self):
+        super().setUp()
+        # A lot this user listed in a different auction, with a picture and a description.
+        self.previous = Lot.objects.create(
+            lot_name="Blue Dream Shrimp",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=12,
+            summernote_description="<p>Home bred, three months old.</p>",
+            i_bred_this_fish=True,
+        )
+        self.previous_image = LotImage.objects.create(
+            lot_number=self.previous, url="https://example.com/shrimp.jpg", is_primary=True
+        )
+
+    def _add(self, params):
+        self._script({"action": "add_lot", "params": params, "summary": "Add a lot"})
+        data = self._assist(f"add {params.get('name', '')}").json()
+        self.assertEqual(data["kind"], "countdown", data)
+        self._execute("add_lot", data["params"])
+        return data
+
+    def test_a_relisting_copies_the_description_and_the_photo(self):
+        self._add({"name": "blue dream shrimp", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction, lot_name__iexact="Blue Dream Shrimp").first()
+        self.assertIsNotNone(lot)
+        self.assertIn("Home bred", lot.summernote_description)
+        self.assertTrue(lot.i_bred_this_fish)
+        self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 1)
+
+    def test_a_relisting_takes_the_old_lots_capitalisation(self):
+        """The user typed it properly once already; that is better than anything we'd guess."""
+        self._add({"name": "blue dream shrimp", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction).order_by("-lot_number").first()
+        self.assertEqual(lot.lot_name, "Blue Dream Shrimp")
+
+    def test_what_the_user_actually_said_still_wins(self):
+        self._add({"name": "blue dream shrimp", "auction": self.in_person_auction.title, "quantity": 3})
+        lot = Lot.objects.filter(auction=self.in_person_auction).order_by("-lot_number").first()
+        self.assertEqual(lot.quantity, 3)
+
+    def test_a_brand_new_lot_is_capitalised_and_has_no_photos(self):
+        self._add({"name": "red cherry shrimp", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction, lot_name="Red Cherry Shrimp").first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 0)
+
+    def test_someone_elses_lot_is_never_copied(self):
+        """The clone rule is the one the Copy button enforces: your lots only."""
+        other = Lot.objects.create(
+            lot_name="Secret Shrimp",
+            auction=self.online_auction,
+            auctiontos_seller=self.tosB,
+            user=self.userB,
+            summernote_description="<p>Not yours.</p>",
+        )
+        LotImage.objects.create(lot_number=other, url="https://example.com/secret.jpg")
+        self._add({"name": "secret shrimp", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction, lot_name="Secret Shrimp").first()
+        self.assertIsNotNone(lot)
+        self.assertNotIn("Not yours", lot.summernote_description or "")
+        self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 0)
+
+    def test_a_partial_match_reuses_the_content_but_not_the_name(self):
+        """ "add shrimp" must not come back as a lot called "Blue Dream Shrimp"."""
+        self._add({"name": "dream", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction).order_by("-lot_number").first()
+        self.assertEqual(lot.lot_name, "Dream")
+        # The photo and description are still worth having, and the summary says where from.
+        self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 1)
+
+    def test_an_ambiguous_partial_match_copies_nothing(self):
+        """Two past lots contain the words, so we can't tell which photo they meant."""
+        Lot.objects.create(
+            lot_name="Blue Dream Shrimp Juveniles",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            summernote_description="<p>Second one.</p>",
+        )
+        self._add({"name": "dream", "auction": self.in_person_auction.title})
+        lot = Lot.objects.filter(auction=self.in_person_auction, lot_name="Dream").first()
+        self.assertIsNotNone(lot)
+        self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 0)
+
+    def test_the_user_is_told_the_lot_was_reused(self):
+        request = self.client.request().wsgi_request
+        request.user = self.user
+        request.palette_page = {}
+        result = palette_actions.run_action(
+            request, "add_lot", {"name": "blue dream shrimp", "auction": self.in_person_auction.title}
+        )
+        self.assertIn("Reused", result["summary"])
+
+
+class AddPersonTests(PaletteAssistTestCase):
+    """'add mike smith' is a person, not a lot called Mike Smith."""
+
+    def _add_person(self, params, user=None):
+        request = self.client.request().wsgi_request
+        request.user = user or self.user
+        request.palette_page = {}
+        return palette_actions.run_action(request, "add_person", params)
+
+    def test_an_admin_can_add_someone(self):
+        result = self._add_person({"name": "Mike Smith", "auction": self.in_person_auction.title})
+        self.assertTrue(result.get("ok"), result)
+        tos = AuctionTOS.objects.filter(auction=self.in_person_auction, name="Mike Smith").first()
+        self.assertIsNotNone(tos)
+        self.assertTrue(tos.bidder_number)
+
+    def test_a_participant_cannot_add_people(self):
+        result = self._add_person({"name": "Mike Smith", "auction": self.in_person_auction.title}, user=self.member)
+        self.assertIn("error", result)
+        self.assertIn("permission", result["error"].lower())
+
+    def test_adding_the_same_person_twice_is_refused_rather_than_duplicated(self):
+        self._add_person({"name": "Mike Smith", "auction": self.in_person_auction.title})
+        result = self._add_person({"name": "mike smith", "auction": self.in_person_auction.title})
+        self.assertIn("error", result)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Mike Smith").count(), 1)
+
+    def test_a_duplicate_bidder_number_is_the_forms_error_not_ours(self):
+        result = self._add_person(
+            {"name": "Mike Smith", "auction": self.in_person_auction.title, "bidder_number": "555"}
+        )
+        self.assertIn("error", result)
+        self.assertIn("already in use", result["error"].lower())
+
+    def test_it_writes_nothing_during_assist(self):
+        """add_person is confirm-tier: the countdown comes back, the row does not exist yet."""
+        self._script({"action": "add_person", "params": {"name": "Jane Doe"}, "summary": "Add Jane"})
+        data = self._assist("add jane doe").json()
+        self.assertEqual(data["kind"], "countdown")
+        self.assertFalse(AuctionTOS.objects.filter(name="Jane Doe").exists())
+
+    def test_the_prompt_warns_the_model_off_making_a_person_into_a_lot(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        self.assertIn("add_person", prompt)
+        self.assertIn("PERSON", prompt)
+
+
+class CancelTrackingTests(PaletteAssistTestCase):
+    """Cancelling the countdown is the only signal that we understood the wrong thing."""
+
+    def _countdown(self):
+        self._script({"action": "add_lot", "params": {"name": "cancel me"}, "summary": "Add a lot"})
+        return self._assist("add a lot of cancel me").json()
+
+    def test_the_countdown_carries_the_usage_row_id(self):
+        data = self._countdown()
+        self.assertEqual(data["kind"], "countdown")
+        self.assertTrue(data["usage_id"])
+
+    def test_cancelling_marks_the_row(self):
+        data = self._countdown()
+        response = self.client.post(
+            reverse("command_palette_cancel"),
+            data=json.dumps({"usage_id": data["usage_id"]}),
+            content_type="application/json",
+        )
+        self.assertTrue(response.json()["recorded"])
+        self.assertTrue(LLMUsage.objects.get(pk=data["usage_id"]).cancelled)
+
+    def test_cancelling_writes_nothing_else(self):
+        data = self._countdown()
+        self.client.post(
+            reverse("command_palette_cancel"),
+            data=json.dumps({"usage_id": data["usage_id"]}),
+            content_type="application/json",
+        )
+        self.assertFalse(Lot.objects.filter(lot_name__icontains="cancel me").exists())
+
+    def test_one_user_cannot_mark_anothers_row(self):
+        data = self._countdown()
+        self.client.force_login(self.member)
+        response = self.client.post(
+            reverse("command_palette_cancel"),
+            data=json.dumps({"usage_id": data["usage_id"]}),
+            content_type="application/json",
+        )
+        self.assertFalse(response.json()["recorded"])
+        self.assertFalse(LLMUsage.objects.get(pk=data["usage_id"]).cancelled)
+
+    def test_junk_is_ignored(self):
+        self.client.force_login(self.user)
+        for body in ({"usage_id": "nonsense"}, {"usage_id": None}, {}):
+            response = self.client.post(
+                reverse("command_palette_cancel"), data=json.dumps(body), content_type="application/json"
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()["recorded"])
+
+    def test_the_endpoint_requires_login(self):
+        self.client.logout()
+        response = self.client.post(
+            reverse("command_palette_cancel"), data=json.dumps({"usage_id": 1}), content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 302)
+
+
+class ContextInMessagesTests(PaletteAssistTestCase):
+    """Say which auction, not just what."""
+
+    def test_the_countdown_names_the_auction_it_will_write_to(self):
+        self._script({"action": "add_lot", "params": {"name": "context shrimp"}, "summary": "Add a lot"})
+        data = self._assist("add a lot of context shrimp").json()
+        self.assertEqual(data["kind"], "countdown")
+        self.assertEqual(data["context"], self.in_person_auction.title)
+
+    def test_the_progress_line_names_the_auction_too(self):
+        self._script({"action": "add_lot", "params": {"name": "context shrimp"}, "summary": "Add a lot"})
+        response = self._assist("add a lot of context shrimp")
+        self.assertTrue(
+            any(self.in_person_auction.title in line for line in response.progress_messages),
+            response.progress_messages,
+        )
+
+    def test_a_navigation_says_where_it_is_going(self):
+        self._script({"action": "go_to_page", "params": {"page": "auction_lot_list"}, "summary": ""})
+        data = self._assist("take me to the lot list for this auction").json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertIn("Taking you to", data["message"])
+        self.assertIn(self.in_person_auction.title, data["message"])
+
+    def test_a_page_with_no_object_still_says_where_it_is_going(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        data = self._assist("take me to the lots I am watching").json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertIn("Taking you to", data["message"])
+
+
+class ClarifyOptionsTests(PaletteAssistTestCase):
+    """A question the user can't click is a dead end, especially by voice."""
+
+    def test_a_clarify_without_options_still_offers_something_to_click(self):
+        """The reported bug: an either/or question arrived with an empty options list.
+
+        The prompt now demands options, but a prompt is a request. When the model asks anyway, the
+        question gets ordinary search results underneath it so there is still a way forward —
+        which matters most by voice, where there is nothing to type into.
+        """
+        self._script({"clarify": "Did you want to print labels, or look at invoices?"})
+        data = self._assist("sort out my labels or invoices for this auction").json()
+        self.assertEqual(data["kind"], "clarify")
+        self.assertEqual(data["options"], [])
+        self.assertTrue(data.get("groups"), "a question with nothing to click is the bug")
+
+    def test_a_question_about_nothing_at_all_is_still_a_clean_question(self):
+        """When search has nothing either, the question stands on its own rather than erroring."""
+        self._script({"clarify": "Which did you mean?"})
+        data = self._assist("zzqqxx wibble frobnicate").json()
+        self.assertEqual(data["kind"], "clarify")
+        self.assertEqual(data["message"], "Which did you mean?")
+        self.assertFalse(data.get("groups"))
+
+    def test_options_are_passed_through_when_the_model_gives_them(self):
+        self._script({"clarify": "Which one?", "options": ["Assign bidder 1", "Check them in"]})
+        data = self._assist("give john bidder number 1").json()
+        self.assertEqual(data["options"], ["Assign bidder 1", "Check them in"])
+
+    def test_the_prompt_requires_options_for_a_choice(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        self.assertIn("MUST put each", prompt)

@@ -92,7 +92,6 @@ from django.views.generic.edit import (
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from django_weasyprint import WeasyTemplateResponseMixin
-from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
 from pytz import timezone as pytz_timezone
@@ -134,6 +133,7 @@ from .filters import (
 from .forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
     QUICK_ADD_LOT_FIELDS,
+    QUICK_ADD_TOS_FIELDS,
     AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
@@ -257,12 +257,14 @@ from .services import (
     LOT_ADD_BLOCK_NO_TOS,
     apply_club_member_to_tos,
     check_in_auctiontos,
+    copy_lot_images,
     ensure_club_member,
     existing_tos_for_club_member,
     lot_add_block,
     map_fields,
     recalculate_seller_invoice,
     save_new_lot,
+    user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
 from .tables import (
@@ -6356,15 +6358,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             self.AuctionTOSFormSet = modelformset_factory(
                 AuctionTOS,
                 extra=self.extra_rows,
-                fields=(
-                    "bidder_number",
-                    "name",
-                    "email",
-                    "phone_number",
-                    "address",
-                    "pickup_location",
-                    "is_club_member",
-                ),
+                fields=QUICK_ADD_TOS_FIELDS,
                 form=QuickAddTOS,
             )
 
@@ -7893,25 +7887,8 @@ class LotValidation(LoginRequiredMixin):
             if form.cleaned_data["cloned_from"]:
                 try:
                     original_lot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
-                    if original_lot.user_id == self.request.user.pk or self.request.user.is_superuser:
-                        original_images = LotImage.objects.filter(lot_number=original_lot.lot_number)
-                        for original_image in original_images:
-                            new_image = LotImage.objects.create(
-                                createdon=original_image.createdon,
-                                lot_number=lot,
-                                image_source=original_image.image_source,
-                                is_primary=original_image.is_primary,
-                                url=original_image.url,
-                            )
-                            if original_image.image:
-                                new_image.image = get_thumbnailer(original_image.image)
-                                # both rows share the same file, so they share the same Cloudflare image
-                                new_image.cloudflare_image_id = original_image.cloudflare_image_id
-                            # if the original lot sold, this picture sure isn't of the actual item
-                            if original_lot.winner and original_image.image_source == "ACTUAL":
-                                new_image.image_source = "REPRESENTATIVE"
-                            new_image.save()
-                        # we are only cloning images here, not watchers, views, or other related models
+                    if user_can_clone_lot(self.request.user, original_lot):
+                        copy_lot_images(original_lot, lot)
                 except Exception as e:
                     logger.exception(e)
             msg = mark_safe("Created lot! ")
@@ -24028,6 +24005,25 @@ class CommandPaletteExecuteView(CommandPaletteAssistBase):
         return JsonResponse(response)
 
 
+class CommandPaletteCancelView(View):
+    """Record that the user cancelled a confirm-tier action's countdown.
+
+    POST JSON (or a ``sendBeacon`` body): ``{"usage_id": <int>}``. Nothing happened and nothing is
+    undone -- the action never ran -- so this only writes down that we got it wrong, which is the
+    one thing an abandoned command otherwise leaves no trace of.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        recorded = palette_assist.mark_cancelled(request.user, (data or {}).get("usage_id"))
+        return JsonResponse({"recorded": recorded})
+
+
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     """Admin overview of what people search for in the command palette.
 
@@ -24099,5 +24095,19 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             .values("query", "response_kind")
             .annotate(count=Count("id"))
             .order_by("-count")[:15]
+        )
+        # Commands the user stopped during the countdown. Everything above records the assistant
+        # failing; this records it succeeding at the wrong thing, which nothing else catches -- the
+        # action never ran, so there is no error and no history entry. A query that keeps showing up
+        # here was understood confidently and understood wrongly.
+        cancelled = usage.filter(cancelled=True)
+        context["llm_cancelled"] = cancelled.count()
+        context["llm_cancelled_percent"] = (
+            round(100 * context["llm_cancelled"] / usage.filter(response_kind=palette_assist.KIND_COUNTDOWN).count())
+            if usage.filter(response_kind=palette_assist.KIND_COUNTDOWN).exists()
+            else 0
+        )
+        context["llm_cancelled_queries"] = list(
+            cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
         )
         return context

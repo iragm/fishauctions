@@ -11717,6 +11717,16 @@ class LLMUsage(models.Model):
         ),
     )
     success = models.BooleanField(default=True)
+    cancelled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "The user hit Cancel during the confirm countdown instead of letting the action run. "
+            "This is the only signal we get that we understood the words but picked the wrong "
+            "thing to do -- the action never ran, so nothing else records it. A query that is "
+            "repeatedly cancelled is a bad match worth fixing."
+        ),
+    )
 
     class Meta:
         ordering = ["-createdon"]

@@ -40,9 +40,13 @@ matched nothing anywhere on the site. Each of those outcomes is recorded under i
 ``LLMUsage.response_kind`` so the analytics page can list the queries that defeated it -- which is
 the most direct feature backlog this thing has.
 
+**It never shows the user an identifier.** The model works in slugs and route keys because that is
+what the lookups give it, and it will happily repeat them back. :func:`humanize` runs over every
+user-facing string on the way out and turns them back into titles and labels.
+
 Response kinds returned to the client:
 ``progress`` (streaming only) | ``results`` | ``navigate`` | ``countdown`` | ``clarify`` |
-``done`` | ``error``
+``answer`` | ``done`` | ``error``
 """
 
 from __future__ import annotations
@@ -102,6 +106,7 @@ KIND_RESULTS = "results"
 KIND_NAVIGATE = "navigate"
 KIND_COUNTDOWN = "countdown"
 KIND_CLARIFY = "clarify"
+KIND_ANSWER = "answer"
 KIND_DONE = "done"
 KIND_ERROR = "error"
 #: Streamed to the client while the loop is still working. Never a final answer.
@@ -293,9 +298,16 @@ You always reply with a single JSON object, and it must be exactly one of these 
     Do the thing. The summary is shown to the user, so write it for them: "Add a lot of blue
     shrimp to the Spring Auction for Bob (bidder 14)".
 
+{{"answer": "<what they asked>"}}
+    Answer a question. Only ever from what a lookup above has just told you — never from memory,
+    and never a guess. If you have not looked it up in this conversation, look it up first. Two or
+    three sentences at most; they are reading this in a small box.
+
 {{"clarify": "<question>", "options": ["<choice>", "<choice>"]}}
-    Ask when you genuinely can't tell what they meant. Keep it to one short question. Options are
-    optional but helpful when there is a small set of possibilities.
+    Ask when you genuinely can't tell what they meant. Keep it to one short question. If your
+    question offers a choice between things — anything phrased as "X or Y?" — you MUST put each
+    one in options, written so it can be clicked as a reply on its own. A question with a choice
+    in it and an empty options list is a broken answer.
 
 {{"error": "<why this can't be done>"}}
     Use when the request is impossible or isn't something this site does.
@@ -310,6 +322,13 @@ Rules:
 - When the user refers to something from earlier in the conversation ("print that label", "add
   another one"), use the details in the recent exchanges below.
 - Do not make up bidder numbers, lot numbers or prices. Look them up or ask.
+- **Never show the user a slug, a database id, a route key or a URL.** Those are for you. The user
+  gets titles and names: "the Spring Auction 2026", not "s-auction-july-2026"; "the lot list", not
+  "auction_lot_list". Never repeat a lookup's raw result back to them.
+- A question about how something works ("what are the rules", "how do I earn points", "when does
+  submission close") wants an answer, not a page. Call the matching describe_* lookup and then
+  answer. Send them to a page only when they asked to go somewhere, or when the answer is genuinely
+  not in what you can look up.
 - **Never reply with an error just because nothing fits.** Every page on this site is listed below,
   so if you can't work out a specific action, take your best guess at what the user was trying to
   reach and send them there with go_to_page. Landing on roughly the right page is useful; telling
@@ -470,6 +489,10 @@ def parse_reply(data: Any) -> dict[str, Any]:
             "summary": str(summary)[:300] if isinstance(summary, str) else "",
         }
 
+    answer = data.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return {"kind": "answer", "message": answer.strip()[:1200]}
+
     clarify = data.get("clarify")
     if clarify is None and isinstance(data.get("message"), str):
         clarify = data["message"]
@@ -494,6 +517,81 @@ def parse_reply(data: Any) -> dict[str, Any]:
     return {"kind": "invalid", "reason": "no recognized key"}
 
 
+# --- keeping identifiers out of what the user reads --------------------------
+#
+# The model works in slugs and route keys because that is what the lookups hand it, and left to
+# itself it repeats them back: "5 page(s) matching “open auction s-auction-july-2026 lots”" is a
+# real answer this feature gave. The prompt now forbids it, but a prompt is a request, not a
+# guarantee, so every user-facing string goes through :func:`humanize` on the way out.
+
+#: Anything that could be a slug or a URL name: lowercase words joined by hyphens or underscores.
+#: Matching loosely here is safe because nothing is replaced on the strength of its shape -- every
+#: candidate has to turn out to be a real slug or a real route key, so ordinary hyphenated English
+#: ("check-in", "sign-up", "e-mail") matches the pattern, resolves to nothing, and is left alone.
+_IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b")
+
+#: Cap on how many candidates we'll look up for one message. A message is a couple of sentences;
+#: anything past this is not prose and is not worth a query.
+_MAX_IDENTIFIERS = 20
+
+
+def _names_for_slugs(slugs: set[str]) -> dict[str, str]:
+    """Map each slug that belongs to an auction or club to its title. Two queries, not two per word."""
+    from .models import Auction, Club
+
+    names = {}
+    for slug, name in Club.objects.filter(slug__in=slugs).values_list("slug", "name"):
+        names[slug] = name
+    # Auctions win a collision: the palette talks about auctions far more than clubs.
+    for slug, title in Auction.objects.filter(slug__in=slugs).values_list("slug", "title"):
+        names[slug] = title
+    return names
+
+
+def humanize(text: str) -> str:
+    """Replace identifiers in a user-facing string with the names they stand for.
+
+    A slug becomes its auction or club title, a route key becomes the destination's label. A token
+    that is neither is left exactly as it was: this runs over ordinary prose, and mangling a
+    sentence would be worse than the identifier it was trying to remove.
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+    try:
+        candidates = set(_IDENTIFIER.findall(text))
+        if not candidates or len(candidates) > _MAX_IDENTIFIERS:
+            return text
+        names = _names_for_slugs({candidate for candidate in candidates if "-" in candidate})
+        for candidate in candidates - set(names):
+            route = palette_routes.get_route(candidate)
+            if route:
+                names[candidate] = route.label.lower()
+        if not names:
+            return text
+        # One pass, with the replacement chosen by a function: a title is arbitrary user text and
+        # must never be read as a regex template, and substituting one at a time would let an
+        # earlier replacement's words be rewritten by a later candidate.
+        return _IDENTIFIER.sub(lambda match: names.get(match.group(0), match.group(0)), text)
+    except Exception:  # pragma: no cover - never let tidying break the answer
+        logger.exception("Could not humanize a palette message")
+        return text
+
+
+#: Response keys that hold something a person is going to read.
+_USER_FACING_KEYS = ("message", "summary", "note")
+
+
+def humanize_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Run every user-facing string in a response through :func:`humanize`. Mutates and returns it."""
+    for key in _USER_FACING_KEYS:
+        if isinstance(response.get(key), str):
+            response[key] = humanize(response[key])
+    options = response.get("options")
+    if isinstance(options, list):
+        response["options"] = [humanize(option) if isinstance(option, str) else option for option in options]
+    return response
+
+
 # --- usage logging -----------------------------------------------------------
 
 
@@ -505,10 +603,15 @@ def record_usage(
     action_name: str = "",
     success: bool = True,
     destination: str = "",
-) -> None:
-    """Write one :class:`LLMUsage` row. Never allowed to break the request."""
+) -> int | None:
+    """Write one :class:`LLMUsage` row and return its id. Never allowed to break the request.
+
+    The id matters for confirm-tier actions: it is what the client sends back if the user cancels
+    the countdown, which is the only evidence we ever get that a command was understood as the
+    wrong thing (see :func:`mark_cancelled`).
+    """
     try:
-        LLMUsage.objects.create(
+        return LLMUsage.objects.create(
             destination=(destination or "")[:100],
             user=user,
             model=(result.model if result else "")[:100],
@@ -520,9 +623,29 @@ def record_usage(
             response_kind=response_kind[:30],
             action=(action_name or "")[:50],
             success=success,
-        )
+        ).pk
     except Exception:
         logger.exception("Could not record LLM usage")
+        return None
+
+
+def mark_cancelled(user, usage_id: Any) -> bool:
+    """Record that the user cancelled this command's countdown. Returns whether a row was updated.
+
+    Scoped to the caller's own rows, so one user can't mark up another's history. Cancelling is the
+    single most useful signal this feature produces: the model was confident, the server was happy,
+    the countdown ran -- and the person watching it said no. That is a bad match, and unlike an
+    error nothing else records it.
+    """
+    try:
+        usage_id = int(usage_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(LLMUsage.objects.filter(pk=usage_id, user=user).update(cancelled=True))
+    except Exception:
+        logger.exception("Could not record a palette cancellation")
+        return False
 
 
 def log_assist(user, query: str, kind: str) -> None:
@@ -547,6 +670,7 @@ def log_assist(user, query: str, kind: str) -> None:
 
 #: Opening line, chosen from the shape of the query so the very first frame already says something.
 _OPENERS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("what ", "how ", "when does", "when is", "why ", "rules", "points", "am i allowed"), "Looking that up…"),
     (("add ", "create ", "new lot", "list a", "sell "), "Adding that…"),
     (("sold", "sell to", "winner", "goes to", "hammer"), "Recording that sale…"),
     (("undo", "unsell", "mistake", "wrong bidder"), "Undoing that…"),
@@ -578,6 +702,10 @@ _LOOKUP_NARRATION = {
     "find_lot": "Looking for lot {target}…",
     "find_page": "Looking for the right page…",
     "my_context": "Checking which auction you're in…",
+    "describe_auction": "Reading the auction's details…",
+    "describe_club": "Reading the club's details…",
+    "describe_lot": "Reading up on lot {target}…",
+    "describe_person": "Looking up {target}…",
 }
 
 
@@ -585,7 +713,7 @@ def narrate_lookup(action, params: dict[str, Any]) -> str:
     """Describe a lookup round: "Searching for bob…"."""
     template = _LOOKUP_NARRATION.get(action.name, "Looking that up…")
     target = ""
-    for key in ("name", "query", "lot", "page"):
+    for key in ("name", "query", "lot", "page", "person", "auction", "club"):
         value = params.get(key)
         if isinstance(value, str) and value.strip():
             target = value.strip()[:60]
@@ -595,15 +723,23 @@ def narrate_lookup(action, params: dict[str, Any]) -> str:
     return template
 
 
-def narrate_action(action, params: dict[str, Any]) -> str:
-    """Describe the action round: what we're about to do, before we do it."""
+def narrate_action(request, action, params: dict[str, Any]) -> str:
+    """Describe the action round: what we're about to do, and what to, before we do it.
+
+    Naming the object is the point. "Adding a lot…" and "Adding a lot to the May 2025 auction…" cost
+    the same to show, and only one of them lets the user notice we picked the wrong auction while
+    there is still time to stop it.
+    """
+    context = palette_actions.action_context(request, action, params)
     if action.name == "go_to_page":
         route = palette_routes.get_route(str(params.get("page") or ""))
         if route:
-            return f"Opening {route.label.lower()}…"
+            where = f" for {context}" if context else ""
+            return f"Opening {route.label.lower()}{where}…"
         return "Finding that page…"
     if action.confirm_template:
-        return f"{action.confirm_template}…"
+        where = f" in {context}" if context else ""
+        return f"{action.confirm_template}{where}…"
     return "Nearly there…"
 
 
@@ -648,13 +784,22 @@ def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _countdown_response(action, params: dict[str, Any], summary: str) -> dict[str, Any]:
+def _countdown_response(request, action, params: dict[str, Any], summary: str, usage_id=None) -> dict[str, Any]:
+    """The card shown during the 5 seconds before a database change.
+
+    ``context`` is worked out by the server rather than taken from the model's summary: the summary
+    is the model telling us what it thinks it's doing, and this is the auction the resolver will
+    actually write to. When they disagree, the user should be looking at the second one.
+    """
     return {
         "kind": KIND_COUNTDOWN,
         "action": action.name,
         "params": params,
         "summary": summary or f"{action.confirm_template or action.name}.",
+        "context": palette_actions.action_context(request, action, params),
         "delay_ms": COUNTDOWN_MS,
+        # Sent back if the user hits Cancel, so a bad match can be traced to the query that caused it.
+        "usage_id": usage_id,
     }
 
 
@@ -731,8 +876,8 @@ def _give_up(request, query: str, message: str) -> dict[str, Any]:
         return fallback
     guess = _best_guess_page(request, query)
     if guess:
-        return guess
-    return {"kind": KIND_ERROR, "message": message}
+        return humanize_response(guess)
+    return {"kind": KIND_ERROR, "message": humanize(message)}
 
 
 def _progress(text: str) -> dict[str, Any]:
@@ -862,10 +1007,33 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             )
             continue
 
+        if kind == "answer":
+            record_usage(user, result, query, KIND_ANSWER)
+            log_assist(user, query, KIND_ANSWER)
+            # Search results under the answer: the answer came out of a lookup, and the things it
+            # is about are usually one click away in ordinary search.
+            related = _search_fallback(request, query, "")
+            yield humanize_response(
+                {
+                    "kind": KIND_ANSWER,
+                    "message": reply["message"],
+                    "groups": related["groups"] if related else [],
+                }
+            )
+            return
+
         if kind == "clarify":
             record_usage(user, result, query, KIND_CLARIFY)
             log_assist(user, query, KIND_CLARIFY)
-            yield {"kind": KIND_CLARIFY, "message": reply["message"], "options": reply["options"]}
+            response = {"kind": KIND_CLARIFY, "message": reply["message"], "options": reply["options"]}
+            if not reply["options"]:
+                # A question with nothing to click is a dead end for anyone using this by voice, and
+                # a nuisance for everyone else. If the model didn't offer choices, offer the search
+                # results instead so there is always a way forward from the question.
+                fallback = _search_fallback(request, query, "")
+                if fallback:
+                    response["groups"] = fallback["groups"]
+            yield humanize_response(response)
             return
 
         if kind == "error":
@@ -880,14 +1048,14 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         action = reply["action"]
         params = reply["params"]
         summary = reply["summary"]
-        yield _progress(narrate_action(action, params))
+        yield _progress(narrate_action(request, action, params))
 
         if action.danger == palette_actions.DANGER_CONFIRM:
             # Do NOT execute. The client counts down and then calls the execute endpoint, which
             # runs the resolver (and therefore every permission check) from scratch.
-            record_usage(user, result, query, KIND_COUNTDOWN, action.name)
+            usage_id = record_usage(user, result, query, KIND_COUNTDOWN, action.name)
             log_assist(user, query, KIND_COUNTDOWN)
-            yield _countdown_response(action, params, summary)
+            yield humanize_response(_countdown_response(request, action, params, summary, usage_id))
             return
 
         action_result = palette_actions.run_action(request, action.name, params)
@@ -898,11 +1066,11 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # search results underneath it rather than ending on a wall.
             record_usage(user, result, query, KIND_ERROR, action.name, success=False)
             log_assist(user, query, KIND_ERROR)
-            yield response
+            yield humanize_response(response)
             return
         record_usage(user, result, query, response["kind"], action.name, destination=response.get("route", ""))
         log_assist(user, query, response["kind"])
-        yield response
+        yield humanize_response(response)
         return
 
     record_usage(user, None, query, FAIL_GAVE_UP, success=False)
@@ -943,4 +1111,4 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     if not isinstance(params, dict):
         return {"kind": KIND_ERROR, "message": "Those instructions didn't make sense."}
     result = palette_actions.run_action(request, action.name, params)
-    return _result_to_response(action, params, result, "")
+    return humanize_response(_result_to_response(action, params, result, ""))
