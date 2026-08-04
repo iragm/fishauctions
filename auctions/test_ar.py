@@ -40,6 +40,7 @@ from auctions.ar_mapping import (
 )
 from auctions.mobile.services import ar as ar_service
 from auctions.models import Category, Lot, LotObservation, LotPosition, PageView, ThermalPrinterProfile, Watch
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -610,6 +611,7 @@ class ArCompassHeadingTests(TestCase):
         self.assertEqual(_declination_deg(999.0, -79.99, when), 0.0)
 
 
+@isolated_cache("ar-api")
 class ArApiBaseTestCase(StandardTestCase):
     """Shared fixtures: three unsold lots in the online auction + a JWT-authing client helper."""
 

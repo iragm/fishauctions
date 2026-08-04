@@ -36,6 +36,7 @@ from auctions.apple_notifications import (
     process_notification,
 )
 from auctions.models import AuctionTOS, Club, ClubMember, UserData
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 BUNDLE_ID = "com.fishauctions.app"
@@ -66,6 +67,7 @@ class _FakeResponse:
         return self._payload
 
 
+@isolated_cache("apple-notifications")
 @override_settings(
     APPLE_SIGN_IN_BUNDLE_ID=BUNDLE_ID,
     APPLE_SIGN_IN_SERVICES_ID=SERVICES_ID,
@@ -75,7 +77,8 @@ class AppleNotificationTestCase(TestCase):
     """Shared plumbing: a fake JWKS, and one helper that builds a real signed notification."""
 
     def setUp(self):
-        # The JWKS cache and the processed-jti records both live in the shared cache.
+        # The JWKS cache and the processed-jti records both live in the cache, and SIGNING_KEY is
+        # this process's own -- see auctions.test_support for why that has to be a private one.
         cache.clear()
         self.url = reverse("apple_server_notifications")
         self.jti_counter = 0
@@ -505,6 +508,7 @@ class AppleAccountDeleteTests(AppleNotificationTestCase):
         self.assertIsNone(UserData.objects.get(user=user).account_deletion_requested)
 
 
+@isolated_cache("apple-email-forwarding")
 class AppleEmailForwardingTests(StandardTestCase):
     """Hide My Email forwarding going off means every later message is silently discarded."""
 

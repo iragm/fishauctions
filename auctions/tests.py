@@ -79,6 +79,7 @@ from .models import (
     Watch,
     add_price_info,
 )
+from .test_support import isolated_cache
 
 # channels.testing's package __init__ eagerly imports ChannelsLiveServerTestCase, which
 # pulls in daphne -- a test-only dependency (see requirements-test.in) absent from the
@@ -28152,6 +28153,7 @@ class MobileEmailLoginTests(TestCase):
         self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
 
 
+@isolated_cache("mobile-web-session")
 class MobileWebSessionTests(TestCase):
     """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
     WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
