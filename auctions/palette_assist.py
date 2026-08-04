@@ -78,12 +78,35 @@ logger = logging.getLogger(__name__)
 # that replies off-contract *and* then needs a lookup, which is rare enough not to be worth adding
 # 50% to the worst-case cost of every command that goes wrong.
 MAX_ROUNDS = 2
+#: The ceiling once a lookup has run. See :func:`_rounds_allowed`: a request that has fetched real
+#: data has earned the round it needs to say what it found, and ending the loop on the lookup itself
+#: wastes everything already spent on it.
+MAX_ROUNDS_AFTER_LOOKUP = 3
 #: How many times a reply that doesn't fit the contract is worth correcting. See the loop.
 MAX_CORRECTIONS = 1
+#: How many times the model is worth telling that it already has what it just asked for again.
+MAX_REPEAT_NUDGES = 1
 TOTAL_BUDGET_SECONDS = 20.0
 
 # Recent exchanges kept for context ("print that label" -> the lot we just added).
 MAX_CONTEXT_ENTRIES = 5
+
+# How much of a lookup's result is fed back to the model.
+#
+# This was 2000, and a describe_* lookup is bigger than that, so the cut landed in the middle of the
+# JSON and took the end of it away. ``describe_auction`` lists the auction's fees *after* its dates
+# and its rules text, so "what's the bidder fee split" got a reply built from an auction whose fee
+# settings had been trimmed off before the model ever saw them -- and answered with an invented one.
+# The describe_* lookups have been slimmed to fit under this (the chart blob they used to carry was
+# most of the old overflow), so the raise is headroom rather than the fix.
+#
+# 5000 leaves the largest lookup (``describe_auction``, with a full-length rules block) about 700
+# characters of headroom, so a couple of new settings can be added before anyone has to think about
+# it again -- and :func:`lookup_payload` says so loudly if that day comes.
+MAX_LOOKUP_RESULT_CHARS = 5000
+
+# How much of the model's own previous reply is quoted back to it when correcting or continuing.
+MAX_REPLY_ECHO_CHARS = 1000
 
 # A query this short that already has a good match is answered by search alone.
 SHORT_QUERY_WORDS = 4
@@ -299,21 +322,30 @@ You always reply with a single JSON object, and it must be exactly one of these 
     shrimp to the Spring Auction for Bob (bidder 14)".
 
 {{"answer": "<what they asked>"}}
-    Answer a question. Only ever from what a lookup above has just told you — never from memory,
-    and never a guess. If you have not looked it up in this conversation, look it up first. Two or
-    three sentences at most; they are reading this in a small box.
+    Answer a question. Only ever from a lookup above, or from the facts under "About this user" —
+    never from memory, and never a guess. If it isn't in one of those two places, look it up first.
+    Two or three sentences at most; they are reading this in a small box.
+    Answer the question that was asked, and lead with the fact rather than with "Yes" or "No":
+    write "The Fall Auction is in person, not online", never "Yes. The Fall Auction is in person".
+    A yes that contradicts the sentence after it is worse than no answer at all.
 
 {{"clarify": "<question>", "options": ["<choice>", "<choice>"]}}
     Ask when you genuinely can't tell what they meant. Keep it to one short question. If your
     question offers a choice between things — anything phrased as "X or Y?" — you MUST put each
     one in options, written so it can be clicked as a reply on its own. A question with a choice
     in it and an empty options list is a broken answer.
+    Never offer a choice between things you have not looked up. If they ask about "the split" and
+    you don't know what splits this auction has, call describe_auction and find out — listing
+    plausible-sounding options you invented is worse than asking nothing, because they read like
+    things that exist.
 
 {{"error": "<why this can't be done>"}}
     Use when the request is impossible or isn't something this site does.
 
 Rules:
 - Only use the action and lookup names listed below. Never invent one, and never invent a parameter.
+- 'lookup' and 'action' take a NAME FROM THE LIST — never the name of an auction, club, person or
+  lot. Those go in params: {{"lookup": "describe_auction", "params": {{"auction": "Fall Auction"}}}}.
 - Only send parameters that are listed for that action.
 - Prefer doing the obvious thing over asking. The user gets a 5 second countdown with a cancel
   button before anything is written, so a confident, sensible guess is better than a question.
@@ -354,12 +386,17 @@ def build_system_prompt(user, page: dict[str, Any] | None = None) -> str:
     ``palette_actions.ACTIONS``, and the page list out of ``palette_routes.ROUTE_LIST``, so
     registering an action or a route is all it takes to teach the model about it.
 
+    Both lists are filtered to what this user could plausibly use -- a bidder who runs no club is
+    not shown four club-administration skills, exactly as they aren't shown club admin pages. That
+    is a prompt-size and relevance filter and nothing more: the resolvers re-check every permission,
+    and an action the prompt never mentioned is still accepted if the model names it.
+
     The page catalog costs roughly a thousand prompt tokens per call, which buys two things worth
     more than that: the model can see every destination without a round trip to look one up (a
     whole model call of latency, on a feature where latency is the main complaint), and it can
     always answer *something* rather than giving up.
     """
-    actions = json.dumps(palette_actions.registry_for_prompt(), indent=None)
+    actions = json.dumps(palette_actions.registry_for_prompt(user), indent=None)
     context = json.dumps(palette_actions.user_context(user, page), indent=None, default=str)
     pages = palette_routes.catalog_for_prompt(user)
     return SYSTEM_PROMPT.format(actions=actions, pages=pages, context=context)
@@ -410,6 +447,38 @@ def _page_in_the_wrong_slot(name: str, params: dict[str, Any]) -> dict[str, Any]
     return {"kind": "action", "action": action, "params": page_params, "summary": ""}
 
 
+def _auction_in_the_wrong_slot(user, name: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    """Rewrite ``{"lookup": "Fall Auction"}`` as ``describe_auction`` for that auction.
+
+    The model's other favourite misfire, and the one that used to cost the most: asked when an
+    auction starts it replies with the auction's *title* in the slot where the lookup's name goes.
+    It has understood the question and identified the subject, and the only thing it got wrong is
+    that "Fall Auction" is a thing rather than a verb.
+
+    Only ever resolves to ``describe_auction``, which is read-only and re-scopes the auction through
+    ``_resolve_described_auction`` -- so a title that names an auction this user can't see comes
+    back as "I couldn't find an auction called that", exactly as if they had asked for it by name.
+    """
+    if not name or len(name) > 100:
+        return None
+    action = palette_actions.get_action("describe_auction")
+    if action is None:  # pragma: no cover - registered at import time
+        return None
+    match = command_palette._visible_auctions(user).filter(title__iexact=name.strip()).first()
+    if match is None:
+        return None
+    # Only the auction travels. Anything else the model sent alongside a misplaced name is guesswork
+    # about a call it wasn't making, and ``run_action`` refuses parameters an action never declared.
+    return {"kind": "lookup", "action": action, "params": {"auction": match.title}}
+
+
+def _misplaced_name(user, name: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    """Read a name that landed in the ``action``/``lookup`` slot but isn't one: a page, or an auction."""
+    return _page_in_the_wrong_slot(name, params) or (
+        _auction_in_the_wrong_slot(user, name, params) if user is not None else None
+    )
+
+
 #: Keys that belong to the reply envelope itself, so they never name the thing being called.
 _ENVELOPE_KEYS = frozenset({"lookup", "action", "params", "summary", "clarify", "options", "error", "message"})
 
@@ -446,15 +515,17 @@ def _call_named_by_its_key(data: dict[str, Any]) -> dict[str, Any] | None:
     return {"kind": "action", "action": action, "params": params, "summary": ""}
 
 
-def parse_reply(data: Any) -> dict[str, Any]:
+def parse_reply(data: Any, user=None) -> dict[str, Any]:
     """Schema-check one model reply. Returns a normalized dict with a ``kind``.
 
     Anything that doesn't match the contract exactly comes back as ``{"kind": "invalid"}`` so the
-    loop can tell the model it got the shape wrong rather than acting on a guess. Two near-misses
-    are read rather than discarded -- see :func:`_page_in_the_wrong_slot` and
-    :func:`_call_named_by_its_key` -- because both name a real destination the server was going to
-    re-check anyway, and throwing them away was the main reason this feature said it didn't
-    understand things it plainly had.
+    loop can tell the model it got the shape wrong rather than acting on a guess. Four near-misses
+    are read rather than discarded -- a page key in the ``action``/``lookup`` slot
+    (:func:`_page_in_the_wrong_slot`), an auction title in the same place
+    (:func:`_auction_in_the_wrong_slot`, needs *user* to scope it), a call named by its own key
+    (:func:`_call_named_by_its_key`), and a lookup written into the ``action`` slot -- because each
+    one names something real that the server re-checks anyway, and throwing them away was the main
+    reason this feature said it didn't understand things it plainly had.
     """
     if not isinstance(data, dict):
         return {"kind": "invalid", "reason": "not an object"}
@@ -468,7 +539,7 @@ def parse_reply(data: Any) -> dict[str, Any]:
     if isinstance(data.get("lookup"), str):
         action = palette_actions.get_action(data["lookup"])
         if action is None or not action.lookup:
-            return _page_in_the_wrong_slot(data["lookup"], params) or {
+            return _misplaced_name(user, data["lookup"], params) or {
                 "kind": "invalid",
                 "reason": f"unknown lookup {data['lookup']!r}",
             }
@@ -477,10 +548,18 @@ def parse_reply(data: Any) -> dict[str, Any]:
     if isinstance(data.get("action"), str):
         action = palette_actions.get_action(data["action"])
         if action is None:
-            return _page_in_the_wrong_slot(data["action"], params) or {
+            return _misplaced_name(user, data["action"], params) or {
                 "kind": "invalid",
                 "reason": f"unknown action {data['action']!r}",
             }
+        if action.lookup:
+            # A read-only lookup named in the ``action`` slot, which the model does constantly:
+            # ``{"action": "describe_auction", "summary": "Fetch the auction to explain the fees"}``.
+            # Run as an action that was the end of the story, so the user read "Fetch the auction to
+            # explain the fees" as if it were the answer, and never got one. It's a lookup wherever
+            # it was written, and reading it as one costs nothing -- a lookup changes nothing, and
+            # the loop still has to come back with a real answer afterwards.
+            return {"kind": "lookup", "action": action, "params": params}
         summary = data.get("summary")
         return {
             "kind": "action",
@@ -535,25 +614,48 @@ _IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b")
 _MAX_IDENTIFIERS = 20
 
 
-def _names_for_slugs(slugs: set[str]) -> dict[str, str]:
-    """Map each slug that belongs to an auction or club to its title. Two queries, not two per word."""
-    from .models import Auction, Club
+def _names_for_slugs(slugs: set[str], user=None) -> dict[str, str]:
+    """Map each slug that belongs to an auction or club to its title. Two queries, not two per word.
+
+    Scoped to *user*. Unscoped, this was a slug-to-title oracle: several of the messages it runs
+    over echo a hint the caller typed, so posting ``{"auction": "a-guessed-slug"}`` to the execute
+    endpoint came back as "I couldn't find an auction called “The Real Title Of It”" -- confirming
+    the auction exists, and handing over its *current* title, for an auction the caller has no
+    relationship with. (Slugs are frozen at creation, so a renamed auction's title is not
+    recoverable from its slug.) Soft-deleted auctions and inactive clubs answered too.
+
+    Nothing legitimate is lost: the slugs this is meant to tidy away come out of lookups, and every
+    lookup is already scoped to the same user. Without a user, nothing resolves -- a message that
+    still contains a slug is a cosmetic problem, and this function's failure mode must not be worse
+    than the thing it exists to fix.
+    """
+    from . import command_palette
+    from .models import Club
 
     names = {}
-    for slug, name in Club.objects.filter(slug__in=slugs).values_list("slug", "name"):
+    if user is None or not slugs:
+        return names
+    clubs = Club.objects.filter(slug__in=slugs, active=True)
+    if not getattr(user, "is_superuser", False):
+        clubs = clubs.filter(id__in=[club.id for club in command_palette._admin_clubs(user)])
+    for slug, name in clubs.values_list("slug", "name"):
         names[slug] = name
     # Auctions win a collision: the palette talks about auctions far more than clubs.
-    for slug, title in Auction.objects.filter(slug__in=slugs).values_list("slug", "title"):
+    visible = command_palette._visible_auctions(user).filter(slug__in=slugs)
+    for slug, title in visible.values_list("slug", "title"):
         names[slug] = title
     return names
 
 
-def humanize(text: str) -> str:
+def humanize(text: str, user=None) -> str:
     """Replace identifiers in a user-facing string with the names they stand for.
 
     A slug becomes its auction or club title, a route key becomes the destination's label. A token
     that is neither is left exactly as it was: this runs over ordinary prose, and mangling a
     sentence would be worse than the identifier it was trying to remove.
+
+    *user* scopes the slug lookup -- see :func:`_names_for_slugs`. Route keys need no scoping: a
+    label like "all lots in an auction" is a static string from the catalog and names no object.
     """
     if not text or not isinstance(text, str):
         return text or ""
@@ -561,7 +663,7 @@ def humanize(text: str) -> str:
         candidates = set(_IDENTIFIER.findall(text))
         if not candidates or len(candidates) > _MAX_IDENTIFIERS:
             return text
-        names = _names_for_slugs({candidate for candidate in candidates if "-" in candidate})
+        names = _names_for_slugs({candidate for candidate in candidates if "-" in candidate}, user)
         for candidate in candidates - set(names):
             route = palette_routes.get_route(candidate)
             if route:
@@ -581,14 +683,14 @@ def humanize(text: str) -> str:
 _USER_FACING_KEYS = ("message", "summary", "note")
 
 
-def humanize_response(response: dict[str, Any]) -> dict[str, Any]:
+def humanize_response(response: dict[str, Any], user=None) -> dict[str, Any]:
     """Run every user-facing string in a response through :func:`humanize`. Mutates and returns it."""
     for key in _USER_FACING_KEYS:
         if isinstance(response.get(key), str):
-            response[key] = humanize(response[key])
+            response[key] = humanize(response[key], user)
     options = response.get("options")
     if isinstance(options, list):
-        response["options"] = [humanize(option) if isinstance(option, str) else option for option in options]
+        response["options"] = [humanize(option, user) if isinstance(option, str) else option for option in options]
     return response
 
 
@@ -775,10 +877,19 @@ def _result_to_response(action, params: dict[str, Any], result: dict[str, Any], 
     }
 
 
+#: Values a resolver may hand forward. Must stay a subset of what ``sanitize_context`` will accept
+#: back from the client, or the next command silently loses them.
+_CARRY_OVER_KEYS = ("lot_id", "lot_name", "bidder_number")
+
+
 def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
-    """The few values worth remembering for the next command ("print *that* label")."""
+    """The few values worth remembering for the next command ("print *that* label").
+
+    ``bidder_number`` is here so the exchange that follows adding somebody -- "his email is
+    bob@example.com" -- knows who "he" is without another lookup.
+    """
     data = {}
-    for key in ("lot_id", "lot_name"):
+    for key in _CARRY_OVER_KEYS:
         if result.get(key) is not None:
             data[key] = result[key]
     return data
@@ -795,7 +906,7 @@ def _countdown_response(request, action, params: dict[str, Any], summary: str, u
         "kind": KIND_COUNTDOWN,
         "action": action.name,
         "params": params,
-        "summary": summary or f"{action.confirm_template or action.name}.",
+        "summary": summary or palette_actions.default_summary(action, params),
         "context": palette_actions.action_context(request, action, params),
         "delay_ms": COUNTDOWN_MS,
         # Sent back if the user hits Cancel, so a bad match can be traced to the query that caused it.
@@ -876,8 +987,45 @@ def _give_up(request, query: str, message: str) -> dict[str, Any]:
         return fallback
     guess = _best_guess_page(request, query)
     if guess:
-        return humanize_response(guess)
-    return {"kind": KIND_ERROR, "message": humanize(message)}
+        return humanize_response(guess, request.user)
+    return {"kind": KIND_ERROR, "message": humanize(message, request.user)}
+
+
+def lookup_payload(name: str, result: Any) -> str:
+    """One lookup's result, as the message the model reads next.
+
+    Truncation used to be a bare slice, which is the worst possible way to lose data here: the cut
+    landed mid-JSON, the model was handed a broken object, and nothing anywhere said so. That is how
+    "what's the split" came to be answered with a fee percentage nobody had ever configured -- the
+    settings were past the cut. So when it does have to cut, it says it cut, in the message itself
+    and in the log, and the model is told to send the user to the page rather than fill in the gap.
+
+    ``auctions/test_palette_assist.py`` asserts the describe_* payloads fit without truncation. This
+    is the backstop for the day a new field pushes one of them over anyway.
+    """
+    body = json.dumps(result, default=str)
+    if len(body) <= MAX_LOOKUP_RESULT_CHARS:
+        return f"Result of {name}: {body}"
+    logger.warning("Lookup %s returned %s chars and was truncated to %s", name, len(body), MAX_LOOKUP_RESULT_CHARS)
+    return (
+        f"Result of {name} (TRUNCATED — this is not the whole result, and the end of it is missing): "
+        f"{body[:MAX_LOOKUP_RESULT_CHARS]}\n"
+        "Do not fill in anything the truncated result does not show. If the user asked about "
+        "something that isn't in it, say you can't see it here and send them to the relevant page."
+    )
+
+
+def _rounds_allowed(lookups_run: set) -> int:
+    """How many model calls this request may still make.
+
+    :data:`MAX_ROUNDS` normally, and :data:`MAX_ROUNDS_AFTER_LOOKUP` once a lookup has actually run.
+    A flat cap of two spent whole requests like this: an off-contract first reply, a correction that
+    produced a perfectly good lookup, and then the loop ended -- having paid for two model calls and
+    a database read to find the answer, and then thrown the answer away without saying it. The extra
+    round is only ever granted to a request that has already fetched something real to answer with,
+    which is the case where a further round is worth what it costs.
+    """
+    return MAX_ROUNDS_AFTER_LOOKUP if lookups_run else MAX_ROUNDS
 
 
 def _progress(text: str) -> dict[str, Any]:
@@ -930,12 +1078,15 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     messages = build_messages(query, entries)
     started = time.monotonic()
     corrections = 0
+    nudges = 0
     lookups_run: set[tuple[str, str]] = set()
 
-    for round_number in range(MAX_ROUNDS):
+    round_number = 0
+    while round_number < _rounds_allowed(lookups_run):
         if time.monotonic() - started > TOTAL_BUDGET_SECONDS:
             logger.info("Assist budget exhausted after %s rounds", round_number)
             break
+        round_number += 1
         # Counted per model call, not per request: one request can take several rounds, and the
         # cap is a spend ceiling on tokens rather than a limit on how often the box is used.
         over_budget = check_call_budget(user)
@@ -954,7 +1105,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             yield _give_up(request, query, "I couldn't reach the assistant just now.")
             return
 
-        reply = parse_reply(result.data)
+        reply = parse_reply(result.data, user)
         kind = reply["kind"]
 
         if kind == "invalid":
@@ -972,7 +1123,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # Another whole model call, so say so. Without this the strip sits on one line for the
             # length of a round and reads as a hang -- which is the state the retry is meant to fix.
             yield _progress("Not quite — trying that again…")
-            messages.append({"role": "assistant", "content": json.dumps(result.data)[:1000]})
+            messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
             messages.append(
                 {
                     "role": "user",
@@ -991,20 +1142,36 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # request out of rounds -- four full calls to learn one thing that wasn't there.
             signature = (action.name, json.dumps(reply["params"], sort_keys=True, default=str))
             if signature in lookups_run:
-                logger.info("Assist repeated the %s lookup; stopping", action.name)
                 record_usage(user, result, query, "lookup", action.name)
-                break
+                if nudges >= MAX_REPEAT_NUDGES:
+                    logger.info("Assist repeated the %s lookup; stopping", action.name)
+                    break
+                # Asking for the same thing twice usually means the model has lost track of the fact
+                # that it already has it, not that it needs it again. Stopping here threw away a
+                # result already fetched and already in the conversation -- "what's the split" came
+                # back as "I'm not sure what you meant" while the fee settings sat two messages up.
+                # Say so instead, once, and let it answer. The lookup is *not* re-run: this costs a
+                # model call and no database work, and the round budget still caps the whole request.
+                nudges += 1
+                logger.info("Assist repeated the %s lookup; nudging it to answer", action.name)
+                messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"You already called {action.name} with those parameters and its result is "
+                            "above. Do not call it again. Answer the user now using that result, or "
+                            "choose an action."
+                        ),
+                    }
+                )
+                continue
             lookups_run.add(signature)
             yield _progress(narrate_lookup(action, reply["params"]))
             record_usage(user, result, query, "lookup", action.name)
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
-            messages.append({"role": "assistant", "content": json.dumps(result.data)[:1000]})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Result of {action.name}: {json.dumps(lookup_result, default=str)[:2000]}",
-                }
-            )
+            messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
+            messages.append({"role": "user", "content": lookup_payload(action.name, lookup_result)})
             continue
 
         if kind == "answer":
@@ -1018,7 +1185,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                     "kind": KIND_ANSWER,
                     "message": reply["message"],
                     "groups": related["groups"] if related else [],
-                }
+                },
+                user,
             )
             return
 
@@ -1033,7 +1201,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                 fallback = _search_fallback(request, query, "")
                 if fallback:
                     response["groups"] = fallback["groups"]
-            yield humanize_response(response)
+            yield humanize_response(response, user)
             return
 
         if kind == "error":
@@ -1055,7 +1223,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # runs the resolver (and therefore every permission check) from scratch.
             usage_id = record_usage(user, result, query, KIND_COUNTDOWN, action.name)
             log_assist(user, query, KIND_COUNTDOWN)
-            yield humanize_response(_countdown_response(request, action, params, summary, usage_id))
+            yield humanize_response(_countdown_response(request, action, params, summary, usage_id), user)
             return
 
         action_result = palette_actions.run_action(request, action.name, params)
@@ -1066,11 +1234,11 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # search results underneath it rather than ending on a wall.
             record_usage(user, result, query, KIND_ERROR, action.name, success=False)
             log_assist(user, query, KIND_ERROR)
-            yield humanize_response(response)
+            yield humanize_response(response, user)
             return
         record_usage(user, result, query, response["kind"], action.name, destination=response.get("route", ""))
         log_assist(user, query, response["kind"])
-        yield humanize_response(response)
+        yield humanize_response(response, user)
         return
 
     record_usage(user, None, query, FAIL_GAVE_UP, success=False)
@@ -1111,4 +1279,4 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     if not isinstance(params, dict):
         return {"kind": KIND_ERROR, "message": "Those instructions didn't make sense."}
     result = palette_actions.run_action(request, action.name, params)
-    return humanize_response(_result_to_response(action, params, result, ""))
+    return humanize_response(_result_to_response(action, params, result, ""), request.user)

@@ -1145,22 +1145,22 @@ def audit() -> dict[str, list[str]]:
 # --- prompt catalog ----------------------------------------------------------
 
 
-def catalog_for_prompt(user=None) -> str:
-    """The destination list written into the system prompt, grouped by section.
+def _permitted_routes(user=None) -> list[Route]:
+    """Destinations this user could plausibly use, for the prompt and for free-text matching.
 
-    Filtered to what this user could plausibly use, so an ordinary bidder isn't offered club
-    administration and the model doesn't spend its attention on pages it will only be refused.
+    A pre-filter for relevance, *not* the security boundary -- :func:`resolve_route` re-checks every
+    permission when a destination is actually opened. Its job is to keep an ordinary bidder from
+    being offered club administration, and to keep the model from spending its attention on pages it
+    will only ever be refused. ``user=None`` means "don't filter", which is what the audit wants.
     """
     from . import command_palette
 
-    can_admin_auction = True
-    can_admin_club = True
-    is_superuser = bool(user and getattr(user, "is_superuser", False))
-    if user is not None:
-        can_admin_club = bool(command_palette._admin_clubs(user))
-        can_admin_auction = bool(command_palette._admin_auction_ids(user))
-
-    sections: dict[str, list[str]] = {}
+    if user is None:
+        return list(ROUTE_LIST)
+    is_superuser = bool(getattr(user, "is_superuser", False))
+    can_admin_club = bool(command_palette._admin_clubs(user))
+    can_admin_auction = bool(command_palette._admin_auction_ids(user))
+    allowed = []
     for route in ROUTE_LIST:
         if route.admin == ADMIN_SUPERUSER and not is_superuser:
             continue
@@ -1168,6 +1168,14 @@ def catalog_for_prompt(user=None) -> str:
             continue
         if route.admin == ADMIN_CLUB and not can_admin_club:
             continue
+        allowed.append(route)
+    return allowed
+
+
+def catalog_for_prompt(user=None) -> str:
+    """The destination list written into the system prompt, grouped by section."""
+    sections: dict[str, list[str]] = {}
+    for route in _permitted_routes(user):
         sections.setdefault(route.section, []).append(f"  {route.key}: {route.label}")
     lines = []
     for section, entries in sections.items():
@@ -1193,17 +1201,24 @@ def _tokens(text: str) -> list[str]:
 
 
 def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
-    """Rank destinations against a free-text query.
+    """Rank destinations against a free-text query, among the ones *user* could plausibly use.
 
     Deliberately simple token overlap rather than anything clever: this is the safety net for when
     the model sends a description instead of a key, and a wrong guess here costs a clarify, not a
     wrong action.
+
+    ``user`` was accepted and then ignored, so ``find_page`` and the "did you mean one of these?"
+    fallback offered an ordinary bidder destinations like the treasurer report and the site admin
+    dashboard. Nothing leaked -- ``resolve_route`` refuses on the way through, and a label is a
+    static string naming no object -- but it advertised a shape of the site that isn't theirs, and
+    it made this the one place in the module that doesn't filter. It shares
+    :func:`_permitted_routes` with :func:`catalog_for_prompt` now, so the two can't disagree.
     """
     words = _tokens(query)
     if not words:
         return []
     scored: list[tuple[float, int, Route]] = []
-    for index, route in enumerate(ROUTE_LIST):
+    for index, route in enumerate(_permitted_routes(user)):
         haystack = route.search_text
         hay_tokens = set(_tokens(haystack))
         score = 0.0
@@ -1453,8 +1468,8 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
     """Work out what the user is looking at from the URL they're on.
 
     Resolved through Django's own URLconf rather than trusted from the client: the browser sends a
-    path, and every object it names is looked up again here, scoped to what this user may see. The
-    worst a forged path can do is name an auction they're already part of.
+    path, and every object it names is looked up again here. The worst a forged path can do is name
+    something the same path would have shown them anyway.
 
     This is what makes "add a lot" mean *this* auction rather than whichever one they last touched.
     """
@@ -1473,13 +1488,32 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
     slug = match.kwargs.get("slug")
 
     from . import command_palette
-    from .models import Club, Lot
+    from .models import Auction, Club, Lot
 
     if slug:
-        auction = command_palette._joined_auctions(user).filter(slug=slug).first()
+        # Any auction, whether or not this user has joined it -- because this is the auction whose
+        # page they are standing on, and it is on their screen either way.
+        #
+        # This used to be joined-or-administered, on the reasoning that a forged path must not name
+        # an auction the user has no relationship with. That guarantee was worth nothing and cost a
+        # great deal: ``AuctionInfo`` has ``allow_non_admins`` and no permission check, so *anybody*
+        # holding the slug can already read the title, the dates and the rules by loading the page.
+        # A forged path therefore reveals nothing a plain GET wouldn't. Meanwhile everyone who
+        # hadn't joined yet -- which is everyone reading an auction's page for the first time, and
+        # the entire population of "should I sign up for this?" -- asked "when does this start" on
+        # the auction's own page and got an assistant with no idea which auction they meant.
+        #
+        # This widens *context*, not permission. ``resolve_auction`` still re-scopes the slug
+        # through ``_joined_auctions`` before anything is written, and says so by name when the
+        # answer is no.
+        auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
         if auction:
             data["auction"] = auction.slug
             data["auction_title"] = auction.title
+            # Whether they are actually in it. The prompt needs this to tell "add a lot here" from
+            # "you'd have to join first", and it is the difference between an assistant that can
+            # answer questions about an auction and one that pretends the user is already in it.
+            data["auction_joined"] = command_palette._joined_auctions(user).filter(pk=auction.pk).exists()
         else:
             club = Club.objects.filter(slug=slug).first()
             if club:
@@ -1495,6 +1529,7 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
             if lot.auction and "auction" not in data:
                 data["auction"] = lot.auction.slug
                 data["auction_title"] = lot.auction.title
+                data["auction_joined"] = command_palette._joined_auctions(user).filter(pk=lot.auction.pk).exists()
     custom_lot_number = match.kwargs.get("custom_lot_number")
     if custom_lot_number and data.get("auction"):
         lot = Lot.objects.filter(

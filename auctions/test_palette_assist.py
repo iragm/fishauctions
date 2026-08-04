@@ -10,6 +10,7 @@ do, and that the execute endpoint is a real gate rather than a rubber stamp on t
 
 import datetime
 import json
+import re
 from io import StringIO
 from unittest.mock import patch
 
@@ -22,7 +23,17 @@ from django.utils import timezone
 
 from auctions import llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult
-from auctions.models import Auction, AuctionTOS, Club, CommandPalettePage, LLMUsage, Lot, LotImage
+from auctions.models import (
+    Auction,
+    AuctionDropdown,
+    AuctionTOS,
+    Club,
+    ClubMember,
+    CommandPalettePage,
+    LLMUsage,
+    Lot,
+    LotImage,
+)
 from auctions.tests import StandardTestCase
 
 
@@ -344,11 +355,23 @@ class UntrustedOutputTests(PaletteAssistTestCase):
 class DangerTierTests(PaletteAssistTestCase):
     """safe executes now, confirm counts down, navigate goes to the page."""
 
-    def test_safe_action_runs_during_assist(self):
-        self._script({"action": "my_context", "params": {}, "summary": "Look you up"})
-        response = self._assist("tell me everything about my current situation")
+    def test_a_lookup_in_the_action_slot_is_read_as_a_lookup(self):
+        """Every safe action is a lookup, so one named in the ``action`` slot is still a lookup.
+
+        This used to run as an action that was the end of the conversation, which meant the model's
+        own note-to-self came back as the answer: asked "what's the split", the user was told
+        "Fetching the auction details to see how the fee split is configured." and nothing else. The
+        loop has to come back with a real answer instead.
+        """
+        self._script(
+            {"action": "describe_auction", "params": {}, "summary": "Fetch the auction to explain the fees"},
+            {"answer": "The club takes 25% of the winning bid."},
+        )
+        response = self._assist("what is the split in this auction")
         data = response.json()
-        self.assertEqual(data["kind"], "done")
+        self.assertEqual(data["kind"], "answer")
+        self.assertEqual(data["message"], "The club takes 25% of the winning bid.")
+        self.assertEqual(self.provider.call_count, 2)
 
     def test_confirm_action_returns_a_countdown_and_writes_nothing(self):
         before = Lot.objects.filter(lot_name="blue shrimp").count()
@@ -495,10 +518,10 @@ class ConversationTests(PaletteAssistTestCase):
     def test_lookup_round_then_action(self):
         self._script(
             {"lookup": "find_person", "params": {"name": "no_lots"}},
-            {"action": "my_context", "params": {}, "summary": "Here's your situation"},
+            {"action": "print_labels", "params": {"scope": "mine"}},
         )
-        response = self._assist("who is the person called no_lots and what am I working on")
-        self.assertEqual(response.json()["kind"], "done")
+        response = self._assist("who is the person called no_lots and print their labels")
+        self.assertEqual(response.json()["kind"], "navigate")
         self.assertEqual(self.provider.call_count, 2, "the lookup result should be fed back for a second round")
 
     def test_clarify_is_passed_through(self):
@@ -656,7 +679,7 @@ class UsageLoggingTests(PaletteAssistTestCase):
 
     def test_llm_usage_row_is_written(self):
         LLMUsage.objects.all().delete()
-        self._script({"action": "my_context", "params": {}, "summary": "ok"})
+        self._script({"action": "go_to_page", "params": {"page": "watched"}})
         self._assist("tell me about my current auction situation please")
         usage = LLMUsage.objects.all()
         self.assertEqual(usage.count(), 1)
@@ -664,7 +687,7 @@ class UsageLoggingTests(PaletteAssistTestCase):
         self.assertEqual(row.user, self.user)
         self.assertEqual(row.model, "fake-model")
         self.assertEqual(row.total_tokens, 18)
-        self.assertEqual(row.action, "my_context")
+        self.assertEqual(row.action, "go_to_page")
         self.assertTrue(row.success)
 
     def test_failed_call_is_recorded_as_unsuccessful(self):
@@ -845,11 +868,18 @@ class RoundCostTests(PaletteAssistTestCase):
         self.assertEqual(self.provider.call_count, palette_assist.MAX_CORRECTIONS + 1)
 
     def test_a_repeated_lookup_is_not_run_again(self):
-        """The model asking for the same thing twice will not get a different answer."""
+        """The model asking for the same thing twice will not get a different answer.
+
+        It is told so, once, rather than being cut off: the result it is asking for again is already
+        in the conversation, and ending the loop here threw away a lookup that had already been paid
+        for. The lookup itself is not re-run -- the nudge costs a model call and no database work.
+        """
         same = {"lookup": "find_person", "params": {"name": "nobody at all"}}
-        self._script(same, same, same)
-        self._assist("who on earth is nobody at all and what did they buy")
-        self.assertEqual(self.provider.call_count, 2, "the repeat should end the loop, not run again")
+        self._script(same, same, same, same)
+        with patch.object(palette_actions, "run_action", wraps=palette_actions.run_action) as run:
+            self._assist("who on earth is nobody at all and what did they buy")
+        self.assertEqual(run.call_count, 1, "the repeat must not hit the database again")
+        self.assertEqual(self.provider.call_count, 3, "one nudge, then stop")
 
     def test_a_lookup_followed_by_the_action_it_enabled_still_works(self):
         """The guard is about repeats, not about lookups.
@@ -866,9 +896,10 @@ class RoundCostTests(PaletteAssistTestCase):
         self.assertEqual(response.json()["kind"], "navigate")
 
     def test_the_round_cap_is_the_ceiling_on_what_one_query_can_cost(self):
+        """A lookup buys the round that uses it, and nothing buys a fourth."""
         self._script(*[{"lookup": "find_person", "params": {"name": f"person {i}"}} for i in range(10)])
         self._assist("find me somebody, anybody, and keep looking until you do")
-        self.assertLessEqual(self.provider.call_count, palette_assist.MAX_ROUNDS)
+        self.assertLessEqual(self.provider.call_count, palette_assist.MAX_ROUNDS_AFTER_LOOKUP)
 
 
 class TokenAccountingTests(PaletteAssistTestCase):
@@ -885,7 +916,7 @@ class TokenAccountingTests(PaletteAssistTestCase):
             def complete_json(self, system, messages, max_tokens=800):
                 self.calls.append({"system": system, "messages": messages})
                 return LLMResult(
-                    data={"action": "my_context", "params": {}, "summary": "ok"},
+                    data={"action": "go_to_page", "params": {"page": "watched"}},
                     model="fake-model",
                     prompt_tokens=3100,
                     cached_prompt_tokens=2816,
@@ -1048,10 +1079,28 @@ class AssistDisabledTests(PaletteAssistTestCase):
 class RegistryTests(PaletteAssistTestCase):
     """The prompt is generated from the registry, so the two can't drift apart."""
 
-    def test_prompt_lists_every_action(self):
+    def test_prompt_lists_every_action_the_user_could_use(self):
         prompt = palette_assist.build_system_prompt(self.user)
-        for name in palette_actions.ACTIONS:
+        for action in palette_actions.actions_for(self.user):
+            self.assertIn(action.name, prompt)
+
+    def test_an_auction_admin_is_offered_the_auction_skills(self):
+        """self.user created both auctions, so every admin skill is theirs to use."""
+        prompt = palette_assist.build_system_prompt(self.user)
+        for name in ("set_lot_winner", "check_in", "add_person", "set_invoice_status"):
             self.assertIn(name, prompt)
+
+    def test_a_plain_bidder_is_not_offered_club_administration(self):
+        prompt = palette_assist.build_system_prompt(self.member)
+        # Matched as the registry writes them: "renew_member" is a substring of the skill this user
+        # *does* get offered, renew_membership.
+        self.assertNotIn('"skill": "award_points"', prompt)
+        self.assertNotIn('"skill": "renew_member"', prompt)
+        self.assertNotIn('"skill": "set_invoice_status"', prompt)
+        # ...but the things anybody can do are still there.
+        self.assertIn('"skill": "watch_lot"', prompt)
+        self.assertIn('"skill": "add_lot"', prompt)
+        self.assertIn('"skill": "renew_membership"', prompt)
 
     def test_every_action_has_a_valid_danger_level(self):
         valid = {
@@ -1300,10 +1349,36 @@ class PageAwarenessTests(PaletteAssistTestCase):
         self.assertIn("looking_at_right_now", prompt)
         self.assertIn(self.in_person_auction.title, prompt)
 
-    def test_a_forged_path_cannot_reach_an_auction_the_user_is_not_in(self):
-        path = reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug})
+    def test_the_prompt_names_an_auction_the_user_has_not_joined(self):
+        """The commonest reader of an auction's page is somebody deciding whether to join it."""
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
         page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
-        self.assertNotIn("auction", page)
+        prompt = palette_assist.build_system_prompt(self.user_who_does_not_join, page)
+        self.assertIn(self.online_auction.title, prompt)
+        self.assertIn("has NOT joined", prompt)
+
+    def test_a_forged_path_still_cannot_act_on_an_auction_the_user_is_not_in(self):
+        """Naming the auction on screen is context; writing to it is still membership-gated."""
+        path = reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug})
+        response = self._execute("add_lot", {"name": "trespassing shrimp"}, user=self.user_who_does_not_join, path=path)
+        data = response.json()
+        self.assertEqual(data["kind"], "error")
+        self.assertIn(self.online_auction.title, data["message"])
+        self.assertFalse(Lot.objects.filter(lot_name="trespassing shrimp").exists())
+
+    def test_a_question_about_the_auction_on_screen_is_answered_without_joining(self):
+        """The gap this closes: 'when does this start' on an auction you haven't joined."""
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        from django.test import RequestFactory
+
+        page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
+        request = RequestFactory().get(path)
+        request.user = self.user_who_does_not_join
+        request.palette_page = page
+        result = palette_actions.describe_auction(request, {})
+        self.assertTrue(result["found"])
+        self.assertEqual(result["auction"]["title"], self.online_auction.title)
+        self.assertFalse(result["auction"]["you_have_joined"])
 
 
 class LotNamingTests(SimpleTestCase):
@@ -1333,8 +1408,8 @@ class HumanizeTests(PaletteAssistTestCase):
 
     def test_an_auction_slug_becomes_its_title(self):
         text = f"I found lots in {self.in_person_auction.slug} for you."
-        self.assertIn(self.in_person_auction.title, palette_assist.humanize(text))
-        self.assertNotIn(self.in_person_auction.slug, palette_assist.humanize(text))
+        self.assertIn(self.in_person_auction.title, palette_assist.humanize(text, self.user))
+        self.assertNotIn(self.in_person_auction.slug, palette_assist.humanize(text, self.user))
 
     def test_a_route_key_becomes_its_label(self):
         self.assertIn("all lots in an auction", palette_assist.humanize("Try auction_lot_list next."))
@@ -1342,7 +1417,7 @@ class HumanizeTests(PaletteAssistTestCase):
     def test_ordinary_hyphenated_english_is_left_alone(self):
         """Nothing is replaced on the strength of its shape — only real slugs and real route keys."""
         for text in ("Use check-in mode.", "That is a sign-up page.", "e-mail them", "a well-known no-show"):
-            self.assertEqual(palette_assist.humanize(text), text)
+            self.assertEqual(palette_assist.humanize(text, self.user), text)
 
     def _auction(self, title):
         return Auction.objects.create(
@@ -1357,16 +1432,17 @@ class HumanizeTests(PaletteAssistTestCase):
         """One hyphen is still a slug — the check is whether it exists, not how it looks."""
         auction = self._auction("Spring Sale")
         self.assertEqual(auction.slug, "spring-sale")
-        self.assertEqual(palette_assist.humanize("Look in spring-sale."), "Look in Spring Sale.")
+        self.assertEqual(palette_assist.humanize("Look in spring-sale.", self.user), "Look in Spring Sale.")
 
     def test_a_title_is_never_treated_as_a_regex_template(self):
         """Titles are arbitrary user text; one containing backreference syntax must survive intact."""
         auction = self._auction(r"Spring \1 Sale")
-        self.assertIn(r"\1", palette_assist.humanize(f"Look in {auction.slug}."))
+        self.assertIn(r"\1", palette_assist.humanize(f"Look in {auction.slug}.", self.user))
 
     def test_a_club_slug_becomes_its_name(self):
         club = Club.objects.create(name="Humanized Aquarium Society", active=True)
-        self.assertIn("Humanized Aquarium Society", palette_assist.humanize(f"Try {club.slug}."))
+        ClubMember.objects.create(club=club, user=self.user, permission_admin=True)
+        self.assertIn("Humanized Aquarium Society", palette_assist.humanize(f"Try {club.slug}.", self.user))
 
     def test_a_model_answer_is_scrubbed_on_the_way_out(self):
         self._script({"answer": f"The rules for {self.in_person_auction.slug} say no plants."})
@@ -1764,3 +1840,576 @@ class ClarifyOptionsTests(PaletteAssistTestCase):
     def test_the_prompt_requires_options_for_a_choice(self):
         prompt = palette_assist.build_system_prompt(self.user)
         self.assertIn("MUST put each", prompt)
+
+
+class MisplacedNameTests(PaletteAssistTestCase):
+    """Names that arrive in the wrong slot, which is most of what a small model gets wrong."""
+
+    def test_a_lookup_in_the_action_slot_becomes_a_lookup(self):
+        parsed = palette_assist.parse_reply({"action": "describe_auction", "params": {"auction": "spring"}})
+        self.assertEqual(parsed["kind"], "lookup")
+        self.assertEqual(parsed["action"].name, "describe_auction")
+        self.assertEqual(parsed["params"], {"auction": "spring"})
+
+    def test_an_auction_title_in_the_lookup_slot_becomes_describe_auction(self):
+        """``{"lookup": "This auction is in-person"}`` -- the subject, where the verb belongs.
+
+        The model has understood the question and named the right auction; the only mistake is that
+        an auction is a thing rather than something to call. Reading it costs nothing: describe_auction
+        is read-only and re-scopes the title through the user's own visible auctions.
+        """
+        parsed = palette_assist.parse_reply({"lookup": self.in_person_auction.title}, user=self.user)
+        self.assertEqual(parsed["kind"], "lookup")
+        self.assertEqual(parsed["action"].name, "describe_auction")
+        self.assertEqual(parsed["params"], {"auction": self.in_person_auction.title})
+
+    def test_an_auction_the_user_cannot_see_is_not_resolved(self):
+        hidden = Auction.objects.create(
+            created_by=self.userB,
+            title="A private auction nobody joined",
+            is_online=True,
+            promote_this_auction=False,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        parsed = palette_assist.parse_reply({"lookup": hidden.title}, user=self.member)
+        self.assertEqual(parsed["kind"], "invalid")
+
+    def test_without_a_user_an_auction_title_is_still_rejected(self):
+        """The scoping needs a user; no user means no guess, not an unscoped one."""
+        parsed = palette_assist.parse_reply({"lookup": self.in_person_auction.title})
+        self.assertEqual(parsed["kind"], "invalid")
+
+
+class LookupRoundBudgetTests(PaletteAssistTestCase):
+    """A lookup that is never used is the most expensive thing this loop can do."""
+
+    def test_a_lookup_is_never_the_last_round(self):
+        """Off-contract reply, correction, then a lookup -- and the answer must still get out.
+
+        Under a flat two-round cap this request paid for two model calls and a database read and
+        then dropped what it found on the floor, which is what "when does this auction start?"
+        looked like from the outside: a spinner, and then search results.
+        """
+        self._script(
+            {"lookup": self.in_person_auction.title},  # not a lookup name; no user scoping in setUp
+            {"lookup": "describe_auction", "params": {}},
+            {"answer": "It started an hour ago."},
+        )
+        data = self._assist(
+            "when exactly does this auction start", path=self.in_person_auction.get_absolute_url()
+        ).json()
+        self.assertEqual(data["kind"], "answer")
+        self.assertEqual(data["message"], "It started an hour ago.")
+        self.assertEqual(self.provider.call_count, 3)
+
+    def test_a_request_that_never_looks_anything_up_still_stops_at_two(self):
+        self._script({"nonsense": 1}, {"nonsense": 2}, {"nonsense": 3}, {"nonsense": 4})
+        self._assist("do something impossible with several words")
+        self.assertLessEqual(self.provider.call_count, palette_assist.MAX_ROUNDS)
+
+
+class DescribeAuctionPayloadTests(PaletteAssistTestCase):
+    """What a lookup sends back is paid for by the token, and truncated if it doesn't fit."""
+
+    def _describe(self, user=None):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user or self.user
+        request.palette_page = {}
+        return palette_actions.describe_auction(request, {"auction": self.in_person_auction.title})
+
+    def test_dates_are_local_and_readable(self):
+        """The raw field is UTC with microseconds, and the model repeated it back verbatim."""
+        starts = self._describe()["auction"]["starts"]
+        self.assertNotIn("+00:00", starts)
+        self.assertIn(str(self.in_person_auction.date_start.astimezone(self.in_person_auction.timezone).year), starts)
+
+    def test_the_chart_blob_is_not_sent(self):
+        """``cached_stats`` is the stats page's chart series: ~700 tokens, and no question needs it."""
+        admin = self._describe()["auction"].get("_admin", {})
+        self.assertNotIn("cached_stats", admin)
+
+    def test_the_fee_settings_survive_truncation(self):
+        """ "What's the split?" was answered with an invented one because this got cut off."""
+        self.in_person_auction.summernote_description = "Rules. " * 400
+        self.in_person_auction.save()
+        payload = json.dumps(self._describe(), default=str)
+        self.assertLessEqual(len(payload), palette_assist.MAX_LOOKUP_RESULT_CHARS)
+        trimmed = payload[: palette_assist.MAX_LOOKUP_RESULT_CHARS]
+        self.assertIn("winning bid percent to club", trimmed)
+
+    def test_the_alternate_split_is_described(self):
+        settings_block = self._describe()["auction"]["settings"]
+        names = {row["setting"] for row in settings_block}
+        self.assertIn("Alternate split", names)
+        self.assertIn("Alternate winning bid percent to club", names)
+
+    def test_rules_are_stripped_and_capped(self):
+        self.in_person_auction.summernote_description = "<p><b>Be nice.</b></p>" + ("blah " * 900)
+        self.in_person_auction.save()
+        rules = self._describe()["auction"]["rules"]
+        self.assertNotIn("<b>", rules)
+        self.assertLessEqual(len(rules), palette_actions.RULES_LIMIT)
+        self.assertIn("Be nice.", rules)
+
+
+class PageContextTests(PaletteAssistTestCase):
+    """What the user is looking at, and the facts about it they are most likely to ask for."""
+
+    def test_the_auction_on_screen_brings_its_own_facts(self):
+        context = palette_actions.user_context(
+            self.user, palette_routes.page_context_from_path(self.user, self.in_person_auction.get_absolute_url())
+        )
+        facts = context["looking_at_right_now"]["this_auction"]
+        self.assertEqual(facts["title"], self.in_person_auction.title)
+        self.assertFalse(facts["is_online"])
+        self.assertEqual(facts["format"], "in-person auction")
+        self.assertTrue(facts["starts"])
+
+    def test_an_online_auction_says_so_in_words(self):
+        """A bare ``is_online: false`` was read straight past; "Yes" came back about an in-person one."""
+        context = palette_actions.user_context(
+            self.user, palette_routes.page_context_from_path(self.user, self.online_auction.get_absolute_url())
+        )
+        self.assertEqual(context["looking_at_right_now"]["this_auction"]["format"], "online auction")
+
+    def test_an_auction_the_user_has_not_joined_is_still_the_page_they_are_on(self):
+        """Running an auction through its club is not the same as having joined it."""
+        club = Club.objects.create(name="Runner Club", abbreviation="RC")
+        run_not_joined = Auction.objects.create(
+            created_by=self.userB,
+            title="An auction run through its club",
+            club=club,
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        ClubMember.objects.create(club=club, user=self.member, permission_admin=True)
+        self.assertFalse(AuctionTOS.objects.filter(auction=run_not_joined, user=self.member).exists())
+        page = palette_routes.page_context_from_path(self.member, run_not_joined.get_absolute_url())
+        self.assertEqual(page.get("auction"), run_not_joined.slug)
+
+    def test_the_page_hint_still_cannot_write_to_an_unjoined_auction(self):
+        """Naming an auction is not joining it: resolve_auction stays scoped to joined auctions."""
+        stranger = Auction.objects.create(
+            created_by=self.userB,
+            title="Somebody else's auction",
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        auction, _error = palette_actions.resolve_auction(self.member, "", {"auction": stranger.slug})
+        self.assertNotEqual(getattr(auction, "pk", None), stranger.pk)
+
+
+class PeopleTests(PaletteAssistTestCase):
+    """Adding somebody, and then fixing what you got wrong about them."""
+
+    def _run(self, action, params, user=None):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user or self.user
+        request.palette_page = {"auction": self.in_person_auction.slug}
+        return palette_actions.run_action(request, action, params)
+
+    def test_adding_someone_says_their_details_are_blank(self):
+        """Added by voice at the door, they have a name and nothing else -- and nobody was told."""
+        result = self._run("add_person", {"name": "Doris Door"})
+        self.assertIn("No email or phone number yet", result["summary"])
+        self.assertTrue(any("Doris Door's details" in f["label"] for f in result["followups"]))
+
+    def test_adding_someone_with_contact_details_does_not_nag(self):
+        result = self._run("add_person", {"name": "Ed Email", "email": "ed@example.com", "phone_number": "5551212"})
+        self.assertNotIn("No email", result["summary"])
+
+    def test_the_countdown_names_who_it_is_about(self):
+        """ "Add someone to the auction." over a five second timer describes the wrong half."""
+        self._script({"action": "add_person", "params": {"name": "Nora New"}})
+        data = self._assist("add nora new to this auction please").json()
+        self.assertEqual(data["kind"], "countdown")
+        self.assertIn("Nora New", data["summary"])
+
+    def test_updating_an_email(self):
+        self._run("add_person", {"name": "Fred Fix"})
+        result = self._run("update_person", {"person": "Fred Fix", "email": "fred@example.com"})
+        self.assertNotIn("error", result)
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Fred Fix")
+        self.assertEqual(tos.email, "fred@example.com")
+
+    def test_updating_a_phone_number(self):
+        """The reported bug: a countdown ran, and the phone number did not change."""
+        self._run("add_person", {"name": "Phil Phone"})
+        self._run("update_person", {"person": "Phil Phone", "phone_number": "555-1212"})
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Phil Phone")
+        self.assertEqual(tos.phone_number, "555-1212")
+
+    def test_updating_uses_the_pages_duplicate_email_rule(self):
+        self._run("add_person", {"name": "Ann A", "email": "ann@example.com"})
+        self._run("add_person", {"name": "Ben B"})
+        result = self._run("update_person", {"person": "Ben B", "email": "ann@example.com"})
+        self.assertIn("error", result)
+
+    def test_updating_nothing_asks_what_to_change(self):
+        self._run("add_person", {"name": "Vic Vague"})
+        result = self._run("update_person", {"person": "Vic Vague"})
+        self.assertIn("more_info_needed", result)
+
+    def test_a_name_is_only_renamed_when_a_new_name_is_given(self):
+        """ "change bob's email" passes bob's name too; that must not be read as renaming bob to bob."""
+        self._run("add_person", {"name": "Ray Rename"})
+        self._run("update_person", {"person": "Ray Rename", "new_name": "Ray Renamed"})
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Ray Renamed").exists())
+
+    def test_a_non_admin_cannot_change_someone(self):
+        self._run("add_person", {"name": "Tim Target", "email": "tim@example.com"})
+        result = self._run("update_person", {"person": "Tim Target", "email": "hacked@example.com"}, user=self.member)
+        self.assertIn("error", result)
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Tim Target")
+        self.assertEqual(tos.email, "tim@example.com")
+
+    def test_updating_is_a_confirm_tier_action(self):
+        """It writes to the database, so it gets the countdown and the execute endpoint's re-check."""
+        self.assertEqual(palette_actions.get_action("update_person").danger, palette_actions.DANGER_CONFIRM)
+
+
+class ClubManagedPeopleTests(PaletteAssistTestCase):
+    """In a club-managed auction the club owns the bidder number, so it has to own the person."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Palette Club", abbreviation="PC")
+        self.in_person_auction.club = self.club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.is_club_managed)
+
+    def _run(self, action, params):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {"auction": self.in_person_auction.slug}
+        return palette_actions.run_action(request, action, params)
+
+    def test_adding_someone_creates_the_club_member(self):
+        """Without this the participant had a bidder number the club had never heard of.
+
+        Nothing in the club admin could find them, and the participant edit form hides the bidder
+        number in club-managed mode -- so the number could not even be corrected afterwards.
+        """
+        self._run("add_person", {"name": "Cara Club"})
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Cara Club")
+        self.assertIsNotNone(tos.clubmember_id)
+        self.assertEqual(tos.clubmember.club, self.club)
+        self.assertEqual(tos.clubmember.bidder_number, tos.bidder_number)
+
+    def test_only_one_participant_row_is_created(self):
+        """Creating the member also creates its shadow row; adding a second means two invoices."""
+        self._run("add_person", {"name": "Solo Row"})
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Solo Row").count(), 1)
+
+    def test_changing_contact_details_writes_them_to_the_club_member(self):
+        """The club owns these fields; editing only the participant row leaves the two disagreeing."""
+        self._run("add_person", {"name": "Mo Move"})
+        self._run("update_person", {"person": "Mo Move", "email": "mo@example.com", "phone_number": "5550000"})
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Mo Move")
+        self.assertEqual(tos.email, "mo@example.com")
+        self.assertEqual(tos.clubmember.email, "mo@example.com")
+        self.assertEqual(tos.clubmember.phone_number, "5550000")
+
+
+class RequiredFieldTests(PaletteAssistTestCase):
+    """An auction's own required fields are the auction's to enforce, whatever route a lot arrives by."""
+
+    def setUp(self):
+        super().setUp()
+        self.in_person_auction.custom_field_1 = "required"
+        self.in_person_auction.custom_field_1_name = "Scientific name"
+        self.in_person_auction.buy_now = "required"
+        self.in_person_auction.use_custom_dropdown_field = "required"
+        self.in_person_auction.custom_dropdown_name = "Table"
+        self.in_person_auction.save()
+        for value in ("A", "B"):
+            AuctionDropdown.objects.create(auction=self.in_person_auction, value=value)
+        self.walk_in = AuctionTOS.objects.create(
+            auction=self.in_person_auction, name="Walk In", pickup_location=self.in_person_location
+        )
+
+    def _add(self, **params):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {"auction": self.in_person_auction.slug}
+        return palette_actions.run_action(
+            request, "add_lot", {"name": "blue shrimp", "bidder": self.walk_in.bidder_number, **params}
+        )
+
+    def test_a_lot_missing_required_fields_is_refused_and_says_which(self):
+        result = self._add()
+        self.assertIn("more_info_needed", result)
+        self.assertIn("Scientific name", result["more_info_needed"])
+        self.assertIn("Table", result["more_info_needed"])
+        self.assertEqual(Lot.objects.filter(lot_name="Blue Shrimp", auction=self.in_person_auction).count(), 0)
+
+    def test_a_dropdown_value_the_auction_does_not_offer_is_refused(self):
+        result = self._add(custom_field_1="Neocaridina", buy_now_price=20, custom_dropdown="not an option")
+        self.assertIn("error", result)
+        self.assertEqual(Lot.objects.filter(lot_name="Blue Shrimp", auction=self.in_person_auction).count(), 0)
+
+    def test_a_complete_lot_is_accepted(self):
+        result = self._add(custom_field_1="Neocaridina", buy_now_price=20, custom_dropdown="A")
+        self.assertNotIn("error", result)
+        self.assertEqual(Lot.objects.filter(lot_name="Blue Shrimp", auction=self.in_person_auction).count(), 1)
+
+    def test_adding_a_lot_for_a_seller_with_no_account_does_not_crash(self):
+        """Most sellers at an in-person auction were added at the door and have no login.
+
+        ``find_lot_to_copy`` returned a bare ``None`` for them where every other exit returns a
+        pair, so the unpack raised and every one of these came back as "Something went wrong".
+        """
+        self.assertIsNone(self.walk_in.user)
+        self.assertEqual(palette_actions.find_lot_to_copy(self.walk_in.user, "blue shrimp"), (None, False))
+        result = self._add(custom_field_1="Neocaridina", buy_now_price=20, custom_dropdown="A")
+        self.assertNotIn("Something went wrong", str(result))
+
+
+#: Fields whose name suggests the auction charges somebody money. See DriftTests.
+MONEY_FIELD = re.compile(r"fee|percent|split|price|cost|tax")
+#: Fields whose name suggests a club points rule. Same rule, same reason.
+POINTS_FIELD = re.compile(r"point|bap|hap|cap|breeder")
+
+
+class DriftTests(PaletteAssistTestCase):
+    """The parts that go stale silently when the rest of the site moves on."""
+
+    def test_every_registered_action_is_described_to_the_model(self):
+        described = {entry["skill"] for entry in palette_actions.registry_for_prompt()}
+        self.assertEqual(described, set(palette_actions.ACTIONS))
+
+    def test_update_person_sends_every_field_its_form_asks_for(self):
+        """The data dict is read off the form, so a new field on the modal can't break the palette."""
+        from auctions.forms import CreateEditAuctionTOS
+
+        tos = AuctionTOS.objects.create(
+            auction=self.in_person_auction, name="Drift Check", pickup_location=self.in_person_location
+        )
+        from django.forms import model_to_dict
+
+        data = model_to_dict(tos, fields=CreateEditAuctionTOS.Meta.fields)
+        self.assertEqual(set(data), set(CreateEditAuctionTOS.Meta.fields))
+
+    def test_a_truncated_lookup_says_it_was_truncated(self):
+        """Silent truncation is how an answer about fees got invented: the fees were past the cut."""
+        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 9000})
+        self.assertIn("TRUNCATED", payload)
+        self.assertIn("Do not fill in anything", payload)
+
+    def test_a_payload_that_fits_is_sent_verbatim(self):
+        payload = palette_assist.lookup_payload("my_context", {"username": "bob"})
+        self.assertNotIn("TRUNCATED", payload)
+        self.assertIn('"username": "bob"', payload)
+
+    def test_every_money_field_on_an_auction_is_described_or_excused(self):
+        """The rule that would have caught the reported bug before a user did.
+
+        Asked "what's the split?" the assistant answered with a fee percentage nobody had
+        configured, because the alternate-fee fields weren't in ``_AUCTION_SETTINGS`` and it filled
+        the gap from the fees it could see. A fee the assistant can't see is worse than one it has
+        never heard of, so a new one has to be described or written off on purpose.
+        """
+        described = set(palette_actions._AUCTION_SETTINGS)
+        excused = set(palette_actions.SETTINGS_NOT_DESCRIBED)
+        money = {
+            field.name
+            for field in Auction._meta.get_fields()
+            if hasattr(field, "attname") and MONEY_FIELD.search(field.name)
+        }
+        self.assertEqual(
+            sorted(money - described - excused),
+            [],
+            "These look like fees on Auction but the assistant can't see them. Add each to "
+            "palette_actions._AUCTION_SETTINGS, or to SETTINGS_NOT_DESCRIBED with a reason.",
+        )
+
+    def test_every_points_rule_on_a_club_is_described_or_excused(self):
+        """ "How do I earn points?" is answered entirely from this list, so a gap in it is a wrong answer."""
+        described = set(palette_actions._CLUB_BAP_SETTINGS)
+        excused = set(palette_actions.POINTS_NOT_DESCRIBED)
+        rules = {
+            field.name
+            for field in Club._meta.get_fields()
+            if hasattr(field, "attname") and POINTS_FIELD.search(field.name)
+        }
+        self.assertEqual(
+            sorted(rules - described - excused),
+            [],
+            "These look like club points rules the assistant can't see. Add each to "
+            "palette_actions._CLUB_BAP_SETTINGS, or to POINTS_NOT_DESCRIBED with a reason.",
+        )
+
+    def test_nothing_is_both_described_and_excused(self):
+        for described, excused in (
+            (palette_actions._AUCTION_SETTINGS, palette_actions.SETTINGS_NOT_DESCRIBED),
+            (palette_actions._CLUB_BAP_SETTINGS, palette_actions.POINTS_NOT_DESCRIBED),
+        ):
+            self.assertEqual(set(described) & set(excused), set())
+
+    def test_every_excused_setting_has_a_real_reason(self):
+        excuses = {**palette_actions.SETTINGS_NOT_DESCRIBED, **palette_actions.POINTS_NOT_DESCRIBED}
+        for name, reason in excuses.items():
+            self.assertGreater(len(reason), 20, f"{name} needs a real reason, not '{reason}'")
+
+    def test_every_described_setting_is_a_real_field(self):
+        """A renamed field would otherwise vanish from the answer with nothing failing."""
+        for name in palette_actions._AUCTION_SETTINGS:
+            Auction._meta.get_field(name)
+        for name in palette_actions._CLUB_BAP_SETTINGS:
+            Club._meta.get_field(name)
+
+    def test_every_describe_lookup_fits_without_truncation(self):
+        """The guard for the day a new setting pushes one of these over the limit again."""
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {}
+        self.in_person_auction.summernote_description = "Rules and more rules. " * 300
+        self.in_person_auction.save()
+        club = Club.objects.create(name="Drift Club", abbreviation="DC", description="About us. " * 300)
+        for name, params in (
+            ("describe_auction", {"auction": self.in_person_auction.title}),
+            ("describe_club", {"club": club.name}),
+            ("my_context", {}),
+        ):
+            with self.subTest(lookup=name):
+                result = palette_actions.run_action(request, name, params)
+                self.assertNotIn("TRUNCATED", palette_assist.lookup_payload(name, result))
+
+
+class DisclosureTests(PaletteAssistTestCase):
+    """Messages that echo what the caller typed must not turn a guess into a confirmation."""
+
+    def setUp(self):
+        super().setUp()
+        self.secret = Auction.objects.create(
+            created_by=self.userB,
+            title="The Secret Society Auction",
+            is_online=True,
+            promote_this_auction=False,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+    def test_a_guessed_slug_does_not_come_back_as_a_title(self):
+        """The oracle: an error echoes the hint, and humanize used to look it up unscoped.
+
+        Posting a guessed slug to the execute endpoint answered "I couldn't find an auction called
+        “The Secret Society Auction”" — confirming it exists, and handing over its current title, to
+        somebody with no relationship to it at all.
+        """
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.member
+        result = palette_assist.execute(request, "add_lot", {"auction": self.secret.slug, "name": "x"})
+        self.assertNotIn(self.secret.title, result["message"])
+        self.assertIn(self.secret.slug, result["message"])
+
+    def test_a_slug_the_user_can_see_is_still_tidied_away(self):
+        """The scoping must not break what humanize is for."""
+        text = f"Opening {self.in_person_auction.slug} for you."
+        self.assertIn(self.in_person_auction.title, palette_assist.humanize(text, self.user))
+
+    def test_without_a_user_no_slug_resolves(self):
+        text = f"Opening {self.in_person_auction.slug} for you."
+        self.assertEqual(palette_assist.humanize(text), text)
+
+    def test_route_keys_still_resolve_without_a_user(self):
+        """A route label is a static catalog string and names no object, so it needs no scoping."""
+        self.assertIn("all lots in an auction", palette_assist.humanize("Try auction_lot_list next."))
+
+    def test_a_stale_last_auction_pointer_is_not_trusted(self):
+        """``last_auction_used`` outlives the participant row it was set from."""
+        self.member.userdata.last_auction_used = self.secret
+        self.member.userdata.save()
+        auction, error = palette_actions.resolve_auction(self.member, "")
+        self.assertIsNone(auction)
+        self.assertTrue(error)
+
+    def test_a_stale_pointer_is_not_described_either(self):
+        self.member.userdata.last_auction_used = self.secret
+        self.member.userdata.save()
+        auction, error = palette_actions._resolve_described_auction(self.member, "", {})
+        self.assertIsNone(auction)
+        self.assertTrue(error)
+
+    def test_a_non_admin_is_not_offered_admin_destinations(self):
+        """``match_routes`` took a user and ignored it, so find_page offered everyone everything."""
+        matches = palette_routes.match_routes("treasurer report", self.member)
+        self.assertEqual([route.key for route in matches if route.admin == palette_routes.ADMIN_AUCTION], [])
+
+    def test_an_admin_still_is(self):
+        matches = palette_routes.match_routes("treasurer report", self.user)
+        self.assertTrue(matches)
+
+    def test_the_prompt_catalog_and_the_matcher_agree(self):
+        """These filtered differently, which is how one of them came to be forgotten."""
+        catalog = palette_routes.catalog_for_prompt(self.member)
+        for route in palette_routes.match_routes("report invoices lots users club", self.member):
+            self.assertIn(route.key, catalog)
+
+
+class AddPersonCollisionTests(PaletteAssistTestCase):
+    """Adding a person must not quietly become editing a different one."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Collision Club", abbreviation="CC")
+        self.in_person_auction.club = self.club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+
+    def _add(self, **params):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {"auction": self.in_person_auction.slug}
+        return palette_actions.run_action(request, "add_person", params)
+
+    def test_an_email_that_belongs_to_somebody_else_is_refused(self):
+        """``ensure_club_member`` matches on email, so this used to rename the person it matched."""
+        self._add(name="Bob Original", email="shared@example.com")
+        member = ClubMember.objects.get(club=self.club, email="shared@example.com")
+        # The member's address and the participant row's can differ, which is what slips past the
+        # form's own duplicate-email rule.
+        AuctionTOS.objects.filter(clubmember=member).update(email="")
+        result = self._add(name="Jane Impostor", email="shared@example.com")
+        self.assertIn("error", result)
+        self.assertIn("Bob Original", result["error"])
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Bob Original").exists())
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Jane Impostor").exists())
+
+    def test_a_shadow_row_with_no_name_of_its_own_is_still_adopted(self):
+        """Refusing a collision must not refuse a row that nobody has claimed yet.
+
+        ``AuctionTOS.save()`` fills a blank name with "Unknown", so both spellings of "not really
+        anybody" have to be adoptable — otherwise a club member added by email only can never be
+        given a name here.
+        """
+        self._add(name="Blank Row", email="blank@example.com")
+        member = ClubMember.objects.get(club=self.club, email="blank@example.com")
+        AuctionTOS.objects.filter(clubmember=member).delete()
+        AuctionTOS.objects.create(
+            auction=self.in_person_auction,
+            clubmember=member,
+            pickup_location=self.in_person_location,
+            name="Unknown",
+        )
+        result = self._add(name="Now Named", email="blank@example.com")
+        self.assertNotIn("error", result)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Now Named").exists())

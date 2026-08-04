@@ -121,11 +121,25 @@ class PageContextTests(StandardTestCase):
         context = palette_routes.page_context_from_path(self.user, path)
         self.assertEqual(context["lot_id"], self.lot.pk)
 
-    def test_an_auction_the_user_is_not_part_of_is_not_returned(self):
-        """The client sends a path; it does not get to name an auction by sending one."""
+    def test_an_auction_the_user_has_not_joined_is_still_the_auction_on_screen(self):
+        """Reading an auction's page is how you decide whether to join it."""
         path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
         context = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
-        self.assertNotIn("auction", context)
+        self.assertEqual(context["auction"], self.online_auction.slug)
+        self.assertFalse(context["auction_joined"])
+
+    def test_a_joined_auction_says_so(self):
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        context = palette_routes.page_context_from_path(self.user, path)
+        self.assertTrue(context["auction_joined"])
+
+    def test_an_auction_on_screen_but_not_joined_still_cannot_be_written_to(self):
+        """Context is not permission: resolving an auction to act on re-checks membership."""
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
+        auction, error = palette_actions.resolve_auction(self.user_who_does_not_join, "", page)
+        self.assertIsNone(auction)
+        self.assertIn(self.online_auction.title, error)
 
     def test_rubbish_paths_are_ignored_rather_than_raising(self):
         for path in ("", "not-a-path", "/nope/nope/nope/", "//", "/" + "x" * 600):
