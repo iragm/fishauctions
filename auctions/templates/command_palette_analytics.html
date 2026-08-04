@@ -7,6 +7,90 @@
   Add common bounce terms as <code>synonyms</code> on an existing
   <a href="/admin/auctions/commandpalettepage/">command palette page</a>, or create a new page for them.
 </p>
+{% if llm_calls %}
+<div class="alert alert-info">
+  <h5 class="mb-2"><i class="bi bi-stars"></i> Natural-language assist</h5>
+  <p class="mb-1">
+    {{ llm_calls }} model call{{ llm_calls|pluralize }} · {{ llm_total_tokens }} tokens
+    ({{ llm_prompt_tokens }} prompt / {{ llm_completion_tokens }} completion){% if llm_failures %} · {{ llm_failures }} failed{% endif %}.
+  </p>
+  {% comment %}
+    The prompt total on its own reads as far more expensive than it is. The system prompt is the
+    same few thousand tokens on every call, so the provider serves nearly all of it from cache at a
+    fraction of the normal input rate. Rounds-per-query is the number worth watching: it multiplies
+    everything above, and a figure well over 1 means the model is being asked again and again.
+  {% endcomment %}
+  <p class="mb-1"><small>
+    {{ llm_cached_prompt_tokens }} of those prompt tokens ({{ llm_cached_percent }}%) were served
+    from the provider's cache and are billed at a fraction of the normal input rate — only
+    <strong>{{ llm_uncached_prompt_tokens }}</strong> were charged at full price.
+  </small></p>
+  <p class="mb-1"><small>
+    <strong>{{ llm_rounds_per_query }}</strong> model calls per query on average. Each round re-sends
+    the whole system prompt, so this is the multiplier on everything above.
+  </small></p>
+  {% if llm_by_action %}
+  <p class="mb-0"><small>
+    {% for row in llm_by_action %}<code>{{ row.action }}</code> ×{{ row.count }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </small></p>
+  {% endif %}
+</div>
+{% endif %}
+{% if llm_cancelled_queries %}
+<div class="alert alert-warning text-dark">
+  <h5 class="mb-2"><i class="bi bi-x-octagon"></i> Commands people stopped</h5>
+  {% comment %}
+    These are worse than the failures below, and much harder to find any other way. The assistant
+    was confident, the server was happy, the countdown started -- and the person watching it hit
+    Cancel. Nothing ran, so there is no error and no history entry: this table is the only record
+    that the query was understood as the wrong thing.
+  {% endcomment %}
+  <p class="small mb-2">
+    Cancelled during the countdown: <strong>{{ llm_cancelled }}</strong>
+    ({{ llm_cancelled_percent }}% of confirmable actions). Nothing was written. A phrase repeated
+    here was matched to the wrong action, or to the right action on the wrong auction.
+  </p>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0">
+      <thead><tr><th>Query</th><th>Was going to run</th><th class="text-end">Count</th></tr></thead>
+      <tbody>
+        {% for row in llm_cancelled_queries %}
+        <tr>
+          <td>{{ row.query }}</td>
+          <td><small class="text-muted">{{ row.action }}</small></td>
+          <td class="text-end">{{ row.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% if llm_gave_up %}
+<div class="alert alert-warning text-dark">
+  <h5 class="mb-2"><i class="bi bi-question-circle"></i> Queries the assistant couldn't answer</h5>
+  {% comment %} This is the feature backlog: a phrase repeated here is somebody asking for a skill that doesn't exist. {% endcomment %}
+  <p class="small mb-2">
+    Each of these fell through to search results or a guess. A phrase that shows up repeatedly is
+    a request for an action that isn't in <code>auctions/palette_actions.py</code> yet, or a page
+    missing keywords in <code>auctions/palette_routes.py</code>.
+  </p>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0">
+      <thead><tr><th>Query</th><th>Outcome</th><th class="text-end">Count</th></tr></thead>
+      <tbody>
+        {% for row in llm_gave_up %}
+        <tr>
+          <td>{{ row.query }}</td>
+          <td><small class="text-muted">{{ row.response_kind }}</small></td>
+          <td class="text-end">{{ row.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 <div class="row">
   <div class="col-lg-6 mb-4">
     <h5>Top searches</h5>

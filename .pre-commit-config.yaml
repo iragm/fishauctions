@@ -18,3 +18,14 @@ repos:
       args: [ --fix ]
     # Run the formatter.
     - id: ruff-format
+- repo: local
+  hooks:
+    # Django only matches a template tag within a single line, so one spread over two renders
+    # onto the page as text with no error anywhere. Ruff can't see inside templates; this is the
+    # same checker auctions.test_template_hygiene runs, so the two can't disagree.
+    - id: django-template-tags
+      name: Django template tags render as tags, not text
+      entry: python3 auctions/template_lint.py
+      language: system
+      pass_filenames: false
+      files: templates/.*\.(html|txt)$

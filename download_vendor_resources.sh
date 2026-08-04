@@ -18,43 +18,31 @@ mkdir -p auctions/static/css/vendor
 mkdir -p auctions/static/fonts
 
 echo ""
-echo "1. Downloading Vosklet library..."
-curl -L -o auctions/static/js/vendor/Vosklet.js \
-  "https://cdn.jsdelivr.net/gh/msqr1/Vosklet@1.2.1/Examples/Vosklet.js"
-echo "✓ Vosklet.js downloaded"
-
-echo ""
-echo "1b. Downloading Vosklet WASM module..."
-curl -L -o auctions/static/js/vendor/Vosklet.wasm \
-  "https://cdn.jsdelivr.net/gh/msqr1/Vosklet@1.2.1/Examples/Vosklet.wasm"
-echo "✓ Vosklet.wasm downloaded"
-
-echo ""
-echo "2. Downloading jQuery 3.5.1..."
+echo "1. Downloading jQuery 3.5.1..."
 curl -L -o auctions/static/js/vendor/jquery.min.js \
   "https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"
 echo "✓ jquery.min.js downloaded"
 
 echo ""
-echo "3. Downloading Bootstrap 5.3.3 bundle (includes Popper)..."
+echo "2. Downloading Bootstrap 5.3.3 bundle (includes Popper)..."
 curl -L -o auctions/static/js/vendor/bootstrap.bundle.min.js \
   "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 echo "✓ bootstrap.bundle.min.js downloaded"
 
 echo ""
-echo "4. Downloading Bootstrap Darkly theme CSS..."
+echo "3. Downloading Bootstrap Darkly theme CSS..."
 curl -L -o auctions/static/css/vendor/bootstrap.min.css \
   "https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css"
 echo "✓ bootstrap.min.css downloaded"
 
 echo ""
-echo "5. Downloading Bootstrap Icons CSS..."
+echo "4. Downloading Bootstrap Icons CSS..."
 curl -L -o auctions/static/css/vendor/bootstrap-icons.min.css \
   "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 echo "✓ bootstrap-icons.min.css downloaded"
 
 echo ""
-echo "6. Downloading Bootstrap Icons fonts..."
+echo "5. Downloading Bootstrap Icons fonts..."
 curl -L -o auctions/static/fonts/bootstrap-icons.woff2 \
   "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff2"
 echo "✓ bootstrap-icons.woff2 downloaded"
@@ -64,7 +52,7 @@ curl -L -o auctions/static/fonts/bootstrap-icons.woff \
 echo "✓ bootstrap-icons.woff downloaded"
 
 echo ""
-echo "7. Updating font paths in Bootstrap Icons CSS..."
+echo "6. Updating font paths in Bootstrap Icons CSS..."
 # Update the @font-face URLs to point to self-hosted fonts
 if [[ "$OSTYPE" == "darwin"* ]]; then
   # macOS
@@ -78,7 +66,7 @@ fi
 echo "✓ Font paths updated"
 
 echo ""
-echo "8. Downloading Select2 4.0.13..."
+echo "7. Downloading Select2 4.0.13..."
 curl -L -o auctions/static/css/vendor/select2.min.css \
   "https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css"
 echo "✓ select2.min.css downloaded"
@@ -88,13 +76,13 @@ curl -L -o auctions/static/js/vendor/select2.min.js \
 echo "✓ select2.min.js downloaded"
 
 echo ""
-echo "9. Downloading Select2 Bootstrap theme..."
+echo "8. Downloading Select2 Bootstrap theme..."
 curl -L -o auctions/static/css/vendor/select2-bootstrap.min.css \
   "https://cdnjs.cloudflare.com/ajax/libs/select2-bootstrap-theme/0.1.0-beta.10/select2-bootstrap.min.css"
 echo "✓ select2-bootstrap.min.css downloaded"
 
 echo ""
-echo "10. Downloading Chart.js 2.9.3..."
+echo "9. Downloading Chart.js 2.9.3..."
 curl -L -o auctions/static/js/vendor/Chart.min.js \
   "https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"
 echo "✓ Chart.min.js downloaded"

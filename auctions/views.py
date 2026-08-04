@@ -20,7 +20,7 @@ from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 import channels.layers
 import qr_code
 import requests
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from chartjs.colors import next_color
 from chartjs.views.columns import BaseColumnsHighChartsView
 from chartjs.views.lines import BaseLineChartView
@@ -65,15 +65,17 @@ from django.http import (
     HttpResponseForbidden,
     HttpResponseRedirect,
     JsonResponse,
+    StreamingHttpResponse,
 )
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.defaultfilters import date as date_filter
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.decorators.clickjacking import xframe_options_exempt
@@ -90,7 +92,6 @@ from django.views.generic.edit import (
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from django_weasyprint import WeasyTemplateResponseMixin
-from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
 from pytz import timezone as pytz_timezone
@@ -109,7 +110,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from . import club_events, discord_events
+from . import club_events, discord_events, voice
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -131,6 +132,8 @@ from .filters import (
 )
 from .forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
+    QUICK_ADD_LOT_FIELDS,
+    QUICK_ADD_TOS_FIELDS,
     AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
@@ -214,6 +217,7 @@ from .models import (
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
+    LLMUsage,
     Lot,
     LotHistory,
     LotImage,
@@ -229,6 +233,7 @@ from .models import (
     UserIgnoreCategory,
     UserInterestCategory,
     UserLabelPrefs,
+    VoiceGrammar,
     VolunteerJob,
     VolunteerSignup,
     Watch,
@@ -247,7 +252,20 @@ from .serializers import (
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
-from .services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member, map_fields
+from .services import (
+    LOT_ADD_BLOCK_BULK_DISABLED,
+    LOT_ADD_BLOCK_NO_TOS,
+    apply_club_member_to_tos,
+    check_in_auctiontos,
+    copy_lot_images,
+    ensure_club_member,
+    existing_tos_for_club_member,
+    lot_add_block,
+    map_fields,
+    recalculate_seller_invoice,
+    save_new_lot,
+    user_can_clone_lot,
+)
 from .site_setup import get_server_public_ip
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -383,9 +401,8 @@ class AuctionViewMixin:
             self.allow_non_admins = prev_allow_non_admins
         if is_admin:
             return True
-        if self.auction and self.auction.is_club_managed:
-            if check_club_permission(self.request.user, self.auction.club, "permission_add_edit"):
-                return True
+        if user_can_add_edit_people(self.request.user, self.auction):
+            return True
         raise PermissionDenied()
 
     @property
@@ -418,6 +435,19 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+def user_can_add_edit_people(user, auction):
+    """Can this user manage participants in this auction? (non-raising)
+
+    The club-managed half of ``AuctionViewMixin.can_add_edit_people``, split out so the command
+    palette's ``check_in`` action asks exactly the same question the check-in modal does without
+    having to build a view. Callers that also accept plain auction admins should check
+    ``auction.permission_check(user)`` first, as the mixin does.
+    """
+    if not auction or not auction.is_club_managed:
+        return False
+    return check_club_permission(user, auction.club, "permission_add_edit")
 
 
 _UNSET = object()
@@ -472,6 +502,19 @@ def _upsert_clubmember_shadow_tos(
     return tos
 
 
+_SCRIPT_JSON_ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"}
+
+
+def script_json(value):
+    """``json.dumps`` for a value that gets embedded in an inline ``<script>``.
+
+    json.dumps escapes quotes and backslashes but leaves ``<`` alone, so a value containing
+    ``</script>`` closes the tag early and everything after it runs as markup.  Escape the same
+    three characters Django's ``|json_script`` filter does, which keeps the payload inert.
+    """
+    return json.dumps(value).translate(_SCRIPT_JSON_ESCAPES)
+
+
 def close_modal_response(
     action=None,
     *,
@@ -503,11 +546,15 @@ def close_modal_response(
         detail["tableSelector"] = table_selector
     body = ""
     if toast:
-        toast_options = json.dumps({"title": toast, "type": toast_type, "delay": 8000})
+        # The toast plugin in base.html builds its markup by string concatenation, so the title
+        # lands in the DOM as HTML — escape it here, since callers pass names and emails.
+        toast_options = script_json({"title": escape(toast), "type": toast_type, "delay": 8000})
         body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
-    body += f"<script>window.closeModal({json.dumps(detail)});</script>"
+    body += f"<script>window.closeModal({script_json(detail)});</script>"
     headers = {}
     if extra_triggers:
+        # A header value rather than markup, and Django rejects CR/LF in headers, so plain
+        # json.dumps is safe here — no HTML escaping wanted.
         headers["HX-Trigger"] = json.dumps(extra_triggers)
     return HttpResponse(body, headers=headers)
 
@@ -4138,23 +4185,7 @@ window.mountHtmxModal(document.currentScript.previousElementSibling);
 
     def post(self, request, *args, **kwargs):
         tos = self.auctiontos
-        bidder_number = (request.POST.get("bidder_number") or "").strip()
-        update_fields = []
-        if not tos.checked_in:
-            tos.checked_in = timezone.now()
-            update_fields.append("checked_in")
-        if not tos.bidding_allowed:
-            tos.bidding_allowed = True
-            update_fields.append("bidding_allowed")
-        if update_fields:
-            tos.save(update_fields=update_fields)
-        if bidder_number and bidder_number != tos.bidder_number:
-            tos.force_set_bidder_number(bidder_number, acting_user=request.user)
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Checked in {tos.name}",
-            user=request.user,
-        )
+        check_in_auctiontos(tos, acting_user=request.user, bidder_number=request.POST.get("bidder_number", ""))
         messages.success(request, f"Checked in {tos.name}.")
         return close_modal_response("reload-page")
 
@@ -4566,6 +4597,24 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # into the queue elsewhere flows straight into selling them here.
         head_lot = queue_head_lot(self.auction)
         context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
+        # Voice input (mobile app only — the app listens, this page owns the form). The page needs
+        # the same score cutoffs the app is using, so that "green" here and "confident" there mean
+        # the same thing after someone tunes them in the admin. No configured grammar means the app
+        # is running on its bundled defaults, so use ours, which match.
+        #
+        # Only looked up for the app: the template renders every voice element behind the same
+        # is_mobile_app check, and this page is the busiest thing on the site while an auction is
+        # actually running, so a query nothing on screen can use doesn't belong in that path.
+        if getattr(self.request, "is_mobile_app", False):
+            grammar = VoiceGrammar.load()
+            thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
+            defaults = voice.default_thresholds()
+            context["voice_config"] = {
+                "enabled": grammar.enabled if grammar else True,
+                "confident": thresholds.get("confident", defaults["confident"]),
+                "unsure": thresholds.get("unsure", defaults["unsure"]),
+                "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
+            }
         return context
 
     def pop_queue_and_set_next(self, lot, result):
@@ -4724,6 +4773,61 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
+    def cross_check_price_and_winner(self, lot, price, winner, action, lot_error, price_error, winner_error):
+        """The price/winner checks that need the lot, price and winner all resolved together.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
+        action runs exactly these checks rather than a parallel copy of them.
+        Returns the possibly-updated ``(price_error, winner_error)``.
+        """
+        if (
+            not price_error
+            and lot
+            and winner
+            and lot.high_bidder
+            and lot.auction.online_bidding == "allow"
+            and action != "force_save"
+        ):
+            if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
+                price_error = "Lower than an online bid"
+                winner_error = f"Bidder {lot.high_bidder_for_admins} has bid more than this"
+        if not price_error and price and lot and not lot_error and action != "force_save":
+            if lot.reserve_price and price < lot.reserve_price:
+                price_error = f"This lot's minimum bid is ${lot.reserve_price}"
+            if price < self.auction.minimum_bid:
+                price_error = f"Minimum bid is ${self.auction.minimum_bid}"
+        return price_error, winner_error
+
+    def commit_winner(self, lot, winner, price, action, result):
+        """Record the sale: set the winner, check the buyer in on force_save, log history, advance the queue.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
+        action commits through this exact code instead of reimplementing it.
+        """
+        result["success_message"] = self.set_winner(lot, winner, price)
+        if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
+            winner.checked_in = timezone.now()
+            update_fields = ["checked_in"]
+            if not winner.bidding_allowed:
+                winner.bidding_allowed = True
+                update_fields.append("bidding_allowed")
+            winner.save(update_fields=update_fields)
+            lot.auction.create_history(
+                applies_to="USERS",
+                action=f"Checked in {winner.name} (ignored errors, lot sold)",
+                user=self.request.user,
+            )
+        try:
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
+                user=self.request.user,
+            )
+        except Exception:
+            logger.exception("create_history failed for lot %s", lot.pk)
+        self.pop_queue_and_set_next(lot, result)
+        return result
+
     def post(self, request, *args, **kwargs):
         """All lot validation checks called from here"""
         lot = request.POST.get("lot", None)
@@ -4774,48 +4878,14 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 logger.exception("create_history failed for lot %s", lot.pk)
             self.pop_queue_and_set_next(lot, result)
             return JsonResponse(result)
-        if (
-            not price_error
-            and lot
-            and winner
-            and lot.high_bidder
-            and lot.auction.online_bidding == "allow"
-            and action != "force_save"
-        ):
-            if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
-                price_error = "Lower than an online bid"
-                winner_error = f"Bidder {lot.high_bidder_for_admins} has bid more than this"
-        if not price_error and price and lot and not lot_error and action != "force_save":
-            if lot.reserve_price and price < lot.reserve_price:
-                price_error = f"This lot's minimum bid is ${lot.reserve_price}"
-            if price < self.auction.minimum_bid:
-                price_error = f"Minimum bid is ${self.auction.minimum_bid}"
+        price_error, winner_error = self.cross_check_price_and_winner(
+            lot, price, winner, action, lot_error, price_error, winner_error
+        )
         if not lot_error and not price_error and not winner_error:
             if action != "validate":
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
-                result["success_message"] = self.set_winner(lot, winner, price)
-                if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
-                    winner.checked_in = timezone.now()
-                    update_fields = ["checked_in"]
-                    if not winner.bidding_allowed:
-                        winner.bidding_allowed = True
-                        update_fields.append("bidding_allowed")
-                    winner.save(update_fields=update_fields)
-                    lot.auction.create_history(
-                        applies_to="USERS",
-                        action=f"Checked in {winner.name} (ignored errors, lot sold)",
-                        user=self.request.user,
-                    )
-                try:
-                    lot.auction.create_history(
-                        applies_to="LOTS",
-                        action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
-                        user=self.request.user,
-                    )
-                except Exception:
-                    logger.exception("create_history failed for lot %s", lot.pk)
-                self.pop_queue_and_set_next(lot, result)
+                self.commit_winner(lot, winner, price, action, result)
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -4861,37 +4931,92 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
+    def find_lot(self, lot_number):
+        """Look a lot up the way this auction numbers its lots.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
+        finds lots by exactly the same rule the Undo button does.
+        """
+        if not lot_number:
+            return None
+        if self.auction.use_seller_dash_lot_numbering:
+            return self.auction.lots_qs.filter(custom_lot_number=lot_number).first()
+        return self.auction.lots_qs.filter(lot_number_int=lot_number).first()
+
+    def unsell(self, undo_lot):
+        """Clear the winner on a lot and record why. Returns the view's own result dict.
+
+        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
+        produces the identical database change and history entry as the Undo button.
+        """
+        result = {
+            "hide_undo_button": "true",
+            "last_sold_lot_number": "",
+            "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
+        }
+        undo_lot.winner = None
+        undo_lot.auctiontos_winner = None
+        undo_lot.winning_price = None
+        if not self.auction.is_online:
+            undo_lot.date_end = None
+            # this might need changing for online auctions
+            # but as it is now, this view is only ever called for in-person auctions
+        undo_lot.active = True
+        undo_lot.admin_validated = False
+        undo_lot.save()
+        undo_lot.auction.create_history(
+            applies_to="LOTS",
+            action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
+            user=self.request.user,
+        )
+        return result
+
     def post(self, request, *args, **kwargs):
-        undo_lot = request.POST.get("lot_number", None)
+        undo_lot = self.find_lot(request.POST.get("lot_number", None))
         if undo_lot:
-            if self.auction.use_seller_dash_lot_numbering:
-                undo_lot = self.auction.lots_qs.filter(custom_lot_number=undo_lot).first()
-            else:
-                undo_lot = self.auction.lots_qs.filter(lot_number_int=undo_lot).first()
-        if undo_lot:
-            result = {
-                "hide_undo_button": "true",
-                "last_sold_lot_number": "",
-                "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
-            }
-            undo_lot.winner = None
-            undo_lot.auctiontos_winner = None
-            undo_lot.winning_price = None
-            if not self.auction.is_online:
-                undo_lot.date_end = None
-                # this might need changing for online auctions
-                # but as it is now, this view is only ever called for in-person auctions
-            undo_lot.active = True
-            undo_lot.admin_validated = False
-            undo_lot.save()
-            undo_lot.auction.create_history(
-                applies_to="LOTS",
-                action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
-                user=self.request.user,
-            )
+            result = self.unsell(undo_lot)
         else:
             result = {"message": "No lot found"}
         return JsonResponse(result)
+
+    def get(self, request, *args, **kwargs):
+        return self.http_method_not_allowed(request, *args, **kwargs)
+
+
+class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
+    """Record what the app's voice recognition heard on the set-winners page, and any correction.
+
+    The page writes this, not the app, because the page is the only side that sees both halves: the
+    app tells it what it heard and what it matched, and the page is where the operator then fixes a
+    wrong bidder number before saving. Posting the returned ``id`` back with ``corrected_to`` lands
+    the correction on the same row.
+
+    This is the whole reason voice can be tuned at all. The first version's fatal flaw wasn't the
+    speech engine — it was having no record of *what* it misheard, which left grammar changes as
+    guesswork. Every row with a ``corrected_to`` names a word to fix in the Voice grammar admin.
+
+    Admin-only via ``AuctionViewMixin`` (which raises PermissionDenied for non-admins), and
+    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out, and never an error that
+    could interrupt a sale.
+    """
+
+    def post(self, request, *args, **kwargs):
+        log_id = request.POST.get("id")
+        try:
+            log_id = int(log_id) if log_id else None
+        except (TypeError, ValueError):
+            log_id = None
+        result_id = voice.log_command(
+            request.user,
+            self.auction,
+            log_id=log_id,
+            slot=request.POST.get("slot", ""),
+            heard=request.POST.get("heard", ""),
+            chosen=request.POST.get("chosen", ""),
+            confidence=request.POST.get("confidence"),
+            corrected_to=request.POST.get("corrected_to", ""),
+        )
+        return JsonResponse({"id": result_id})
 
     def get(self, request, *args, **kwargs):
         return self.http_method_not_allowed(request, *args, **kwargs)
@@ -6238,15 +6363,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             self.AuctionTOSFormSet = modelformset_factory(
                 AuctionTOS,
                 extra=self.extra_rows,
-                fields=(
-                    "bidder_number",
-                    "name",
-                    "email",
-                    "phone_number",
-                    "address",
-                    "pickup_location",
-                    "is_club_member",
-                ),
+                fields=QUICK_ADD_TOS_FIELDS,
                 form=QuickAddTOS,
             )
 
@@ -6376,19 +6493,17 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
             for lot in lots:
-                lot.auctiontos_seller = self.tos
-                lot.auction = self.auction
-                if self.tos.user:
-                    lot.user = self.tos.user
-                # if not lot.description:
-                #    lot.description = ""
                 if not lot.pk:
                     new_lot_count += 1
-                    lot.added_by = self.request.user
-                    if not self.is_admin:
-                        if self.tos.user:
-                            lot.user = self.tos.user
-                lot.save()
+                    # save_new_lot is shared with the command palette's add_lot action so a lot
+                    # added by voice lands exactly the same way as one added on this page.
+                    save_new_lot(lot, auction=self.auction, tos=self.tos, added_by=self.request.user)
+                else:
+                    lot.auctiontos_seller = self.tos
+                    lot.auction = self.auction
+                    if self.tos.user:
+                        lot.user = self.tos.user
+                    lot.save()
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
                 self.auction.create_history(
@@ -6397,10 +6512,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     user=self.request.user,
                 )
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
-                invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
-                if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-                invoice.recalculate()
+                recalculate_seller_invoice(self.auction, self.tos)
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
             if "print" in str(self.request.GET.get("type", "")):
@@ -6447,24 +6559,17 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-        if not self.tos:
-            messages.error(request, "You can't add lots until you join this auction")
-            return redirect(
-                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
-            )
-        else:
-            if not self.tos.selling_allowed and not self.is_admin:
-                messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.can_submit_lots:
-            messages.error(request, f"Lot submission has ended for {self.auction}")
+        block = lot_add_block(self.auction, self.tos, self.is_admin)
+        if block:
+            code, message = block
+            messages.error(request, message)
+            if code == LOT_ADD_BLOCK_NO_TOS:
+                return redirect(
+                    f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                )
+            if code == LOT_ADD_BLOCK_BULK_DISABLED:
+                return redirect(self.auction.add_lot_link)
             return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
-            messages.error(
-                request,
-                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
-            )
-            return redirect(self.auction.add_lot_link)
         self.queryset = self.tos.unbanned_lot_qs
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
@@ -6480,20 +6585,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         self.LotFormSet = modelformset_factory(
             Lot,
             extra=extra,
-            fields=(
-                # "custom_lot_number",
-                "lot_name",
-                "summernote_description",
-                "species_category",
-                "i_bred_this_fish",
-                "quantity",
-                "donation",
-                "reserve_price",
-                "buy_now_price",
-                "custom_checkbox",
-                "custom_field_1",
-                "custom_dropdown",
-            ),
+            fields=QUICK_ADD_LOT_FIELDS,
             form=QuickAddLot,
         )
         return super().dispatch(request, *args, **kwargs)
@@ -6587,24 +6679,17 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-        if not self.tos:
-            messages.error(request, "You can't add lots until you join this auction")
-            return redirect(
-                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
-            )
-        else:
-            if not self.tos.selling_allowed and not self.is_admin:
-                messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.can_submit_lots:
-            messages.error(request, f"Lot submission has ended for {self.auction}")
+        block = lot_add_block(self.auction, self.tos, self.is_admin)
+        if block:
+            code, message = block
+            messages.error(request, message)
+            if code == LOT_ADD_BLOCK_NO_TOS:
+                return redirect(
+                    f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                )
+            if code == LOT_ADD_BLOCK_BULK_DISABLED:
+                return redirect(self.auction.add_lot_link)
             return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
-            messages.error(
-                request,
-                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
-            )
-            return redirect(self.auction.add_lot_link)
         self.queryset = self.tos.unbanned_lot_qs
         return super().dispatch(request, *args, **kwargs)
 
@@ -7807,25 +7892,8 @@ class LotValidation(LoginRequiredMixin):
             if form.cleaned_data["cloned_from"]:
                 try:
                     original_lot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
-                    if original_lot.user_id == self.request.user.pk or self.request.user.is_superuser:
-                        original_images = LotImage.objects.filter(lot_number=original_lot.lot_number)
-                        for original_image in original_images:
-                            new_image = LotImage.objects.create(
-                                createdon=original_image.createdon,
-                                lot_number=lot,
-                                image_source=original_image.image_source,
-                                is_primary=original_image.is_primary,
-                                url=original_image.url,
-                            )
-                            if original_image.image:
-                                new_image.image = get_thumbnailer(original_image.image)
-                                # both rows share the same file, so they share the same Cloudflare image
-                                new_image.cloudflare_image_id = original_image.cloudflare_image_id
-                            # if the original lot sold, this picture sure isn't of the actual item
-                            if original_lot.winner and original_image.image_source == "ACTUAL":
-                                new_image.image_source = "REPRESENTATIVE"
-                            new_image.save()
-                        # we are only cloning images here, not watchers, views, or other related models
+                    if user_can_clone_lot(self.request.user, original_lot):
+                        copy_lot_images(original_lot, lot)
                 except Exception as e:
                     logger.exception(e)
             msg = mark_safe("Created lot! ")
@@ -13823,16 +13891,18 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
 
     @staticmethod
     def _apple_sign_in_items(base_url, site_host):
-        """Sign in with Apple: the app half, the web half, and the two things Apple requires of both.
+        """Sign in with Apple: the app half, the web half, and the things Apple requires of both.
 
-        Split into three because they fail independently and a deployment can legitimately stop
-        after the first. The bundle id alone is a complete, working native sign-in — verifying an
-        Apple identity token only needs Apple's public keys.
+        Split up because these fail independently and a deployment can legitimately stop after the
+        first. The bundle id alone is a complete, working native sign-in — verifying an Apple
+        identity token only needs Apple's public keys.
         """
+        from auctions.apple_notifications import notifications_configured
         from auctions.apple_signin import revocation_configured
 
         section = "Sign in with Apple"
         callback = reverse("apple_callback")
+        notification_url = f"{base_url}{reverse('apple_server_notifications')}"
         return [
             {
                 "section": section,
@@ -13932,6 +14002,47 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {
                         "label": "Apple — Configure email communication",
                         "url": "https://developer.apple.com/account/resources/services/configure",
+                    }
+                ],
+            },
+            {
+                "section": section,
+                "name": "Server-to-server notifications",
+                # Green once the endpoint can actually verify a notification, which needs an
+                # identifier to check the audience against. Whether Apple has been *told* the URL
+                # can't be seen from here — that half is the setup steps below.
+                "configured": notifications_configured(),
+                "what_it_does": (
+                    "Apple tells this site when someone disconnects the app, deletes their Apple ID, or turns "
+                    "<em>Hide My Email</em> forwarding off. <strong>Apple sends each of these exactly once and keeps no "
+                    "history</strong>, so until the URL is registered they are not delayed &mdash; they are lost. "
+                    "Without it: people who revoked the app stay signed in, an account whose Apple ID was deleted "
+                    "becomes an unreachable ghost nobody can sign into, and mail keeps being sent to a relay address "
+                    "that has been throwing it away. It is also how Apple expects a site to keep sessions valid "
+                    "without re-checking every account against Apple on a timer."
+                ),
+                "where_to_get_it": (
+                    "Nothing to add to <code>.env</code> &mdash; the endpoint is built in and uses the identifiers "
+                    "above. It just has to be registered with Apple, in the same place the web return URL is set."
+                ),
+                "setup_steps": [
+                    "Open <strong>Certificates, Identifiers &amp; Profiles &rarr; Identifiers</strong> and click your "
+                    "App ID (or the Services ID, if that is where you configured Sign in with Apple).",
+                    "Next to <strong>Sign in with Apple</strong> click <strong>Edit</strong> / "
+                    "<strong>Configure</strong>.",
+                    f"Put <code>{notification_url}</code> in <strong>Server to Server Notification Endpoint</strong> "
+                    "and save. Apple requires https and will not accept a localhost address, so this can only be set "
+                    "on a live site.",
+                    "Check it: opening that URL in a browser answers <code>ok</code>. Apple itself only ever POSTs to "
+                    "it, and a real notification is recorded in the log as <code>apple_notifications</code>.",
+                ],
+                "links": [
+                    {
+                        "label": "Apple — Processing changes for Sign in with Apple accounts",
+                        "url": (
+                            "https://developer.apple.com/documentation/signinwithapple/"
+                            "processing-changes-for-sign-in-with-apple-accounts"
+                        ),
                     }
                 ],
             },
@@ -14065,9 +14176,17 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         from urllib.parse import urlsplit
 
+        from auctions import palette_assist
+        from auctions.llm import assist_enabled
         from fishauctions._env import env_has_real_value
 
         context = super().get_context_data(**kwargs)
+
+        # Asked through the same helper the palette itself uses, so the checklist can never claim
+        # the assistant is on while the palette quietly treats it as off.
+        llm_configured = assist_enabled()
+        llm_window_max = palette_assist.WINDOW_MAX_CALLS
+        llm_window_minutes = palette_assist.WINDOW_SECONDS // 60
 
         server_ip = get_server_public_ip()
         if server_ip:
@@ -14524,6 +14643,57 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     {"label": "Google Analytics", "url": "https://analytics.google.com/"},
                     {"label": "Google Tag Manager", "url": "https://tagmanager.google.com/"},
                     {"label": "Google AdSense", "url": "https://www.google.com/adsense/"},
+                ],
+            },
+            # -- Natural-language command palette ---------------------------------
+            {
+                "section": "Command palette assistant",
+                "name": "Command palette assistant",
+                "hide_title": True,
+                "configured": llm_configured,
+                "what_it_does": (
+                    "Lets people type or say what they want in the command palette "
+                    "(<kbd>Ctrl</kbd>/<kbd>&#8984;</kbd>+<kbd>K</kbd>) instead of searching for the page: "
+                    "&ldquo;add a lot of blue shrimp&rdquo;, &ldquo;check in bob&rdquo;, &ldquo;lot 101 sold to "
+                    "bidder 14 for 25&rdquo;. Anything that writes to the database shows a five second countdown "
+                    "with a cancel button first, and every action re-runs the same permission checks the web page "
+                    "does.<br><br>"
+                    "<strong>This is the only setting here that costs money per use.</strong> Each request is one "
+                    "or more calls to the model you configure, billed by that provider. The palette throttles to "
+                    f"{llm_window_max} calls per {llm_window_minutes} minutes per user, and "
+                    "<a href='" + reverse("command_palette_analytics") + "'>command palette analytics</a> shows "
+                    "the running token total, what it's being used for, and the queries it couldn't answer.<br><br>"
+                    "Leave <code>OPENAI_API_KEY</code> empty and the palette behaves exactly as it did before this "
+                    "feature existed: ordinary search, no microphone button, no model calls."
+                ),
+                "where_to_get_it": (
+                    "An API key from your model provider. <code>LLM_MODEL</code> is a one-line model swap and "
+                    "<code>LLM_BASE_URL</code> points at any OpenAI-compatible endpoint &mdash; a proxy, "
+                    "OpenRouter, or a model running on your own hardware &mdash; so the key doesn't have to be "
+                    "OpenAI's. The default model is a small, cheap one; a smarter model gets more commands right "
+                    "and costs more per use."
+                ),
+                "setup_steps": [
+                    "Create an API key with your provider and paste it into <code>OPENAI_API_KEY</code>.",
+                    "Restart the site, then press <kbd>Ctrl</kbd>/<kbd>&#8984;</kbd>+<kbd>K</kbd> and type "
+                    "something like &ldquo;take me to my invoice&rdquo; to check it responds.",
+                    "Watch the analytics page for the first few days &mdash; the token total tells you what this "
+                    "is actually costing, and the &ldquo;couldn't answer&rdquo; list tells you what people expected "
+                    "it to do.",
+                ],
+                "snippets": [
+                    {
+                        "code": (
+                            'LLM_PROVIDER="openai"\n'
+                            f'LLM_MODEL="{settings.LLM_MODEL or "gpt-5-nano"}"\n'
+                            'OPENAI_API_KEY="sk-..."\n'
+                            'LLM_BASE_URL=""'
+                        )
+                    }
+                ],
+                "links": [
+                    {"label": "OpenAI API keys", "url": "https://platform.openai.com/api-keys"},
+                    {"label": "Command palette analytics", "url": reverse("command_palette_analytics")},
                 ],
             },
             # -- Mailchimp --------------------------------------------------------
@@ -18344,12 +18514,13 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["upcoming_events"] = upcoming
         context["past_events"] = past
         context["has_any_events"] = bool(upcoming or past)
-        ical_path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
-        context["club_ical_url"] = ical_path
-        # A relative link only downloads the file — a one-time import that never updates. These
-        # are the two links that actually *subscribe*: webcal:// hands the feed to the desktop
-        # or phone calendar app, and Google takes the https URL through its "add by URL" screen.
-        absolute_ical_url = self.request.build_absolute_uri(ical_path)
+        # Both of these *subscribe*, so the calendar keeps updating: webcal:// hands the feed to
+        # the desktop or phone calendar app, and Google takes the https URL through its
+        # "add by URL" screen. There's deliberately no plain link to the .ics — a relative one
+        # only downloads the file, which is a one-time import of events that then never changes.
+        absolute_ical_url = self.request.build_absolute_uri(
+            reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        )
         context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
         context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
         if can_manage_auctions:
@@ -18357,6 +18528,12 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["unpromoted_auctions"] = Auction.objects.filter(
                 club=self.club, is_deleted=False, promote_this_auction=False
             ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
+            # Snippets for putting the calendar on the club's own website — admins only, though
+            # the embed itself is public (it shows what this page already does). Which is also
+            # why it's offered only when the club page is on: with it off the embed 404s, and
+            # handing out a snippet that renders nothing is worse than not offering one.
+            if self.club.enable_club_page:
+                context["club_events_embed_path"] = reverse("club_events_embed", kwargs={"slug": self.club.slug})
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 
@@ -19776,6 +19953,96 @@ class BapEmbedView(View):
                 "club_name": club.name,
                 "program_label": label,
                 "leaderboard": rows,
+            },
+        )
+        response = HttpResponse(html)
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+
+# How many events the embed will ever hand out. Clubs paste this into a sidebar; past ten it
+# stops being "what's coming up" and turns into a second copy of the club page.
+CLUB_EVENTS_EMBED_MAX = 10
+
+
+def _club_events_embed_rows(request, club, count):
+    """The club's next few events, flattened for the embed: what, when, where, and a link back.
+
+    Everything here is already on the public club page and in the public iCal feed — no member
+    data of any kind. Pickup events are left out for the same reason
+    ``club_events.next_member_facing_event`` drops them: they're logistics for people who
+    already won lots, not something to put on the club's website.
+    """
+    upcoming, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
+    rows = []
+    for event in upcoming:
+        start = timezone.localtime(event.date_start)
+        if event.all_day:
+            when = f"{date_filter(start, 'D, N j, Y')} — all day"
+        else:
+            when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
+        rows.append(
+            {
+                "title": event.title,
+                "when": when,
+                "starts": start.isoformat(),
+                "all_day": event.all_day,
+                "location": event.location,
+                "cancelled": event.cancelled,
+                "repeats": event.recurrence_summary,
+                "url": request.build_absolute_uri(event.get_absolute_url()),
+            }
+        )
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubEventsEmbedView(View):
+    """Public, embeddable list of a club's next few events, for WordPress and the like.
+
+    Same shape as ``BapEmbedView``: ?format= picks the representation (json, iframelight,
+    iframedark, unstyledhtml) and ?count= how many events, 1 to CLUB_EVENTS_EMBED_MAX. count=1
+    is the "next event" banner clubs put at the top of a page; the default is the full list.
+    Framing and cross-origin fetches are allowed so a third-party site can use it. GET-only and
+    public, so CSRF never applies; the snippets that produce these URLs are admin-only, but the
+    URLs themselves show nothing the club page doesn't.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+
+        try:
+            count = int(request.GET.get("count") or CLUB_EVENTS_EMBED_MAX)
+        except (TypeError, ValueError):
+            count = CLUB_EVENTS_EMBED_MAX
+        count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
+
+        rows = _club_events_embed_rows(request, club, count)
+        fmt = (request.GET.get("format") or "json").strip().lower()
+
+        if fmt in ("iframelight", "iframedark"):
+            embed_mode = "dark" if fmt == "iframedark" else "light"
+        elif fmt == "unstyledhtml":
+            embed_mode = "unstyled"
+        else:
+            # json or anything unrecognized falls back to JSON — a typo never leaks an
+            # unexpected page.
+            response = JsonResponse({"club": club.name, "events": rows})
+            response["Access-Control-Allow-Origin"] = "*"
+            return response
+
+        html = render_to_string(
+            "auctions/club_events_embed.html",
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                # One event reads as "here's what's next", ten as a calendar. The heading has to
+                # say which, because the embed is dropped onto a page with no other context.
+                "heading": "Next event" if count == 1 else "Upcoming events",
+                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
+                "events": rows,
             },
         )
         response = HttpResponse(html)
@@ -23625,6 +23892,143 @@ class CommandPaletteLogView(View):
         return JsonResponse({"id": search_id})
 
 
+class CommandPaletteAssistBase(View):
+    """Shared plumbing for the two natural-language endpoints: JSON body parsing and throttling.
+
+    Both endpoints are login-only (applied in ``urls.py``, like the other palette routes) and both
+    are throttled before any work happens, so a throttled request can never reach the model.
+    """
+
+    def load_json(self, request):
+        """Parse the request body as JSON. Returns ``{}`` for anything unparseable."""
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def throttled_response(self, request):
+        """A 429 with a message the palette renders, or ``None`` when the user is under the limit."""
+        from auctions import palette_assist
+
+        message = palette_assist.check_cooldown(request.user)
+        if message:
+            return JsonResponse({"kind": "error", "message": message}, status=429)
+        return None
+
+
+#: Returned by :func:`next_or_done` instead of raising ``StopIteration``, which cannot cross the
+#: sync/async boundary (it is swallowed by the coroutine machinery and never reaches the caller).
+STREAM_DONE = object()
+
+
+def next_or_done(iterator):
+    """One item from a sync iterator, or :data:`STREAM_DONE` when it's exhausted."""
+    return next(iterator, STREAM_DONE)
+
+
+class CommandPaletteAssistView(CommandPaletteAssistBase):
+    """Turn a natural-language command palette query into results, a navigation, or an action.
+
+    POST JSON: ``{"q": "...", "context": [...], "path": "/where/the/user/is/"}``.
+
+    Streams **newline-delimited JSON**: zero or more ``{"kind": "progress"}`` objects while the
+    assist loop works, then exactly one final response (results / navigate / countdown / clarify /
+    done / error). One object per line, so the client can render each as it lands and doesn't need
+    an incremental JSON parser.
+
+    NDJSON over ``fetch`` rather than server-sent events because this is a POST with a body and a
+    CSRF token; ``EventSource`` is GET-only. A client that can't read a stream still gets a valid
+    body it can parse line by line at the end, so the streaming is an enhancement, not a
+    requirement.
+
+    The body has to be an **async** generator. Handed a sync one, Django's ASGI handler consumes
+    the whole thing with ``sync_to_async(list)`` before writing a single byte
+    (``django/http/response.py``, ``StreamingHttpResponse.__aiter__``), which silently turns this
+    endpoint back into a slow plain-JSON one: no progress reaches the browser and the answer lands
+    all at once twenty seconds later. ``assist_stream`` itself stays sync -- it is full of ORM
+    calls -- so each event is pulled through ``sync_to_async``.
+
+    Nothing that changes the database happens here -- confirm-tier actions come back as a countdown
+    and are run by the execute endpoint.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        throttled = self.throttled_response(request)
+        if throttled:
+            return throttled
+        data = self.load_json(request)
+        query = data.get("q", "")
+        context = data.get("context")
+        path = data.get("path", "")
+
+        if not data.get("stream", True):
+            return JsonResponse(palette_assist.assist(request, query, context, path))
+
+        events = palette_assist.assist_stream(request, query, context, path)
+
+        async def lines():
+            while True:
+                try:
+                    event = await sync_to_async(next_or_done)(events)
+                except Exception:
+                    # A traceback must not reach the user as a half-written stream, and by this
+                    # point the status line is long gone, so the only thing left is to end with a
+                    # usable final object.
+                    logger.exception("Command palette assist stream failed")
+                    yield json.dumps({"kind": "error", "message": "Something went wrong working that out."}) + "\n"
+                    return
+                if event is STREAM_DONE:
+                    return
+                yield json.dumps(event, default=str) + "\n"
+
+        response = StreamingHttpResponse(lines(), content_type="application/x-ndjson")
+        response["Cache-Control"] = "private, no-store"
+        # Without this nginx buffers the whole response and the streaming does nothing at all.
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
+class CommandPaletteExecuteView(CommandPaletteAssistBase):
+    """Run a confirm-tier palette action once the client's countdown has elapsed.
+
+    POST JSON: ``{"action": "...", "params": {...}}``. The countdown is client-side UX only --
+    this re-runs the action's own resolver, so permissions and validation are checked here
+    independently of whatever the assist call decided a moment ago.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        throttled = self.throttled_response(request)
+        if throttled:
+            return throttled
+        data = self.load_json(request)
+        response = palette_assist.execute(request, data.get("action", ""), data.get("params"), data.get("path", ""))
+        return JsonResponse(response)
+
+
+class CommandPaletteCancelView(View):
+    """Record that the user cancelled a confirm-tier action's countdown.
+
+    POST JSON (or a ``sendBeacon`` body): ``{"usage_id": <int>}``. Nothing happened and nothing is
+    undone -- the action never ran -- so this only writes down that we got it wrong, which is the
+    one thing an abandoned command otherwise leaves no trace of.
+    """
+
+    def post(self, request, *args, **kwargs):
+        from auctions import palette_assist
+
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        recorded = palette_assist.mark_cancelled(request.user, (data or {}).get("usage_id"))
+        return JsonResponse({"recorded": recorded})
+
+
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     """Admin overview of what people search for in the command palette.
 
@@ -23635,6 +24039,8 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     template_name = "command_palette_analytics.html"
 
     def get_context_data(self, **kwargs):
+        from auctions import palette_assist
+
         context = super().get_context_data(**kwargs)
         base = CommandPaletteSearch.objects.exclude(search="")
 
@@ -23649,4 +24055,64 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         context["top_bounces"] = top(base.filter(result="bounce"))
         context["total_searches"] = base.count()
         context["total_bounces"] = base.filter(result="bounce").count()
+        # Natural-language assist: what it's being used for and what it's costing.
+        usage = LLMUsage.objects.all()
+        totals = usage.aggregate(
+            calls=Count("id"),
+            prompt=Sum("prompt_tokens"),
+            cached=Sum("cached_prompt_tokens"),
+            completion=Sum("completion_tokens"),
+            total=Sum("total_tokens"),
+        )
+        context["llm_calls"] = totals["calls"] or 0
+        context["llm_prompt_tokens"] = totals["prompt"] or 0
+        context["llm_cached_prompt_tokens"] = totals["cached"] or 0
+        context["llm_completion_tokens"] = totals["completion"] or 0
+        context["llm_total_tokens"] = totals["total"] or 0
+        # The number that actually drives the bill. The system prompt is the same on every call, so
+        # most of the prompt total is a cache hit charged at a fraction of the normal input rate --
+        # reading the raw prompt total as the cost overstates it several times over.
+        context["llm_uncached_prompt_tokens"] = context["llm_prompt_tokens"] - context["llm_cached_prompt_tokens"]
+        context["llm_cached_percent"] = (
+            round(100 * context["llm_cached_prompt_tokens"] / context["llm_prompt_tokens"])
+            if context["llm_prompt_tokens"]
+            else 0
+        )
+        # Rounds per request: the multiplier on everything above, and the thing worth tuning.
+        context["llm_rounds_per_query"] = (
+            round(context["llm_calls"] / usage.values("query").distinct().count(), 2)
+            if usage.values("query").distinct().count()
+            else 0
+        )
+        context["llm_failures"] = usage.filter(success=False).count()
+        context["llm_by_action"] = list(
+            usage.exclude(action="")
+            .values("action")
+            .annotate(count=Count("id"), tokens=Sum("total_tokens"))
+            .order_by("-count")[:10]
+        )
+        # The queries the assistant couldn't answer, most repeated first. This is the closest thing
+        # to a feature backlog the palette has: a phrase that keeps showing up here is somebody
+        # asking, over and over, for a skill that doesn't exist yet.
+        context["llm_gave_up"] = list(
+            usage.filter(response_kind__in=palette_assist.FAILURE_KINDS)
+            .exclude(query="")
+            .values("query", "response_kind")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:15]
+        )
+        # Commands the user stopped during the countdown. Everything above records the assistant
+        # failing; this records it succeeding at the wrong thing, which nothing else catches -- the
+        # action never ran, so there is no error and no history entry. A query that keeps showing up
+        # here was understood confidently and understood wrongly.
+        cancelled = usage.filter(cancelled=True)
+        context["llm_cancelled"] = cancelled.count()
+        context["llm_cancelled_percent"] = (
+            round(100 * context["llm_cancelled"] / usage.filter(response_kind=palette_assist.KIND_COUNTDOWN).count())
+            if usage.filter(response_kind=palette_assist.KIND_COUNTDOWN).exists()
+            else 0
+        )
+        context["llm_cancelled_queries"] = list(
+            cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
+        )
         return context

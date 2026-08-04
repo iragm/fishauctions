@@ -4,7 +4,7 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import passkit_views, views
+from . import apple_notifications, passkit_views, views
 
 urlpatterns = [
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
@@ -13,6 +13,15 @@ urlpatterns = [
     # allauth's so reverse() anywhere else is unaffected.
     path("social/signup/", socialaccount_views.signup, name="mobile_socialaccount_signup"),
     path("social/connections/", socialaccount_views.connections, name="mobile_socialaccount_connections"),
+    # Sign in with Apple server-to-server notifications (see auctions/apple_notifications.py).
+    # allauth has no view for these. The path is whatever was registered in Apple's developer
+    # portal and matches with or without the trailing slash, because APPEND_SLASH can't rescue a
+    # POST — the redirect drops the body, and Apple would only see it as a failed delivery.
+    re_path(
+        r"^apple/notifications/?$",
+        apple_notifications.AppleServerNotificationView.as_view(),
+        name="apple_server_notifications",
+    ),
     # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
     # by Apple's spec — devices build them from the webServiceURL in pass.json — and
     # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
@@ -204,6 +213,21 @@ urlpatterns = [
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
     path("command-palette/", login_required(views.CommandPaletteView.as_view()), name="command_palette"),
     path("command-palette/log/", login_required(views.CommandPaletteLogView.as_view()), name="command_palette_log"),
+    path(
+        "command-palette/assist/",
+        login_required(views.CommandPaletteAssistView.as_view()),
+        name="command_palette_assist",
+    ),
+    path(
+        "command-palette/execute/",
+        login_required(views.CommandPaletteExecuteView.as_view()),
+        name="command_palette_execute",
+    ),
+    path(
+        "command-palette/cancel/",
+        login_required(views.CommandPaletteCancelView.as_view()),
+        name="command_palette_cancel",
+    ),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
@@ -399,6 +423,11 @@ urlpatterns = [
         "auctions/<slug:slug>/lots/set-winners/undo/",
         views.AuctionUnsellLot.as_view(),
         name="auction_unsell_lot",
+    ),
+    path(
+        "auctions/<slug:slug>/lots/set-winners/voice-log/",
+        views.VoiceCommandLogView.as_view(),
+        name="auction_voice_command_log",
     ),
     path(
         "auctions/<slug:slug>/queue/",
@@ -911,6 +940,11 @@ urlpatterns = [
         "clubs/<slug:slug>/bap-embed/",
         views.BapEmbedView.as_view(),
         name="bap_embed",
+    ),
+    path(
+        "clubs/<slug:slug>/events-embed/",
+        views.ClubEventsEmbedView.as_view(),
+        name="club_events_embed",
     ),
     path(
         "clubs/<slug:slug>/print-barcodes/",

@@ -264,3 +264,108 @@ a.ad:hover {
     --bs-pagination-disabled-color: #888;
     --bs-pagination-disabled-bg: #2b2b2b;
 }
+
+/* --- Voice input on the set-winners page (mobile app) -------------------- */
+/* Three states, and the middle one is the point: a field the app filled but isn't sure it heard
+   right is neither valid nor invalid, so it can't borrow Bootstrap's green or red. Amber dashed
+   says "this is a guess, look at it" without claiming the server rejected it -- and it survives
+   handleServerResponse clearing is-valid/is-invalid, because it's a separate class.
+   Amber is the light text tint (#d99f3f), not the fill (#b9770e), which is too dark to read as a
+   border on the dark body. */
+.form-control.voice-unsure-field {
+    border: 2px dashed #d99f3f;
+}
+
+.voice-unsure {
+    margin-top: 0.35rem;
+    font-size: 0.875rem;
+    color: #d99f3f;
+}
+
+/* Mic level meter. Without it, a dead microphone and a bad match look identical. */
+.voice-level {
+    display: inline-block;
+    width: 3rem;
+    height: 0.4rem;
+    margin-left: 0.5rem;
+    background: #444;
+    border-radius: 0.2rem;
+    overflow: hidden;
+    vertical-align: middle;
+}
+
+.voice-level > span {
+    display: block;
+    width: 0;
+    height: 100%;
+    background: #00bc8c;
+    transition: width 0.1s linear;
+}
+
+/* --- Command palette: voice + assist -------------------------------------- */
+
+/* The microphone lives inside the palette (see command_palette.html for its styles); there is
+   deliberately no navbar mic — the brand opens the palette and the mic is one click further in. */
+
+/* Countdown card shown before a database-changing action runs. */
+#command-palette-results .cp-countdown .progress {
+    height: 0.4rem;
+}
+
+#command-palette-results .cp-countdown .progress-bar {
+    transition: width 0.1s linear;
+}
+
+/* Progress strip while an assist request is in flight.
+
+   An assist call can take the better part of twenty seconds, so this narrates what the server is
+   actually doing (each step arrives from the stream) instead of showing one frozen line. Completed
+   steps stay above the current one, muted, so the path taken is visible.
+
+   The results underneath are dimmed rather than removed: whatever was already clickable stays
+   clickable, which matters because the assistant may well come back with nothing better. */
+#command-palette-results .cp-thinking {
+    font-size: 0.9rem;
+    border-left: 2px solid var(--bs-border-color);
+}
+
+#command-palette-results .cp-thinking-step {
+    line-height: 1.6;
+}
+
+#command-palette-results .cp-thinking-step::before {
+    content: "\2713";  /* check mark: this step finished */
+    margin-right: 0.4rem;
+    opacity: 0.7;
+}
+
+/* Each new line fades in, which reads as progress rather than as a flicker. */
+#command-palette-results .cp-thinking-step,
+#command-palette-results .cp-thinking > div:last-child {
+    animation: cp-thinking-in 0.25s ease-out;
+}
+
+@keyframes cp-thinking-in {
+    from { opacity: 0; transform: translateY(0.15rem); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Results stay on screen and stay clickable while we think — see "Unavailable actions stay
+   clickable" in style_reference.md. This is a visual de-emphasis only, not pointer-events: none. */
+#command-palette-results.cp-dimmed .cp-item,
+#command-palette-results.cp-dimmed .list-group {
+    opacity: 0.45;
+    transition: opacity 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #command-palette-results .cp-thinking-step,
+    #command-palette-results .cp-thinking > div:last-child {
+        animation: none;
+    }
+
+    #command-palette-results.cp-dimmed .cp-item,
+    #command-palette-results.cp-dimmed .list-group {
+        transition: none;
+    }
+}

@@ -73,7 +73,7 @@ def deletion_due_date(userdata):
     return userdata.account_deletion_requested + timezone.timedelta(days=GRACE_PERIOD_DAYS)
 
 
-def _blacklist_refresh_tokens(user):
+def blacklist_refresh_tokens(user):
     """Retire the app's long-lived tokens, so a signed-in phone stops being signed in."""
     try:
         from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -98,7 +98,7 @@ def request_deletion(user):
     if not userdata.account_deletion_requested:
         userdata.account_deletion_requested = timezone.now()
         userdata.save(update_fields=["account_deletion_requested"])
-        _blacklist_refresh_tokens(user)
+        blacklist_refresh_tokens(user)
         logger.info("Account deletion requested for user %s", user.pk)
     return deletion_due_date(userdata)
 
@@ -192,7 +192,7 @@ def _delete_sign_in_identities(user):
     EmailAddress.objects.filter(user=user).delete()
     # Already done when the deletion was requested; repeated here because a token can be issued
     # between the two (signing in cancels the deletion, so that's a cancel-then-ask-again).
-    _blacklist_refresh_tokens(user)
+    blacklist_refresh_tokens(user)
 
 
 def _delete_personal_rows(user):

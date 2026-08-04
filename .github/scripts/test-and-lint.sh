@@ -52,9 +52,20 @@ process_args() {
 
 process_args "$@"
 
+# Django template tags have to open and close on the same line or they render onto the page as
+# text — see auctions/template_lint.py. Ruff can't see inside templates, so this runs alongside
+# it. Same code the auctions.test_template_hygiene tests use.
+check_templates() {
+  python3 /home/app/web/auctions/template_lint.py /home/app/web
+}
+
 if [ -z ${IS_CI+x} ]; then
   eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS}"
+  if [ "${RUFF_MODE}" = 'check' ]; then
+    check_templates
+  fi
 else
   ruff format /home/app/web --check
   ruff check /home/app/web
+  check_templates
 fi

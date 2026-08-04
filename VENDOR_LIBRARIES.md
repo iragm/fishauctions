@@ -22,7 +22,6 @@ Located in `auctions/static/js/vendor/`:
 - **Bootstrap 5.3.3** (`bootstrap.bundle.min.js`) - Includes Popper.js for tooltips/popovers
 - **Select2 4.0.13** (`select2.min.js`) - Enhanced select boxes
 - **Chart.js 2.9.3** (`Chart.min.js`) - Data visualization and charting
-- **Vosklet** (`Vosklet.js`) - Voice recognition library
 
 ### CSS Libraries
 

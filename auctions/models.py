@@ -52,7 +52,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
-from . import cloudflare_images, printer_programs
+from . import cloudflare_images, printer_programs, voice
 from .email_routing import admin_routing_email, build_routed_sender_address
 from .helper_functions import bin_data, get_currency_symbol
 
@@ -10022,6 +10022,13 @@ class UserData(models.Model):
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
+    use_llm_search = models.BooleanField(default=False, blank=True, verbose_name="Natural-language command palette")
+    use_llm_search.help_text = (
+        "Let this user type or speak commands into the command palette and have a language model "
+        "work out what they meant.  Off for everyone by default: it costs money per use, and with it "
+        "off the palette is plain search, exactly as it was before the feature existed.  Also needs an "
+        "LLM to be configured site-wide (see auctions.llm.assist_enabled)."
+    )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"
     show_ads = models.BooleanField(default=True, blank=True)
@@ -11675,6 +11682,68 @@ class CommandPaletteSearch(models.Model):
         return f"{self.user} searched '{self.search}' ({self.result})"
 
 
+class LLMUsage(models.Model):
+    """One row per language-model call made by the command palette's natural-language assist.
+
+    Exists to answer "what is this costing and is it working?" -- token totals per user, which
+    actions get run, and how often a query ends in an error. Written by ``palette_assist`` for
+    every provider call, including failed ones (``success=False``), and summarized on the
+    command palette analytics page.
+    """
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True)
+    model = models.CharField(max_length=100, blank=True, help_text="Model string reported by the provider.")
+    prompt_tokens = models.PositiveIntegerField(default=0)
+    cached_prompt_tokens = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many of the prompt tokens the provider served from its own cache. Billed at a "
+            "fraction of the normal input rate, so a total that ignores this badly overstates the "
+            "bill: the system prompt is the same ~3k tokens on every call and 90%+ of it is a "
+            "cache hit."
+        ),
+    )
+    completion_tokens = models.PositiveIntegerField(default=0)
+    total_tokens = models.PositiveIntegerField(default=0)
+    query = models.CharField(max_length=600, blank=True, help_text="What the user typed or said.")
+    response_kind = models.CharField(
+        max_length=30,
+        blank=True,
+        help_text="navigate, countdown, clarify, done, error, or lookup for an intermediate round.",
+    )
+    action = models.CharField(max_length=50, blank=True, help_text="Registry action name, when one was chosen.")
+    destination = models.CharField(
+        max_length=100,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "For a navigation, the palette_routes key it landed on. This is what "
+            "`manage.py mine_palette_shortcuts` reads: a query that resolves to the same "
+            "destination every time never needs to be asked about again."
+        ),
+    )
+    success = models.BooleanField(default=True)
+    cancelled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "The user hit Cancel during the confirm countdown instead of letting the action run. "
+            "This is the only signal we get that we understood the words but picked the wrong "
+            "thing to do -- the action never ran, so nothing else records it. A query that is "
+            "repeatedly cancelled is a bad match worth fixing."
+        ),
+    )
+
+    class Meta:
+        ordering = ["-createdon"]
+        verbose_name = "LLM usage"
+        verbose_name_plural = "LLM usage"
+
+    def __str__(self):
+        return f"{self.user} · {self.model} · {self.total_tokens} tokens ({self.response_kind})"
+
+
 class ChatSubscription(models.Model):
     """Get notifications about new chat messages on lots"""
 
@@ -12139,3 +12208,111 @@ class LotQueueEntry(models.Model):
 
     def __str__(self):
         return f"queue entry lot={self.lot_id} order={self.order}"
+
+
+class VoiceGrammar(models.Model):
+    """The grammar the mobile app listens with on the set-lot-winners page — one row, site-wide.
+
+    Served in the ``voice`` block of ``GET /api/mobile/config/``; the app merges it over the
+    defaults it ships with. The whole point of keeping it here is that "the auctioneer says 'hammer'
+    where we expected 'sold'" is fixed by editing this row, not by shipping an app release. Defaults
+    live in :mod:`auctions.voice` and are what a freshly created row starts as.
+
+    Singleton by construction: ``save()`` pins the primary key, so adding a second one in the admin
+    edits the first instead of creating a rival. No row at all means the endpoint omits the block
+    entirely and the app runs on its bundled defaults — which is the state every deployment starts
+    in, and a perfectly good one.
+
+    ``enabled=False`` is the kill switch: the app reports ``supported: false`` and the set-winners
+    page hides its microphone button, without an app release or a deploy.
+    """
+
+    SINGLETON_PK = 1
+
+    enabled = models.BooleanField(default=True)
+    enabled.help_text = "Uncheck to turn voice off everywhere; the app hides the microphone button."
+    backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_PLATFORM)
+    backend.help_text = "What the app should listen with, if it can. It reports what it actually managed."
+    locale = models.CharField(max_length=20, default="en_US")
+    prefer_on_device = models.BooleanField(default=True)
+    prefer_on_device.help_text = "On-device recognition keeps working when the hall's wifi doesn't."
+
+    # Word lists. All of these are merged over the app's bundled defaults, so a row that only
+    # changes `anchors` leaves everything else at whatever the installed app ships.
+    anchors = models.JSONField(default=voice.default_anchors, blank=True)
+    anchors.help_text = 'Slot name → the words that introduce it, e.g. {"lot": ["lot", "item"]}. Lowercase.'
+    number_words = models.JSONField(default=voice.default_number_words, blank=True)
+    number_words.help_text = 'Spoken number → digits, e.g. {"seventeen": 17}.'
+    homophones = models.JSONField(default=voice.default_homophones, blank=True)
+    homophones.help_text = 'Pairs that sound alike, e.g. [["15", "50"]]. The app offers both when it cannot tell.'
+    weights = models.JSONField(default=voice.default_weights, blank=True)
+    weights.help_text = "How much each signal counts toward confidence: asr, keyword, snap, agreement."
+    thresholds = models.JSONField(default=voice.default_thresholds, blank=True)
+    thresholds.help_text = "Score cutoffs: at/above 'confident' fills green, at/above 'unsure' asks, below is ignored."
+
+    auto_submit_on_sold = models.BooleanField(default=True)
+    auto_submit_on_sold.help_text = "Saying 'sold' saves the lot, instead of only filling the fields."
+    block_auto_submit_when_unsure = models.BooleanField(default=True)
+    block_auto_submit_when_unsure.help_text = (
+        "Refuse to save while any field is unsure. Turning this off sells lots to bidders nobody confirmed."
+    )
+
+    updatedon = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Voice grammar"
+        verbose_name_plural = "Voice grammar"
+
+    def __str__(self):
+        return "Voice grammar" if self.enabled else "Voice grammar (disabled)"
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_PK
+        # A forced pk on an INSERT-only save would try to insert over the existing row.
+        kwargs.pop("force_insert", None)
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        """The configured grammar, or None when nobody has set one up."""
+        return cls.objects.filter(pk=cls.SINGLETON_PK).first()
+
+
+class VoiceCommandLog(models.Model):
+    """One voice command the set-winners page acted on, and what the operator did about it.
+
+    This is the tuning data. The first version of voice input died because when it misheard, there
+    was no way to find out *what* it was mishearing — so grammar changes were guesswork. A row here
+    is written when a command is accepted, and updated with ``corrected_to`` if the operator edits
+    that field before saving, which makes "the word we get wrong most often" a query rather than a
+    hunch, and every fix an edit to :class:`VoiceGrammar`.
+
+    Written by the page (it is the side that sees both the command and the correction), so it is
+    session-authenticated and scoped to an auction the user administers.
+    """
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    slot = models.CharField(max_length=20, choices=voice.SLOT_CHOICES)
+    heard = models.CharField(max_length=300, blank=True, default="")
+    heard.help_text = "The recognizer's transcript of what was said."
+    chosen = models.CharField(max_length=100, blank=True, default="")
+    chosen.help_text = "The value the app matched it to and put in the field."
+    confidence = models.FloatField(null=True, blank=True)
+    corrected_to = models.CharField(max_length=100, blank=True, default="")
+    corrected_to.help_text = "What the operator changed the field to before saving. Blank means the match stood."
+    createdon = models.DateTimeField(auto_now_add=True)
+    updatedon = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        result = f"{self.slot}: heard '{self.heard}' → {self.chosen}"
+        if self.corrected_to:
+            result += f" (corrected to {self.corrected_to})"
+        return result
+
+    @property
+    def was_corrected(self):
+        return bool(self.corrected_to)

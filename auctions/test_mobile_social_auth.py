@@ -31,6 +31,7 @@ from auctions.mobile.services.social_auth import (
     _sha256_hex,
     resolve_completed_user,
 )
+from auctions.test_support import isolated_cache
 
 APPLE_BUNDLE_ID = "com.fishauctions.app"
 APPLE_SERVICES_ID = "fish.auction.signin"
@@ -61,6 +62,7 @@ RAW_NONCE = "a-32-byte-random-value-from-the-app"
 HASHED_NONCE = _sha256_hex(RAW_NONCE)
 
 
+@isolated_cache("mobile-social-auth")
 @override_settings(
     SOCIALACCOUNT_PROVIDERS=SOCIAL_PROVIDERS,
     GOOGLE_OAUTH_CLIENT_ID="test-client.apps.googleusercontent.com",
@@ -597,6 +599,7 @@ class SocialAuthRequestValidationTests(SocialAuthTestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+@isolated_cache("mobile-config-social")
 class MobileConfigSocialTests(TestCase):
     """SOCIAL-7 — the app hides a provider's button entirely when its key is absent."""
 
@@ -727,6 +730,7 @@ class AppleAuthorizationCodeTests(SocialAuthTestCase):
         self.assertIn("access", resp.json())
 
 
+@isolated_cache("legacy-google-endpoint")
 class LegacyGoogleEndpointTests(TestCase):
     """The old Google-only endpoint stays alive until older installs age out."""
 
@@ -826,6 +830,7 @@ class SocialAdapterTests(TestCase):
             get_adapter().get_app(None, "google")
 
 
+@isolated_cache("settings-configured-provider-tokens")
 @override_settings(SOCIALACCOUNT_PROVIDERS=SOCIAL_PROVIDERS, FACEBOOK_APP_ID=FACEBOOK_APP_ID)
 class SettingsConfiguredProviderTokenTests(TestCase):
     """A settings-configured provider must still be able to store its tokens.

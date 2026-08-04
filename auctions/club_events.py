@@ -228,20 +228,37 @@ def pickup_slots(auction):
 
     Only online auctions get pickup events: for an in-person auction the "pickup" is the auction
     itself, which already has its own event. Mail-only locations have no time or place to show.
+
+    An auction with several pickup locations gets none at all — only the auction's own event.
+    A member goes to exactly one of those locations, so putting all of them on the club calendar
+    (and from there into everyone's Google Calendar and Discord) buries the auction itself under
+    a pile of appointments that don't apply to them. The auction page is where you pick your
+    location; that's where the full list belongs.
     """
     if not auction.is_online:
         return
-    for location in auction.location_qs.filter(pickup_by_mail=False):
-        for slot, start in ((1, location.pickup_time), (2, location.second_pickup_time)):
-            if start:
-                yield (location, slot, start)
+    # Count locations that would actually produce an event, not rows: a half-filled location with
+    # no pickup time yet shouldn't suppress the one real location sitting next to it.
+    locations = [
+        location
+        for location in auction.location_qs.filter(pickup_by_mail=False)
+        if location.pickup_time or location.second_pickup_time
+    ]
+    if len(locations) != 1:
+        return
+    location = locations[0]
+    for slot, start in ((1, location.pickup_time), (2, location.second_pickup_time)):
+        if start:
+            yield (location, slot, start)
 
 
 def sync_pickup_events(auction):
     """Create, update, or retire the calendar events for an online auction's pickup times.
 
-    Each pickup time becomes its own short event at that location's address, so members can see
-    exactly when and where to collect their lots. Returns how many events changed.
+    Each pickup time ``pickup_slots`` yields becomes its own short event at that location's
+    address, so members can see exactly when and where to collect their lots. Multi-location
+    auctions yield nothing, and any events they picked up before are retired here along with
+    cleared pickup times. Returns how many events changed.
     """
     from auctions.models import ClubEvent
 
@@ -400,15 +417,21 @@ def next_member_facing_event(club):
     )
 
 
-def upcoming_events(club, *, limit=None, include_past=False, past_limit=5):
+def upcoming_events(club, *, limit=None, include_past=False, past_limit=5, exclude_pickups=False):
     """Events for the club page: everything upcoming, plus a little recent history.
 
     Returns (upcoming, past). ``past`` is newest-first so the most recent event is on top.
+
+    ``exclude_pickups`` drops pickup events for the same reason ``next_member_facing_event``
+    does — they're logistics for people who already won lots, not something to advertise. It
+    filters in the query rather than after the slice, so ``limit`` still counts real rows.
     """
     from auctions.models import ClubEvent
 
     now = timezone.now()
     base = ClubEvent.objects.filter(club=club, is_deleted=False).select_related("auction")
+    if exclude_pickups:
+        base = base.exclude(source=ClubEvent.SOURCE_PICKUP)
     upcoming = base.filter(Q(date_end__gte=now) | Q(date_end__isnull=True, date_start__gte=now)).order_by("date_start")
     if limit:
         upcoming = upcoming[:limit]

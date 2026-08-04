@@ -79,6 +79,7 @@ from .models import (
     Watch,
     add_price_info,
 )
+from .test_support import isolated_cache
 
 # channels.testing's package __init__ eagerly imports ChannelsLiveServerTestCase, which
 # pulls in daphne -- a test-only dependency (see requirements-test.in) absent from the
@@ -14363,69 +14364,6 @@ class AdminSetupChecklistViewTests(TestCase):
             self.assertNotIn("only the signed-in account", item["what_it_does"].lower())
 
 
-class MiddlewareTestCase(TestCase):
-    """Test cases for middleware"""
-
-    def test_cross_origin_isolation_middleware_adds_headers_for_voice_recognition(self):
-        """Test CrossOriginIsolationMiddleware adds required headers for voice recognition pages"""
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from auctions.middleware import CrossOriginIsolationMiddleware
-
-        factory = RequestFactory()
-        # Voice recognition page that needs cross-origin isolation
-        request = factory.get("/auctions/test-auction/lots/set-winners/")
-
-        # Create a mock get_response that returns a simple response
-        def get_response(request):
-            return HttpResponse("OK")
-
-        middleware = CrossOriginIsolationMiddleware(get_response)
-        response = middleware(request)
-
-        # Headers should be present for voice recognition page
-        self.assertEqual(response["Cross-Origin-Opener-Policy"], "same-origin-allow-popups")
-        self.assertEqual(response["Cross-Origin-Embedder-Policy"], "require-corp")
-        self.assertEqual(response["Cross-Origin-Resource-Policy"], "cross-origin")
-
-    def test_cross_origin_isolation_middleware_skips_headers_for_other_pages(self):
-        """Test CrossOriginIsolationMiddleware does not add headers for pages without voice recognition"""
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from auctions.middleware import CrossOriginIsolationMiddleware
-
-        factory = RequestFactory()
-
-        # Create a mock get_response that returns a simple response
-        def get_response(request):
-            return HttpResponse("OK")
-
-        middleware = CrossOriginIsolationMiddleware(get_response)
-
-        # Test various pages that should NOT have cross-origin isolation headers
-        test_paths = [
-            "/",
-            "/about/",
-            "/promo/",
-            "/auctions/",
-            "/auctions/test-auction/",
-            "/auctions/test-auction/lots/",
-            "/auctions/test-auction/lots/set-winners/undo/",  # Undo URL should NOT get headers
-        ]
-
-        for path in test_paths:
-            with self.subTest(path=path):
-                request = factory.get(path)
-                response = middleware(request)
-
-                # Headers should NOT be present on pages without voice recognition
-                self.assertNotIn("Cross-Origin-Opener-Policy", response)
-                self.assertNotIn("Cross-Origin-Embedder-Policy", response)
-                self.assertNotIn("Cross-Origin-Resource-Policy", response)
-
-
 class ModelMethodsTestCase(StandardTestCase):
     """Test cases for specific model methods with complex logic"""
 
@@ -28215,6 +28153,7 @@ class MobileEmailLoginTests(TestCase):
         self.assertIsNone(MobileAuthService.authenticate("dave", "pw-dave"))
 
 
+@isolated_cache("mobile-web-session")
 class MobileWebSessionTests(TestCase):
     """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
     WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
@@ -31949,3 +31888,67 @@ class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
         keeper.refresh_from_db()
         self.assertEqual(keeper.membership_expiration_date, self.today + datetime.timedelta(days=300))
         self.assertEqual(keeper.membership_last_paid, self.today)
+
+
+class CloseModalResponseEscapingTests(TestCase):
+    """close_modal_response writes an inline <script>, so anything it interpolates must be inert.
+
+    json.dumps alone is not enough: it leaves "<" untouched, so a member name containing
+    "</script>" would end the tag early and run whatever followed as markup.
+    """
+
+    def test_a_toast_cannot_break_out_of_the_script_tag(self):
+        from auctions.views import close_modal_response
+
+        response = close_modal_response(toast="</script><img src=x onerror=alert(1)>")
+        body = response.content.decode()
+        self.assertNotIn("</script><img", body)
+        self.assertNotIn("<img", body)
+        self.assertEqual(body.count("</script>"), 2)
+
+    def test_the_detail_payload_cannot_break_out_of_the_script_tag(self):
+        from auctions.views import close_modal_response
+
+        response = close_modal_response("reload-page", redirect_url="/x?a=</script><script>alert(1)</script>")
+        body = response.content.decode()
+        self.assertEqual(body.count("<script>"), 1)
+        self.assertEqual(body.count("</script>"), 1)
+        self.assertIn("\\u003C", body)
+
+    def test_a_toast_is_html_escaped_for_the_toast_plugin(self):
+        """The plugin concatenates the title into markup, so tags must arrive already escaped.
+
+        The title is escaped twice over: HTML-escaped for the plugin, then JSON-escaped for the
+        script tag, so assert on the title the browser hands the plugin rather than on the wire.
+        """
+        from auctions.views import close_modal_response
+
+        response = close_modal_response(toast="<b>Bob</b> & Sons has no email address on file.")
+        body = response.content.decode()
+        self.assertNotIn("<b>", body)
+        title = json.loads(body.split("toast(")[1].split(");")[0])["title"]
+        self.assertEqual(title, "&lt;b&gt;Bob&lt;/b&gt; &amp; Sons has no email address on file.")
+
+    def test_extra_triggers_still_ride_along_as_a_plain_json_header(self):
+        from auctions.views import close_modal_response
+
+        response = close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
+        self.assertEqual(response["HX-Trigger"], '{"clubMemberListChanged": null}')
+
+
+class ClubMemberToastEscapingTests(TestCase):
+    """The resend-card view puts a member-supplied name in a toast — the real path to the sink."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Toast Escaping Club", show_member_barcode=True)
+        self.admin = User.objects.create_user(username="toast_admin", password="testpass", email="ta@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, name="Toast Admin", permission_add_edit=True)
+        self.member = ClubMember.objects.create(club=self.club, name="</script><img src=x onerror=alert(1)>", email="")
+
+    def test_a_hostile_member_name_reaches_the_page_inert(self):
+        self.client.login(username="toast_admin", password="testpass")
+        response = self.client.post(reverse("club_member_resend_card", kwargs={"pk": self.member.pk}))
+        body = response.content.decode()
+        self.assertContains(response, "no email address on file")
+        self.assertNotIn("<img", body)
+        self.assertEqual(body.count("</script>"), 2)

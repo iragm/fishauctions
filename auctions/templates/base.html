@@ -274,6 +274,7 @@ window.onload = function() {
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
           <a class="navbar-brand" href="{% url 'home' %}">{{ navbar_brand }}</a>
+          {% comment %} The microphone lives in the command palette itself (the brand opens it), not out here. {% endcomment %}
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>

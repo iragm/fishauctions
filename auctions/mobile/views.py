@@ -34,6 +34,18 @@ GET /api/mobile/config/
                         "messaging_sender_id": "...", "project_id": "..."},
             "ios":     {"bundle_id": "...", "api_key": "...", "app_id": "...",
                         "messaging_sender_id": "...", "project_id": "..."}
+          },
+          // Optional; the set-winners voice grammar, present only once an admin has configured
+          // one (auctions.models.VoiceGrammar). Absent means "use the app's bundled grammar".
+          // See auctions/voice.py for what each key does.
+          "voice": {
+            "enabled": true, "backend": "platform", "locale": "en_US", "prefer_on_device": true,
+            "anchors": {"lot": ["lot", "item"], "…": []},
+            "number_words": {"seventeen": 17},
+            "homophones": [["15", "50"]],
+            "weights": {"asr": 0.5, "keyword": 1.0, "snap": 1.0, "agreement": 0.4},
+            "thresholds": {"confident": 0.85, "unsure": 0.5},
+            "auto_submit_on_sold": true, "block_auto_submit_when_unsure": true
           }
         }
 
@@ -303,6 +315,32 @@ POST /api/mobile/labels/printed/
     silently skipped rather than failing the batch — some of them printed fine. Idempotent: a
     reprint posting the same pks is normal.
 
+Voice
+-----
+GET /api/mobile/auctions/<slug>/voice/vocabulary/
+    The lot and bidder numbers the app is allowed to hear in this auction, for voice-driven set
+    winners. Admin-only (``Auction.permission_check``, the same test the set-winners page uses) and
+    weak-ETagged, because the app refreshes it on a timer and after every save — bidders are added
+    at the check-in desk while selling is running.
+
+    **The values are strings and nothing normalizes them**: ``BOB-1`` and ``3-1`` are both ordinary
+    lot numbers in a seller-dash auction, and bidder numbers are routinely text. The app owns the
+    expansion into spoken forms; matching against values that really exist here is what makes
+    "fifteen" vs "fifty" decidable.
+
+    Response 200::
+
+        {
+          "lot_numbers":    ["1", "12", "BOB-1", "3-1"],   // unsold, non-deleted, non-banned
+          "bidder_numbers": ["4", "17", "BOB"],            // + ClubMember when club-managed
+          "only_whole_dollar_bids": true,
+          "use_seller_dash_lot_numbering": false,
+          "currency_symbol": "$"
+        }
+
+    Response 304 on a matching ``If-None-Match``. 403 when the caller doesn't administer the
+    auction, 404 when there is no such auction.
+
 Printers
 --------
 GET /api/mobile/printers/profiles/
@@ -544,6 +582,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from auctions import voice
 from auctions.account_deletion import cancel_deletion
 from auctions.models import (
     PRIVACY_POLICY_SLUG,
@@ -555,6 +594,7 @@ from auctions.models import (
     ThermalPrinterProfile,
     UserData,
     UserLabelPrefs,
+    VoiceGrammar,
     Watch,
 )
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
@@ -1156,6 +1196,13 @@ class MobileConfigView(APIView):
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
         if firebase:
             data["firebase"] = firebase
+        # The set-winners voice grammar, when an admin has configured one. Omitted otherwise, which
+        # the app reads as "use the grammar you shipped with" — so the key's absence is the normal
+        # state, not a failure. `enabled: false` in a configured row is the kill switch: the app
+        # reports supported=false and the page hides its microphone button, no release needed.
+        grammar = VoiceGrammar.load()
+        if grammar:
+            data["voice"] = voice.serialize_grammar(grammar)
         return Response(data)
 
 
@@ -1396,6 +1443,47 @@ class MobilePrinterProfilesView(APIView):
             "schema_version_max": PROGRAM_SCHEMA_VERSION,
             "profiles": [serialize_profile(p) for p in profiles],
         }
+        digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        etag = f'"{digest}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+        response = Response(data)
+        response["ETag"] = etag
+        return response
+
+
+class MobileVoiceVocabularyView(APIView):
+    """GET /api/mobile/auctions/<slug>/voice/vocabulary/ — the values voice may match against here.
+
+    Auction-scoped and admin-only (the same ``permission_check`` the set-winners page runs). Nothing
+    here is new exposure: every lot number and bidder number in it is already on the users and lots
+    pages this operator is looking at.
+
+    ETagged like ``printers/profiles/``, because the app refreshes on a timer and after every save
+    — bidders get added at the check-in desk *while* selling is running, so a vocabulary fetched
+    once at page load is stale within minutes, and most of those refreshes change nothing.
+
+    There is deliberately no offline path: the app doesn't read voice vocabulary out of the offline
+    snapshot. Voice without a live vocabulary would mark every field unsure anyway.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get(self, request, slug):
+        from .services import voice as voice_service
+
+        auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
+        if auction is None:
+            return Response({"detail": "Auction not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not auction.permission_check(request.user):
+            return Response(
+                {"detail": "You do not have permission to sell lots in this auction."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = voice_service.build_vocabulary(auction)
         digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
         etag = f'"{digest}"'
         if request.headers.get("If-None-Match") == etag:

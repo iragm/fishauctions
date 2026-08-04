@@ -300,7 +300,6 @@ MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
-    "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -765,6 +764,18 @@ ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None
 ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
+
+# Natural-language command palette ("assist"). See auctions/llm.py and .env.example.
+# Assist is enabled only when the provider is configured (an API key is set); with no key the
+# command palette behaves exactly as it did before -- plain search, no mic, no LLM calls.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Optional: point at any OpenAI-compatible endpoint (proxy, local model) instead of OpenAI.
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
+# How hard a reasoning model thinks before answering: minimal / low / medium / high, or blank to
+# leave the parameter off. Defaults to minimal -- see llm.DEFAULT_REASONING_EFFORT for why.
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [
