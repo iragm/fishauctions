@@ -10022,6 +10022,13 @@ class UserData(models.Model):
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
+    use_llm_search = models.BooleanField(default=False, blank=True, verbose_name="Natural-language command palette")
+    use_llm_search.help_text = (
+        "Let this user type or speak commands into the command palette and have a language model "
+        "work out what they meant.  Off for everyone by default: it costs money per use, and with it "
+        "off the palette is plain search, exactly as it was before the feature existed.  Also needs an "
+        "LLM to be configured site-wide (see auctions.llm.assist_enabled)."
+    )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"
     show_ads = models.BooleanField(default=True, blank=True)

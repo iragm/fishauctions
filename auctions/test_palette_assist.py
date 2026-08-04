@@ -33,6 +33,7 @@ from auctions.models import (
     LLMUsage,
     Lot,
     LotImage,
+    UserData,
 )
 from auctions.tests import StandardTestCase
 
@@ -131,6 +132,20 @@ class PaletteAssistTestCase(StandardTestCase):
         self.member.userdata.save()
         self._clear_throttles(self.member)
         self.assertFalse(self.in_person_auction.permission_check(self.member))
+        self.enable_assist_for_everyone()
+
+    def enable_assist_for_everyone(self):
+        """Opt every user in the fixture into the assistant.
+
+        ``UserData.use_llm_search`` is off by default (the feature is per-user opt-in, flipped in
+        the admin), so without this the whole suite would only ever exercise the disabled fallback.
+        :class:`AssistDisabledTests` turns it back off to test that path deliberately.
+        """
+        UserData.objects.update(use_llm_search=True)
+        for user in (self.user, self.admin_user, self.userB, self.member):
+            # A UserData already cached on the in-memory user predates the UPDATE above, and a
+            # later .save() on it would quietly write the old value back.
+            user.userdata.refresh_from_db(fields=["use_llm_search"])
 
     def tearDown(self):
         llm.set_provider_override(None)
@@ -1074,6 +1089,51 @@ class AssistDisabledTests(PaletteAssistTestCase):
             self.assertFalse(llm.assist_enabled())
         with override_settings(OPENAI_API_KEY="sk-test"):
             self.assertTrue(llm.assist_enabled())
+
+
+class OptInTests(PaletteAssistTestCase):
+    """The assistant is per-user opt-in on top of being site-configured."""
+
+    def _opt_out(self, user):
+        UserData.objects.filter(user=user).update(use_llm_search=False)
+        user.userdata.refresh_from_db(fields=["use_llm_search"])
+
+    def test_both_gates_are_required(self):
+        self.assertTrue(palette_assist.assist_enabled_for(self.user))
+        self._opt_out(self.user)
+        self.assertFalse(palette_assist.assist_enabled_for(self.user))
+        self.enable_assist_for_everyone()
+        llm.set_provider_override(None)
+        with override_settings(OPENAI_API_KEY="", LLM_BASE_URL=""):
+            self.assertFalse(palette_assist.assist_enabled_for(self.user))
+
+    def test_anonymous_users_never_get_it(self):
+        from django.contrib.auth.models import AnonymousUser
+
+        self.assertFalse(palette_assist.assist_enabled_for(AnonymousUser()))
+        self.assertFalse(palette_assist.assist_enabled_for(None))
+
+    def test_an_opted_out_user_gets_plain_search_and_no_model_call(self):
+        self._opt_out(self.user)
+        self._script({"action": "go_to_page", "params": {"page": "nope"}})
+        data = self._assist("add a lot of blue shrimp for bob").json()
+        self.assertEqual(data["kind"], "results")
+        self.assertEqual(self.provider.calls, [], "an opted-out user must never reach the model")
+
+    def test_an_opted_out_user_cannot_execute_a_confirm_action(self):
+        """A countdown started before the preference was turned off must not still run."""
+        self._opt_out(self.user)
+        response = self._execute("add_lot", {"name": "blue shrimp", "quantity": 2})
+        self.assertEqual(response.json()["kind"], "error")
+        self.assertFalse(Lot.objects.filter(lot_name="blue shrimp").exists())
+
+    def test_the_template_only_offers_the_mic_to_opted_in_users(self):
+        """The context processor and the endpoints must agree, or the mic lies about what works."""
+        self.client.force_login(self.user)
+        # "home" redirects to a landing page, so follow it to reach one that actually renders.
+        self.assertTrue(self.client.get(reverse("home"), follow=True).context["palette_assist_enabled"])
+        self._opt_out(self.user)
+        self.assertFalse(self.client.get(reverse("home"), follow=True).context["palette_assist_enabled"])
 
 
 class RegistryTests(PaletteAssistTestCase):

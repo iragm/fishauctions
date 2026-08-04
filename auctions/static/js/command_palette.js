@@ -823,16 +823,75 @@
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     var recognition = null;
     var listening = false;
-    var micButtons = [];
     var paletteMic = document.getElementById("command-palette-mic");
-    var navbarMic = document.getElementById("navbar-mic");
+    var micHint = document.getElementById("command-palette-mic-hint");
+    var micHintTimer = null;
+
+    // Whether the mic starts on its own next time the palette opens, remembered from the last time
+    // the user touched the button. localStorage rather than the account: which of your devices has
+    // a microphone you're willing to talk to is a property of the device, not of you -- dictating
+    // commands on a phone shouldn't switch the mic on at a desk in an office.
+    var MIC_AUTO_KEY = "cp_mic_auto";
+    // How many times we've explained an auto-start. Capped, because the explanation is only news
+    // the first couple of times; after that the mic coming on by itself is just how it works.
+    var MIC_HINT_KEY = "cp_mic_auto_hints";
+    var MIC_HINT_MAX = 2;
+    var MIC_HINT_MS = 6000;
+
+    function storageGet(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (err) {
+        return null; // private mode, or storage disabled: fall back to "never remembered"
+      }
+    }
+
+    function storageSet(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (err) {
+        /* nothing to do; the feature just doesn't persist */
+      }
+    }
+
+    function micAutoRemembered() {
+      return storageGet(MIC_AUTO_KEY) === "1";
+    }
+
+    // Called only for a real click on the mic, never for an auto-start: the point is to remember
+    // what the user chose. Turning it off during an auto-started session is a choice too -- it's
+    // how someone who doesn't want this any more turns it back off.
+    function rememberMicChoice(wanted) {
+      storageSet(MIC_AUTO_KEY, wanted ? "1" : "0");
+    }
+
+    function hideMicHint() {
+      window.clearTimeout(micHintTimer);
+      if (micHint) {
+        micHint.classList.add("d-none");
+      }
+    }
+
+    function showMicHint() {
+      if (!micHint) {
+        return;
+      }
+      var shown = parseInt(storageGet(MIC_HINT_KEY), 10) || 0;
+      if (shown >= MIC_HINT_MAX) {
+        return;
+      }
+      storageSet(MIC_HINT_KEY, String(shown + 1));
+      micHint.classList.remove("d-none");
+      window.clearTimeout(micHintTimer);
+      micHintTimer = window.setTimeout(hideMicHint, MIC_HINT_MS);
+    }
 
     function setListening(state) {
       listening = state;
-      micButtons.forEach(function (button) {
-        button.classList.toggle("listening", state);
-        button.setAttribute("aria-pressed", state ? "true" : "false");
-      });
+      if (paletteMic) {
+        paletteMic.classList.toggle("listening", state);
+        paletteMic.setAttribute("aria-pressed", state ? "true" : "false");
+      }
     }
 
     function stopListening() {
@@ -897,36 +956,44 @@
       return speech;
     }
 
-    if (assistEnabled && SpeechRecognition) {
+    var micAvailable = false;
+
+    if (assistEnabled && SpeechRecognition && paletteMic) {
+      micAvailable = true;
       recognition = buildRecognition();
-      [paletteMic, navbarMic].forEach(function (button) {
-        if (!button) {
-          return;
+      paletteMic.classList.remove("d-none");
+      paletteMic.addEventListener("click", function () {
+        // A deliberate click always wins over the explanation for the automatic one.
+        hideMicHint();
+        if (listening) {
+          stopListening();
+          rememberMicChoice(false);
+        } else {
+          startListening();
+          rememberMicChoice(true);
         }
-        micButtons.push(button);
-        button.classList.remove("d-none");
       });
-      if (paletteMic) {
-        paletteMic.addEventListener("click", function () {
-          if (listening) {
-            stopListening();
-          } else {
-            startListening();
-          }
-        });
+    }
+
+    // The palette is open and the user used the mic last time, so switch it on for them. Delayed a
+    // beat: the modal is still animating in, and Chrome refuses recognition.start() on an element
+    // that isn't visible yet.
+    function autoStartListening() {
+      if (!micAvailable || listening || !micAutoRemembered()) {
+        return;
       }
-      if (navbarMic) {
-        // From the navbar: open the palette first so the user can see the words appear.
-        navbarMic.addEventListener("click", function (event) {
-          event.preventDefault();
+      window.setTimeout(function () {
+        // Still worth doing? The user may have closed the palette or started typing in the 250ms
+        // this waited, and neither should be interrupted by the mic coming on.
+        if (!listening && modalEl.classList.contains("show") && !input.value) {
+          startListening();
+          // Only explain something that actually happened -- start() throws when the browser
+          // won't give us the microphone, and setListening(false) has already put it back.
           if (listening) {
-            stopListening();
-            return;
+            showMicHint();
           }
-          open();
-          window.setTimeout(startListening, 250);
-        });
-      }
+        }
+      }, 250);
     }
 
     // --- Events --------------------------------------------------------------
@@ -935,6 +1002,12 @@
       // Typing means the user has moved on: never let a countdown started a moment ago fire
       // against a query they are already editing.
       cancelCountdown();
+      hideMicHint();
+      // Someone who opened the palette with Ctrl+K and started typing is not talking to it, and an
+      // auto-started mic that keeps listening would overwrite what they typed with a transcript
+      // and submit it. Only a real keystroke gets here -- the recognizer sets input.value
+      // directly, which fires no input event -- so this can't cut off dictation mid-sentence.
+      stopListening();
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(runSearch, DEBOUNCE_MS);
     });
@@ -965,6 +1038,7 @@
     modalEl.addEventListener("shown.bs.modal", function () {
       input.focus();
       input.select();
+      autoStartListening();
     });
     modalEl.addEventListener("show.bs.modal", function () {
       // Fresh session each time the palette opens.
@@ -976,9 +1050,10 @@
       fetchResults("");
     });
     modalEl.addEventListener("hidden.bs.modal", function () {
-      // Never leave the microphone running, a countdown pending, or a navigation about to fire
-      // once the palette is hidden.
+      // Never leave the microphone running, a countdown pending, a hint on screen, or a navigation
+      // about to fire once the palette is hidden.
       stopListening();
+      hideMicHint();
       cancelCountdown();
       cancelPendingNavigation();
       flushFinal();

@@ -150,6 +150,33 @@ KIND_FALLBACK = "fallback"
 FAILURE_KINDS = (FAIL_GAVE_UP, FAIL_MODEL_ERROR, FAIL_INVALID, KIND_FALLBACK)
 
 
+# --- who gets this at all -----------------------------------------------------
+
+
+def assist_enabled_for(user) -> bool:
+    """True when *this user* should be offered natural-language/voice commands.
+
+    Two independent gates, both required:
+
+    * the install has a model configured at all (:func:`auctions.llm.assist_enabled`), and
+    * the user has opted in (``UserData.use_llm_search``).
+
+    The preference is off by default and is deliberately not on the preferences page yet -- it is
+    flipped per user in the admin while the feature is in beta. With either gate shut the palette
+    must behave exactly as it did before this feature existed: no mic, no assist calls, Enter falls
+    through to ordinary search. Everything user-facing asks *this* function rather than
+    ``assist_enabled()`` so the answer can't differ between the template and the endpoints.
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    # Reverse one-to-one raises RelatedObjectDoesNotExist (an AttributeError) when the row is
+    # missing, which getattr turns back into the default rather than a 500 on every page.
+    userdata = getattr(user, "userdata", None)
+    if not userdata or not userdata.use_llm_search:
+        return False
+    return assist_enabled()
+
+
 # --- throttling --------------------------------------------------------------
 
 
@@ -1060,8 +1087,9 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         yield {"kind": KIND_RESULTS, "groups": groups}
         return
 
-    # With no provider configured the palette must behave exactly as it did before this feature.
-    if not assist_enabled():
+    # No provider configured, or this user hasn't opted in: the palette must behave exactly as it
+    # did before this feature existed.
+    if not assist_enabled_for(user):
         yield {"kind": KIND_RESULTS, "groups": command_palette.search(request, query)}
         return
 
@@ -1269,6 +1297,10 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     The page is resolved again here too. It has to be: the resolver reads it to default an auction,
     and this call does not trust anything the assist call worked out a moment ago.
     """
+    # Re-checked here and not just in ``assist_stream``: a countdown started before the preference
+    # was turned off (or before the key was pulled) must not still be able to run the action.
+    if not assist_enabled_for(request.user):
+        return {"kind": KIND_ERROR, "message": "I don't know how to do that."}
     request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
     action = palette_actions.get_action(name)
     if action is None:

@@ -4601,15 +4601,20 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # the same score cutoffs the app is using, so that "green" here and "confident" there mean
         # the same thing after someone tunes them in the admin. No configured grammar means the app
         # is running on its bundled defaults, so use ours, which match.
-        grammar = VoiceGrammar.load()
-        thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
-        defaults = voice.default_thresholds()
-        context["voice_config"] = {
-            "enabled": grammar.enabled if grammar else True,
-            "confident": thresholds.get("confident", defaults["confident"]),
-            "unsure": thresholds.get("unsure", defaults["unsure"]),
-            "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
-        }
+        #
+        # Only looked up for the app: the template renders every voice element behind the same
+        # is_mobile_app check, and this page is the busiest thing on the site while an auction is
+        # actually running, so a query nothing on screen can use doesn't belong in that path.
+        if getattr(self.request, "is_mobile_app", False):
+            grammar = VoiceGrammar.load()
+            thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
+            defaults = voice.default_thresholds()
+            context["voice_config"] = {
+                "enabled": grammar.enabled if grammar else True,
+                "confident": thresholds.get("confident", defaults["confident"]),
+                "unsure": thresholds.get("unsure", defaults["unsure"]),
+                "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
+            }
         return context
 
     def pop_queue_and_set_next(self, lot, result):

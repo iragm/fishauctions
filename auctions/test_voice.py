@@ -347,6 +347,10 @@ class VoicePageTests(StandardTestCase):
         self.assertNotIn('id="voice-btn"', page)
         self.assertNotIn("fishauctionsVoice", page)
 
+    def test_web_does_not_even_build_the_config(self):
+        """Nothing on the web page can use it, and this page is the busiest one in a live auction."""
+        self.assertNotIn("voice_config", self.client.get(self.url).context)
+
     def test_app_gets_the_bridge_and_a_hidden_button(self):
         """is_mobile_app alone isn't enough to *show* the button: current app builds ship no voice
         handlers, so every phone would get a dead control. It's revealed by voiceGetState()."""

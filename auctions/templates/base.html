@@ -274,13 +274,7 @@ window.onload = function() {
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
           <a class="navbar-brand" href="{% url 'home' %}">{{ navbar_brand }}</a>
-          {% comment %} Opens the command palette and starts listening. Script un-hides it only when the browser supports speech recognition. {% endcomment %}
-          {% if request.user.is_authenticated and palette_assist_enabled %}
-          <button type="button" class="btn btn-link nav-link px-2 py-0 me-2 cp-navbar-mic d-none" id="navbar-mic"
-                  aria-pressed="false" aria-label="Speak a command" title="Speak a command">
-            <i class="bi bi-mic-fill"></i>
-          </button>
-          {% endif %}
+          {% comment %} The microphone lives in the command palette itself (the brand opens it), not out here. {% endcomment %}
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>

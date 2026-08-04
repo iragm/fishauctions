@@ -304,36 +304,8 @@ a.ad:hover {
 
 /* --- Command palette: voice + assist -------------------------------------- */
 
-/* Navbar microphone. Sits next to the brand (which opens the palette), so it inherits the
-   navbar's dark theme rather than the body's. Muted until it's listening, so it reads as an
-   affordance rather than a warning. */
-.cp-navbar-mic {
-    color: rgba(255, 255, 255, 0.75);
-    text-decoration: none;
-}
-
-.cp-navbar-mic:hover,
-.cp-navbar-mic:focus {
-    color: #fff;
-}
-
-/* Listening: the same pulsing red as the palette's own mic, so the two read as one state.
-   Darkened danger (#a93226) per the palette in style_reference.md — white text is ~6.6:1. */
-.cp-navbar-mic.listening {
-    color: #fff;
-    background-color: #a93226;
-    border-radius: 0.25rem;
-    animation: cp-mic-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes cp-mic-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(169, 50, 38, 0.7); }
-    50% { box-shadow: 0 0 0 0.5rem rgba(169, 50, 38, 0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .cp-navbar-mic.listening { animation: none; }
-}
+/* The microphone lives inside the palette (see command_palette.html for its styles); there is
+   deliberately no navbar mic — the brand opens the palette and the mic is one click further in. */
 
 /* Countdown card shown before a database-changing action runs. */
 #command-palette-results .cp-countdown .progress {

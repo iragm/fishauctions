@@ -31,6 +31,46 @@ Most-of-the-page on desktop; fullscreen on mobile.
   #command-palette-results .cp-item .cp-item-title {
     font-weight: 500;
   }
+  {% comment %}
+  The auto-listen explainer. Styled to look like a Bootstrap tooltip rather than being one: a real
+  tooltip instance takes over the button's title attribute and has to be disposed to give it back,
+  and this bubble has to sit there for several seconds without swallowing "Speak a command".
+  Panel/border colors are the dark-theme surfaces from style_reference.md.
+  {% endcomment %}
+  #command-palette-modal .modal-header {
+    position: relative;
+  }
+  #command-palette-mic-hint {
+    position: absolute;
+    top: calc(100% - 0.3rem);
+    right: 2.5rem;
+    z-index: 5;
+    max-width: min(22rem, 80vw);
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #444;
+    border-radius: 0.375rem;
+    background-color: #303030;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.4);
+    font-size: 0.8rem;
+    line-height: 1.3;
+    animation: cp-hint-in 0.2s ease-out;
+  }
+  {% comment %} Arrow pointing up at the mic button. {% endcomment %}
+  #command-palette-mic-hint::before {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    right: 0.9rem;
+    border: 0.4rem solid transparent;
+    border-bottom-color: #444;
+  }
+  @keyframes cp-hint-in {
+    from { opacity: 0; transform: translateY(-0.25rem); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #command-palette-mic-hint { animation: none; }
+  }
   {% comment %} Listening state: the mic pulses so it's obvious the browser is still recording. {% endcomment %}
   .cp-mic.listening {
     color: #fff;
@@ -74,6 +114,12 @@ Most-of-the-page on desktop; fullscreen on mobile.
           {% endif %}
         </div>
         <button type="button" class="btn-close ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
+        {% comment %} Shown by the script only on the first couple of auto-started listens. {% endcomment %}
+        {% if palette_assist_enabled %}
+        <div id="command-palette-mic-hint" class="d-none text-muted" role="status">
+          <i class="bi bi-mic-fill me-1"></i>Microphone automatically enabled because you used it last time
+        </div>
+        {% endif %}
       </div>
       <div class="modal-body pt-2" id="command-palette-results" aria-live="polite"></div>
       <div class="modal-footer py-1 justify-content-start d-none d-md-flex">
