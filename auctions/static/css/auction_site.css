@@ -442,3 +442,10 @@ body.speaker-panel-open {
         transition: none;
     }
 }
+
+/* The speaker directory's topic menu is the whole vocabulary; without a cap it
+   runs off the bottom of a phone. */
+.dropdown-menu-scroll {
+    max-height: 60vh;
+    overflow-y: auto;
+}

@@ -1,0 +1,44 @@
+{% comment %}
+Search and filters for the speaker directory, rendered by HTMxTableView via
+htmx_table_header_template.
+
+Stacked rather than laid out in a row: the search box gets a full-width line of its own, and
+everything else is a dropdown under it.  That is the same at every width -- a dropdown is a
+fixed-size button no matter how many options are behind it, so nothing here has to be
+rearranged for a phone.  The form filters as you type, so there is no apply button.
+{% endcomment %}
+<div class="input-group mb-2">
+  <span class="input-group-text"><i class="bi bi-search"></i></span>
+  {{ filter.form.query }}
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  {% comment %}Topics: the same shape as the Filters menu beside it, but radios -- a speaker
+  can hold several topics, filtering by two at once would almost always find nobody.{% endcomment %}
+  <span class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-tag"></i> <span id="topic-filter-label">{{ selected_topic_label|default:"Topics" }}</span>
+    </button>
+    {% comment %}htmx sits on the menu, not on each of the ~25 radios: change events bubble, so one set of attributes does the job. Keep them in step with speaker_filter_attrs() in filters.py.{% endcomment %}
+    <div class="dropdown-menu dropdown-menu-scroll" hx-get="" hx-target="div.table-container" hx-trigger="change" hx-swap="outerHTML" hx-indicator=".progress" hx-include=".speaker-filter-control">
+      {% for topic_value, topic_label in topic_choices %}
+      <label class="dropdown-item">
+        <input type="radio" name="topic" value="{{ topic_value }}" class="speaker-filter-control topic-filter-option" {% if topic_value == selected_topic %}checked{% endif %}> {{ topic_label }}
+      </label>
+      {% endfor %}
+    </div>
+  </span>
+
+  {% include "auctions/partials/htmx_table_filters.html" %}
+
+  {% comment %}Where distances are measured from. There is no picker for it: the origin follows the club whose page you came from, or your own location.{% endcomment %}
+  {% if has_origin %}
+    <small class="text-muted">Distances from {{ origin_label }}.{% if origin_change_url %} <a href="{{ origin_change_url }}">Change</a>{% endif %}</small>
+  {% elif origin_club %}
+    <small class="text-warning">{{ origin_club.name }} has no address set, so distances are unavailable.
+      {% if origin_change_url %}<a href="{{ origin_change_url }}">Set the club address</a>{% endif %}</small>
+  {% else %}
+    <small class="text-warning">Set your location to sort speakers by distance.
+      <a href="{{ origin_change_url }}">Set your location</a></small>
+  {% endif %}
+</div>

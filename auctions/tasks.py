@@ -377,12 +377,23 @@ def maybe_send_membership_renewal_confirmation(member):
             " This renews automatically through your PayPal subscription. To manage or cancel it, "
             "visit your PayPal automatic payments page: https://www.paypal.com/myaccount/autopay/"
         )
-    return send_club_member_email(
+    sent = send_club_member_email(
         member,
         subject=f"Your {member.club.name} membership has been renewed",
         message_text=message_text,
         email_type="renewal",
     )
+    if sent:
+        # Logged here rather than at the four call sites: each one already records the renewal
+        # itself, and this says whether the member was actually told about it.
+        from auctions.models import ClubHistory
+
+        ClubHistory.objects.create(
+            club=member.club,
+            action=f"Sent renewal confirmation to {member} ({member.email})",
+            applies_to="MEMBERSHIP",
+        )
+    return sent
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -786,7 +797,7 @@ def update_expired_membership_discord_roles(self):
     """
     from django.utils import timezone
 
-    from auctions.models import ClubMember
+    from auctions.models import ClubHistory, ClubMember
 
     members = (
         ClubMember.objects.filter(
@@ -829,12 +840,19 @@ def update_expired_membership_discord_roles(self):
             member.save(update_fields=update_fields)
             continue
         if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
-            send_club_member_email(
+            sent = send_club_member_email(
                 member,
                 subject=f"Welcome to the {member.club.name}!",
                 message_text="",
                 email_type="welcome",
             )
+            if sent:
+                # System action, so no user on the history entry
+                ClubHistory.objects.create(
+                    club=member.club,
+                    action=f"Sent welcome letter to {member} ({member.email})",
+                    applies_to="MEMBERS",
+                )
         member.save(update_fields=update_fields)
 
     reminder_30_days_qs = ClubMember.objects.filter(
@@ -849,12 +867,18 @@ def update_expired_membership_discord_roles(self):
     ).select_related("club")
     for member in reminder_30_days_qs:
         if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
-            send_club_member_email(
+            sent = send_club_member_email(
                 member,
                 subject=f"Your {member.club.name} membership expires in 30 days",
                 message_text=f"Your {member.club.name} membership expires in 30 days.",
                 email_type="expiring_soon",
             )
+            if sent:
+                ClubHistory.objects.create(
+                    club=member.club,
+                    action=f"Sent 30-day expiration reminder to {member} ({member.email})",
+                    applies_to="MEMBERSHIP",
+                )
         member.membership_expiration_reminder_30_days_due = None
         member.save(update_fields=["membership_expiration_reminder_30_days_due"])
 
@@ -869,12 +893,18 @@ def update_expired_membership_discord_roles(self):
     ).select_related("club")
     for member in reminder_qs:
         if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:
-            send_club_member_email(
+            sent = send_club_member_email(
                 member,
                 subject=f"Your {member.club.name} membership expires tomorrow",
                 message_text=f"Your {member.club.name} membership expires tomorrow.",
                 email_type="expiring_soon",
             )
+            if sent:
+                ClubHistory.objects.create(
+                    club=member.club,
+                    action=f"Sent final expiration reminder to {member} ({member.email})",
+                    applies_to="MEMBERSHIP",
+                )
         member.membership_expiration_reminder_due = None
         member.save(update_fields=["membership_expiration_reminder_due"])
 

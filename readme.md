@@ -85,32 +85,19 @@ Run these with docker exec after docker compose is up.  For example: `docker exe
 
 ##### Speaker directory
 
-The speaker directory at `/speakers/` is seeded from the Northeast Council's old WordPress site.
-Get a WordPress eXtended RSS export from that site (Tools → Export) and import it:
+The directory at `/speakers/` was seeded once from a WordPress export of the Northeast Council's
+old site (Tools → Export; export files are gitignored).  A one-time job, kept in case it needs a
+re-run — each command's `--help` and module docstring has the details:
 
 ```bash
-docker exec -it django python3 manage.py import_nec_speakers /home/app/web/nec.WordPress.2026-08-03.xml --dry-run
-docker exec -it django python3 manage.py import_nec_speakers /home/app/web/nec.WordPress.2026-08-03.xml
+manage.py import_nec_speakers <export.xml>              # --dry-run first; re-running updates, never duplicates
+manage.py import_nec_speakers <export.xml> --topics-only  # re-apply just the topics after the vocabulary changes
+manage.py geocode_speakers                              # LLM reads the bios for a location, then geocodes it
+manage.py split_speaker_talks                           # LLM splits the flattened "Programs:" run-on
 ```
 
-The export is matched on WordPress post id, so re-running updates existing rows instead of
-duplicating them, and photos already downloaded are skipped (`--replace-images` re-fetches them,
-`--skip-images` leaves them alone).  Export files are gitignored — don't commit one.
-
-The export carries no addresses, so imported speakers start with no coordinates and are absent
-from the map and the distance filter.  To fill those in, `geocode_speakers` reads each bio with
-the configured LLM (`LLM_PROVIDER` / `LLM_MODEL`) and geocodes what it finds with
-`GOOGLE_MAPS_SERVER_API_KEY`.  Review a dry run first — bios mention far more places the speaker
-talks *about* than places they live:
-
-```bash
-docker exec -it django python3 manage.py geocode_speakers --dry-run --limit 25
-docker exec -it django python3 manage.py geocode_speakers
-```
-
-Access to the directory is limited to users holding any club permission in a club marked
-**NEC member club**, which is set in the Django admin on the club (or from the club list, which
-has an inline checkbox) and deliberately absent from the club's own settings page.
+Topics are a closed vocabulary (`auctions/speaker_topics.py`) — nothing in the UI coins a new one.
+Access needs any club permission in a club flagged **NEC member club** in the Django admin.
 
 ### Developing in VSCode
 

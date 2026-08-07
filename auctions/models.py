@@ -12335,8 +12335,8 @@ class SpeakerTopic(models.Model):
     Deliberately a canonical list rather than free text on each speaker: the NEC WordPress
     export arrived with three spellings of "cichlids" and two of "africa", and a shared row
     means fixing the name once fixes it everywhere and keeps the topic filter a clean list.
-    Rows are created by `manage.py import_nec_speakers` and by the add-speaker form; there is
-    no seed migration, so nothing here depends on fixture rows surviving a test flush.
+    The rows come from the closed vocabulary in auctions/speaker_topics.py (migration 0374 and
+    `ensure_site_defaults` both create them); nothing in the UI adds to it.
     """
 
     name = models.CharField(max_length=100, unique=True)
@@ -12367,6 +12367,10 @@ class Speaker(CloudflareImageMixin, models.Model):
     bio.help_text = "A paragraph or two about the speaker."
     programs = models.TextField(blank=True, default="", verbose_name="Talks")
     programs.help_text = "The talks this speaker offers."
+    # Same shape as LotImage's photo handling -- upload resized on save, or a URL to an image
+    # somewhere else -- except a speaker gets exactly one, so it's a field here rather than a
+    # related model.  Uploads are validated with forms.validate_uploaded_image (see SpeakerForm)
+    # so a corrupt file is an inline field error instead of a 500 during thumbnailing.
     image = ThumbnailerImageField(
         upload_to="speakers/",
         blank=True,
@@ -12374,6 +12378,9 @@ class Speaker(CloudflareImageMixin, models.Model):
         resize_source={"size": (600, 600), "quality": 85},
         verbose_name="Photo",
     )
+    image.help_text = "Select a photo to upload"
+    url = models.URLField(max_length=500, blank=True, null=True, verbose_name="Photo URL")
+    url.help_text = "Or enter a URL to a photo instead of uploading one"
     topics = models.ManyToManyField(SpeakerTopic, blank=True, related_name="speakers")
     email = models.EmailField(max_length=255, blank=True, default="")
     email.help_text = "Only shown to people who can see the speaker directory."
@@ -12394,6 +12401,17 @@ class Speaker(CloudflareImageMixin, models.Model):
         help_text=(
             "Keeps this speaker out of the directory for clubs that aren't NEC members.  "
             "Everything imported from the NEC speaker database is set this way."
+        ),
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="speaker_profiles",
+        help_text=(
+            "The site account this speaker is, when they have one.  Linked by email address on "
+            "import.  Distinct from `created_by`, which is whoever typed the record in."
         ),
     )
     created_by = models.ForeignKey(
@@ -12433,13 +12451,18 @@ class Speaker(CloudflareImageMixin, models.Model):
 
     @property
     def display_url(self):
-        """Full-size photo, from Cloudflare when this image has been migrated there."""
-        return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or None
+        """Full-size photo: the upload if there is one, otherwise the URL that was pasted in.
+
+        Identical to LotImage.display_url.  cloudflare_images.image_url falls back to locally
+        generated easy-thumbnails files whenever Cloudflare Images isn't configured, which is
+        the case in production today -- so this is the local thumbnailer in practice.
+        """
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or self.url or None
 
     @property
     def thumbnail_url(self):
-        """Small square photo for the speaker list and map info windows."""
-        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "speaker") or None
+        """Small square photo for the speaker list, map info windows and the panel header."""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "speaker") or self.url or None
 
     @property
     def has_coordinates(self):
@@ -12523,9 +12546,11 @@ class SpeakerTag(models.Model):
         ("remote", "Presents remotely", GROUP_LOGISTICS),
         ("travels", "Willing to travel", GROUP_LOGISTICS),
         ("brings_items", "Brings items for the auction", GROUP_LOGISTICS),
-        ("donates_fee", "Donates their fee back", GROUP_LOGISTICS),
         ("no_fee", "No fee (expenses only)", GROUP_LOGISTICS),
         ("responsive", "Quick to respond", GROUP_LOGISTICS),
+        # Last on purpose: it's the one tag that says don't bother booking them, so it reads
+        # as a warning at the end of the list rather than as another endorsement.
+        ("no_longer_speaking", "No longer speaking", GROUP_LOGISTICS),
     )
     TAG_CHOICES = tuple((value, label) for value, label, _group in TAG_DEFINITIONS)
     TAG_LABELS = dict(TAG_CHOICES)
@@ -12569,12 +12594,10 @@ class SpeakerComment(models.Model):
 
     @property
     def author_display(self):
+        """Just the person.  The club is still recorded, but nobody reading wants it here."""
         if not self.user:
             return "Deleted user"
-        name = self.user.get_full_name() or self.user.username
-        if self.club:
-            return f"{name} ({self.club.name})"
-        return name
+        return self.user.get_full_name() or self.user.username
 
     def can_be_deleted_by(self, user):
         if not user or not user.is_authenticated:

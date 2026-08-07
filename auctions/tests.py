@@ -7547,6 +7547,50 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         member.refresh_from_db()
         self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
 
+    # --- ClubHistory: a subscription renewal has to leave the same trail a manual one does ---
+
+    def test_subscription_renewal_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("renewed via PayPal subscription", history.action)
+        self.assertIsNone(history.user)  # a webhook has no acting user
+        self.assertNotIn("I-SUB1", history.action)  # the id is masked, as it is in the logs
+
+    def test_duplicate_subscription_event_writes_history_once(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").count(), 1)
+
+    def test_subscription_created_member_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(email="new@example.com"))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("from PayPal subscription", history.action)
+
+    def test_cancelled_subscription_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(
+            club=self.club, name="Sub Member", email="subscriber@example.com", paypal_subscription_id="I-SUB1"
+        )
+        sub = self._active_subscription()
+        sub["status"] = "CANCELLED"
+        _apply_paypal_subscription_event(self.club, sub)
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("stopped auto-renewing", history.action)
+        self.assertIn("paid-through date unchanged", history.action)
+
     def test_cancelled_clears_subscription_but_keeps_expiration(self):
         from auctions.views import _apply_paypal_subscription_event
 
@@ -8113,6 +8157,26 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertTrue(self.member.welcome_email_sent)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Welcome to the {self.club.name}!")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").first()
+        self.assertIsNotNone(history)
+        self.assertIn("Sent welcome letter to", history.action)
+        self.assertIn(self.member.email, history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_logs_no_history_when_welcome_email_not_sent(self, mock_send):
+        """A do-not-contact member gets no welcome email, so there's nothing to log."""
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(
+            createdon=timezone.now() - datetime.timedelta(days=2),
+            contact_status="do_not_contact",
+        )
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.welcome_email_sent)
+        self.assertFalse(mock_send.called)
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, action__contains="welcome letter").exists())
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_30_day_expiration_email(self, mock_send):
@@ -8127,6 +8191,8 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires in 30 days")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent 30-day expiration reminder to", history.action)
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
@@ -8143,6 +8209,29 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_due)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires tomorrow")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent final expiration reminder to", history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_renewal_confirmation_email_writes_club_history(self, mock_send):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        self.assertTrue(maybe_send_membership_renewal_confirmation(self.member))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent renewal confirmation to", history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_no_renewal_confirmation_history_when_member_cannot_be_emailed(self, mock_send):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        self.member.contact_status = "do_not_contact"
+        self.member.save(update_fields=["contact_status"])
+        self.assertFalse(maybe_send_membership_renewal_confirmation(self.member))
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
     @patch("auctions.tasks.mail.send")
     def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):
@@ -26661,6 +26750,24 @@ class MailchimpWebhookTests(TestCase):
         self.member.refresh_from_db()
         self.assertEqual(self.member.email, "new@example.com")
 
+    def test_webhook_events_write_club_history(self):
+        # These happen at Mailchimp, so the club's history log is the admins' only view of them.
+        self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "hook@example.com"})
+        self.client_http.post(
+            self._url(),
+            {"type": "upemail", "data[old_email]": "hook@example.com", "data[new_email]": "new@example.com"},
+        )
+        actions = list(
+            ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").values_list("action", flat=True)
+        )
+        self.assertEqual(len(actions), 2)
+        self.assertTrue(any("unsubscribed at Mailchimp" in a for a in actions))
+        self.assertTrue(any("changed their email to new@example.com via Mailchimp" in a for a in actions))
+
+    def test_event_for_unknown_email_writes_no_history(self):
+        self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "nobody@example.com"})
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
+
 
 class MailchimpSelfServiceTests(TestCase):
     """The UUID merge-field links change only the club contact status."""
@@ -26699,6 +26806,44 @@ class MailchimpSelfServiceTests(TestCase):
         self.client_http.post(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "do_not_contact")
+
+    def test_contact_preference_link_writes_club_history(self):
+        # The one-click preference links change the same field the unsubscribe view does, so the
+        # club's admins need the same record of it.
+        url = reverse(
+            "club_member_contact_pref",
+            kwargs={"slug": self.club.slug, "uuid": self.member.uuid, "level": "essential"},
+        )
+        self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "non_essential")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("essential emails only", history.action)
+        self.assertIsNone(history.user)
+
+
+class ClubMemberEmailPropagationTests(TestCase):
+    """Changing a site account email rewrites the member's club records, so the club is told."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Propagation Club")
+        self.user = User.objects.create_user(username="propagate", password="pw", email="before@example.com")
+        self.member = ClubMember.objects.create(club=self.club, user=self.user, name="Pat", email="before@example.com")
+
+    def test_account_email_change_writes_club_history(self):
+        self.user.email = "after@example.com"
+        self.user.save()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, "after@example.com")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("before@example.com", history.action)
+        self.assertIn("after@example.com", history.action)
+        self.assertEqual(history.user, self.user)
+
+    def test_unrelated_account_save_writes_no_history(self):
+        self.user.first_name = "Pat"
+        self.user.save()
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
 
 class BrevoSyncTests(TestCase):
@@ -26973,6 +27118,20 @@ class BrevoWebhookTests(TestCase):
         self._post({"event": "spam", "email": "bhook@example.com"})
         self.member.refresh_from_db()
         self.assertEqual(self.member.brevo_status, "cleaned")
+
+    def test_webhook_events_write_club_history(self):
+        self._post({"event": "unsubscribe", "email": "bhook@example.com"})
+        self._post({"event": "hard_bounce", "email": "bhook@example.com"})
+        actions = list(
+            ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").values_list("action", flat=True)
+        )
+        self.assertEqual(len(actions), 2)
+        self.assertTrue(any("unsubscribed at Brevo" in a for a in actions))
+        self.assertTrue(any("marked undeliverable (hardbounce) by Brevo" in a for a in actions))
+
+    def test_event_for_unknown_email_writes_no_history(self):
+        self._post({"event": "unsubscribe", "email": "nobody@example.com"})
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
 
 class BrevoSelfServiceTests(TestCase):

@@ -120,6 +120,38 @@ and `overflow-x: hidden` on an ancestor (hides the symptom, still cuts the text
 mid-word with no ellipsis). `w-100` / `max-width: 100%` on the child does work,
 but only for that one child.
 
+## Filter controls: search box, then dropdowns
+
+A row of filter controls that reads fine at 1200px falls apart at 390px — inline
+`w-auto` selects size to their content, and the row wraps into a ragged stack of
+mismatched heights. The fix is not a separate mobile layout. It's using controls
+whose size doesn't depend on how much is inside them:
+
+1. **The search box gets a full-width line of its own**, above everything else.
+2. **Every other filter is a dropdown** on the line below it, in the same shape as
+   `partials/htmx_table_filters.html` (`btn-sm dropdown-toggle` + `dropdown-menu`
+   of `<label class="dropdown-item">` rows). A dropdown button is the same size
+   whether it holds four options or forty, so nothing has to be rearranged for a
+   phone. Cap tall menus with `dropdown-menu-scroll`.
+3. **No apply button, no result count, no "clear all".** These tables filter as
+   you type; a filter is cleared by its own "Any …" option or by unticking it.
+
+Reference implementation: `partials/speaker_table_header.html`. Its topic menu is
+radios (single-select) beside the shared keyword checkboxes (multi-select); the
+htmx attributes sit on the `dropdown-menu` rather than on each of the ~30 radios,
+since `change` bubbles.
+
+Two things that follow from it:
+
+- **Don't add a control for something rare.** The speaker list takes a radius as
+  words in the search box (`within 50 miles`, parsed by `SpeakerFilter`) and hints
+  at it in the placeholder, instead of spending a permanent dropdown on it.
+- **Not every keyword needs a menu row.** `photo`, `mapped` and `myclub` still
+  work typed into the box; they're just not worth a row everyone has to read past.
+
+Put the view-switching control (list/map, table/tiles) **below** the filters and
+directly above the results, not up beside the heading where it gets missed.
+
 ## Unavailable actions stay clickable
 
 **Don't hide or disable a button when its action is currently unavailable.** Keep

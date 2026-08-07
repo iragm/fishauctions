@@ -631,11 +631,18 @@ def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
     new_email = instance.email or ""
     if not old_email or old_email == new_email:
         return
-    from .models import ClubMember
+    from .models import ClubHistory, ClubMember
 
     for member in ClubMember.objects.filter(user=instance, email__iexact=old_email, is_deleted=False):
         member.email = new_email
         member.save(update_fields=["email"])
+        # The club never sees the account-side change, so tell it where the new address came from
+        ClubHistory.objects.create(
+            club=member.club,
+            user=instance,
+            action=f"{member} changed their account email from {old_email} to {new_email}",
+            applies_to="MEMBERS",
+        )
 
 
 @receiver(pre_save, sender="auctions.Lot")

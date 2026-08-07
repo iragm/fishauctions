@@ -25,6 +25,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from auctions.models import Speaker, SpeakerTopic
+from auctions.speaker_topics import STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics
 
 NAMESPACES = {
     "wp": "http://wordpress.org/export/1.2/",
@@ -33,25 +34,15 @@ NAMESPACES = {
     "dc": "http://purl.org/dc/elements/1.1/",
 }
 
-# The export has three spellings of cichlids and two of africa.  A canonical SpeakerTopic
-# list is only worth having if the import actually merges them, so map the typos here.
-# Keys are compared casefolded against the raw category name from the XML.
-TOPIC_ALIASES = {
-    "cichids": "Cichlids",
-    "cichlids": "Cichlids",
-    "africa": "African",
-    "african": "African",
-    "diy (do it yourself)": "DIY",
-    "other non-fish species talk": "Other non-fish species",
-    "moving with fish": "Moving with fish",
-}
-
 # WordPress writes the talk list as "...bio text... Programs: Talk One Talk Two".  Only the
-# split point is recoverable; the individual titles are not.
+# split point is recoverable; the individual titles are not (see manage.py split_speaker_talks).
 PROGRAMS_RE = re.compile(r"\bPrograms?:\s*(.*)$", re.DOTALL)
 
+# Used to link an imported speaker to a site account. No bio in the NEC export has one.
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
 # Non-breaking spaces are all over the pasted bios.
-WHITESPACE_RE = re.compile(r"[\s ]+")
+WHITESPACE_RE = re.compile(r"[\s\u00a0]+")
 
 IMAGE_TIMEOUT_SECONDS = 30
 
@@ -68,24 +59,6 @@ def clean_text(value):
     return WHITESPACE_RE.sub(" ", html.unescape(value)).strip()
 
 
-def canonical_topic_name(raw_name):
-    """Fold the export's duplicate spellings onto one name, and title-case the rest.
-
-    Returns None for a name that is only punctuation, so junk categories are skipped.
-    """
-    cleaned = clean_text(raw_name)
-    if not cleaned:
-        return None
-    alias = TOPIC_ALIASES.get(cleaned.casefold())
-    if alias:
-        return alias
-    # "Freshwater species" and "US Native Fish" are both in the export; leave anything that
-    # already has an uppercase letter past the first alone rather than mangling acronyms.
-    if cleaned.isupper() or cleaned.islower():
-        return cleaned[:1].upper() + cleaned[1:]
-    return cleaned
-
-
 class Command(BaseCommand):
     help = "Import speakers from a WordPress WXR export of the NEC website."
 
@@ -100,6 +73,11 @@ class Command(BaseCommand):
             "--replace-images",
             action="store_true",
             help="Re-download photos for speakers that already have one.",
+        )
+        parser.add_argument(
+            "--topics-only",
+            action="store_true",
+            help="Only re-apply topics to speakers already imported; leave every other field alone.",
         )
         parser.add_argument(
             "--dry-run",
@@ -130,10 +108,16 @@ class Command(BaseCommand):
             raise CommandError(msg)
 
         self.dry_run = options["dry_run"]
+        self.topics_only = options["topics_only"]
         if self.dry_run:
             self.stdout.write(self.style.WARNING("Dry run — nothing will be written."))
+        if self.topics_only:
+            self.stdout.write(self.style.WARNING("Topics only — no bios, photos or new speakers."))
 
         self.stdout.write(f"Found {len(speakers)} speakers and {len(attachments_by_id)} attachments.")
+        if not self.dry_run:
+            # Topics are a closed vocabulary; make sure it exists before mapping onto it.
+            ensure_speaker_topics()
 
         created = updated = 0
         image_results = {"downloaded": 0, "skipped": 0, "failed": 0}
@@ -153,22 +137,25 @@ class Command(BaseCommand):
             else:
                 updated += 1
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"{created} speakers created, {updated} updated. "
-                f"Photos: {image_results['downloaded']} downloaded, "
-                f"{image_results['skipped']} skipped, {image_results['failed']} failed."
+        if self.topics_only:
+            self.stdout.write(self.style.SUCCESS(f"{updated} speakers re-tagged."))
+        else:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"{created} speakers created, {updated} updated. "
+                    f"Photos: {image_results['downloaded']} downloaded, "
+                    f"{image_results['skipped']} skipped, {image_results['failed']} failed."
+                )
             )
-        )
         if not self.dry_run:
-            # Topics only ever come into existence attached to a speaker, so one with no
-            # speakers left is debris — either a name this run merged away, or the last
-            # speaker using it was retagged.  Dropping them keeps the topic filter honest.
-            orphans = SpeakerTopic.objects.filter(speakers__isnull=True)
+            # Anything outside the fixed vocabulary with nobody left on it is debris from an
+            # older import that mapped names differently. Vocabulary rows are kept even when
+            # empty -- they have to stay in the add-speaker dropdown.
+            orphans = SpeakerTopic.objects.filter(speakers__isnull=True).exclude(name__in=STARTER_TOPICS)
             orphan_count = orphans.count()
             if orphan_count:
                 orphans.delete()
-                self.stdout.write(f"Removed {orphan_count} topics that no longer have any speakers.")
+                self.stdout.write(f"Removed {orphan_count} topics that are no longer used.")
             self.stdout.write(f"{SpeakerTopic.objects.count()} topics in the shared topic list.")
 
     def _partition_items(self, channel):
@@ -209,6 +196,9 @@ class Command(BaseCommand):
         if self._text(item, "wp:status") != "publish":
             return None
 
+        if self.topics_only:
+            return self._retag_speaker(post_id, name, item)
+
         body = clean_text(self._findtext(item, "content:encoded"))
         bio, programs = self._split_bio_and_programs(body)
 
@@ -219,29 +209,24 @@ class Command(BaseCommand):
             "source_url": self._findtext(item, "link") or "",
             "imported_from_nec": True,
             # Everything here came out of the NEC's own database, so it stays NEC-only
-            # regardless of what the add-speaker form defaults to.
+            # Not settable from the add-speaker form: import and the Django admin only.
             "nec_only": True,
         }
+        linked_user = self._user_for_email(self._speaker_email(item))
+        if linked_user:
+            fields["user"] = linked_user
 
         if self.dry_run:
             exists = Speaker.objects.filter(wordpress_post_id=post_id).exists()
-            topics = [canonical_topic_name(raw) for raw in self._topic_names(item)]
             self.stdout.write(
                 f"  {'update' if exists else 'create'} {name} "
-                f"({len([t for t in topics if t])} topics, {'photo' if self._photo_url(item, attachments_by_parent, attachments_by_id) else 'no photo'})"
+                f"({len(self._canonical_topic_names(item))} topics, {'photo' if self._photo_url(item, attachments_by_parent, attachments_by_id) else 'no photo'})"
             )
             return not exists
 
         with transaction.atomic():
             speaker, created = Speaker.objects.update_or_create(wordpress_post_id=post_id, defaults=fields)
-            topics = []
-            for raw_name in self._topic_names(item):
-                canonical = canonical_topic_name(raw_name)
-                if not canonical:
-                    continue
-                topic, _ = SpeakerTopic.objects.get_or_create(name=canonical)
-                topics.append(topic)
-            speaker.topics.set(topics)
+            speaker.topics.set(self._topics_for(item))
 
         if not skip_images:
             self._attach_photo(
@@ -252,6 +237,41 @@ class Command(BaseCommand):
             )
         return created
 
+    def _retag_speaker(self, post_id, name, item):
+        """Re-apply this speaker's topics from the export, touching nothing else.
+
+        For when the vocabulary changes after an import: the export is the only record of what
+        each speaker's subjects were, but re-running the whole import to recover them would
+        overwrite bios and undo `split_speaker_talks`.  Returns False (an update) for a speaker
+        that is already here, None for one that isn't -- this never creates a speaker.
+        """
+        speaker = Speaker.objects.filter(wordpress_post_id=post_id).first()
+        if not speaker:
+            return None
+        if self.dry_run:
+            topics = self._canonical_topic_names(item)
+            self.stdout.write(f"  retag {name} ({', '.join(topics) if topics else 'no topics'})")
+            return False
+        speaker.topics.set(self._topics_for(item))
+        return False
+
+    def _canonical_topic_names(self, item):
+        """This speaker's export categories as vocabulary names, dropped ones left out."""
+        names = [canonical_topic_name(clean_text(raw)) for raw in self._topic_names(item)]
+        return [name for name in names if name]
+
+    def _topics_for(self, item):
+        """The vocabulary rows to tag this speaker with."""
+        topics = []
+        for name in self._canonical_topic_names(item):
+            # iexact, and create only as a backstop: ensure_speaker_topics() has already
+            # made every vocabulary row, so this should always find one.
+            topic = SpeakerTopic.objects.filter(name__iexact=name).first()
+            if not topic:
+                topic = SpeakerTopic.objects.create(name=name)
+            topics.append(topic)
+        return topics
+
     def _split_bio_and_programs(self, body):
         """Separate the bio from the trailing "Programs:" run-on list."""
         if not body:
@@ -260,6 +280,28 @@ class Command(BaseCommand):
         if not match:
             return body, ""
         return body[: match.start()].strip(), clean_text(match.group(1))
+
+    def _speaker_email(self, item):
+        """The speaker's email address, if the export carries one.
+
+        This particular export has none in any of its 405 bios -- an email was simply not part
+        of the old site's speaker record -- so this returns "" throughout that import.  It is
+        here so the linking rule isn't missing the day an export does have them.
+        """
+        body = clean_text(self._findtext(item, "content:encoded"))
+        match = EMAIL_RE.search(body)
+        return match.group(0) if match else ""
+
+    def _user_for_email(self, email):
+        """The site account with this email address, if there is exactly one."""
+        if not email:
+            return None
+        from django.contrib.auth.models import User
+
+        matches = list(User.objects.filter(email__iexact=email)[:2])
+        # Two accounts sharing an address is ambiguous, and linking to the wrong one would hand
+        # somebody else's record to a stranger -- so link to neither.
+        return matches[0] if len(matches) == 1 else None
 
     def _topic_names(self, item):
         return [

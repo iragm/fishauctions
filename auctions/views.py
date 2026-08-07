@@ -12957,6 +12957,21 @@ def _ical_escape(value):
     )
 
 
+def _log_esp_member_events(club, members, action_for_member):
+    """Record what a mailing-list provider just told us about a member, one entry each.
+
+    The member did this at Mailchimp/Brevo rather than on the site, so the club's admins have no
+    other way to see it — the on-site equivalent (ClubMemberSelfServiceView) already logs. There is
+    no acting user: the actor is the ESP.
+    """
+    ClubHistory.objects.bulk_create(
+        [
+            ClubHistory(club=club, user=None, action=action_for_member(member), applies_to="MEMBERS")
+            for member in members
+        ]
+    )
+
+
 class MailchimpWebhookView(View):
     """Receive Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
 
@@ -13000,16 +13015,29 @@ class MailchimpWebhookView(View):
             new_email = request.POST.get("data[new_email]")
             if old_email and new_email:
                 # Reflect the new address locally; explicitly NOT a site-wide account change.
+                renamed = list(members.filter(email__iexact=old_email))
                 members.filter(email__iexact=old_email).update(email=new_email)
+                _log_esp_member_events(
+                    club, renamed, lambda member: f"{member} changed their email to {new_email} via Mailchimp"
+                )
             return HttpResponse("ok")
 
         email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
-        if email:
-            members = members.filter(email__iexact=email)
+        if not email:
+            # Every real unsubscribe/cleaned event names a contact. Without one there is nobody to
+            # act on, and acting on the unfiltered queryset would mark the whole club unsubscribed.
+            return HttpResponse("ok")
+        members = members.filter(email__iexact=email)
         if event_type == "unsubscribe":
+            affected = list(members)
             members.update(mailchimp_status="unsubscribed")
+            _log_esp_member_events(club, affected, lambda member: f"{member} unsubscribed at Mailchimp")
         elif event_type == "cleaned":
+            affected = list(members)
             members.update(mailchimp_status="cleaned")
+            _log_esp_member_events(
+                club, affected, lambda member: f"{member} marked undeliverable (cleaned) by Mailchimp"
+            )
         # 'profile' events need no action under one-way sync.
         return HttpResponse("ok")
 
@@ -13377,11 +13405,17 @@ class BrevoWebhookView(View):
         members = ClubMember.objects.filter(club=club, is_deleted=False, email__iexact=email)
 
         if event in ("unsubscribe", "unsubscribed"):
+            affected = list(members)
             members.update(brevo_status="unsubscribed")
+            _log_esp_member_events(club, affected, lambda member: f"{member} unsubscribed at Brevo")
         elif event in ("hardbounce", "spam"):
+            affected = list(members)
             members.update(brevo_status="cleaned")
+            _log_esp_member_events(club, affected, lambda member: f"{member} marked undeliverable ({event}) by Brevo")
         elif event == "contactdeleted":
+            affected = list(members)
             members.update(brevo_status="archived")
+            _log_esp_member_events(club, affected, lambda member: f"{member} deleted from the Brevo list")
         return HttpResponse("ok")
 
 
@@ -17718,7 +17752,14 @@ def _find_or_create_subscription_member(club, subscription_id, email):
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
         if member:
             return member
-        return ClubMember.objects.create(club=club, email=email)
+        member = ClubMember.objects.create(club=club, email=email)
+        # user stays null: a webhook has no acting user, same as the ledger entry below
+        ClubHistory.objects.create(
+            club=club,
+            action=f"Added member {member} from PayPal subscription {_mask_subscription_id(subscription_id)}",
+            applies_to="MEMBERS",
+        )
+        return member
     return None
 
 
@@ -17815,6 +17856,14 @@ def _apply_paypal_subscription_event(club, subscription):
         if member and member.paypal_subscription_id:
             member.paypal_subscription_id = ""
             member.save(update_fields=["paypal_subscription_id"])
+            ClubHistory.objects.create(
+                club=club,
+                action=(
+                    f"{member} stopped auto-renewing (PayPal subscription "
+                    f"{_mask_subscription_id(subscription_id)} {status.lower()}); paid-through date unchanged"
+                ),
+                applies_to="MEMBERSHIP",
+            )
             logger.info(
                 "PayPal subscription %s %s: cleared for member %s",
                 _mask_subscription_id(subscription_id),
@@ -17853,11 +17902,24 @@ def _apply_paypal_subscription_event(club, subscription):
             "PayPal subscription %s: already current for member %s", _mask_subscription_id(subscription_id), member.pk
         )
         return
+    old_expiration = member.membership_expiration_date
     member.paypal_subscription_id = subscription_id
     member.membership_last_paid = timezone.now().date()
     if advanced:
         member.membership_expiration_date = next_date
     member.save()
+    old_exp_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
+    new_exp_str = (
+        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+    )
+    ClubHistory.objects.create(
+        club=club,
+        action=(
+            f"{member} renewed via PayPal subscription {_mask_subscription_id(subscription_id)}; "
+            f"expiration {old_exp_str} → {new_exp_str}"
+        ),
+        applies_to="MEMBERSHIP",
+    )
     maybe_send_membership_renewal_confirmation(member)
     logger.info(
         "PayPal subscription %s (%s): renewed member %s through %s",
@@ -21873,6 +21935,14 @@ class SelfServeContactLinkView(ClubViewMixin, View):
         new_status = self._LEVEL_TO_STATUS[level]
         ClubMember.objects.filter(pk=member.pk).update(contact_status=new_status)
         label = self._STATUS_LABELS[new_status]
+        # The member acts on their own UUID link, so there's no acting user (matches
+        # ClubMemberSelfServiceView, which logs the same kind of change)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=None,
+            action=f"{member} set their email preferences to {label} (self-service)",
+            applies_to="MEMBERS",
+        )
         return render(
             request,
             "auctions/self_serve_contact.html",
@@ -24282,14 +24352,15 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         return kwargs
 
     def get_filter_placeholder_text(self):
-        return "Filter by name, talk, bio or location"
+        # Doubles as the only hint that a radius can be searched for, now that there is no
+        # distance control.  Short, because this box is the width of a phone.
+        return 'Search speakers, or "within 50 miles"'
 
     def get_possible_filters(self):
+        # photo / mapped / myclub are deliberately absent: they still work as keywords in the
+        # search box, but they aren't how anyone looks for a speaker, and every row in this
+        # menu is a row somebody has to read past to reach the ones that are.
         return [
-            ("<small class='text-muted'>Details:</small>", ""),
-            ("<i class='bi bi-camera'></i> Has a photo", "photo"),
-            ("<i class='bi bi-geo-alt'></i> On the map", "mapped"),
-            ("<i class='bi bi-people'></i> Added by my club", "myclub"),
             ("<small class='text-muted'>Tagged as:</small>", ""),
             ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
             ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
@@ -24328,7 +24399,15 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         context["has_origin"] = latitude is not None and longitude is not None
         context["origin_latitude"] = latitude
         context["origin_longitude"] = longitude
-        context["nec_clubs"] = self.nec_clubs
+        # The topic menu is markup the template writes itself (radios in a dropdown), so the
+        # choices come through the context rather than off a rendered widget.
+        context["topic_choices"] = filterset.topic_choices() if filterset else []
+        selected_topic = self.request.GET.get("topic", "")
+        context["selected_topic"] = selected_topic
+        # Empty unless a topic is set, so the button falls back to reading "Topics".
+        context["selected_topic_label"] = (
+            dict(context["topic_choices"]).get(selected_topic, "") if selected_topic else ""
+        )
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         context["is_htmx"] = bool(self.request.htmx)
         context["speakers_json"] = self.speakers_for_map(filterset) if filterset else []
@@ -24340,7 +24419,7 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         context["club_query"] = self.request.GET.get("club", "")
         # Only the full page renders the suggestion banner, and working it out reads every
         # speaker name in the directory -- doing that again on each keystroke would be waste.
-        context["suggested_members"] = [] if self.request.htmx else self.suggested_club_members()
+        context["has_unlisted_members"] = False if self.request.htmx else self.has_unlisted_club_members()
         if filterset and context.get("result_count") == 0:
             context["no_results"] = self._build_no_results_html()
         return context
@@ -24376,35 +24455,26 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             create_url,
         )
 
-    def suggested_club_members(self):
-        """Members of the user's NEC clubs who don't look like they're in the directory yet.
+    def has_unlisted_club_members(self):
+        """Whether any member of the user's NEC clubs is missing from the directory.
 
-        A nudge, not a bulk import -- the whole point is that a club knows which of its own
-        people give talks and the site doesn't.  Matching on name is deliberately loose;
-        a false "already added" is much better than pestering someone to re-add a speaker.
+        Only ever asked as a yes/no -- the banner names nobody. Matching on name is deliberately
+        loose; a false "already listed" is much better than nagging a club to re-add a speaker.
         """
         if not self.nec_clubs:
-            return []
+            return False
         # The NEC import stores names as "Last, First" while club members are "First Last", so
-        # index both readings of every speaker or every imported speaker looks like a new person.
+        # index both readings or every imported speaker looks like a new person.
         existing_names = set()
         for speaker in Speaker.objects.filter(is_deleted=False).only("name"):
             existing_names.add(speaker.name.casefold())
             existing_names.add(speaker.display_name.casefold())
-        suggestions = []
-        members = (
+        member_names = (
             ClubMember.objects.filter(club__in=self.nec_clubs, is_deleted=False)
             .exclude(name="")
-            .select_related("club")
-            .order_by("name")
+            .values_list("name", flat=True)
         )
-        for member in members:
-            if member.name.casefold() in existing_names:
-                continue
-            suggestions.append(member)
-            if len(suggestions) >= 8:
-                break
-        return suggestions
+        return any(name.casefold() not in existing_names for name in member_names)
 
 
 class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
@@ -24431,7 +24501,6 @@ class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
         context["comment_form"] = SpeakerCommentForm()
         context["can_delete"] = speaker.can_be_deleted_by(self.request.user)
         context["can_edit"] = speaker.can_be_deleted_by(self.request.user)
-        context["nec_clubs"] = self.nec_clubs
         latitude, longitude, _club, _label, _change_url = self.resolve_origin()
         if latitude is not None and speaker.has_coordinates:
             context["distance"] = int(
@@ -24577,12 +24646,9 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
             comment = form.save(commit=False)
             comment.speaker = speaker
             comment.user = request.user
-            # Attribute the comment to the club they picked, or their only NEC club.
-            club_slug = (request.POST.get("club") or "").strip()
-            club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
-            if not club and len(self.nec_clubs) == 1:
-                club = self.nec_clubs[0]
-            comment.club = club
+            # Recorded for the admin only -- comments are shown under the person's name, so
+            # there is nothing to pick from: a club is attached only when there's one to attach.
+            comment.club = self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
             comment.save()
             form = SpeakerCommentForm()
         return render(
@@ -24592,7 +24658,6 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": form,
-                "nec_clubs": self.nec_clubs,
             },
         )
 
@@ -24613,6 +24678,5 @@ class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": SpeakerCommentForm(),
-                "nec_clubs": self.nec_clubs,
             },
         )

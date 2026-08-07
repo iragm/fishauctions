@@ -13,12 +13,14 @@ from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 
-from auctions.management.commands.import_nec_speakers import canonical_topic_name, clean_text
+from auctions.management.commands.import_nec_speakers import clean_text
 from auctions.models import Club, ClubMember, Speaker, SpeakerComment, SpeakerTag, SpeakerTopic
+from auctions.speaker_topics import OTHER, STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics
 
 # A trimmed WXR export with the shapes that actually matter: an entity inside CDATA, the two
-# spellings of cichlids the real file has, a bio with a trailing "Programs:" run-on, a speaker
-# whose photo is linked by _thumbnail_id, one linked only by post_parent, and a draft to skip.
+# spellings of cichlids the real file has, a topic that is deliberately thrown away ("General"),
+# a bio with a trailing "Programs:" run-on, a speaker whose photo is linked by _thumbnail_id,
+# one linked only by post_parent, and a draft to skip.
 SAMPLE_WXR = """<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0"
     xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -34,6 +36,7 @@ SAMPLE_WXR = """<?xml version="1.0" encoding="UTF-8" ?>
     <wp:post_type><![CDATA[speaker]]></wp:post_type>
     <category domain="speaker_topics" nicename="cichlids"><![CDATA[CIchlids]]></category>
     <category domain="speaker_topics" nicename="reef"><![CDATA[Reef &amp; Brackish]]></category>
+    <category domain="speaker_topics" nicename="rift-lakes"><![CDATA[Rift Lakes]]></category>
     <wp:postmeta>
         <wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key>
         <wp:meta_value><![CDATA[674]]></wp:meta_value>
@@ -47,6 +50,7 @@ SAMPLE_WXR = """<?xml version="1.0" encoding="UTF-8" ?>
     <wp:status><![CDATA[publish]]></wp:status>
     <wp:post_type><![CDATA[speaker]]></wp:post_type>
     <category domain="speaker_topics" nicename="cichids"><![CDATA[Cichids]]></category>
+    <category domain="speaker_topics" nicename="general"><![CDATA[General]]></category>
 </item>
 <item>
     <title><![CDATA[Draft, Never Published]]></title>
@@ -85,10 +89,20 @@ def tiny_jpeg():
     return buffer.getvalue()
 
 
-def write_sample_export():
-    """Drop SAMPLE_WXR in a temp file and return its path."""
+def write_sample_export(bio_extra=""):
+    """Drop SAMPLE_WXR in a temp file and return its path.
+
+    `bio_extra` is appended to the first speaker's bio, for the tests that need an email in it.
+    """
+    body = SAMPLE_WXR
+    if bio_extra:
+        body = body.replace(
+            "Kevin breeds Central &amp; South American cichlids.",
+            f"Kevin breeds Central &amp; South American cichlids.{bio_extra}",
+            1,
+        )
     handle = tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False, encoding="utf-8")
-    handle.write(SAMPLE_WXR)
+    handle.write(body)
     handle.close()
     return handle.name
 
@@ -110,10 +124,15 @@ class ImportNecSpeakersTests(TestCase):
         self.assertFalse(Speaker.objects.filter(name__startswith="Draft").exists())
 
     def test_unescapes_entities_inside_cdata(self):
-        """WordPress double-escapes, and CDATA means the XML parser leaves `&amp;` alone."""
+        """WordPress double-escapes, and CDATA means the XML parser leaves `&amp;` alone.
+
+        Without the unescape "Reef &amp; Brackish" wouldn't match its alias and would land in
+        Other, so the topic mapping is the visible symptom of getting this wrong.
+        """
         self.run_import()
-        self.assertTrue(SpeakerTopic.objects.filter(name="Reef & Brackish").exists())
-        self.assertIn("Central & South American", Speaker.objects.get(wordpress_post_id=672).bio)
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        self.assertIn("Central & South American", speaker.bio)
+        self.assertIn("Reef & Invertebrates", list(speaker.topics.values_list("name", flat=True)))
 
     def test_merges_duplicate_topic_spellings(self):
         """ "CIchlids" and "Cichids" are the same subject and must not become two rows."""
@@ -121,6 +140,40 @@ class ImportNecSpeakersTests(TestCase):
         self.assertEqual(SpeakerTopic.objects.filter(name__iexact="cichlids").count(), 1)
         topic = SpeakerTopic.objects.get(name="Cichlids")
         self.assertEqual(topic.speakers.count(), 2)
+
+    def test_rift_lakes_imports_onto_the_one_rift_lake_topic(self):
+        self.run_import()
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        self.assertIn("Rift Lake Cichlids", speaker.topics.values_list("name", flat=True))
+
+    def test_a_discarded_topic_is_dropped_rather_than_imported_as_other(self):
+        """Esther's "General" says nothing about her, so it leaves her with just Cichlids."""
+        self.run_import()
+        speaker = Speaker.objects.get(wordpress_post_id=673)
+        self.assertEqual(list(speaker.topics.values_list("name", flat=True)), ["Cichlids"])
+        self.assertFalse(SpeakerTopic.objects.get(name=OTHER).speakers.exists())
+
+    def test_topics_only_re_tags_and_touches_nothing_else(self):
+        """The path for re-applying the vocabulary after it changes, on an import already done."""
+        self.run_import()
+        Speaker.objects.filter(wordpress_post_id=672).update(bio="hand edited", programs="Talk one\nTalk two")
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        speaker.topics.set([SpeakerTopic.objects.get(name="Killifish")])
+
+        self.run_import("--topics-only")
+
+        speaker.refresh_from_db()
+        # A full re-import would put the flattened run-on back, undoing split_speaker_talks.
+        self.assertEqual(speaker.bio, "hand edited")
+        self.assertEqual(speaker.programs, "Talk one\nTalk two")
+        names = list(speaker.topics.values_list("name", flat=True))
+        self.assertIn("Cichlids", names)
+        self.assertNotIn("Killifish", names)
+
+    def test_topics_only_never_creates_a_speaker(self):
+        out = self.run_import("--topics-only")
+        self.assertEqual(Speaker.objects.count(), 0)
+        self.assertIn("0 speakers re-tagged", out)
 
     def test_splits_the_bio_from_the_programs_list(self):
         self.run_import()
@@ -153,10 +206,21 @@ class ImportNecSpeakersTests(TestCase):
         self.run_import("--dry-run")
         self.assertEqual(Speaker.objects.count(), 0)
 
-    def test_orphan_topics_are_pruned(self):
+    def test_topics_outside_the_vocabulary_with_no_speakers_are_pruned(self):
         orphan = SpeakerTopic.objects.create(name="Nobody Talks About This")
         self.run_import()
         self.assertFalse(SpeakerTopic.objects.filter(pk=orphan.pk).exists())
+
+    def test_unused_vocabulary_topics_are_kept(self):
+        """They still have to appear in the add-speaker dropdown."""
+        self.run_import()
+        unused = SpeakerTopic.objects.get(name="Goldfish & Koi")
+        self.assertEqual(unused.speakers.count(), 0)
+        self.assertEqual(SpeakerTopic.objects.filter(name__in=STARTER_TOPICS).count(), len(STARTER_TOPICS))
+
+    def test_the_import_never_widens_the_vocabulary(self):
+        self.run_import()
+        self.assertEqual(list(SpeakerTopic.objects.exclude(name__in=STARTER_TOPICS)), [])
 
     @patch("auctions.management.commands.import_nec_speakers.requests.get")
     def test_downloads_photos_by_thumbnail_id_and_by_parent(self, mock_get):
@@ -193,14 +257,59 @@ class ImportNecSpeakersTests(TestCase):
         self.assertFalse(Speaker.objects.get(wordpress_post_id=672).image)
         self.assertIn("2 failed", out.getvalue())
 
+    def test_a_speaker_is_linked_to_a_site_account_by_email(self):
+        """The NEC export has no emails, so this is exercised with one that does."""
+        user = User.objects.create_user("kevin", "kevin@example.com", "pw")
+        path = write_sample_export(bio_extra=" Reach me at kevin@example.com")
+        call_command("import_nec_speakers", path, "--skip-images", stdout=StringIO(), stderr=StringIO())
+        self.assertEqual(Speaker.objects.get(wordpress_post_id=672).user, user)
+
+    def test_no_account_means_no_link(self):
+        self.run_import()
+        self.assertIsNone(Speaker.objects.get(wordpress_post_id=672).user)
+
+    def test_an_ambiguous_email_links_to_nobody(self):
+        """Two accounts on one address; guessing would hand a record to the wrong person."""
+        User.objects.create_user("kevin1", "kevin@example.com", "pw")
+        User.objects.create_user("kevin2", "kevin@example.com", "pw")
+        path = write_sample_export(bio_extra=" Reach me at kevin@example.com")
+        call_command("import_nec_speakers", path, "--skip-images", stdout=StringIO(), stderr=StringIO())
+        self.assertIsNone(Speaker.objects.get(wordpress_post_id=672).user)
+
     def test_clean_text_collapses_nbsp_runs(self):
         self.assertEqual(clean_text("a\xa0\xa0 b\n\nc"), "a b c")
 
-    def test_canonical_topic_name_folds_aliases(self):
+    def test_canonical_topic_name_folds_aliases_onto_the_vocabulary(self):
         self.assertEqual(canonical_topic_name("CIchlids"), "Cichlids")
         self.assertEqual(canonical_topic_name("Cichids"), "Cichlids")
-        self.assertEqual(canonical_topic_name("Africa"), "African")
+        self.assertEqual(canonical_topic_name("Africa"), "African Cichlids")
         self.assertIsNone(canonical_topic_name("   "))
+
+    def test_every_lake_lands_on_the_one_rift_lake_topic(self):
+        """One topic for all three lakes: the export's "Rift Lakes" doesn't say which."""
+        for name in ("Rift Lakes", "Lake Malawi", "Tanganyika", "Lake Victoria Region"):
+            self.assertEqual(canonical_topic_name(name), "Rift Lake Cichlids", name)
+
+    def test_the_meaningless_old_topics_are_dropped_rather_than_becoming_other(self):
+        """112 of 405 speakers carried one; in Other they'd swamp the topic that means "unknown"."""
+        self.assertIsNone(canonical_topic_name("Freshwater species"))
+        self.assertIsNone(canonical_topic_name("General"))
+
+    def test_an_unrecognised_topic_becomes_other_rather_than_a_new_row(self):
+        self.assertEqual(canonical_topic_name("Underwater Basket Weaving"), OTHER)
+
+    def test_every_alias_points_at_a_real_vocabulary_entry(self):
+        """A typo in the alias table would quietly send a whole topic into Other."""
+        from auctions.speaker_topics import TOPIC_ALIASES
+
+        self.assertEqual(sorted(set(TOPIC_ALIASES.values()) - set(STARTER_TOPICS)), [])
+
+    def test_no_name_is_both_discarded_and_mapped(self):
+        """Discarded wins in canonical_topic_name, so an overlap would be a silent dead alias."""
+        from auctions.speaker_topics import DISCARDED_TOPICS, TOPIC_ALIASES
+
+        self.assertEqual(sorted(DISCARDED_TOPICS & set(TOPIC_ALIASES)), [])
+        self.assertEqual(sorted(DISCARDED_TOPICS & {name.casefold() for name in STARTER_TOPICS}), [])
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -247,6 +356,44 @@ class SpeakerAccessTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.url)
 
+    def test_no_speaker_url_is_readable_while_logged_out(self):
+        """Nothing about a speaker -- not a name, not a comment -- is public."""
+        anonymous = Client()
+        slug = self.speaker.slug
+        urls = [
+            reverse("speaker_list"),
+            reverse("speaker_add"),
+            reverse("speaker_detail", kwargs={"slug": slug}),
+            reverse("speaker_panel", kwargs={"slug": slug}),
+            reverse("speaker_edit", kwargs={"slug": slug}),
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                response = anonymous.get(url)
+                self.assertEqual(response.status_code, 302, f"{url} did not redirect")
+                self.assertIn("/login", response.url)
+                self.assertNotIn(self.speaker.name, response.content.decode())
+
+    def test_no_speaker_url_is_writable_while_logged_out(self):
+        anonymous = Client()
+        slug = self.speaker.slug
+        posts = [
+            (reverse("speaker_add"), {"name": "Sneaky, Sam", "location": "x"}),
+            (reverse("speaker_delete", kwargs={"slug": slug}), {}),
+            (reverse("speaker_tag", kwargs={"slug": slug}), {"tag": "engaging"}),
+            (reverse("speaker_comment", kwargs={"slug": slug}), {"body": "hello"}),
+        ]
+        for url, payload in posts:
+            with self.subTest(url=url):
+                response = anonymous.post(url, payload)
+                self.assertEqual(response.status_code, 302, f"{url} did not redirect")
+                self.assertIn("/login", response.url)
+        self.assertFalse(Speaker.objects.filter(name="Sneaky, Sam").exists())
+        self.assertEqual(SpeakerTag.objects.count(), 0)
+        self.assertEqual(SpeakerComment.objects.count(), 0)
+        self.speaker.refresh_from_db()
+        self.assertFalse(self.speaker.is_deleted)
+
     def test_detail_page_is_scoped_too(self):
         url = reverse("speaker_detail", kwargs={"slug": self.speaker.slug})
         self.assertEqual(self.get(self.outsider, url).status_code, 403)
@@ -282,8 +429,10 @@ class SpeakerListTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
-        self.cichlids = SpeakerTopic.objects.create(name="Cichlids")
-        self.plants = SpeakerTopic.objects.create(name="Plants")
+        # get_or_create, not create: migration 0374 seeds the vocabulary, so these rows already
+        # exist -- but a --keepdb run after a full-suite flush starts without them.
+        self.cichlids, _ = SpeakerTopic.objects.get_or_create(name="Cichlids")
+        self.plants, _ = SpeakerTopic.objects.get_or_create(name="Plants")
         # ~40 miles from Providence
         self.nearby = Speaker.objects.create(
             name="Boston, Bob", location="Boston, MA", latitude=42.3601, longitude=-71.0589
@@ -399,17 +548,50 @@ class SpeakerListTests(TestCase):
         self.assertContains(response, "Add a speaker")
         self.assertNotContains(response, "name=untagged")
 
-    def test_suggestions_are_skipped_on_htmx_requests(self):
-        """Working them out reads every speaker name; not worth doing per keystroke."""
+    def test_the_unlisted_member_check_is_skipped_on_htmx_requests(self):
+        """It reads every speaker name in the directory; not worth doing per keystroke."""
         ClubMember.objects.create(club=self.club, name="Sally Speaker")
         response = self.client.get(self.list_url(), headers={"hx-request": "true"})
-        self.assertEqual(response.context["suggested_members"], [])
+        self.assertFalse(response.context["has_unlisted_members"])
 
     def test_htmx_response_carries_the_map_payload_out_of_band(self):
         """This is what keeps the map in sync when the filter box swaps only the table."""
         response = self.client.get(self.list_url(query="boston"), headers={"hx-request": "true"})
         self.assertContains(response, 'id="speaker-map-payload" hx-swap-oob="true"')
         self.assertNotContains(response, "<html")
+
+    def test_the_topic_menu_lists_every_topic_in_use(self):
+        response = self.client.get(self.list_url())
+        self.assertContains(response, f'value="{self.cichlids.slug}"')
+        self.assertContains(response, f'value="{self.plants.slug}"')
+        self.assertContains(response, "Any topic")
+
+    def test_the_topic_menu_button_names_the_topic_being_filtered_by(self):
+        response = self.client.get(self.list_url(topic=self.cichlids.slug))
+        self.assertEqual(response.context["selected_topic_label"], "Cichlids")
+        self.assertEqual(self.client.get(self.list_url()).context["selected_topic_label"], "")
+
+    def test_keywords_without_a_menu_entry_still_filter(self):
+        """photo/mapped/myclub were dropped from the Filters menu, not from the search box."""
+        self.assertNotContains(self.client.get(self.list_url()), 'data-filter-key="photo"')
+        names = self.names_in(self.client.get(self.list_url(query="mapped")))
+        self.assertNotIn("Nora Nowhere", names)
+
+    def test_a_radius_typed_into_the_search_box_filters_by_distance(self):
+        names = self.names_in(self.client.get(self.list_url(club=self.club.slug, query="within 100 miles")))
+        self.assertIn("Bob Boston", names)
+        self.assertNotIn("Los Angeles", names)
+
+    def test_the_radius_phrase_is_not_also_searched_for_as_text(self):
+        """Left in the text, "within 100 miles" would match nobody's bio and empty the page."""
+        for phrase in ("within 100 miles", "100 miles", "100mi"):
+            names = self.names_in(self.client.get(self.list_url(club=self.club.slug, query=phrase)))
+            self.assertIn("Bob Boston", names, msg=f"{phrase} found nobody")
+
+    def test_the_word_miles_on_its_own_is_still_a_text_search(self):
+        Speaker.objects.filter(pk=self.faraway.pk).update(bio="Ships fish miles from home")
+        names = self.names_in(self.client.get(self.list_url(query="miles")))
+        self.assertEqual(names, {"Los Angeles"})
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -459,6 +641,16 @@ class SpeakerTaggingTests(TestCase):
         response = self.client.get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
         self.assertContains(response, "Would book again")
 
+    def test_no_longer_speaking_is_available(self):
+        response = self.client.post(self.url, {"tag": "no_longer_speaking"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No longer speaking")
+        self.assertTrue(SpeakerTag.objects.filter(speaker=self.speaker, tag="no_longer_speaking").exists())
+
+    def test_the_donates_fee_tag_is_gone(self):
+        self.assertNotIn("donates_fee", SpeakerTag.TAG_LABELS)
+        self.assertEqual(self.client.post(self.url, {"tag": "donates_fee"}).status_code, 404)
+
     def test_every_tag_definition_has_a_group(self):
         groups = dict(SpeakerTag.grouped_definitions())
         self.assertEqual(sum(len(tags) for tags in groups.values()), len(SpeakerTag.TAG_DEFINITIONS))
@@ -485,11 +677,13 @@ class SpeakerCommentTests(TestCase):
         self.assertEqual(comment.body, "Excellent talk on plecos.")
         self.assertEqual(comment.user, self.user)
 
-    def test_a_comment_is_attributed_to_the_users_only_nec_club(self):
-        self.client.post(self.url, {"body": "Good stuff"})
+    def test_a_comment_records_the_users_only_nec_club_without_showing_it(self):
+        """The club is kept for the admin, but readers see the person, not the club."""
+        response = self.client.post(self.url, {"body": "Good stuff"})
         comment = SpeakerComment.objects.get()
         self.assertEqual(comment.club, self.club)
-        self.assertIn(self.club.name, comment.author_display)
+        self.assertNotIn(self.club.name, comment.author_display)
+        self.assertNotContains(response, self.club.name)
 
     def test_an_empty_comment_is_rejected(self):
         self.client.post(self.url, {"body": "   "})
@@ -538,34 +732,61 @@ class SpeakerCreateDeleteTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
+    def add(self, **extra):
+        payload = {"name": "Nobody, Ned", "bio": "", "programs": "", "location": "Providence, RI"}
+        payload.update(extra)
+        return self.client.post(reverse("speaker_add"), payload)
+
     def test_anyone_with_access_can_add_a_speaker_who_has_no_account(self):
-        response = self.client.post(
-            reverse("speaker_add"),
-            {"name": "Nobody, Ned", "bio": "", "programs": "", "new_topics": "", "location": ""},
-        )
+        response = self.add()
         self.assertEqual(response.status_code, 302)
         speaker = Speaker.objects.get(name="Nobody, Ned")
         self.assertEqual(speaker.created_by, self.user)
 
+    def test_location_is_required_when_adding(self):
+        """Without one the speaker is invisible on the map and in the distance filter."""
+        response = self.add(location="")
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "location", "This field is required.")
+        self.assertFalse(Speaker.objects.filter(name="Nobody, Ned").exists())
+
+    def test_location_is_not_forced_when_editing_an_imported_speaker(self):
+        """405 imported speakers have no location; requiring one would block editing them."""
+        from auctions.forms import SpeakerForm
+
+        speaker = Speaker.objects.create(name="Imported, Ivy", imported_from_nec=True)
+        form = SpeakerForm(instance=speaker, available_clubs=Club.objects.none())
+        self.assertFalse(form.fields["location"].required)
+
     def test_new_speakers_default_to_not_nec_only(self):
-        self.client.post(reverse("speaker_add"), {"name": "Nobody, Ned", "bio": "", "programs": "", "new_topics": ""})
+        self.add()
         self.assertFalse(Speaker.objects.get(name="Nobody, Ned").nec_only)
 
-    def test_new_topics_are_created_and_matched_case_insensitively(self):
-        SpeakerTopic.objects.create(name="Cichlids")
-        self.client.post(
-            reverse("speaker_add"),
-            {"name": "Nobody, Ned", "bio": "", "programs": "", "new_topics": "cichlids, Biotopes"},
-        )
-        speaker = Speaker.objects.get(name="Nobody, Ned")
-        self.assertEqual(SpeakerTopic.objects.filter(name__iexact="cichlids").count(), 1)
-        self.assertEqual(set(speaker.topics.values_list("name", flat=True)), {"Cichlids", "Biotopes"})
+    def test_nec_only_is_not_settable_from_the_form(self):
+        """Import and the Django admin only."""
+        from auctions.forms import SpeakerForm
+
+        self.assertNotIn("nec_only", SpeakerForm(available_clubs=Club.objects.none()).fields)
+        self.add(nec_only="on")
+        self.assertFalse(Speaker.objects.get(name="Nobody, Ned").nec_only)
+
+    def test_users_cannot_invent_topics(self):
+        """The vocabulary is closed; the form offers no way to add to it."""
+        from auctions.forms import SpeakerForm
+
+        self.assertNotIn("new_topics", SpeakerForm(available_clubs=Club.objects.none()).fields)
+        before = set(SpeakerTopic.objects.values_list("name", flat=True))
+        self.add()
+        self.assertEqual(set(SpeakerTopic.objects.values_list("name", flat=True)), before)
+
+    def test_a_topic_from_the_vocabulary_can_be_picked(self):
+        ensure_speaker_topics()
+        topic = SpeakerTopic.objects.get(name="Killifish")
+        self.add(topics=[topic.pk])
+        self.assertEqual(list(Speaker.objects.get(name="Nobody, Ned").topics.all()), [topic])
 
     def test_attribution_names_the_user_and_their_club(self):
-        self.client.post(
-            reverse("speaker_add"),
-            {"name": "Nobody, Ned", "bio": "", "programs": "", "new_topics": "", "club": self.club.pk},
-        )
+        self.add(club=self.club.pk)
         speaker = Speaker.objects.get(name="Nobody, Ned")
         self.assertEqual(speaker.attribution, "Added by Ada Officer (NEC Club)")
 
@@ -616,25 +837,27 @@ class SpeakerCreateDeleteTests(TestCase):
         self.assertEqual(response.context["form"].initial["name"], "Jane Aquarist")
         self.assertEqual(response.context["form"].initial["email"], "jane@example.com")
 
-    def test_club_members_who_are_not_speakers_are_suggested(self):
+    def test_the_banner_shows_when_a_club_member_is_not_in_the_directory(self):
         ClubMember.objects.create(club=self.club, name="Sally Speaker", email="sally@example.com")
         response = self.client.get(reverse("speaker_list"))
-        self.assertIn("Sally Speaker", [member.name for member in response.context["suggested_members"]])
+        self.assertTrue(response.context["has_unlisted_members"])
         self.assertContains(response, "Do any of your club members give talks?")
+        self.assertContains(response, "Add them here")
 
-    def test_a_member_already_in_the_directory_is_not_suggested(self):
-        """The NEC stores "Speaker, Sally" and the club stores "Sally Speaker" -- same person.
+    def test_the_banner_names_nobody(self):
+        """It's a nudge, not an accusation that a particular member gives talks."""
+        ClubMember.objects.create(club=self.club, name="Sally Speaker", email="sally@example.com")
+        response = self.client.get(reverse("speaker_list"))
+        self.assertNotContains(response, "Sally Speaker")
 
-        Checked through the context rather than the page body: the speaker is in the table
-        too, so their name appears either way.
-        """
-        ClubMember.objects.create(club=self.club, name="Sally Speaker")
+    def test_a_member_already_in_the_directory_does_not_count_as_unlisted(self):
+        """The NEC stores "Speaker, Sally" and the club stores "Sally Speaker" -- same person."""
+        ClubMember.objects.filter(club=self.club).delete()
+        ClubMember.objects.create(club=self.club, user=self.user, name="Sally Speaker", permission_view=True)
         Speaker.objects.create(name="Speaker, Sally")
         response = self.client.get(reverse("speaker_list"))
-        suggested = [member.name for member in response.context["suggested_members"]]
-        self.assertNotIn("Sally Speaker", suggested)
-        # The club's other members are still fair game, so this isn't just an empty list.
-        self.assertIn("Ada Officer", suggested)
+        self.assertFalse(response.context["has_unlisted_members"])
+        self.assertNotContains(response, "Do any of your club members give talks?")
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -662,6 +885,172 @@ class SpeakerModelTests(TestCase):
 
         names = set(FakeView().visible_speakers().values_list("name", flat=True))
         self.assertEqual(names, {"Public, Paula"})
+
+
+class SplitSpeakerTalksTests(TestCase):
+    """The talk-list splitter, and above all its refusal to accept a rewritten split."""
+
+    RUN_ON = (
+        "Killifish of Madagascar Filtration: Making a Debruyn Filter and a Working Mattenfilter "
+        "Demo (Workshop) Seahorses, Pipefish, and Seadragons This Is the Golden Age of Aquarium Fish"
+    )
+    GOOD_SPLIT = [
+        "Killifish of Madagascar",
+        "Filtration: Making a Debruyn Filter and a Working Mattenfilter Demo (Workshop)",
+        "Seahorses, Pipefish, and Seadragons",
+        "This Is the Golden Age of Aquarium Fish",
+    ]
+
+    def setUp(self):
+        self.speaker = Speaker.objects.create(name="Pierce, Richard", programs=self.RUN_ON)
+
+    def faithful(self, talks):
+        from auctions.management.commands.split_speaker_talks import split_is_faithful
+
+        return split_is_faithful(self.RUN_ON, talks)
+
+    def test_a_clean_split_is_accepted(self):
+        self.assertTrue(self.faithful(self.GOOD_SPLIT))
+
+    def test_whitespace_differences_are_tolerated(self):
+        self.assertTrue(self.faithful([talk.replace(" ", "  ") for talk in self.GOOD_SPLIT]))
+
+    def test_a_reworded_title_is_rejected(self):
+        """The failure that would matter: a club books a talk the speaker doesn't give."""
+        reworded = list(self.GOOD_SPLIT)
+        reworded[0] = "Killifishes of Madagascar"
+        self.assertFalse(self.faithful(reworded))
+
+    def test_a_dropped_title_is_rejected(self):
+        self.assertFalse(self.faithful(self.GOOD_SPLIT[:-1]))
+
+    def test_an_invented_title_is_rejected(self):
+        self.assertFalse(self.faithful([*self.GOOD_SPLIT, "Cichlids of Lake Malawi"]))
+
+    def test_reordered_titles_are_rejected(self):
+        self.assertFalse(self.faithful(list(reversed(self.GOOD_SPLIT))))
+
+    def test_an_empty_split_is_rejected(self):
+        self.assertFalse(self.faithful([]))
+        self.assertFalse(self.faithful(["", "   "]))
+
+    @patch("auctions.management.commands.split_speaker_talks.get_provider")
+    def test_a_faithful_split_is_written_one_per_line(self, mock_provider):
+        mock_provider.return_value = self._fake_provider({"talks": self.GOOD_SPLIT})
+        call_command("split_speaker_talks", stdout=StringIO(), stderr=StringIO())
+        self.speaker.refresh_from_db()
+        self.assertEqual(self.speaker.programs, "\n".join(self.GOOD_SPLIT))
+
+    @patch("auctions.management.commands.split_speaker_talks.get_provider")
+    def test_an_unfaithful_split_leaves_the_speaker_untouched(self, mock_provider):
+        mock_provider.return_value = self._fake_provider({"talks": ["Something Else Entirely"]})
+        out = StringIO()
+        call_command("split_speaker_talks", stdout=out, stderr=StringIO())
+        self.speaker.refresh_from_db()
+        self.assertEqual(self.speaker.programs, self.RUN_ON)
+        self.assertIn("1 rejected", out.getvalue())
+
+    @patch("auctions.management.commands.split_speaker_talks.get_provider")
+    def test_dry_run_writes_nothing(self, mock_provider):
+        mock_provider.return_value = self._fake_provider({"talks": self.GOOD_SPLIT})
+        call_command("split_speaker_talks", "--dry-run", stdout=StringIO(), stderr=StringIO())
+        self.speaker.refresh_from_db()
+        self.assertEqual(self.speaker.programs, self.RUN_ON)
+
+    @patch("auctions.management.commands.split_speaker_talks.get_provider")
+    def test_already_split_speakers_are_skipped(self, mock_provider):
+        provider = self._fake_provider({"talks": self.GOOD_SPLIT})
+        mock_provider.return_value = provider
+        Speaker.objects.filter(pk=self.speaker.pk).update(programs="One talk\nAnother talk")
+        call_command("split_speaker_talks", stdout=StringIO(), stderr=StringIO())
+        self.assertEqual(provider.calls, 0)
+
+    def _fake_provider(self, data):
+        from auctions.llm import LLMResult
+
+        class FakeProvider:
+            model = "fake"
+            name = "fake"
+
+            def __init__(self):
+                self.calls = 0
+
+            def is_configured(self):
+                return True
+
+            def complete_json(self, system, messages, max_tokens=None):
+                self.calls += 1
+                return LLMResult(data=data, model="fake")
+
+        return FakeProvider()
+
+
+@override_settings(SINGLE_CLUB_MODE=False)
+class SpeakerPhotoTests(TestCase):
+    """The photo field reuses LotImage's handling: upload or URL, with the same validation."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="NEC Club", is_nec_club=True)
+        self.user = User.objects.create_user("officer", "officer@example.com", "pw")
+        ClubMember.objects.create(club=self.club, user=self.user, name="Officer", permission_view=True)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def form(self, **data):
+        from auctions.forms import SpeakerForm
+
+        payload = {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"}
+        payload.update(data)
+        return SpeakerForm(payload, available_clubs=Club.objects.none())
+
+    def test_a_photo_url_is_accepted(self):
+        form = self.form(url="https://example.com/photo.jpg")
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_a_url_that_is_not_an_image_is_rejected(self):
+        form = self.form(url="https://example.com/not-a-photo")
+        self.assertFalse(form.is_valid())
+        self.assertIn("url", form.errors)
+
+    def test_a_corrupt_upload_is_a_field_error_not_a_500(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from auctions.forms import SpeakerForm
+
+        broken = SimpleUploadedFile("photo.jpg", b"this is not a jpeg", content_type="image/jpeg")
+        form = SpeakerForm(
+            {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"},
+            {"image": broken},
+            available_clubs=Club.objects.none(),
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("image", form.errors)
+
+    def test_a_real_upload_is_accepted_and_thumbnailed(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from auctions.forms import SpeakerForm
+
+        good = SimpleUploadedFile("photo.jpg", tiny_jpeg(), content_type="image/jpeg")
+        form = SpeakerForm(
+            {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"},
+            {"image": good},
+            available_clubs=Club.objects.none(),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        speaker = form.save()
+        self.assertTrue(speaker.image)
+        self.assertTrue(speaker.thumbnail_url)
+
+    def test_the_url_is_used_when_there_is_no_upload(self):
+        speaker = Speaker.objects.create(name="Nobody, Ned", url="https://example.com/photo.jpg")
+        self.assertEqual(speaker.thumbnail_url, "https://example.com/photo.jpg")
+        self.assertEqual(speaker.display_url, "https://example.com/photo.jpg")
+
+    def test_no_photo_at_all_is_none(self):
+        speaker = Speaker.objects.create(name="Nobody, Ned")
+        self.assertIsNone(speaker.thumbnail_url)
+        self.assertIsNone(speaker.display_url)
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -731,7 +1120,66 @@ class SpeakerNavigationTests(TestCase):
     def test_nec_clubs_get_a_speakers_link(self):
         response = self.sidebar_for(is_nec_club=True)
         self.assertContains(response, reverse("speaker_list"))
+        self.assertContains(response, "Find speakers")
 
     def test_other_clubs_do_not(self):
         response = self.sidebar_for(is_nec_club=False)
         self.assertNotContains(response, reverse("speaker_list"))
+
+    def test_find_speakers_sits_above_only_setup_and_club_history(self):
+        """The agreed tail of the nav. Asserted by position, since that is the whole request."""
+        body = self.sidebar_for(is_nec_club=True).content.decode()
+        find_speakers = body.index("Find speakers")
+        self.assertLess(find_speakers, body.index("Setup"))
+        self.assertLess(body.index("Setup"), body.index("Club history"))
+        # Everything else is above it.
+        for earlier in ("Club Home", "Members", "Map", "Print Barcodes", "Club stats"):
+            self.assertLess(body.index(earlier), find_speakers, f"{earlier} should be above Find speakers")
+
+
+@override_settings(SINGLE_CLUB_MODE=False)
+class ClubSidebarAuctionLinkTests(TestCase):
+    """Running-the-room links belong to in-person auctions only."""
+
+    IN_PERSON_ONLY = ("Set lot winners", "Checkout", "Print labels")
+
+    def setUp(self):
+        self.user = User.objects.create_user("officer", "officer@example.com", "pw")
+        self.club = Club.objects.create(name="A Club")
+        ClubMember.objects.create(club=self.club, user=self.user, name="Officer", permission_admin=True)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def sidebar_for(self, is_online):
+        import datetime
+
+        from django.utils import timezone
+
+        from auctions.models import Auction
+
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="An auction",
+            is_online=is_online,
+            club=self.club,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        Club.objects.filter(pk=self.club.pk).update(current_auction=auction)
+        return self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+    def test_in_person_auctions_keep_the_room_links(self):
+        response = self.sidebar_for(is_online=False)
+        for label in self.IN_PERSON_ONLY:
+            self.assertContains(response, label)
+
+    def test_online_auctions_do_not_show_them(self):
+        response = self.sidebar_for(is_online=True)
+        for label in self.IN_PERSON_ONLY:
+            self.assertNotContains(response, label)
+
+    def test_online_auctions_keep_the_links_that_do_apply(self):
+        """A guard against gating too much away along with the in-person links."""
+        response = self.sidebar_for(is_online=True)
+        for label in ("Rules", "Lots", "Add user"):
+            self.assertContains(response, label)

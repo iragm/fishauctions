@@ -17,7 +17,7 @@ from django.db.models import (
     Sum,
     When,
 )
-from django.forms.widgets import NumberInput, Select, TextInput
+from django.forms.widgets import HiddenInput, NumberInput, Select, TextInput
 from django.utils import timezone
 
 from .models import (
@@ -1413,11 +1413,17 @@ class ClubBapLotFilter(django_filters.FilterSet):
         return queryset
 
 
-#: The three speaker filter controls are rendered in two different <form> elements (the text
-#: box sits under the table header, topic and distance sit inline with the buttons), so an
-#: explicit hx-include is what keeps all three values on every request.  Relying on htmx's
-#: implicit "include the enclosing form" would make changing the topic drop the search text.
+#: The speaker filter controls are not inside one <form> -- the search box sits above the
+#: topic menu, and the topic radios sit inside a dropdown -- so an explicit hx-include is what
+#: keeps every value on every request.  Relying on htmx's implicit "include the enclosing
+#: form" would make picking a topic drop the search text.
 SPEAKER_FILTER_CONTROL_CLASS = "speaker-filter-control"
+
+#: "within 50 miles", "50 miles", "50mi" typed into the search box.  There is no distance
+#: control on the form: a radius is a rare, one-off thing to want, and a permanent dropdown
+#: for it costs every user space on every visit.  Anchored on the number, so the word "miles"
+#: on its own stays an ordinary text search (plenty of bios mention miles).
+DISTANCE_PHRASE_RE = re.compile(r"\b(?:within\s+)?(\d{1,4})\s*(?:mi|mile|miles)\b")
 
 
 def speaker_filter_attrs(trigger, css_class, **extra):
@@ -1445,10 +1451,13 @@ class SpeakerFilter(django_filters.FilterSet):
     """Filter for the speaker directory.
 
     Follows the site's htmx table convention -- one text box that also understands keyword
-    tokens, driven by the Filters dropdown chips -- with two extra controls the speaker list
-    needs: a topic dropdown and a distance limit.  Distance needs an origin, so the view
-    hands one in (a club's coordinates, or the user's own); with no origin the distance
-    filter and the distance column quietly do nothing rather than filtering everything away.
+    tokens, driven by the Filters dropdown chips -- plus a topic menu of the same shape.
+
+    Everything else the box understands has no control of its own: the keyword tokens the
+    Filters menu doesn't list (photo, mapped, myclub) and a distance phrase like "within 50
+    miles".  Distance needs an origin, so the view hands one in (a club's coordinates, or the
+    user's own); with no origin the radius and the distance column quietly do nothing rather
+    than filtering everything away.
     """
 
     #: query token -> tag value.  These read as plain words in the search box.
@@ -1467,24 +1476,16 @@ class SpeakerFilter(django_filters.FilterSet):
             attrs=speaker_filter_attrs(
                 "keyup changed delay:300ms",
                 "form-control",
-                placeholder="Filter by name, talk, bio, location, photo, mapped, myclub, remote, travels, nofee...",
+                placeholder="Search speakers",
             )
         ),
     )
-    topic = django_filters.CharFilter(
-        method="filter_by_topic",
-        label="",
-        widget=Select(attrs=speaker_filter_attrs("change", "form-select form-select-sm w-auto"), choices=()),
-    )
-    distance = django_filters.NumberFilter(
-        method="filter_by_distance",
-        label="",
-        widget=NumberInput(
-            attrs=speaker_filter_attrs(
-                "keyup changed delay:400ms", "form-control form-control-sm w-auto", placeholder="Within ___ miles"
-            )
-        ),
-    )
+    # Both of these are driven by markup the templates write themselves -- the topic menu's
+    # radios (speaker_table_header.html) and, for distance, a phrase typed into the search
+    # box -- so neither widget is ever rendered.  They stay declared because they are still
+    # real query parameters: ?topic=cichlids&distance=50 is a link somebody can be sent.
+    topic = django_filters.CharFilter(method="filter_by_topic", label="Topic", widget=HiddenInput())
+    distance = django_filters.NumberFilter(method="filter_by_distance", label="Distance", widget=HiddenInput())
 
     class Meta:
         model = Speaker
@@ -1500,9 +1501,9 @@ class SpeakerFilter(django_filters.FilterSet):
         if not data:
             data = {"query": ""}
         super().__init__(data, *args, **kwargs)
-        self.filters["topic"].field.widget.choices = self._topic_choices()
 
-    def _topic_choices(self):
+    def topic_choices(self):
+        """(slug, name) for the topic menu, only topics somebody is actually filed under."""
         topics = SpeakerTopic.objects.filter(speakers__is_deleted=False).distinct().order_by("name")
         return [("", "Any topic"), *[(topic.slug, topic.name) for topic in topics]]
 
@@ -1518,6 +1519,18 @@ class SpeakerFilter(django_filters.FilterSet):
             return queryset
         return queryset.filter(topics__slug=value)
 
+    def _take_distance_phrase(self, value):
+        """Pull a radius out of the search text, and hand back the text without it.
+
+        Removing it matters as much as reading it: left in, "within 50 miles" would also be
+        run as a text search for that phrase, and nobody's bio says it.
+        """
+        match = DISTANCE_PHRASE_RE.search(value.lower())
+        if not match:
+            return value, None
+        remaining = (value[: match.start()] + " " + value[match.end() :]).strip()
+        return remaining, int(match.group(1))
+
     def filter_by_distance(self, queryset, name, value):
         """Limit to speakers within `value` miles of the origin.
 
@@ -1529,8 +1542,11 @@ class SpeakerFilter(django_filters.FilterSet):
         return queryset.filter(latitude__isnull=False, longitude__isnull=False, distance__lte=int(value))
 
     def speaker_search(self, queryset, name, value):
-        """Free text over name/talks/bio/location, plus the chip keyword tokens."""
-        tokens = (value or "").lower().split()
+        """Free text over name/talks/bio/location, plus the keyword tokens and a radius."""
+        value, radius = self._take_distance_phrase(value or "")
+        if radius is not None:
+            queryset = self.filter_by_distance(queryset, "distance", radius)
+        tokens = value.lower().split()
         wanted_tags = []
         require_photo = False
         require_mapped = False

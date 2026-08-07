@@ -77,7 +77,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
       {% endif %}
       {% if can_delete %}
       <form method="post" action="{% url 'speaker_delete' speaker.slug %}" class="d-inline"
-            data-confirm="Remove {{ speaker.display_name }} from the speaker directory? Tags and comments other clubs left will be hidden too."
+            data-confirm="Remove {{ speaker.display_name }} from the speaker directory?"
             data-confirm-title="Remove this speaker?"
             data-confirm-ok="Remove speaker"
             data-confirm-variant="danger">

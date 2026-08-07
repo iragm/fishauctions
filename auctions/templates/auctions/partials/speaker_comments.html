@@ -37,11 +37,6 @@ and SpeakerCommentDeleteView, so it has to stand alone.
   {{ comment_form.body }}
   {% if comment_form.body.errors %}<div class="text-danger small">{{ comment_form.body.errors|striptags }}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
-    {% if nec_clubs|length > 1 %}
-    <select name="club" class="form-select form-select-sm w-auto">
-      {% for nec_club in nec_clubs %}<option value="{{ nec_club.slug }}">{{ nec_club.name }}</option>{% endfor %}
-    </select>
-    {% endif %}
     <button type="submit" class="btn btn-sm btn-success text-dark"><i class="bi bi-chat-left-text"></i> Post comment</button>
   </div>
 </form>

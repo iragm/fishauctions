@@ -9,6 +9,7 @@ from auctions.site_setup import (
     ensure_single_club_membership_for_user,
     get_single_club,
 )
+from auctions.speaker_topics import ensure_speaker_topics
 
 
 class Command(BaseCommand):
@@ -16,6 +17,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         User = get_user_model()
+
+        # The speaker directory's topic vocabulary is a closed list nothing in the UI can add
+        # to, so it has to exist before anyone opens the add-speaker form.
+        topics_created = ensure_speaker_topics()
+        if topics_created:
+            self.stdout.write(self.style.SUCCESS(f"Created {topics_created} speaker topics"))
 
         if settings.DEBUG and not User.objects.exists():
             admin_email = getattr(settings, "ADMIN_EMAIL", "admin@example.com") or "admin@example.com"

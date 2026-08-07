@@ -5280,18 +5280,12 @@ class SpeakerForm(forms.ModelForm):
     whatever the person filling it in happens to know.
     """
 
-    new_topics = forms.CharField(
-        required=False,
-        label="Add new topics",
-        help_text="Comma separated. Only use this for a subject that isn't in the list above.",
-        widget=forms.TextInput(attrs={"placeholder": "Biotopes, Fish photography"}),
-    )
-
     class Meta:
         model = Speaker
         fields = [
             "name",
             "image",
+            "url",
             "bio",
             "programs",
             "topics",
@@ -5302,7 +5296,6 @@ class SpeakerForm(forms.ModelForm):
             "location",
             "location_coordinates",
             "club",
-            "nec_only",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
@@ -5326,6 +5319,18 @@ class SpeakerForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
+        # Topics are a closed vocabulary (see auctions/speaker_topics.py). Nothing here creates
+        # one, which is what stops the list drifting into three spellings of "cichlids" again.
+        self.fields["topics"].help_text = "Pick everything they talk about. Use Other if nothing fits."
+        # A speaker with no location can't appear on the map or in the distance filter, which is
+        # most of what the directory is for -- so it's required when adding someone. Editing an
+        # imported speaker who never had one stays possible.
+        if not (self.instance and self.instance.pk):
+            self.fields["location"].required = True
+        self.fields["url"].required = False
+        # Marking the input image-only lets the app's WebView file chooser offer the camera; not
+        # setting `capture` keeps the photo library available too. Copied from CreateImageForm.
+        self.fields["image"].widget.attrs["accept"] = "image/*"
         self.fields["club"].required = False
         self.fields["club"].label = "Adding on behalf of"
         self.fields["club"].help_text = "Optional. Shown as the source of this entry."
@@ -5340,13 +5345,16 @@ class SpeakerForm(forms.ModelForm):
         club_row = ["club"] if "club" in self.fields else []
         self.helper.layout = Layout(
             "name",
-            "image",
+            Fieldset(
+                "Photo",
+                "image",
+                "url",
+            ),
             "bio",
             "programs",
             Fieldset(
                 "Topics",
                 "topics",
-                "new_topics",
             ),
             Fieldset(
                 "Contact",
@@ -5364,7 +5372,6 @@ class SpeakerForm(forms.ModelForm):
                 "location_coordinates",
             ),
             *club_row,
-            "nec_only",
         )
         self.helper.add_input(Submit("submit", "Save speaker", css_class="btn-primary"))
         add_bootstrap_classes(self)
@@ -5376,33 +5383,24 @@ class SpeakerForm(forms.ModelForm):
             raise forms.ValidationError(msg)
         return name
 
-    def clean_new_topics(self):
-        """Split the comma separated box into names, dropping blanks and duplicates."""
-        raw = self.cleaned_data.get("new_topics") or ""
-        names = []
-        for part in raw.split(","):
-            cleaned = part.strip()
-            if cleaned and cleaned.casefold() not in {name.casefold() for name in names}:
-                names.append(cleaned)
-        return names
+    def clean_url(self):
+        """Validate that the URL points to an image. Same check LotImage's form runs."""
+        url = self.cleaned_data.get("url")
+        if not url:
+            return url
+        return validate_image_url(url)
 
-    def save(self, commit=True):
-        """Save, then attach any topics typed into `new_topics`.
+    def clean_image(self):
+        """Reject a corrupt upload with a friendly message instead of a 500 during thumbnailing.
 
-        Matching an existing topic case-insensitively matters here: without it the first
-        person to type "cichlids" creates a second row next to the imported "Cichlids".
+        Django's ImageField only runs Pillow's header check, which lets truncated files through
+        to blow up later. See CreateImageForm.clean_image -- this is the same guard.
         """
-        speaker = super().save(commit=commit)
-        if commit:
-            self._attach_new_topics(speaker)
-        return speaker
-
-    def _attach_new_topics(self, speaker):
-        for name in self.cleaned_data.get("new_topics", []):
-            topic = SpeakerTopic.objects.filter(name__iexact=name).first()
-            if not topic:
-                topic = SpeakerTopic.objects.create(name=name)
-            speaker.topics.add(topic)
+        image = self.cleaned_data.get("image")
+        # Only a freshly uploaded file needs decoding; an unchanged stored image is fine.
+        if isinstance(image, UploadedFile):
+            validate_uploaded_image(image)
+        return image
 
 
 class SpeakerCommentForm(forms.ModelForm):
