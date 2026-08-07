@@ -123,6 +123,7 @@ from .filters import (
     ClubMemberFilter,
     LotAdminFilter,
     LotFilter,
+    SpeakerFilter,
     UserBidLotFilter,
     UserLotFilter,
     UserWatchLotFilter,
@@ -178,6 +179,8 @@ from .forms import (
     PickupLocationForm,
     QuickAddLot,
     QuickAddTOS,
+    SpeakerCommentForm,
+    SpeakerForm,
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
@@ -227,6 +230,9 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    Speaker,
+    SpeakerComment,
+    SpeakerTag,
     SquareSeller,
     UserBan,
     UserData,
@@ -277,6 +283,7 @@ from .tables import (
     ClubMemberHTMxTable,
     LotHTMxTable,
     LotHTMxTableForUsers,
+    SpeakerHTMxTable,
 )
 from .tasks import (
     cancel_invoice_notification,
@@ -435,6 +442,39 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+#: Every per-member permission flag on ClubMember.  "Has some permission in a club" is the
+#: bar for the speaker directory, so it needs the whole list rather than one named flag.
+CLUB_PERMISSION_FIELDS = (
+    "permission_admin",
+    "permission_view",
+    "permission_export",
+    "permission_add_edit",
+    "permission_edit_club",
+    "permission_money",
+    "permission_manage_auctions",
+    "permission_manage_bap",
+)
+
+
+def clubs_with_any_permission(user, nec_only=True):
+    """Clubs where this user holds at least one permission.
+
+    The permission filters and the user filter go in a single ``filter()`` call on purpose:
+    across a multi-valued relation that constrains one ClubMember row to satisfy all of them,
+    which is the question being asked.  Split across two calls it would instead match a club
+    where the user is a member and *somebody* has a permission.
+    """
+    if not user.is_authenticated:
+        return Club.objects.none()
+    base = Club.objects.filter(is_nec_club=True) if nec_only else Club.objects.all()
+    if user.is_superuser:
+        return base.order_by("name")
+    any_permission = Q()
+    for field in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{f"members__{field}": True})
+    return base.filter(any_permission, members__user=user, members__is_deleted=False).distinct().order_by("name")
 
 
 def user_can_add_edit_people(user, auction):
@@ -24116,3 +24156,463 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
         )
         return context
+
+
+class NECSpeakerAccessMixin(LoginRequiredMixin):
+    """Gate the speaker directory to people involved with an NEC member club.
+
+    "Involved with" is any permission in a club an admin has flagged `is_nec_club`.  Rather
+    than a bare 403 this renders a page explaining what the directory is and who can see it,
+    because most people hitting it will be members of clubs that simply aren't NEC members.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.nec_clubs = []
+        self._origin = None
+        if request.user.is_authenticated:
+            self.nec_clubs = list(clubs_with_any_permission(request.user))
+            # A superuser gets in even before any club has been flagged as an NEC member --
+            # otherwise the person who has to tick that box can't reach the page to see why.
+            if not self.nec_clubs and not request.user.is_superuser:
+                return render(request, "auctions/speaker_no_access.html", status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    @property
+    def nec_club_ids(self):
+        return [club.pk for club in self.nec_clubs]
+
+    def visible_speakers(self):
+        """Speakers this user is allowed to see.
+
+        Today everyone who gets this far is in an NEC club, so this is every speaker.  When
+        the directory opens up to other clubs, only this method changes: `nec_only` rows drop
+        out for everyone else, and the NEC roster stays where it is.
+        """
+        queryset = Speaker.objects.filter(is_deleted=False)
+        if self.nec_clubs or self.request.user.is_superuser:
+            return queryset
+        return queryset.filter(nec_only=False)
+
+    def resolve_origin(self):
+        """Work out what distances on this page are measured from.
+
+        `?club=<slug>` wins when the user has a permission in that club, which is what makes
+        the list shareable between officers of the same club.  Without it we fall back to the
+        user's own coordinates, so the page is still useful before anyone sets a club address.
+        Returns (latitude, longitude, club_or_None, label, change_url_or_None).
+
+        Cached per request: four different hooks on the list view need the same answer, and
+        recomputing it would re-run the club lookup each time.
+        """
+        if self._origin is not None:
+            return self._origin
+        self._origin = self._resolve_origin_uncached()
+        return self._origin
+
+    def _resolve_origin_uncached(self):
+        requested_slug = (self.request.GET.get("club") or "").strip()
+        if requested_slug:
+            club = next((c for c in self.nec_clubs if c.slug == requested_slug), None)
+            if club:
+                change_url = (
+                    reverse("club_edit", kwargs={"slug": club.slug})
+                    if check_club_permission(self.request.user, club, "permission_edit_club")
+                    else None
+                )
+                if club.latitude and club.longitude:
+                    return club.latitude, club.longitude, club, club.name, change_url
+                # A club with no address still scopes the page to that club, it just can't
+                # measure anything -- say so rather than silently using the user's location.
+                return None, None, club, club.name, change_url
+        # contact_info is the page with the location map on it, not preferences.
+        userdata = getattr(self.request.user, "userdata", None)
+        if userdata and userdata.latitude and userdata.longitude:
+            return (
+                userdata.latitude,
+                userdata.longitude,
+                None,
+                "your location",
+                reverse("contact_info"),
+            )
+        return None, None, None, "", reverse("contact_info")
+
+
+class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
+    """The speaker directory, as a sortable table or a map of the same filtered set.
+
+    The map is why this subclasses HTMxTableView rather than just using it: an htmx filter
+    normally swaps the table and nothing else, so the htmx response here also carries an
+    out-of-band payload of every matching speaker's coordinates and the map redraws its
+    markers from that.  Both views therefore always agree, and filtering doesn't reload the
+    page or lose the map's pan/zoom.
+    """
+
+    model = Speaker
+    table_class = SpeakerHTMxTable
+    filterset_class = SpeakerFilter
+    template_name = "auctions/speaker_list.html"
+    htmx_template_name = "auctions/partials/speaker_table.html"
+    htmx_table_header_template = "auctions/partials/speaker_table_header.html"
+
+    def get_queryset(self):
+        queryset = self.visible_speakers().prefetch_related("topics")
+        latitude, longitude, *_ = self.resolve_origin()
+        if latitude is not None and longitude is not None:
+            # nulls_last matters more than it looks: the distance expression is NULL for every
+            # speaker without coordinates, and most speakers don't have any yet, so a plain
+            # ascending sort fills the entire first page with "no location set".
+            queryset = queryset.annotate(distance=distance_to(latitude, longitude)).order_by(
+                F("distance").asc(nulls_last=True), "name"
+            )
+        return queryset
+
+    def get_filterset_kwargs(self, filterset_class):
+        kwargs = super().get_filterset_kwargs(filterset_class)
+        latitude, longitude, *_ = self.resolve_origin()
+        kwargs["latitude"] = latitude
+        kwargs["longitude"] = longitude
+        kwargs["nec_club_ids"] = self.nec_club_ids
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        latitude, longitude, *_ = self.resolve_origin()
+        kwargs["has_origin"] = latitude is not None and longitude is not None
+        return kwargs
+
+    def get_filter_placeholder_text(self):
+        return "Filter by name, talk, bio or location"
+
+    def get_possible_filters(self):
+        return [
+            ("<small class='text-muted'>Details:</small>", ""),
+            ("<i class='bi bi-camera'></i> Has a photo", "photo"),
+            ("<i class='bi bi-geo-alt'></i> On the map", "mapped"),
+            ("<i class='bi bi-people'></i> Added by my club", "myclub"),
+            ("<small class='text-muted'>Tagged as:</small>", ""),
+            ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
+            ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
+            ("<i class='bi bi-car-front'></i> Willing to travel", "travels"),
+            ("<i class='bi bi-cash'></i> No fee", "nofee"),
+            ("<i class='bi bi-box-seam'></i> Brings auction items", "auctionitems"),
+            ("<i class='bi bi-tag'></i> Not tagged yet", "untagged"),
+        ]
+
+    def speakers_for_map(self, filterset):
+        """Coordinates for every speaker matching the current filters, not just this page.
+
+        A map that only plots the current page of results would be actively misleading, so
+        this deliberately ignores pagination.
+        """
+        queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
+        return [
+            {
+                "slug": speaker.slug,
+                "name": speaker.display_name,
+                "location": speaker.location,
+                "lat": speaker.latitude,
+                "lng": speaker.longitude,
+                "thumbnail": speaker.thumbnail_url or "",
+            }
+            for speaker in queryset[:1000]
+        ]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        latitude, longitude, club, label, change_url = self.resolve_origin()
+        filterset = context.get("filter")
+        context["origin_club"] = club
+        context["origin_label"] = label
+        context["origin_change_url"] = change_url
+        context["has_origin"] = latitude is not None and longitude is not None
+        context["origin_latitude"] = latitude
+        context["origin_longitude"] = longitude
+        context["nec_clubs"] = self.nec_clubs
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["is_htmx"] = bool(self.request.htmx)
+        context["speakers_json"] = self.speakers_for_map(filterset) if filterset else []
+        if filterset:
+            total = filterset.qs.count()
+            context["unmapped_count"] = total - len(context["speakers_json"])
+            context["result_count"] = total
+        context["default_view"] = "map" if self.request.GET.get("view") == "map" else "list"
+        context["club_query"] = self.request.GET.get("club", "")
+        # Only the full page renders the suggestion banner, and working it out reads every
+        # speaker name in the directory -- doing that again on each keystroke would be waste.
+        context["suggested_members"] = [] if self.request.htmx else self.suggested_club_members()
+        if filterset and context.get("result_count") == 0:
+            context["no_results"] = self._build_no_results_html()
+        return context
+
+    def _build_no_results_html(self):
+        """Empty state that offers to add the person who was just searched for.
+
+        A search that finds nobody is the most likely moment someone realises a speaker is
+        missing, so this is where the Add button belongs.
+        """
+        query = (self.request.GET.get("query") or "").strip()
+        create_url = reverse("speaker_add")
+        params = {}
+        # Only offer to prefill a name when the search looks like one, not when it's a keyword
+        # token like "photo" or a scrap of a bio.
+        keywords = set(SpeakerFilter.TAG_TOKENS) | {"photo", "photos", "mapped", "located", "myclub", "untagged"}
+        if query and re.fullmatch(r"[A-Za-z\s\-'.]{2,60}", query) and query.lower() not in keywords:
+            params["name"] = query
+        club_slug = (self.request.GET.get("club") or "").strip()
+        if club_slug:
+            params["club"] = club_slug
+        if params:
+            create_url += f"?{urlencode(params)}"
+        message = (
+            format_html("<p class='text-muted mb-2'>No speakers match <strong>{}</strong>.</p>", query)
+            if query
+            else format_html("<p class='text-muted mb-2'>No speakers match these filters.</p>")
+        )
+        return format_html(
+            "<div class='text-center py-3'>{}<a class='btn btn-info btn-sm' href='{}'>"
+            "<i class='bi bi-person-plus-fill'></i> Add a speaker</a></div>",
+            message,
+            create_url,
+        )
+
+    def suggested_club_members(self):
+        """Members of the user's NEC clubs who don't look like they're in the directory yet.
+
+        A nudge, not a bulk import -- the whole point is that a club knows which of its own
+        people give talks and the site doesn't.  Matching on name is deliberately loose;
+        a false "already added" is much better than pestering someone to re-add a speaker.
+        """
+        if not self.nec_clubs:
+            return []
+        # The NEC import stores names as "Last, First" while club members are "First Last", so
+        # index both readings of every speaker or every imported speaker looks like a new person.
+        existing_names = set()
+        for speaker in Speaker.objects.filter(is_deleted=False).only("name"):
+            existing_names.add(speaker.name.casefold())
+            existing_names.add(speaker.display_name.casefold())
+        suggestions = []
+        members = (
+            ClubMember.objects.filter(club__in=self.nec_clubs, is_deleted=False)
+            .exclude(name="")
+            .select_related("club")
+            .order_by("name")
+        )
+        for member in members:
+            if member.name.casefold() in existing_names:
+                continue
+            suggestions.append(member)
+            if len(suggestions) >= 8:
+                break
+        return suggestions
+
+
+class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
+    """The speaker card that slides in beside the list (or fills the screen on mobile).
+
+    Served as a fragment for htmx and, at the same URL family, as a whole page for anyone
+    who follows a shared link -- see SpeakerDetailView.
+    """
+
+    model = Speaker
+    template_name = "auctions/partials/speaker_panel.html"
+    context_object_name = "speaker"
+
+    def get_queryset(self):
+        return self.visible_speakers().prefetch_related("topics")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        speaker = self.object
+        context["tag_counts"] = speaker.tag_counts()
+        context["my_tags"] = speaker.tags_by_user(self.request.user)
+        context["tag_groups"] = SpeakerTag.grouped_definitions()
+        context["comments"] = speaker.comments.filter(is_deleted=False).select_related("user", "club")
+        context["comment_form"] = SpeakerCommentForm()
+        context["can_delete"] = speaker.can_be_deleted_by(self.request.user)
+        context["can_edit"] = speaker.can_be_deleted_by(self.request.user)
+        context["nec_clubs"] = self.nec_clubs
+        latitude, longitude, _club, _label, _change_url = self.resolve_origin()
+        if latitude is not None and speaker.has_coordinates:
+            context["distance"] = int(
+                Speaker.objects.filter(pk=speaker.pk)
+                .annotate(distance=distance_to(latitude, longitude))
+                .values_list("distance", flat=True)
+                .first()
+                or 0
+            )
+        return context
+
+
+class SpeakerDetailView(SpeakerPanelView):
+    """A speaker's own page, for when someone shares the URL the panel pushed."""
+
+    template_name = "auctions/speaker_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["standalone"] = True
+        return context
+
+
+class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
+    """Add a speaker.  Anyone who can see the directory can add to it."""
+
+    model = Speaker
+    form_class = SpeakerForm
+    template_name = "auctions/speaker_form.html"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["available_clubs"] = Club.objects.filter(pk__in=self.nec_club_ids).order_by("name")
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        # Prefilled by the "add your club members" prompt on the list page.
+        for field in ("name", "email", "phone"):
+            value = self.request.GET.get(field)
+            if value:
+                initial[field] = value
+        club_slug = self.request.GET.get("club")
+        if club_slug:
+            club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
+            if club:
+                initial["club"] = club
+        return initial
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        response = super().form_valid(form)
+        messages.success(self.request, f"{self.object.display_name} has been added to the speaker directory.")
+        return response
+
+    def get_success_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = "Add a speaker"
+        return context
+
+
+class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
+    """Edit a speaker.  Restricted to whoever added them (imported rows: superusers only)."""
+
+    model = Speaker
+    form_class = SpeakerForm
+    template_name = "auctions/speaker_form.html"
+
+    def get_queryset(self):
+        return self.visible_speakers()
+
+    def get_object(self, queryset=None):
+        speaker = super().get_object(queryset)
+        if not speaker.can_be_deleted_by(self.request.user):
+            raise PermissionDenied()
+        return speaker
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["available_clubs"] = Club.objects.filter(pk__in=self.nec_club_ids).order_by("name")
+        return kwargs
+
+    def get_success_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = f"Edit {self.object.display_name}"
+        return context
+
+
+class SpeakerDeleteView(NECSpeakerAccessMixin, View):
+    """Soft delete a speaker you added.
+
+    Soft, not hard, because tags and comments other clubs left are worth keeping if this
+    turns out to be a mistake.
+    """
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not speaker.can_be_deleted_by(request.user):
+            raise PermissionDenied()
+        Speaker.objects.filter(pk=speaker.pk).update(is_deleted=True)
+        messages.success(request, f"{speaker.display_name} has been removed from the speaker directory.")
+        return redirect("speaker_list")
+
+
+class SpeakerTagView(NECSpeakerAccessMixin, View):
+    """Toggle one of the current user's tags on a speaker, and re-render the tag block."""
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        tag = (request.POST.get("tag") or "").strip()
+        if tag not in SpeakerTag.TAG_LABELS:
+            raise Http404
+        existing = SpeakerTag.objects.filter(speaker=speaker, user=request.user, tag=tag)
+        if existing.exists():
+            existing.delete()
+        else:
+            SpeakerTag.objects.get_or_create(speaker=speaker, user=request.user, tag=tag)
+        return render(
+            request,
+            "auctions/partials/speaker_tags.html",
+            {
+                "speaker": speaker,
+                "tag_counts": speaker.tag_counts(),
+                "my_tags": speaker.tags_by_user(request.user),
+                "tag_groups": SpeakerTag.grouped_definitions(),
+            },
+        )
+
+
+class SpeakerCommentView(NECSpeakerAccessMixin, View):
+    """Add a comment to a speaker, and re-render the comment list."""
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        form = SpeakerCommentForm(request.POST)
+        if form.is_valid():
+            comment = form.save(commit=False)
+            comment.speaker = speaker
+            comment.user = request.user
+            # Attribute the comment to the club they picked, or their only NEC club.
+            club_slug = (request.POST.get("club") or "").strip()
+            club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
+            if not club and len(self.nec_clubs) == 1:
+                club = self.nec_clubs[0]
+            comment.club = club
+            comment.save()
+            form = SpeakerCommentForm()
+        return render(
+            request,
+            "auctions/partials/speaker_comments.html",
+            {
+                "speaker": speaker,
+                "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
+                "comment_form": form,
+                "nec_clubs": self.nec_clubs,
+            },
+        )
+
+
+class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
+    """Remove your own comment (or, for a superuser, anyone's)."""
+
+    def post(self, request, slug, pk):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        comment = get_object_or_404(SpeakerComment, pk=pk, speaker=speaker)
+        if not comment.can_be_deleted_by(request.user):
+            raise PermissionDenied()
+        SpeakerComment.objects.filter(pk=comment.pk).update(is_deleted=True)
+        return render(
+            request,
+            "auctions/partials/speaker_comments.html",
+            {
+                "speaker": speaker,
+                "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
+                "comment_form": SpeakerCommentForm(),
+                "nec_clubs": self.nec_clubs,
+            },
+        )

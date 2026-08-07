@@ -78,4 +78,8 @@ def club_sidebar(context):
         "active_tab": active_tab,
         "setup_active": active_tab in setup_tabs,
         "bap_url": bap_url,
+        # The speaker directory is only for NEC member clubs, so the link only exists for them.
+        # Anyone in this sidebar already holds a club permission, which is the access bar.
+        "show_speakers": club.is_nec_club,
+        "speakers_url": reverse("speaker_list") + "?" + urlencode({"club": club.slug}),
     }

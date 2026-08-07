@@ -2843,6 +2843,19 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why. Every entry is a decision somebody made on purpose.
 NOT_A_SKILL: dict[str, str] = {
+    # Speaker directory
+    "SpeakerCreateView": _FORM_PAGE,
+    "SpeakerUpdateView": _FORM_PAGE,
+    "SpeakerDeleteView": _DESTRUCTIVE,
+    "SpeakerTagView": (
+        "Tagging is a toggle on a speaker's page, and the tag list is on screen while you pick. "
+        "Saying which of fourteen tags you meant is slower than clicking it."
+    ),
+    "SpeakerCommentView": (
+        "The comment is a paragraph about how a talk went. Dictating one into a command box is "
+        "worse than typing it into the box on the speaker's page, which the palette can reach."
+    ),
+    "SpeakerCommentDeleteView": _NEEDS_THE_ROW,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
     "AdminUserFlow": _FORM_PAGE,

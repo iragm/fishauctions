@@ -1,0 +1,346 @@
+{% extends "auctions/htmx_table_view.html" %}
+{% block title %}Speaker directory{% endblock %}
+
+{% comment %}
+The speaker directory. Extends the shared htmx table page so the filter box, chips and
+pagination behave like every other table on the site, and adds two things on top:
+
+  * a map of the same filtered set, kept in sync by an out-of-band payload the htmx
+    table response carries (see partials/speaker_table.html)
+  * a detail panel that slides in from the right on desktop and covers the screen on
+    mobile, pushing the speaker's own URL so it can be copied and shared
+{% endcomment %}
+
+{% block htmx_table_ribbon %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <h3 class="mb-0"><i class="bi bi-megaphone me-1"></i> Speakers</h3>
+  <div class="btn-group btn-group-sm" role="group" aria-label="List or map">
+    <button type="button" class="btn btn-outline-secondary" id="speaker-view-list"><i class="bi bi-list-ul"></i> List</button>
+    <button type="button" class="btn btn-outline-secondary" id="speaker-view-map"><i class="bi bi-map"></i> Map</button>
+  </div>
+</div>
+
+{% comment %} Where distances are measured from, and how to change it. {% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  {% if nec_clubs %}
+  <form method="get" class="d-flex align-items-center gap-1">
+    {% if request.GET.view %}<input type="hidden" name="view" value="{{ request.GET.view }}">{% endif %}
+    <label for="speaker-club-select" class="text-muted small mb-0">Distances from</label>
+    <select class="form-select form-select-sm w-auto" name="club" id="speaker-club-select" onchange="this.form.submit()">
+      <option value="">My location</option>
+      {% for nec_club in nec_clubs %}
+      <option value="{{ nec_club.slug }}" {% if origin_club and origin_club.pk == nec_club.pk %}selected{% endif %}>{{ nec_club.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+
+  {% if has_origin %}
+    <small class="text-muted">Measured from {{ origin_label }}. {% if origin_change_url %}<a href="{{ origin_change_url }}">Change</a>{% endif %}</small>
+  {% elif origin_club %}
+    <small class="text-warning">{{ origin_club.name }} has no address set, so distances are unavailable.
+      {% if origin_change_url %}<a href="{{ origin_change_url }}">Set the club address</a>{% endif %}</small>
+  {% else %}
+    <small class="text-warning">Set your location to sort speakers by distance.
+      <a href="{{ origin_change_url }}">Set your location</a></small>
+  {% endif %}
+</div>
+
+{% comment %} Nudge to add the club's own members, since the club knows who speaks and the site doesn't. {% endcomment %}
+{% if suggested_members %}
+<div class="mt-3 mb-3 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50" id="speaker-suggestions">
+  <h5><i class="bi bi-person-plus me-1"></i> Do any of your club members give talks?</h5>
+  <p class="mb-2">They aren't in the directory yet. Adding them lets every other NEC club find them.</p>
+  <div class="d-flex flex-wrap gap-2">
+    {% for member in suggested_members %}
+    <a class="btn btn-sm btn-light" href="{% url 'speaker_add' %}?name={{ member.name|urlencode }}&amp;email={{ member.email|urlencode }}&amp;club={{ member.club.slug|urlencode }}">
+      <i class="bi bi-plus-lg"></i> {{ member.name }}
+    </a>
+    {% endfor %}
+    <a class="btn btn-sm btn-light" href="{% url 'speaker_add' %}"><i class="bi bi-person-plus"></i> Someone else</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% comment %}Only the free-text box belongs here — the topic dropdown and distance box are
+rendered by speaker_table_header.html so they sit inline with the Add and Filters buttons.
+Rendering the whole crispy form would duplicate them.{% endcomment %}
+{% block htmx_table_filter_form %}
+<form class="col-sm-12 mt-2" onsubmit="return false;">
+  {{ filter.form.query }}
+</form>
+{% endblock %}
+
+{% block htmx_table %}
+<div id="speaker-map-wrapper" class="card mb-3 d-none">
+  <div class="card-body p-0">
+    <div id="speaker-map" style="height: 60vh; min-height: 320px; width: 100%;"></div>
+  </div>
+  {% if unmapped_count %}
+  <div class="card-footer py-1">
+    <small class="text-muted">
+      <i class="bi bi-info-circle me-1"></i>{{ unmapped_count }} of {{ result_count }} matching speaker{{ result_count|pluralize }}
+      {{ unmapped_count|pluralize:"has,have" }} no location set, so {{ unmapped_count|pluralize:"it isn't,they aren't" }} on the map.
+    </small>
+  </div>
+  {% endif %}
+</div>
+
+<div id="speaker-list-wrapper">
+  {{ block.super }}
+</div>
+
+{% comment %} The detail panel: offcanvas-style column on desktop, full screen on mobile. {% endcomment %}
+<div id="speaker-panel-shell" class="speaker-panel-shell" hidden>
+  <div class="speaker-panel-backdrop" data-speaker-panel-close></div>
+  <aside class="speaker-panel" role="dialog" aria-modal="true" aria-label="Speaker details">
+    <div id="speaker-panel"></div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+
+{% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale;
+the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
+<div id="speaker-map-payload">{{ speakers_json|json_script:"speaker-map-data" }}</div>
+<script>
+(function () {
+  'use strict';
+
+  const shell = document.getElementById('speaker-panel-shell');
+  const panel = document.getElementById('speaker-panel');
+  const listWrapper = document.getElementById('speaker-list-wrapper');
+  const mapWrapper = document.getElementById('speaker-map-wrapper');
+  const listButton = document.getElementById('speaker-view-list');
+  const mapButton = document.getElementById('speaker-view-map');
+  const listUrl = window.location.pathname + window.location.search;
+
+  /* ---- the sliding detail panel -------------------------------------- */
+
+  // The URL the list was on, so closing the panel can restore it. htmx pushes the
+  // speaker's own URL when the panel opens, which is what makes the link shareable.
+  let listUrlBeforePanel = listUrl;
+
+  function openPanel() {
+    shell.hidden = false;
+    // Force a reflow so the CSS transition actually runs on first open.
+    void shell.offsetWidth;
+    shell.classList.add('is-open');
+    document.body.classList.add('speaker-panel-open');
+  }
+
+  function closePanel() {
+    shell.classList.remove('is-open');
+    document.body.classList.remove('speaker-panel-open');
+    shell.hidden = true;
+    panel.innerHTML = '';
+    if (window.location.pathname !== listUrlBeforePanel.split('?')[0]) {
+      history.pushState({}, '', listUrlBeforePanel);
+    }
+  }
+
+  window.closeSpeakerPanel = closePanel;
+
+  document.body.addEventListener('htmx:beforeRequest', function (event) {
+    if (event.target.closest && event.target.closest('.speaker-open')) {
+      listUrlBeforePanel = window.location.pathname + window.location.search;
+    }
+  });
+
+  document.body.addEventListener('htmx:afterSwap', function (event) {
+    if (event.target && event.target.id === 'speaker-panel') {
+      openPanel();
+    }
+  });
+
+  document.addEventListener('click', function (event) {
+    if (event.target.closest('[data-speaker-panel-close]')) {
+      event.preventDefault();
+      closePanel();
+    }
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !shell.hidden) {
+      closePanel();
+    }
+  });
+
+  // Back/forward: the pushed speaker URL is a real page, so let the browser load it
+  // rather than trying to reconstruct state.
+  window.addEventListener('popstate', function () {
+    if (!shell.hidden) {
+      closePanel();
+    }
+  });
+
+  /* ---- list / map toggle --------------------------------------------- */
+
+  let mapInitialized = false;
+
+  function showList() {
+    mapWrapper.classList.add('d-none');
+    listWrapper.classList.remove('d-none');
+    listButton.classList.add('active');
+    mapButton.classList.remove('active');
+    setViewParam('list');
+  }
+
+  function showMap() {
+    listWrapper.classList.add('d-none');
+    mapWrapper.classList.remove('d-none');
+    mapButton.classList.add('active');
+    listButton.classList.remove('active');
+    setViewParam('map');
+    initSpeakerMap();
+    if (speakerMap) {
+      // The container was display:none while Google measured it, so it needs a nudge.
+      window.google.maps.event.trigger(speakerMap, 'resize');
+      fitToMarkers();
+    }
+  }
+
+  function setViewParam(value) {
+    const url = new URL(window.location);
+    if (value === 'map') {
+      url.searchParams.set('view', 'map');
+    } else {
+      url.searchParams.delete('view');
+    }
+    history.replaceState({}, '', url);
+  }
+
+  listButton.addEventListener('click', showList);
+  mapButton.addEventListener('click', showMap);
+
+  /* ---- the map itself ------------------------------------------------- */
+
+  let speakerMap = null;
+  let markers = [];
+  let infoWindow = null;
+
+  function readMapData() {
+    const node = document.getElementById('speaker-map-data');
+    if (!node) {
+      return [];
+    }
+    try {
+      return JSON.parse(node.textContent) || [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function initSpeakerMap() {
+    if (mapInitialized || !window.google || !window.google.maps) {
+      return;
+    }
+    const origin = {
+      lat: {{ origin_latitude|default:"null" }},
+      lng: {{ origin_longitude|default:"null" }}
+    };
+    const center = (origin.lat !== null && origin.lng !== null) ? origin : {lat: 42.0, lng: -72.0};
+    speakerMap = new google.maps.Map(document.getElementById('speaker-map'), {
+      zoom: 7,
+      center: center
+    });
+    infoWindow = new google.maps.InfoWindow();
+    if (origin.lat !== null && origin.lng !== null) {
+      new google.maps.Marker({
+        position: origin,
+        map: speakerMap,
+        title: "{{ origin_label|escapejs }}",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 9,
+          fillColor: '#375a7f',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 2
+        }
+      });
+    }
+    mapInitialized = true;
+    renderMarkers(readMapData());
+  }
+
+  function clearMarkers() {
+    markers.forEach(function (marker) { marker.setMap(null); });
+    markers = [];
+  }
+
+  function renderMarkers(speakers) {
+    if (!speakerMap) {
+      return;
+    }
+    clearMarkers();
+    speakers.forEach(function (speaker) {
+      const marker = new google.maps.Marker({
+        position: {lat: speaker.lat, lng: speaker.lng},
+        map: speakerMap,
+        title: speaker.name,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 7,
+          fillColor: '#00bc8c',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 2
+        }
+      });
+      marker.addListener('click', function () {
+        // Same panel the table rows open, so the two views never diverge.
+        const url = '/speakers/' + encodeURIComponent(speaker.slug) + '/panel/';
+        const shareUrl = '/speakers/' + encodeURIComponent(speaker.slug) + '/';
+        listUrlBeforePanel = window.location.pathname + window.location.search;
+        htmx.ajax('GET', url, {target: '#speaker-panel', swap: 'innerHTML'}).then(function () {
+          history.pushState({}, '', shareUrl);
+        });
+      });
+      markers.push(marker);
+    });
+    fitToMarkers();
+  }
+
+  function fitToMarkers() {
+    if (!speakerMap || markers.length === 0) {
+      return;
+    }
+    const bounds = new google.maps.LatLngBounds();
+    markers.forEach(function (marker) { bounds.extend(marker.getPosition()); });
+    speakerMap.fitBounds(bounds);
+    if (markers.length === 1) {
+      speakerMap.setZoom(10);
+    }
+  }
+
+  // The htmx table response replaces the map payload out of band; redraw from it so
+  // filtering updates both views at once. htmx names the event differently depending on
+  // version, so listen for both rather than depending on which one fires.
+  function onPayloadSwap(event) {
+    if (event.target && event.target.id === 'speaker-map-payload') {
+      renderMarkers(readMapData());
+    }
+  }
+  document.body.addEventListener('htmx:afterSwap', onPayloadSwap);
+  document.body.addEventListener('htmx:oobAfterSwap', onPayloadSwap);
+
+  window.initSpeakerMap = initSpeakerMap;
+
+  // Restore the view the URL asked for.
+  if ('{{ default_view }}' === 'map') {
+    showMap();
+  } else {
+    showList();
+  }
+})();
+</script>
+{% if google_maps_api_key %}
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initSpeakerMap"></script>
+{% else %}
+<script>console.error('Google Maps is not configured; the speaker map will stay empty.');</script>
+{% endif %}
+{% endblock %}

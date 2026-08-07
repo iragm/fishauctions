@@ -61,3 +61,6 @@ auctions/static/bootstrap_datepicker_plus/
 auctions/static/account/
 auctions/static/el-pagination/
 *.plist
+
+# NEC WordPress speaker export (imported via manage.py import_nec_speakers, not tracked)
+nec.WordPress.*.xml

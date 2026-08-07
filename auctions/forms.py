@@ -51,6 +51,9 @@ from .models import (
     MobileDevice,
     PayPalSeller,
     PickupLocation,
+    Speaker,
+    SpeakerComment,
+    SpeakerTopic,
     SquareSeller,
     UserBan,
     UserData,
@@ -5267,3 +5270,162 @@ class VolunteerJobForm(forms.ModelForm):
             msg = "You need at least one person"
             raise forms.ValidationError(msg)
         return value
+
+
+class SpeakerForm(forms.ModelForm):
+    """Add or edit a speaker in the directory.
+
+    Anyone with a permission in an NEC club can add a speaker, and the speaker doesn't need
+    an account here -- most of them don't have one.  Only `name` is required; the rest is
+    whatever the person filling it in happens to know.
+    """
+
+    new_topics = forms.CharField(
+        required=False,
+        label="Add new topics",
+        help_text="Comma separated. Only use this for a subject that isn't in the list above.",
+        widget=forms.TextInput(attrs={"placeholder": "Biotopes, Fish photography"}),
+    )
+
+    class Meta:
+        model = Speaker
+        fields = [
+            "name",
+            "image",
+            "bio",
+            "programs",
+            "topics",
+            "email",
+            "phone",
+            "website",
+            "facebook_page",
+            "location",
+            "location_coordinates",
+            "club",
+            "nec_only",
+        ]
+        widgets = {
+            "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
+            "bio": forms.Textarea(attrs={"rows": 5, "placeholder": "A paragraph about the speaker."}),
+            "programs": forms.Textarea(
+                attrs={"rows": 4, "placeholder": "One talk per line, or however they list them."}
+            ),
+            "topics": forms.SelectMultiple(attrs={"size": 10}),
+            "website": forms.URLInput(attrs={"placeholder": "https://example.com"}),
+            "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/..."}),
+            "location": forms.TextInput(attrs={"placeholder": "Providence, RI"}),
+        }
+        help_texts = {
+            "location": "Roughly where they travel from. Used for the map and the distance filter.",
+            "programs": "The talks they offer.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        # The clubs this user could be adding the speaker on behalf of.
+        self.available_clubs = kwargs.pop("available_clubs", None)
+        super().__init__(*args, **kwargs)
+        self.fields["topics"].required = False
+        self.fields["topics"].queryset = SpeakerTopic.objects.all()
+        self.fields["club"].required = False
+        self.fields["club"].label = "Adding on behalf of"
+        self.fields["club"].help_text = "Optional. Shown as the source of this entry."
+        if self.available_clubs is not None:
+            self.fields["club"].queryset = self.available_clubs
+            if not self.available_clubs:
+                del self.fields["club"]
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        # Required or the photo silently doesn't upload.
+        self.helper.attrs = {"enctype": "multipart/form-data"}
+        club_row = ["club"] if "club" in self.fields else []
+        self.helper.layout = Layout(
+            "name",
+            "image",
+            "bio",
+            "programs",
+            Fieldset(
+                "Topics",
+                "topics",
+                "new_topics",
+            ),
+            Fieldset(
+                "Contact",
+                Div(
+                    Div("email", css_class="col-md-6"),
+                    Div("phone", css_class="col-md-6"),
+                    css_class="row",
+                ),
+                "website",
+                "facebook_page",
+            ),
+            Fieldset(
+                "Location",
+                "location",
+                "location_coordinates",
+            ),
+            *club_row,
+            "nec_only",
+        )
+        self.helper.add_input(Submit("submit", "Save speaker", css_class="btn-primary"))
+        add_bootstrap_classes(self)
+
+    def clean_name(self):
+        name = (self.cleaned_data.get("name") or "").strip()
+        if not name:
+            msg = "Please enter the speaker's name"
+            raise forms.ValidationError(msg)
+        return name
+
+    def clean_new_topics(self):
+        """Split the comma separated box into names, dropping blanks and duplicates."""
+        raw = self.cleaned_data.get("new_topics") or ""
+        names = []
+        for part in raw.split(","):
+            cleaned = part.strip()
+            if cleaned and cleaned.casefold() not in {name.casefold() for name in names}:
+                names.append(cleaned)
+        return names
+
+    def save(self, commit=True):
+        """Save, then attach any topics typed into `new_topics`.
+
+        Matching an existing topic case-insensitively matters here: without it the first
+        person to type "cichlids" creates a second row next to the imported "Cichlids".
+        """
+        speaker = super().save(commit=commit)
+        if commit:
+            self._attach_new_topics(speaker)
+        return speaker
+
+    def _attach_new_topics(self, speaker):
+        for name in self.cleaned_data.get("new_topics", []):
+            topic = SpeakerTopic.objects.filter(name__iexact=name).first()
+            if not topic:
+                topic = SpeakerTopic.objects.create(name=name)
+            speaker.topics.add(topic)
+
+
+class SpeakerCommentForm(forms.ModelForm):
+    """Leave a note about a speaker on their panel."""
+
+    class Meta:
+        model = SpeakerComment
+        fields = ["body"]
+        labels = {"body": ""}
+        widgets = {
+            "body": forms.Textarea(
+                attrs={"rows": 3, "placeholder": "How did the talk go? Anything another club should know?"}
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["body"].required = True
+        add_bootstrap_classes(self)
+
+    def clean_body(self):
+        body = (self.cleaned_data.get("body") or "").strip()
+        if not body:
+            msg = "Please write something first"
+            raise forms.ValidationError(msg)
+        return body

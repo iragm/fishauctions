@@ -83,6 +83,35 @@ To check if code passes the linting check *without* modifying any files on disk,
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 
+##### Speaker directory
+
+The speaker directory at `/speakers/` is seeded from the Northeast Council's old WordPress site.
+Get a WordPress eXtended RSS export from that site (Tools → Export) and import it:
+
+```bash
+docker exec -it django python3 manage.py import_nec_speakers /home/app/web/nec.WordPress.2026-08-03.xml --dry-run
+docker exec -it django python3 manage.py import_nec_speakers /home/app/web/nec.WordPress.2026-08-03.xml
+```
+
+The export is matched on WordPress post id, so re-running updates existing rows instead of
+duplicating them, and photos already downloaded are skipped (`--replace-images` re-fetches them,
+`--skip-images` leaves them alone).  Export files are gitignored — don't commit one.
+
+The export carries no addresses, so imported speakers start with no coordinates and are absent
+from the map and the distance filter.  To fill those in, `geocode_speakers` reads each bio with
+the configured LLM (`LLM_PROVIDER` / `LLM_MODEL`) and geocodes what it finds with
+`GOOGLE_MAPS_SERVER_API_KEY`.  Review a dry run first — bios mention far more places the speaker
+talks *about* than places they live:
+
+```bash
+docker exec -it django python3 manage.py geocode_speakers --dry-run --limit 25
+docker exec -it django python3 manage.py geocode_speakers
+```
+
+Access to the directory is limited to users holding any club permission in a club marked
+**NEC member club**, which is set in the Django admin on the club (or from the club list, which
+has an inline checkbox) and deliberately absent from the club's own settings page.
+
 ### Developing in VSCode
 
 This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).

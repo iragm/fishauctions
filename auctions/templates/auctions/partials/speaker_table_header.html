@@ -1,0 +1,14 @@
+{% comment %}Buttons and filter controls above the speaker table. Rendered by HTMxTableView via
+htmx_table_header_template, which also puts the Filters dropdown inline here.{% endcomment %}
+<div class="mb-2 d-flex flex-wrap gap-2 align-items-center">
+  <a class="btn btn-sm btn-info" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">
+    <i class="bi bi-person-plus-fill"></i> Add a speaker
+  </a>
+
+  <form class="d-flex align-items-center gap-2 mb-0" onsubmit="return false;">
+    {{ filter.form.topic }}
+    {% if has_origin %}{{ filter.form.distance }}{% endif %}
+  </form>
+
+  {% include "auctions/partials/htmx_table_filters.html" %}
+</div>

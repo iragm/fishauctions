@@ -1727,3 +1727,41 @@ def compute_user_flow_all(self, sleep_seconds=2):
         logger.exception("compute_user_flow_all: failed to compute combined result")
 
     logger.info("compute_user_flow_all: complete")
+
+
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=3,
+)
+def geocode_speaker(self, pk):
+    """Geocode a Speaker's free-text location into lat/lng.
+
+    Mirrors geocode_club_member: only runs when GOOGLE_MAPS_SERVER_API_KEY is configured,
+    and does nothing without a location to work from.  Speakers whose coordinates were
+    dropped on the map by hand already have a location_coordinates value, and the pre_save
+    signal has written those into lat/lng before this ever runs -- so this only fills gaps.
+    """
+    from auctions.models import Speaker
+
+    api_key = getattr(settings, "GOOGLE_MAPS_SERVER_API_KEY", "")
+    if not api_key:
+        return
+
+    speaker = Speaker.objects.filter(pk=pk).first()
+    if not speaker or not speaker.location:
+        return
+
+    response = requests.get(
+        "https://maps.googleapis.com/maps/api/geocode/json",
+        params={"address": speaker.location, "key": api_key},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("status") == "OK" and data.get("results"):
+        location = data["results"][0]["geometry"]["location"]
+        Speaker.objects.filter(pk=pk).update(latitude=location["lat"], longitude=location["lng"])

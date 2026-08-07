@@ -61,6 +61,7 @@ class RouteAuditTests(StandardTestCase):
             palette_routes.SCOPE_MEMBER: {"slug": "x", "pk": 1},
             palette_routes.SCOPE_USER: {"slug": "bob"},
             palette_routes.SCOPE_BLOG: {"slug": "x"},
+            palette_routes.SCOPE_SPEAKER: {"slug": "x"},
         }
         for route in palette_routes.ROUTE_LIST:
             kwargs = dict(dummy[route.scope])

@@ -33,6 +33,7 @@ VARIANTS = {
     "lot_list": {"fit": "cover", "width": 250, "height": 150, "metadata": "none"},
     "club_icon": {"fit": "cover", "width": 128, "height": 128, "metadata": "none"},
     "club_icon_small": {"fit": "cover", "width": 32, "height": 32, "metadata": "none"},
+    "speaker": {"fit": "cover", "width": 200, "height": 200, "metadata": "none"},
     "google_wallet_logo": {"fit": "cover", "width": 660, "height": 660, "metadata": "none"},
 }
 

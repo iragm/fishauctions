@@ -50,6 +50,10 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
 
   <a class="nav-link {% if active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map me-1"></i> Map</a>
 
+  {% if show_speakers %}
+  <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-megaphone me-1"></i> Speakers</a>
+  {% endif %}
+
   {% if can_access_admin %}
   <a class="nav-link {% if active_tab == 'barcode_labels' %}active{% endif %}" href="{% url 'club_barcode_labels' club.slug %}"><i class="bi bi-upc-scan me-1"></i> Print Barcodes</a>
   <a class="nav-link {% if active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up me-1"></i> Club stats</a>

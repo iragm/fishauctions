@@ -2,10 +2,20 @@ from urllib.parse import urlencode
 
 import django_tables2 as tables
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionHistory, AuctionTOS, BapAward, ClubBapCategoryOverride, ClubHistory, ClubMember, Lot
+from .models import (
+    Auction,
+    AuctionHistory,
+    AuctionTOS,
+    BapAward,
+    ClubBapCategoryOverride,
+    ClubHistory,
+    ClubMember,
+    Lot,
+    Speaker,
+)
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -1024,3 +1034,99 @@ class ClubBapLotHTMxTable(tables.Table):
             self._override_cache = {o.category_id: o for o in ClubBapCategoryOverride.objects.filter(club=self.club)}
         else:
             self._override_cache = {}
+
+
+class SpeakerHTMxTable(tables.Table):
+    """The list half of the speaker directory.
+
+    Clicking a row loads the speaker panel over htmx (see `speaker_list.html`), which is also
+    what the map markers do, so both views open the same thing.
+    """
+
+    hide_string = "d-md-table-cell d-none"
+    photo = tables.Column(accessor="pk", verbose_name="", orderable=False)
+    name = tables.Column(accessor="name", verbose_name="Speaker", orderable=True)
+    location = tables.Column(accessor="location", verbose_name="Location", orderable=True, empty_values=())
+    topics = tables.Column(
+        accessor="pk",
+        verbose_name="Topics",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    speaker_tags = tables.Column(
+        accessor="pk",
+        verbose_name="Tags",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+
+    class Meta:
+        model = Speaker
+        fields = ("photo", "name", "location", "topics", "speaker_tags")
+        # Row-level click target; the anchor in the name column carries the htmx attributes.
+        row_attrs = {"class": "speaker-row"}
+
+    def __init__(self, *args, **kwargs):
+        # With no origin the Location column still renders, it just doesn't gain a "· 40 miles"
+        # suffix -- there is nothing to measure from.
+        self.has_origin = kwargs.pop("has_origin", False)
+        super().__init__(*args, **kwargs)
+
+    def render_photo(self, record):
+        url = record.thumbnail_url
+        if not url:
+            return format_html(
+                "<span class='d-inline-flex align-items-center justify-content-center bg-secondary rounded-circle' "
+                "style='width:40px;height:40px;'><i class='bi bi-person-fill'></i></span>"
+            )
+        return format_html(
+            "<img src='{}' alt='' class='rounded-circle' style='width:40px;height:40px;object-fit:cover;'>", url
+        )
+
+    def render_name(self, value, record):
+        """Open the panel over htmx, but push the speaker's *page* URL, not the fragment's.
+
+        hx-push-url='true' would push the /panel/ URL that was actually requested, so a copied
+        link would hand someone a bare unstyled fragment. Naming the page URL explicitly means
+        the address bar always holds something worth sharing, and href keeps the row working
+        as an ordinary link when JavaScript hasn't loaded.
+        """
+        page_url = reverse("speaker_detail", kwargs={"slug": record.slug})
+        return format_html(
+            "<a href='{}' class='speaker-open' hx-get='{}' hx-target='#speaker-panel' "
+            "hx-swap='innerHTML' hx-push-url='{}'>{}</a>",
+            page_url,
+            reverse("speaker_panel", kwargs={"slug": record.slug}),
+            page_url,
+            record.display_name,
+        )
+
+    def render_location(self, value, record):
+        distance = getattr(record, "distance", None)
+        if not value:
+            if self.has_origin:
+                return format_html("<span class='text-muted'>No location set</span>")
+            return format_html("<span class='text-muted'>—</span>")
+        if distance is not None and record.latitude is not None:
+            return format_html("{} <small class='text-muted'>· {} miles</small>", value, int(distance))
+        return value
+
+    def render_topics(self, record):
+        names = [topic.name for topic in record.topics.all()[:3]]
+        if not names:
+            return format_html("<span class='text-muted'>—</span>")
+        badges = format_html_join(" ", "<span class='badge bg-secondary'>{}</span>", ((name,) for name in names))
+        extra = record.topics.count() - len(names)
+        if extra > 0:
+            badges += format_html(" <small class='text-muted'>+{}</small>", extra)
+        return badges
+
+    def render_speaker_tags(self, record):
+        counts = record.tag_counts()[:2]
+        if not counts:
+            return format_html("<span class='text-muted'>—</span>")
+        return format_html_join(
+            " ",
+            "<span class='badge bg-primary'>{} {}</span>",
+            ((label, count) for _value, label, _group, count in counts),
+        )

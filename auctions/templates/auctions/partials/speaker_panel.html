@@ -1,0 +1,90 @@
+{% comment %}
+One speaker's card. Rendered two ways: as an htmx fragment into the sliding panel on the
+list page, and inside speaker_detail.html as a standalone page when someone opens a shared
+link. Nothing here assumes which — `standalone` only controls the close button.
+{% endcomment %}
+
+<div class="speaker-panel-inner">
+  <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+    <div class="d-flex align-items-center gap-3 min-w-0">
+      {% if speaker.thumbnail_url %}
+      <img src="{{ speaker.thumbnail_url }}" alt="" class="rounded" style="width:72px;height:72px;object-fit:cover;">
+      {% else %}
+      <span class="d-inline-flex align-items-center justify-content-center bg-secondary rounded" style="width:72px;height:72px;">
+        <i class="bi bi-person-fill fs-3"></i>
+      </span>
+      {% endif %}
+      <div class="min-w-0">
+        <h4 class="mb-1">{{ speaker.display_name }}</h4>
+        {% if speaker.location %}
+        <div class="text-muted small">
+          <i class="bi bi-geo-alt me-1"></i>{{ speaker.location }}{% if distance %} <span class="text-muted">&middot; {{ distance }} miles away</span>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if not standalone %}
+    <button type="button" class="btn-close" aria-label="Close" data-speaker-panel-close></button>
+    {% endif %}
+  </div>
+
+  {% if speaker.topics.exists %}
+  <div class="mb-3">
+    {% for topic in speaker.topics.all %}<span class="badge bg-secondary">{{ topic.name }}</span> {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if speaker.bio %}
+  <h6 class="text-muted text-uppercase small">About</h6>
+  <p style="white-space: pre-line;">{{ speaker.bio }}</p>
+  {% endif %}
+
+  {% if speaker.programs %}
+  <h6 class="text-muted text-uppercase small">Talks</h6>
+  <p style="white-space: pre-line;">{{ speaker.programs }}</p>
+  {% endif %}
+
+  {% if speaker.email or speaker.phone or speaker.website or speaker.facebook_page %}
+  <h6 class="text-muted text-uppercase small">Contact</h6>
+  <ul class="list-unstyled">
+    {% if speaker.email %}<li><i class="bi bi-envelope me-1"></i> <a href="mailto:{{ speaker.email }}">{{ speaker.email }}</a></li>{% endif %}
+    {% if speaker.phone %}<li><i class="bi bi-telephone me-1"></i> {{ speaker.phone }}</li>{% endif %}
+    {% if speaker.website %}<li><i class="bi bi-globe me-1"></i> <a href="{{ speaker.website }}" target="_blank" rel="noopener">{{ speaker.website }}</a></li>{% endif %}
+    {% if speaker.facebook_page %}<li><i class="bi bi-facebook me-1"></i> <a href="{{ speaker.facebook_page }}" target="_blank" rel="noopener">Facebook</a></li>{% endif %}
+  </ul>
+  {% endif %}
+
+  <div id="speaker-tags-block">
+    {% include "auctions/partials/speaker_tags.html" %}
+  </div>
+
+  <div id="speaker-comments-block">
+    {% include "auctions/partials/speaker_comments.html" %}
+  </div>
+
+  <hr>
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <small class="text-muted">
+      {{ speaker.attribution }}
+      {% if speaker.nec_only %}<span class="badge bg-secondary ms-1" title="Not shown to clubs outside the NEC">NEC only</span>{% endif %}
+    </small>
+    <div class="d-flex gap-2">
+      {% if not standalone %}
+      <a class="btn btn-sm btn-secondary" href="{% url 'speaker_detail' speaker.slug %}"><i class="bi bi-box-arrow-up-right"></i> Open page</a>
+      {% endif %}
+      {% if can_edit %}
+      <a class="btn btn-sm btn-secondary" href="{% url 'speaker_edit' speaker.slug %}"><i class="bi bi-pencil"></i> Edit</a>
+      {% endif %}
+      {% if can_delete %}
+      <form method="post" action="{% url 'speaker_delete' speaker.slug %}" class="d-inline"
+            data-confirm="Remove {{ speaker.display_name }} from the speaker directory? Tags and comments other clubs left will be hidden too."
+            data-confirm-title="Remove this speaker?"
+            data-confirm-ok="Remove speaker"
+            data-confirm-variant="danger">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>

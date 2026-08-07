@@ -153,6 +153,7 @@ def on_save_auction(sender, instance, **kwargs):
 @receiver(pre_save, sender="auctions.UserData")
 @receiver(pre_save, sender="auctions.PickupLocation")
 @receiver(pre_save, sender="auctions.Club")
+@receiver(pre_save, sender="auctions.Speaker")
 def update_user_location(sender, instance, **kwargs):
     """Store lat/lng from location_coordinates field."""
     try:
@@ -896,3 +897,32 @@ def _push_printer_supported(observation, profile):
     # On commit so a rolled-back save can't push about a profile that was never enabled.
     transaction.on_commit(enqueue)
     return True
+
+
+@receiver(pre_save, sender="auctions.Speaker")
+def stash_previous_speaker_location(sender, instance, **kwargs):
+    """Snapshot the location text so post_save can tell whether it needs re-geocoding."""
+    if instance.pk:
+        from .models import Speaker
+
+        prev = Speaker.objects.filter(pk=instance.pk).values("location").first() or {}
+        instance._previous_location = prev.get("location") or ""
+    else:
+        instance._previous_location = ""
+
+
+@receiver(post_save, sender="auctions.Speaker")
+def geocode_speaker_on_location_change(sender, instance, created, **kwargs):
+    """Geocode a speaker whose location text is new or has changed.
+
+    Skipped when the save already produced coordinates for this exact location -- someone who
+    placed the marker themselves shouldn't have it moved by the geocoder.
+    """
+    from .tasks import geocode_speaker
+
+    current_location = instance.location or ""
+    if not current_location:
+        return
+    location_changed = created or (current_location != getattr(instance, "_previous_location", ""))
+    if location_changed and not instance.location_coordinates:
+        transaction.on_commit(lambda: geocode_speaker.delay(instance.pk))

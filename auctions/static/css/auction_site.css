@@ -369,3 +369,76 @@ a.ad:hover {
         transition: none;
     }
 }
+
+/* ---------------------------------------------------------------------------
+   Speaker directory detail panel
+
+   Slides in from the right on desktop and covers the screen on mobile.  Built
+   here rather than with Bootstrap's offcanvas because the panel's content is
+   swapped in by htmx and the URL is pushed alongside it, and offcanvas' own JS
+   lifecycle fights being opened from an htmx:afterSwap handler.
+   --------------------------------------------------------------------------- */
+
+.speaker-panel-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 1045;
+}
+
+.speaker-panel-shell[hidden] {
+    display: none;
+}
+
+.speaker-panel-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transition: opacity 0.25s ease-out;
+}
+
+.speaker-panel-shell.is-open .speaker-panel-backdrop {
+    opacity: 1;
+}
+
+.speaker-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(38rem, 100%);
+    background: #303030;
+    border-left: 1px solid #444;
+    overflow-y: auto;
+    transform: translateX(100%);
+    transition: transform 0.25s ease-out;
+}
+
+.speaker-panel-shell.is-open .speaker-panel {
+    transform: none;
+}
+
+.speaker-panel-inner {
+    padding: 1rem;
+}
+
+/* Below lg the panel is the whole screen — a 38rem drawer on a phone is just a
+   cramped page with a sliver of unusable backdrop next to it. */
+@media (max-width: 991.98px) {
+    .speaker-panel {
+        width: 100%;
+        border-left: none;
+    }
+}
+
+/* The page behind the panel shouldn't scroll while the panel is open. */
+body.speaker-panel-open {
+    overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .speaker-panel,
+    .speaker-panel-backdrop {
+        transition: none;
+    }
+}

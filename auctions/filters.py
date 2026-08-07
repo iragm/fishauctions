@@ -31,6 +31,8 @@ from .models import (
     Location,
     Lot,
     LotPosition,
+    Speaker,
+    SpeakerTopic,
     UserInterestCategory,
     Watch,
     add_tos_info,
@@ -1408,4 +1410,169 @@ class ClubBapLotFilter(django_filters.FilterSet):
                 | Q(auctiontos_seller__name__icontains=search)
                 | Q(auctiontos_seller__email__icontains=search)
             )
+        return queryset
+
+
+#: The three speaker filter controls are rendered in two different <form> elements (the text
+#: box sits under the table header, topic and distance sit inline with the buttons), so an
+#: explicit hx-include is what keeps all three values on every request.  Relying on htmx's
+#: implicit "include the enclosing form" would make changing the topic drop the search text.
+SPEAKER_FILTER_CONTROL_CLASS = "speaker-filter-control"
+
+
+def speaker_filter_attrs(trigger, css_class, **extra):
+    """Shared htmx wiring for the speaker filter controls.
+
+    Module level, not a classmethod: these build the widgets inside the class body, so the
+    class object does not exist yet when they run.  `css_class` is spelled out per widget
+    because the templates render these fields directly rather than through crispy, so nothing
+    else adds the Bootstrap classes.
+    """
+    attrs = {
+        "class": f"{css_class} {SPEAKER_FILTER_CONTROL_CLASS}",
+        "hx-get": "",
+        "hx-target": "div.table-container",
+        "hx-trigger": trigger,
+        "hx-swap": "outerHTML",
+        "hx-indicator": ".progress",
+        "hx-include": f".{SPEAKER_FILTER_CONTROL_CLASS}",
+    }
+    attrs.update(extra)
+    return attrs
+
+
+class SpeakerFilter(django_filters.FilterSet):
+    """Filter for the speaker directory.
+
+    Follows the site's htmx table convention -- one text box that also understands keyword
+    tokens, driven by the Filters dropdown chips -- with two extra controls the speaker list
+    needs: a topic dropdown and a distance limit.  Distance needs an origin, so the view
+    hands one in (a club's coordinates, or the user's own); with no origin the distance
+    filter and the distance column quietly do nothing rather than filtering everything away.
+    """
+
+    #: query token -> tag value.  These read as plain words in the search box.
+    TAG_TOKENS = {
+        "remote": "remote",
+        "travels": "travels",
+        "nofee": "no_fee",
+        "recommended": "book_again",
+        "auctionitems": "brings_items",
+    }
+
+    query = django_filters.CharFilter(
+        method="speaker_search",
+        label="",
+        widget=TextInput(
+            attrs=speaker_filter_attrs(
+                "keyup changed delay:300ms",
+                "form-control",
+                placeholder="Filter by name, talk, bio, location, photo, mapped, myclub, remote, travels, nofee...",
+            )
+        ),
+    )
+    topic = django_filters.CharFilter(
+        method="filter_by_topic",
+        label="",
+        widget=Select(attrs=speaker_filter_attrs("change", "form-select form-select-sm w-auto"), choices=()),
+    )
+    distance = django_filters.NumberFilter(
+        method="filter_by_distance",
+        label="",
+        widget=NumberInput(
+            attrs=speaker_filter_attrs(
+                "keyup changed delay:400ms", "form-control form-control-sm w-auto", placeholder="Within ___ miles"
+            )
+        ),
+    )
+
+    class Meta:
+        model = Speaker
+        fields = []
+
+    def __init__(self, data=None, *args, **kwargs):
+        self.latitude = kwargs.pop("latitude", None)
+        self.longitude = kwargs.pop("longitude", None)
+        self.nec_club_ids = kwargs.pop("nec_club_ids", ())
+        self.user = kwargs.pop("user", None)
+        # Same reason as ClubMemberFilter: FilterView passes `request.GET or None`, and an
+        # unbound filterset never runs filter_queryset, which would leak deleted speakers.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+        self.filters["topic"].field.widget.choices = self._topic_choices()
+
+    def _topic_choices(self):
+        topics = SpeakerTopic.objects.filter(speakers__is_deleted=False).distinct().order_by("name")
+        return [("", "Any topic"), *[(topic.slug, topic.name) for topic in topics]]
+
+    @property
+    def has_origin(self):
+        return self.latitude is not None and self.longitude is not None
+
+    def filter_queryset(self, queryset):
+        return super().filter_queryset(queryset).filter(is_deleted=False)
+
+    def filter_by_topic(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(topics__slug=value)
+
+    def filter_by_distance(self, queryset, name, value):
+        """Limit to speakers within `value` miles of the origin.
+
+        Speakers with no coordinates are dropped by this filter -- an unknown location can't
+        be claimed to be nearby -- which is why the list surfaces how many were excluded.
+        """
+        if value in (None, "") or not self.has_origin:
+            return queryset
+        return queryset.filter(latitude__isnull=False, longitude__isnull=False, distance__lte=int(value))
+
+    def speaker_search(self, queryset, name, value):
+        """Free text over name/talks/bio/location, plus the chip keyword tokens."""
+        tokens = (value or "").lower().split()
+        wanted_tags = []
+        require_photo = False
+        require_mapped = False
+        require_my_club = False
+        require_untagged = False
+        remaining = []
+        for token in tokens:
+            if token in self.TAG_TOKENS:
+                wanted_tags.append(self.TAG_TOKENS[token])
+            elif token in ("photo", "photos"):
+                require_photo = True
+            elif token in ("mapped", "located"):
+                require_mapped = True
+            elif token in ("myclub", "my_club"):
+                require_my_club = True
+            elif token == "untagged":
+                require_untagged = True
+            else:
+                remaining.append(token)
+
+        if require_photo:
+            queryset = queryset.exclude(image="").exclude(image__isnull=True)
+        if require_mapped:
+            queryset = queryset.filter(latitude__isnull=False, longitude__isnull=False)
+        if require_my_club:
+            # "My club's speakers" means someone from one of my NEC clubs added them, which is
+            # the only club link a speaker has.
+            queryset = queryset.filter(club_id__in=list(self.nec_club_ids))
+        if require_untagged:
+            queryset = queryset.filter(tags__isnull=True)
+        for tag_value in wanted_tags:
+            queryset = queryset.filter(tags__tag=tag_value)
+        if wanted_tags:
+            queryset = queryset.distinct()
+
+        text = " ".join(remaining)
+        if text:
+            queryset = queryset.filter(
+                Q(name__icontains=text)
+                | Q(bio__icontains=text)
+                | Q(programs__icontains=text)
+                | Q(location__icontains=text)
+                | Q(topics__name__icontains=text)
+            ).distinct()
         return queryset

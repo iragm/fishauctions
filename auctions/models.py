@@ -914,6 +914,17 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="Automatically create a Discord scheduled event for each promoted auction.",
     )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    is_nec_club = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="NEC member club",
+        help_text=(
+            "This club belongs to the Northeast Council of Aquarium Societies.  Anyone with a "
+            "permission in an NEC club can use the speaker directory.  Set this here in the "
+            "Django admin only — it is deliberately absent from the club settings page so clubs "
+            "can't opt themselves in."
+        ),
+    )
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     icon = ThumbnailerImageField(
         upload_to="club_icons/",
@@ -12316,3 +12327,256 @@ class VoiceCommandLog(models.Model):
     @property
     def was_corrected(self):
         return bool(self.corrected_to)
+
+
+class SpeakerTopic(models.Model):
+    """A subject a speaker gives talks about, shared across all speakers.
+
+    Deliberately a canonical list rather than free text on each speaker: the NEC WordPress
+    export arrived with three spellings of "cichlids" and two of "africa", and a shared row
+    means fixing the name once fixes it everywhere and keeps the topic filter a clean list.
+    Rows are created by `manage.py import_nec_speakers` and by the add-speaker form; there is
+    no seed migration, so nothing here depends on fixture rows surviving a test flush.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    slug = AutoSlugField(populate_from="name", unique=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return str(self.name)
+
+
+class Speaker(CloudflareImageMixin, models.Model):
+    """Someone who gives talks to aquarium clubs.
+
+    Seeded from the Northeast Council's WordPress speaker database, but any user with a
+    permission in an NEC club can add more — including people who have no account on this
+    site.  `nec_only` scopes a speaker to NEC member clubs; the directory itself is NEC-only
+    for now, and that flag is what keeps the NEC roster private once it opens up more widely.
+    """
+
+    IMAGE_FIELD_NAME = "image"
+
+    name = models.CharField(max_length=200, db_index=True)
+    name.help_text = "The speaker's name, as you'd print it on a meeting flyer."
+    slug = AutoSlugField(populate_from="name", unique=True)
+    bio = models.TextField(blank=True, default="")
+    bio.help_text = "A paragraph or two about the speaker."
+    programs = models.TextField(blank=True, default="", verbose_name="Talks")
+    programs.help_text = "The talks this speaker offers."
+    image = ThumbnailerImageField(
+        upload_to="speakers/",
+        blank=True,
+        null=True,
+        resize_source={"size": (600, 600), "quality": 85},
+        verbose_name="Photo",
+    )
+    topics = models.ManyToManyField(SpeakerTopic, blank=True, related_name="speakers")
+    email = models.EmailField(max_length=255, blank=True, default="")
+    email.help_text = "Only shown to people who can see the speaker directory."
+    phone = models.CharField(max_length=30, blank=True, default="")
+    website = models.URLField(max_length=500, blank=True, default="")
+    facebook_page = models.URLField(max_length=500, blank=True, default="")
+
+    location = models.CharField(max_length=500, blank=True, default="")
+    location.help_text = "Roughly where the speaker travels from — a town and state is plenty."
+    latitude = models.FloatField(blank=True, null=True, db_index=True)
+    longitude = models.FloatField(blank=True, null=True, db_index=True)
+    location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
+
+    nec_only = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Only show to NEC member clubs",
+        help_text=(
+            "Keeps this speaker out of the directory for clubs that aren't NEC members.  "
+            "Everything imported from the NEC speaker database is set this way."
+        ),
+    )
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_speakers"
+    )
+    created_by.help_text = "Blank for the rows imported from the NEC speaker database."
+    club = models.ForeignKey(
+        Club,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="added_speakers",
+        help_text="The club the person adding this speaker was representing, if they picked one.",
+    )
+    imported_from_nec = models.BooleanField(default=False, editable=False, db_index=True)
+    source_url = models.URLField(max_length=500, blank=True, default="", editable=False)
+    source_url.help_text = "Where this record came from on the old NEC website."
+    wordpress_post_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+        unique=True,
+        help_text="WordPress post id, so re-running the import updates rows instead of duplicating them.",
+    )
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    lastmodified = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return str(self.name)
+
+    def get_absolute_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.slug})
+
+    @property
+    def display_url(self):
+        """Full-size photo, from Cloudflare when this image has been migrated there."""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or None
+
+    @property
+    def thumbnail_url(self):
+        """Small square photo for the speaker list and map info windows."""
+        return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "speaker") or None
+
+    @property
+    def has_coordinates(self):
+        return self.latitude is not None and self.longitude is not None
+
+    @property
+    def attribution(self):
+        """Where this record came from, for the bottom of the speaker panel.
+
+        Imported rows have no `created_by`, which is exactly what distinguishes them.
+        """
+        if not self.created_by:
+            return "Added from the NEC speaker database"
+        name = self.created_by.get_full_name() or self.created_by.username
+        if self.club:
+            return f"Added by {name} ({self.club.name})"
+        return f"Added by {name}"
+
+    @property
+    def display_name(self):
+        """The NEC export stores names as "Last, First" — read it back the way people say it."""
+        if self.name.count(",") == 1:
+            last, first = (part.strip() for part in self.name.split(","))
+            if last and first:
+                return f"{first} {last}"
+        return self.name
+
+    def tag_counts(self):
+        """[(value, label, group, count), ...] for every tag that has at least one vote."""
+        counts = dict(
+            SpeakerTag.objects.filter(speaker=self)
+            .values_list("tag")
+            .annotate(total=Count("pk"))
+            .values_list("tag", "total")
+        )
+        result = []
+        for value, label, group in SpeakerTag.TAG_DEFINITIONS:
+            if counts.get(value):
+                result.append((value, label, group, counts[value]))
+        result.sort(key=lambda row: -row[3])
+        return result
+
+    def tags_by_user(self, user):
+        """The set of tag values this user has already applied, for rendering the toggles."""
+        if not user or not user.is_authenticated:
+            return set()
+        return set(SpeakerTag.objects.filter(speaker=self, user=user).values_list("tag", flat=True))
+
+    def can_be_deleted_by(self, user):
+        """Only the person who added a speaker (or a superuser) may delete it.
+
+        Imported rows have no `created_by`, so nobody but a superuser can remove them.
+        """
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        return bool(self.created_by_id and self.created_by_id == user.pk)
+
+
+class SpeakerTag(models.Model):
+    """One user's vote that a tag applies to a speaker.
+
+    A fixed list rather than a table of tag rows: nothing needs to create tags at runtime, and
+    choices can't be emptied out from under the tests the way seeded rows can.
+    """
+
+    GROUP_TALK = "How the talk went"
+    GROUP_LOGISTICS = "Logistics"
+
+    #: (value, label, group).  Order within a group is the order they render in.
+    TAG_DEFINITIONS = (
+        ("engaging", "Engaging presenter", GROUP_TALK),
+        ("visuals", "Great photos / visuals", GROUP_TALK),
+        ("funny", "Funny", GROUP_TALK),
+        ("beginners", "Good for beginners", GROUP_TALK),
+        ("technical", "In-depth / technical", GROUP_TALK),
+        ("workshop", "Hands-on workshop", GROUP_TALK),
+        ("big_crowd", "Drew a big crowd", GROUP_TALK),
+        ("book_again", "Would book again", GROUP_TALK),
+        ("remote", "Presents remotely", GROUP_LOGISTICS),
+        ("travels", "Willing to travel", GROUP_LOGISTICS),
+        ("brings_items", "Brings items for the auction", GROUP_LOGISTICS),
+        ("donates_fee", "Donates their fee back", GROUP_LOGISTICS),
+        ("no_fee", "No fee (expenses only)", GROUP_LOGISTICS),
+        ("responsive", "Quick to respond", GROUP_LOGISTICS),
+    )
+    TAG_CHOICES = tuple((value, label) for value, label, _group in TAG_DEFINITIONS)
+    TAG_LABELS = dict(TAG_CHOICES)
+
+    speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="tags")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="speaker_tags")
+    tag = models.CharField(max_length=30, choices=TAG_CHOICES, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["speaker", "user", "tag"], name="unique_speaker_tag_per_user")]
+        ordering = ["tag"]
+
+    def __str__(self):
+        return f"{self.speaker}: {self.get_tag_display()}"
+
+    @classmethod
+    def grouped_definitions(cls):
+        """[(group_name, [(value, label), ...]), ...] preserving TAG_DEFINITIONS order."""
+        groups = {}
+        for value, label, group in cls.TAG_DEFINITIONS:
+            groups.setdefault(group, []).append((value, label))
+        return list(groups.items())
+
+
+class SpeakerComment(models.Model):
+    """A note one club left about a speaker, shown on the speaker's panel."""
+
+    speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="comments")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="speaker_comments")
+    club = models.ForeignKey(Club, on_delete=models.SET_NULL, null=True, blank=True, related_name="speaker_comments")
+    body = models.TextField(max_length=2000)
+    createdon = models.DateTimeField(auto_now_add=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} on {self.speaker}"
+
+    @property
+    def author_display(self):
+        if not self.user:
+            return "Deleted user"
+        name = self.user.get_full_name() or self.user.username
+        if self.club:
+            return f"{name} ({self.club.name})"
+        return name
+
+    def can_be_deleted_by(self, user):
+        if not user or not user.is_authenticated:
+            return False
+        return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
