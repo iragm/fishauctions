@@ -264,6 +264,7 @@ from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
     copy_lot_images,
+    draw_door_prize,
     ensure_club_member,
     existing_tos_for_club_member,
     lot_add_block,
@@ -4258,24 +4259,12 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         redirect_url = reverse("auction_door_prizes", kwargs={"slug": self.auction.slug})
-        candidate_ids = list(
-            AuctionTOS.objects.filter(
-                auction=self.auction,
-                checked_in__isnull=False,
-                door_prize_called__isnull=True,
-            ).values_list("pk", flat=True)
-        )
-        if not candidate_ids:
+        # The draw itself lives in services.draw_door_prize so the palette's draw_door_prize action
+        # picks from the same pool, by the same rule, with the same RNG.
+        winner = draw_door_prize(self.auction, acting_user=request.user)
+        if not winner:
             messages.warning(request, "No checked-in users are left for door prizes.")
             return redirect(redirect_url)
-        winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
-        winner.door_prize_called = timezone.now()
-        winner.save(update_fields=["door_prize_called"])
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Picked door prize winner {winner.name}",
-            user=request.user,
-        )
         messages.success(request, f"Picked {winner.name}.")
         return redirect(redirect_url)
 
@@ -24129,13 +24118,43 @@ class CommandPaletteCancelView(View):
     """
 
     def post(self, request, *args, **kwargs):
+        from auctions import palette_assist, palette_routes
+
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        data = data or {}
+        # The page is resolved here for the same reason the execute endpoint resolves it: working
+        # out which auction an action was about is how the trust window is keyed.
+        request.palette_page = palette_routes.page_context_from_path(request.user, data.get("path") or "")
+        recorded = palette_assist.mark_cancelled(
+            request.user,
+            data.get("usage_id"),
+            request=request,
+            action_name=str(data.get("action") or "")[:50],
+            params=data.get("params"),
+        )
+        return JsonResponse({"recorded": recorded})
+
+
+class CommandPaletteReportView(View):
+    """Record that the user told us a palette command didn't work.
+
+    POST JSON: ``{"usage_id": <int>}``. The twin of the cancel endpoint, for the other half of
+    getting it wrong: cancel means "you understood me and picked the wrong thing", this means "you
+    didn't understand me at all". Nothing is emailed — it flags the row so the analytics page can
+    sort the failures somebody actually minded to the top.
+    """
+
+    def post(self, request, *args, **kwargs):
         from auctions import palette_assist
 
         try:
             data = json.loads((request.body or b"").decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             data = {}
-        recorded = palette_assist.mark_cancelled(request.user, (data or {}).get("usage_id"))
+        recorded = palette_assist.mark_reported(request.user, (data or {}).get("usage_id"))
         return JsonResponse({"recorded": recorded})
 
 
@@ -24208,8 +24227,16 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             usage.filter(response_kind__in=palette_assist.FAILURE_KINDS)
             .exclude(query="")
             .values("query", "response_kind")
-            .annotate(count=Count("id"))
-            .order_by("-count")[:15]
+            .annotate(count=Count("id"), reports=Count("id", filter=Q(reported=True)))
+            .order_by("-reports", "-count")[:15]
+        )
+        # The failures somebody minded enough to press a button about. Everything else on this page
+        # is inferred from behaviour; this is the only list where a person deliberately said "that
+        # didn't work", which makes it short, high-signal and the first thing worth reading.
+        reported = usage.filter(reported=True).exclude(query="")
+        context["llm_reported"] = reported.count()
+        context["llm_reported_queries"] = list(
+            reported.values("query", "action", "response_kind").annotate(count=Count("id")).order_by("-count")[:15]
         )
         # Commands the user stopped during the countdown. Everything above records the assistant
         # failing; this records it succeeding at the wrong thing, which nothing else catches -- the

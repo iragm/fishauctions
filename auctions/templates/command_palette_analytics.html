@@ -36,6 +36,34 @@
   {% endif %}
 </div>
 {% endif %}
+{% if llm_reported_queries %}
+<div class="alert alert-danger">
+  <h5 class="mb-2"><i class="bi bi-megaphone"></i> Reported by the people who hit them</h5>
+  {% comment %}
+    Every other list on this page is inferred: we watched what happened and worked out that it went
+    badly. This one is a person reading a failure and deciding it was worth pressing a button about,
+    which makes it the shortest queue here and the first one worth reading.
+  {% endcomment %}
+  <p class="small mb-2">
+    <strong>{{ llm_reported }}</strong> command(s) reported with “that didn't work”. Nothing was
+    emailed — this is the queue.
+  </p>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0">
+      <thead><tr><th>Query</th><th>What it tried</th><th class="text-end">Count</th></tr></thead>
+      <tbody>
+        {% for row in llm_reported_queries %}
+        <tr>
+          <td>{{ row.query }}</td>
+          <td><small class="text-muted">{{ row.action|default:row.response_kind }}</small></td>
+          <td class="text-end">{{ row.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% if llm_cancelled_queries %}
 <div class="alert alert-warning text-dark">
   <h5 class="mb-2"><i class="bi bi-x-octagon"></i> Commands people stopped</h5>
@@ -77,12 +105,13 @@
   </p>
   <div class="table-responsive">
     <table class="table table-sm table-borderless mb-0">
-      <thead><tr><th>Query</th><th>Outcome</th><th class="text-end">Count</th></tr></thead>
+      <thead><tr><th>Query</th><th>Outcome</th><th class="text-end">Reported</th><th class="text-end">Count</th></tr></thead>
       <tbody>
         {% for row in llm_gave_up %}
         <tr>
           <td>{{ row.query }}</td>
           <td><small class="text-muted">{{ row.response_kind }}</small></td>
+          <td class="text-end">{% if row.reports %}<span class="badge bg-danger">{{ row.reports }}</span>{% endif %}</td>
           <td class="text-end">{{ row.count }}</td>
         </tr>
         {% endfor %}

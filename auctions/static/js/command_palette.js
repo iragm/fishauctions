@@ -28,6 +28,7 @@
     var assistUrl = modalEl.dataset.assistUrl;
     var executeUrl = modalEl.dataset.executeUrl;
     var cancelUrl = modalEl.dataset.cancelUrl;
+    var reportUrl = modalEl.dataset.reportUrl;
     var assistEnabled = modalEl.dataset.assistEnabled === "1";
     var csrfToken = modalEl.dataset.csrf;
     var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -663,7 +664,15 @@
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         credentials: "same-origin",
         keepalive: true,
-        body: JSON.stringify({ usage_id: response.usage_id }),
+        // The action and params go with it so the server can spend this action's shortened-countdown
+        // trust window: a cancel is the user saying we got it wrong, and the next card is exactly
+        // where they need the full five seconds back.
+        body: JSON.stringify({
+          usage_id: response.usage_id,
+          action: response.action || "",
+          params: response.params || {},
+          path: window.location.pathname,
+        }),
       }).catch(function () {});
     }
 
@@ -699,11 +708,14 @@
         // the user is told we guessed instead of being left to assume we understood.
         if (response.note) {
           results.insertBefore(renderNote(response.note, "warning", "bi-question-circle"), results.firstChild);
+          appendReportButton(response);
         }
         return;
       }
       if (kind === "navigate" && response.url) {
-        rememberExchange(query, response.message || "Opened a page", "navigate", {});
+        // The subject of a navigation is carried forward like any other answer: "take me to the
+        // fall auction" then "add a lot" has to mean that auction, not whichever one was last used.
+        rememberExchange(query, response.message || "Opened a page", response.action || "navigate", response.data || {});
         navigatedByClick = true;
         finalized = true;
         // Say where we're going before going there. Navigating instantly gets the destination right
@@ -766,6 +778,39 @@
           "bi-exclamation-triangle-fill"
         )
       );
+      appendReportButton(response);
+    }
+
+    // "That didn't work — tell the site owner", under every failure.
+    //
+    // The query that failed is already stored server-side; this only flags the row. It is worth a
+    // button because every other failure signal we have is inferred from behaviour, and this one is
+    // a person deciding it was worth saying so — which makes it the shortest and most useful queue
+    // on the analytics page. Says thank you and stays put rather than closing the box: the failure
+    // is still on screen, and reporting it shouldn't also take away what little we did find.
+    function appendReportButton(response) {
+      if (!reportUrl || !response || !response.usage_id) {
+        return;
+      }
+      var wrap = document.createElement("div");
+      wrap.className = "text-center pt-1 pb-2";
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm btn-outline-secondary";
+      button.innerHTML = '<i class="bi bi-megaphone me-1"></i>That didn\'t work — tell the site owner';
+      button.addEventListener("click", function () {
+        button.disabled = true;
+        button.innerHTML = '<i class="bi bi-check2 me-1"></i>Thanks — passed on';
+        fetch(reportUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+          credentials: "same-origin",
+          keepalive: true,
+          body: JSON.stringify({ usage_id: response.usage_id }),
+        }).catch(function () {});
+      });
+      wrap.appendChild(button);
+      results.appendChild(wrap);
     }
 
     // The single entry point for "act on what's typed": Enter with nothing selected, and the

@@ -1110,6 +1110,7 @@ EXCLUDED: dict[str, str] = {
     "command_palette_assist": _INFRA,
     "command_palette_execute": _INFRA,
     "command_palette_cancel": _INFRA,
+    "command_palette_report": _INFRA,
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",

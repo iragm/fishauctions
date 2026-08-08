@@ -51,6 +51,7 @@ Response kinds returned to the client:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -114,6 +115,21 @@ SHORT_QUERY_WORDS = 4
 # How long the client counts down before a confirm-tier action runs.
 COUNTDOWN_MS = 5000
 
+# The countdown, once you have already done this exact thing and let it run.
+#
+# Five seconds is right the first time somebody adds a lot: it is the only chance to catch a
+# misheard name before it is written down. It is wrong the fortieth time, at a drop-off table, with
+# a queue -- that is three minutes of an evening spent watching progress bars for an action the
+# person has now approved thirty-nine times, and it is how a feature gets abandoned mid-event.
+#
+# So the window is earned, per action and per auction, by letting one run finish: same action, same
+# subject, ten minutes, administrators only. It is shortened, never skipped -- Cancel is still on
+# screen and still works, and the server still re-runs every permission check. Cancelling once
+# spends the trust immediately (see :func:`forget_trust`), because a cancel is the user saying we
+# got it wrong, and the next card is exactly where they need the time back.
+TRUSTED_COUNTDOWN_MS = 1500
+TRUST_WINDOW_SECONDS = 600
+
 MAX_QUERY_LENGTH = 600
 
 # Throttling. The 1/second cooldown is the anti-bot floor -- a real user, typing behind a 300ms
@@ -148,6 +164,17 @@ KIND_FALLBACK = "fallback"
 
 #: Every failure kind, for the analytics page's "queries we couldn't answer" list.
 FAILURE_KINDS = (FAIL_GAVE_UP, FAIL_MODEL_ERROR, FAIL_INVALID, KIND_FALLBACK)
+
+#: What ``LLMUsage.destination`` holds when a query was answered out of one lookup rather than by
+#: going somewhere. See :func:`preloadable_lookup`.
+LOOKUP_DESTINATION_PREFIX = "lookup:"
+
+#: How many times a phrase must have been answered by the same lookup before it is preloaded, and
+#: how long that verdict is cached. The same unanimity rule ``mine_palette_shortcuts`` uses: one
+#: disagreement and the phrase goes back to the model, because a query answered two different ways
+#: is one where context matters.
+PRELOAD_MIN_COUNT = 5
+PRELOAD_CACHE_SECONDS = 3600
 
 
 # --- who gets this at all -----------------------------------------------------
@@ -306,6 +333,101 @@ def shortcut_match(request, query: str) -> list[dict[str, Any]] | None:
             CommandPalettePage.objects.filter(pk=page.pk).update(hits=F("hits") + 1)
             return [{"label": "Go to", "items": items}]
     return None
+
+
+def preloadable_lookup(query: str) -> str | None:
+    """The lookup this exact phrase has always been answered from, if there is one.
+
+    ``mine_palette_shortcuts`` turns repeated *navigations* into zero-token shortcuts, because a
+    navigation's whole answer is a URL. A repeated *lookup* -- "when does this auction end", asked by
+    forty people -- has no such answer to write down: what comes back depends on who is asking. So it
+    paid full price every time, and at two rounds (pick the lookup, then say what it found) it is the
+    most expensive shape of query this feature has.
+
+    What generalises across users is not the answer, it is the *choice of lookup*. So this looks for
+    a phrase that has been answered from one parameterless lookup at least
+    :data:`PRELOAD_MIN_COUNT` times and never from any other, and the loop then runs that lookup
+    *before* the first model call -- one round instead of two, for the same answer.
+
+    Restricted to lookups that were called with **no parameters**, and that is the whole safety
+    argument: such a lookup resolves entirely from the caller's own context and permissions
+    (``my_activity``, ``auction_numbers``, ``lot_queue``), so running it for the next person who
+    types the same words tells them about *their* auction and can't leak anybody else's. A phrase
+    that resolved with an argument ("how many lots in the spring auction") is not preloaded, because
+    the argument is the part that varies.
+
+    Nothing is cached about the *result*, only about which lookup to run. Cached for an hour per
+    phrase; a wrong verdict costs one unnecessary read-only query, never a wrong answer, because the
+    model still sees the result and still decides what to say.
+    """
+    phrase = normalize_query(query)
+    if not phrase:
+        return None
+    # Hashed, not embedded: a normalized phrase still contains spaces, and a cache key with a space
+    # in it is a hard error on memcached and a warning on every other backend.
+    key = "palette_preload_" + hashlib.sha256(phrase.encode("utf-8")).hexdigest()[:32]
+    cached = cache.get(key)
+    if cached is not None:
+        return cached or None
+    destinations = set(
+        LLMUsage.objects.filter(query__iexact=query, success=True)
+        .exclude(destination="")
+        .values_list("destination", flat=True)[: PRELOAD_MIN_COUNT * 4]
+    )
+    verdict = ""
+    if len(destinations) == 1:
+        only = next(iter(destinations))
+        if only.startswith(LOOKUP_DESTINATION_PREFIX):
+            name = only[len(LOOKUP_DESTINATION_PREFIX) :]
+            hits = LLMUsage.objects.filter(query__iexact=query, success=True, destination=only).count()
+            action = palette_actions.get_action(name)
+            if hits >= PRELOAD_MIN_COUNT and action is not None and action.lookup:
+                verdict = name
+    cache.set(key, verdict, timeout=PRELOAD_CACHE_SECONDS)
+    return verdict or None
+
+
+def _answered_from(lookups_run: set[tuple[str, str]]) -> str:
+    """The ``destination`` to record for an answer: the one parameterless lookup behind it, or "".
+
+    Empty for everything else, which is the point -- an unrecorded query can never be mined into a
+    preload, so the restriction enforces itself rather than needing to be re-checked later.
+    """
+    if len(lookups_run) != 1:
+        return ""
+    name, params = next(iter(lookups_run))
+    if params not in ("{}", ""):
+        return ""
+    return f"{LOOKUP_DESTINATION_PREFIX}{name}"
+
+
+def _preload_messages(request, query: str, messages: list[dict[str, str]]) -> str:
+    """Run the lookup this phrase always needs, and hand its result over before the first round.
+
+    Returns the lookup's name when one ran, so the loop can record that this request already has it
+    (and never asks for it twice). Best-effort: anything that goes wrong here just means the model
+    picks the lookup itself, exactly as it did before.
+    """
+    name = preloadable_lookup(query)
+    if not name:
+        return ""
+    try:
+        result = palette_actions.run_action(request, name, {})
+    except Exception:
+        logger.exception("Preloading the %s lookup failed", name)
+        return ""
+    if not isinstance(result, dict) or "error" in result:
+        return ""
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"This question is usually answered from {name}, so I have already run it. "
+                "Do not call it again.\n" + lookup_payload(name, result)
+            ),
+        }
+    )
+    return name
 
 
 def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
@@ -758,14 +880,25 @@ def record_usage(
         return None
 
 
-def mark_cancelled(user, usage_id: Any) -> bool:
+def mark_cancelled(user, usage_id: Any, *, request=None, action_name: str = "", params: Any = None) -> bool:
     """Record that the user cancelled this command's countdown. Returns whether a row was updated.
 
     Scoped to the caller's own rows, so one user can't mark up another's history. Cancelling is the
     single most useful signal this feature produces: the model was confident, the server was happy,
     the countdown ran -- and the person watching it said no. That is a bad match, and unlike an
     error nothing else records it.
+
+    It also spends the shortened-countdown trust window for that action, when the client sent enough
+    to identify it. Whatever the countdown was shortened on the strength of, this is the user
+    disagreeing with it, and the next card is the one that needs the full five seconds back.
     """
+    if request is not None and action_name:
+        action = palette_actions.get_action(action_name)
+        if action is not None and isinstance(params, dict):
+            try:
+                forget_trust(request, action, params)
+            except Exception:
+                logger.exception("Could not clear the palette trust window")
     try:
         usage_id = int(usage_id)
     except (TypeError, ValueError):
@@ -774,6 +907,28 @@ def mark_cancelled(user, usage_id: Any) -> bool:
         return bool(LLMUsage.objects.filter(pk=usage_id, user=user).update(cancelled=True))
     except Exception:
         logger.exception("Could not record a palette cancellation")
+        return False
+
+
+def mark_reported(user, usage_id: Any) -> bool:
+    """Record that the user told us a command didn't work. Returns whether a row was updated.
+
+    ``FAIL_GAVE_UP`` and its siblings leave the user at a wall, and the exact query that produced
+    the wall is already stored -- ``mine_palette_shortcuts`` mines the successes into free
+    shortcuts and nothing has ever mined the failures into anything a person could read.
+
+    Scoped to the caller's own rows, like :func:`mark_cancelled`, so nobody can flag anybody else's
+    history. Nothing is emailed and nothing is escalated: this sets a flag the analytics page sorts
+    on, which is the honest version of "tell the site owner" for a one-tap button.
+    """
+    try:
+        usage_id = int(usage_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(LLMUsage.objects.filter(pk=usage_id, user=user).update(reported=True))
+    except Exception:
+        logger.exception("Could not record a palette failure report")
         return False
 
 
@@ -891,6 +1046,10 @@ def _result_to_response(action, params: dict[str, Any], result: dict[str, Any], 
             "url": result["url"],
             "message": result.get("summary", ""),
             "action": action.name,
+            # Navigations carry their subject forward too. "Take me to the fall auction" followed by
+            # "add a lot" has to mean the fall auction, and before this the second sentence lost the
+            # first one's answer entirely -- only ``done`` responses were remembered.
+            "data": _carry_over(result),
             # Not sent to the client; recorded, so the miner can see where this query landed.
             "route": result.get("route", ""),
         }
@@ -906,7 +1065,7 @@ def _result_to_response(action, params: dict[str, Any], result: dict[str, Any], 
 
 #: Values a resolver may hand forward. Must stay a subset of what ``sanitize_context`` will accept
 #: back from the client, or the next command silently loses them.
-_CARRY_OVER_KEYS = ("lot_id", "lot_name", "bidder_number")
+_CARRY_OVER_KEYS = ("lot_id", "lot_name", "bidder_number", "auction", "club")
 
 
 def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
@@ -914,6 +1073,12 @@ def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
 
     ``bidder_number`` is here so the exchange that follows adding somebody -- "his email is
     bob@example.com" -- knows who "he" is without another lookup.
+
+    ``auction`` and ``club`` are here for the same reason one sentence further on. With only the lot
+    and the bidder, "now make it twenty dollars" worked and "and add another for the same bidder in
+    the other auction" did not -- the second sentence of a conversation lost the subject of the
+    first, and defaulted back to whatever auction the user last touched, which is the one thing it
+    definitely did not mean.
     """
     data = {}
     for key in _CARRY_OVER_KEYS:
@@ -922,20 +1087,55 @@ def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _trust_key(user, action, context: str) -> str:
+    """Cache key for "this user has already approved this action, on this thing, recently"."""
+    subject = re.sub(r"[^a-z0-9]+", "-", (context or "").lower())[:60]
+    return f"palette_trust_{getattr(user, 'pk', 0)}_{action.name}_{subject}"
+
+
+def remember_trust(request, action, params: dict[str, Any]) -> None:
+    """Record that a confirm-tier action ran to completion, so the next identical one counts down less.
+
+    Called only from :func:`execute`, and only on success: an action that errored was not approved
+    by anybody, it merely failed, and treating that as consent would shorten the countdown on the
+    one card most likely to need reading.
+    """
+    if not palette_actions.administers_anything(request.user):
+        return
+    context = palette_actions.action_context(request, action, params)
+    cache.set(_trust_key(request.user, action, context), 1, timeout=TRUST_WINDOW_SECONDS)
+
+
+def forget_trust(request, action, params: dict[str, Any]) -> None:
+    """Spend the trust window. Called when the user cancels: a cancel is "you got that wrong"."""
+    context = palette_actions.action_context(request, action, params)
+    cache.delete(_trust_key(request.user, action, context))
+
+
+def _countdown_ms(request, action, params: dict[str, Any], context: str) -> int:
+    """How long to count down before this particular write. See :data:`TRUSTED_COUNTDOWN_MS`."""
+    if not palette_actions.administers_anything(request.user):
+        return COUNTDOWN_MS
+    if cache.get(_trust_key(request.user, action, context)):
+        return TRUSTED_COUNTDOWN_MS
+    return COUNTDOWN_MS
+
+
 def _countdown_response(request, action, params: dict[str, Any], summary: str, usage_id=None) -> dict[str, Any]:
-    """The card shown during the 5 seconds before a database change.
+    """The card shown in the seconds before a database change.
 
     ``context`` is worked out by the server rather than taken from the model's summary: the summary
     is the model telling us what it thinks it's doing, and this is the auction the resolver will
     actually write to. When they disagree, the user should be looking at the second one.
     """
+    context = palette_actions.action_context(request, action, params)
     return {
         "kind": KIND_COUNTDOWN,
         "action": action.name,
         "params": params,
         "summary": summary or palette_actions.default_summary(action, params),
-        "context": palette_actions.action_context(request, action, params),
-        "delay_ms": COUNTDOWN_MS,
+        "context": context,
+        "delay_ms": _countdown_ms(request, action, params, context),
         # Sent back if the user hits Cancel, so a bad match can be traced to the query that caused it.
         "usage_id": usage_id,
     }
@@ -1003,19 +1203,24 @@ def _best_guess_page(request, query: str) -> dict[str, Any] | None:
     }
 
 
-def _give_up(request, query: str, message: str) -> dict[str, Any]:
+def _give_up(request, query: str, message: str, usage_id=None) -> dict[str, Any]:
     """The end of the line, in the order that helps most.
 
     Search results first (they show what we understood), then our own best-guess page, then --
     only if the query matched nothing anywhere on the site -- an actual error.
+
+    Every one of those outcomes carries ``usage_id``, which is what puts a "that didn't work" button
+    under it. This is the feature's worst moment and the only one where the person in front of it
+    knows something the logs don't: whether search results they didn't ask for were any use. Without
+    a way to say so, a failure is a wall for them and a row in a table nobody sorts for us.
     """
     fallback = _search_fallback(request, query, "I wasn't sure what you meant. Here's what I found:")
     if fallback:
-        return fallback
+        return {**fallback, "usage_id": usage_id}
     guess = _best_guess_page(request, query)
     if guess:
-        return humanize_response(guess, request.user)
-    return {"kind": KIND_ERROR, "message": humanize(message, request.user)}
+        return {**humanize_response(guess, request.user), "usage_id": usage_id}
+    return {"kind": KIND_ERROR, "message": humanize(message, request.user), "usage_id": usage_id}
 
 
 def lookup_payload(name: str, result: Any) -> str:
@@ -1108,6 +1313,12 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     corrections = 0
     nudges = 0
     lookups_run: set[tuple[str, str]] = set()
+    # A phrase this site keeps answering out of one lookup gets that lookup run up front, so the
+    # request costs one round instead of two. Recorded in ``lookups_run`` as though the model had
+    # asked for it, which is what stops it asking again and what earns the extra round if it does.
+    preloaded = _preload_messages(request, query, messages)
+    if preloaded:
+        lookups_run.add((preloaded, json.dumps({}, sort_keys=True)))
 
     round_number = 0
     while round_number < _rounds_allowed(lookups_run):
@@ -1127,10 +1338,10 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             result = provider.complete_json(system, messages)
         except LLMError as error:
             logger.warning("Assist provider error: %s", error)
-            record_usage(user, None, query, FAIL_PROVIDER, success=False)
+            usage_id = record_usage(user, None, query, FAIL_PROVIDER, success=False)
             log_assist(user, query, KIND_ERROR)
             # The provider being down says nothing about the query, so search is still worth a go.
-            yield _give_up(request, query, "I couldn't reach the assistant just now.")
+            yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
             return
 
         reply = parse_reply(result.data, user)
@@ -1203,7 +1414,11 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             continue
 
         if kind == "answer":
-            record_usage(user, result, query, KIND_ANSWER)
+            # An answer built from exactly one parameterless lookup is a routing decision worth
+            # remembering: the next person to type this phrase can have that lookup run for them up
+            # front (see :func:`preloadable_lookup`). Anything more complicated than that -- two
+            # lookups, or one with an argument -- is left unrecorded, so it never becomes a preload.
+            record_usage(user, result, query, KIND_ANSWER, destination=_answered_from(lookups_run))
             log_assist(user, query, KIND_ANSWER)
             # Search results under the answer: the answer came out of a lookup, and the things it
             # is about are usually one click away in ordinary search.
@@ -1235,9 +1450,9 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         if kind == "error":
             # The model has told us it can't do this. It is still better to show the user something
             # than to show them a refusal, so this goes through the same ladder as running out.
-            record_usage(user, result, query, FAIL_MODEL_ERROR, success=False)
+            usage_id = record_usage(user, result, query, FAIL_MODEL_ERROR, success=False)
             log_assist(user, query, KIND_ERROR)
-            yield _give_up(request, query, reply["message"])
+            yield _give_up(request, query, reply["message"], usage_id)
             return
 
         # kind == "action"
@@ -1260,18 +1475,18 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # The action was understood but couldn't run (wrong auction, no permission, closed for
             # submissions). Keep the real reason -- it's specific and useful -- but offer the
             # search results underneath it rather than ending on a wall.
-            record_usage(user, result, query, KIND_ERROR, action.name, success=False)
+            usage_id = record_usage(user, result, query, KIND_ERROR, action.name, success=False)
             log_assist(user, query, KIND_ERROR)
-            yield humanize_response(response, user)
+            yield {**humanize_response(response, user), "usage_id": usage_id}
             return
         record_usage(user, result, query, response["kind"], action.name, destination=response.get("route", ""))
         log_assist(user, query, response["kind"])
         yield humanize_response(response, user)
         return
 
-    record_usage(user, None, query, FAIL_GAVE_UP, success=False)
+    usage_id = record_usage(user, None, query, FAIL_GAVE_UP, success=False)
     log_assist(user, query, KIND_ERROR)
-    yield _give_up(request, query, "I couldn't work out how to do that.")
+    yield _give_up(request, query, "I couldn't work out how to do that.", usage_id)
 
 
 def assist(request, query: str, context: Any = None, path: str = "") -> dict[str, Any]:
@@ -1311,4 +1526,11 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     if not isinstance(params, dict):
         return {"kind": KIND_ERROR, "message": "Those instructions didn't make sense."}
     result = palette_actions.run_action(request, action.name, params)
-    return humanize_response(_result_to_response(action, params, result, ""), request.user)
+    response = _result_to_response(action, params, result, "")
+    if response["kind"] != KIND_ERROR:
+        # Approved and completed. The next identical card gets a shorter countdown for a while.
+        remember_trust(request, action, params)
+        # ...and, when the resolver said how to reverse itself, "undo that" now has something to
+        # reach for. Only from here: an action that never ran is not something to offer to undo.
+        palette_actions.remember_undo(request.user, action.name, result)
+    return humanize_response(response, request.user)

@@ -11745,6 +11745,15 @@ class LLMUsage(models.Model):
             "repeatedly cancelled is a bad match worth fixing."
         ),
     )
+    reported = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "The user pressed 'tell the site owner' after this command failed. Every other failure "
+            "signal here is inferred; this one is a person deciding it was worth saying so, which "
+            "makes it the shortest queue on the analytics page and the first one worth reading."
+        ),
+    )
 
     class Meta:
         ordering = ["-createdon"]

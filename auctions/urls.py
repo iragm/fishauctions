@@ -228,6 +228,11 @@ urlpatterns = [
         login_required(views.CommandPaletteCancelView.as_view()),
         name="command_palette_cancel",
     ),
+    path(
+        "command-palette/report/",
+        login_required(views.CommandPaletteReportView.as_view()),
+        name="command_palette_report",
+    ),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
