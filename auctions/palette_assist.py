@@ -528,7 +528,7 @@ About this user:
 """
 
 
-def build_system_prompt(user, page: dict[str, Any] | None = None) -> str:
+def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinations=()) -> str:
     """Generate the system prompt from the registry so it can never drift from the server.
 
     Every action's name, description, parameter list and danger level comes straight out of
@@ -544,10 +544,18 @@ def build_system_prompt(user, page: dict[str, Any] | None = None) -> str:
     more than that: the model can see every destination without a round trip to look one up (a
     whole model call of latency, on a feature where latency is the main complaint), and it can
     always answer *something* rather than giving up.
+
+    ``app_destinations`` (from :func:`~auctions.command_palette.app_destinations_for_prompt`) adds
+    the handful of native screens that exist only inside the app -- lot scanning, Tap to Pay. They
+    aren't pages and so can't be in the catalog, but they are places a user asks to be taken to, and
+    the catalog holds a plausible wrong answer for each.
     """
     actions = json.dumps(palette_actions.registry_for_prompt(user), indent=None)
     context = json.dumps(palette_actions.user_context(user, page), indent=None, default=str)
     pages = palette_routes.catalog_for_prompt(user)
+    if app_destinations:
+        pages += "\nIn the app, where this user is right now (native screens, same 'page' parameter):\n"
+        pages += "\n".join(f"  {name}: {description}" for name, description in app_destinations)
     return SYSTEM_PROMPT.format(actions=actions, pages=pages, context=context)
 
 
@@ -1307,7 +1315,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
     entries = sanitize_context(context)
     provider = get_provider()
-    system = build_system_prompt(user, request.palette_page)
+    system = build_system_prompt(user, request.palette_page, command_palette.app_destinations_for_prompt(request))
     messages = build_messages(query, entries)
     started = time.monotonic()
     corrections = 0

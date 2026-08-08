@@ -1812,6 +1812,14 @@ def go_to_page(request, params: dict[str, Any]) -> dict[str, Any]:
     if not query:
         return _error("Where would you like to go?")
 
+    # Two destinations in the app aren't pages at all: lot scanning and Tap to Pay are native
+    # screens behind a fishauctions:// deep link. Checked before the catalog because the catalog
+    # holds near misses for both ("tap to pay" is a keyword on the Square payout settings page),
+    # and on a phone the native screen is what someone asking for it by name means.
+    app_destination = command_palette.app_deep_link_by_name(request, query)
+    if app_destination:
+        return _ok(f"Opening {app_destination['title']}.", url=app_destination["url"], title=app_destination["title"])
+
     route = palette_routes.get_route(query)
     if route is None:
         matches = palette_routes.match_routes(query, request.user, limit=4)

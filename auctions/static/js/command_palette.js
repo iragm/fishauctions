@@ -866,6 +866,82 @@
     // --- Speech to text ------------------------------------------------------
 
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    // Neither of the app's WebViews has the Web Speech API -- iOS WKWebView has never shipped it,
+    // Android's System WebView doesn't carry the recognizer Chrome does, and the shell denies the
+    // WebView's own getUserMedia besides -- so in the app the phone's own recognizer arrives over
+    // the shell's JS bridge instead. Wrapped in the same shape as the browser API so everything
+    // below this line, buildRecognition() included, is unchanged.
+    function appBridge() {
+      var b = window.flutter_inappwebview;
+      return b && b.callHandler ? b : null;
+    }
+
+    function AppSpeechRecognition() {
+      var self = this;
+      this._handlers = { result: [], end: [], error: [] };
+      window.fishauctionsDictate = {
+        onEvent: function (event) {
+          if (typeof event === "string") {
+            try {
+              event = JSON.parse(event);
+            } catch (err) {
+              return;
+            }
+          }
+          if (!event || !event.type) {
+            return;
+          }
+          if (event.type === "transcript") {
+            // Same shape the browser gives us: results[i][0].transcript, results[i].isFinal.
+            var alternatives = [{ transcript: event.text || "" }];
+            alternatives.isFinal = !event.partial;
+            self._fire("result", { resultIndex: 0, results: [alternatives] });
+          } else if (event.type === "state" && !event.listening) {
+            // The app stops itself on the final transcript -- a command is one sentence, and a
+            // microphone left open would put the rest of the room into the box.
+            self._fire("end", {});
+          } else if (event.type === "error") {
+            self._fire("error", { error: event.code, message: event.message });
+          }
+          // "level" (mic loudness, ~10 Hz) has no counterpart in the browser API and nothing here
+          // draws a meter, so it's dropped rather than fired at handlers that don't expect it.
+        },
+      };
+    }
+    AppSpeechRecognition.prototype._fire = function (name, event) {
+      (this._handlers[name] || []).forEach(function (fn) {
+        fn(event);
+      });
+    };
+    AppSpeechRecognition.prototype.addEventListener = function (name, fn) {
+      if (this._handlers[name]) {
+        this._handlers[name].push(fn);
+      }
+    };
+    AppSpeechRecognition.prototype.start = function () {
+      var self = this;
+      var bridge = appBridge();
+      if (!bridge) {
+        return;
+      }
+      bridge.callHandler("dictateStart").then(function (state) {
+        // No handler ever rejects: a rejected promise would be indistinguishable from an app build
+        // with no dictation at all, so a failure resolves with a state map carrying `error`. A
+        // resolution is therefore not success -- read the error out and put the button back.
+        if (state && state.error) {
+          self._fire("error", { error: "app", message: state.error });
+          self._fire("end", {});
+        }
+      });
+    };
+    AppSpeechRecognition.prototype.stop = function () {
+      var bridge = appBridge();
+      if (bridge) {
+        bridge.callHandler("dictateStop");
+      }
+    };
+
     var recognition = null;
     var listening = false;
     var paletteMic = document.getElementById("command-palette-mic");
@@ -1003,21 +1079,51 @@
 
     var micAvailable = false;
 
-    if (assistEnabled && SpeechRecognition && paletteMic) {
+    function onMicClick() {
+      // A deliberate click always wins over the explanation for the automatic one.
+      hideMicHint();
+      if (listening) {
+        stopListening();
+        rememberMicChoice(false);
+      } else {
+        startListening();
+        rememberMicChoice(true);
+      }
+    }
+
+    function enableMic() {
       micAvailable = true;
       recognition = buildRecognition();
       paletteMic.classList.remove("d-none");
-      paletteMic.addEventListener("click", function () {
-        // A deliberate click always wins over the explanation for the automatic one.
-        hideMicHint();
-        if (listening) {
-          stopListening();
-          rememberMicChoice(false);
-        } else {
-          startListening();
-          rememberMicChoice(true);
-        }
-      });
+      paletteMic.addEventListener("click", onMicClick);
+    }
+
+    if (assistEnabled && SpeechRecognition && paletteMic) {
+      enableMic();
+    } else if (assistEnabled && paletteMic && appBridge()) {
+      // The app's answer is async (it asks the OS whether a recognition service exists), so the
+      // button is revealed on the reply rather than synchronously. A build without the handlers
+      // resolves nothing useful and the button stays hidden, exactly as it does in a browser
+      // without the API.
+      //
+      // Guarded rather than chained straight off the call: this runs before the palette's own event
+      // listeners are attached, so a bridge that answers with something other than a promise must
+      // cost the app a microphone, not a working palette.
+      var dictateState = appBridge().callHandler("dictateGetState");
+      if (dictateState && dictateState.then) {
+        dictateState
+          .then(function (state) {
+            // supported is the capability, not the permission: a first visit answers
+            // {supported: true, permission: false} and the tap on this button is what raises the OS
+            // prompt. Hiding the button on a missing permission would leave nothing left to tap.
+            if (!state || !state.supported) {
+              return;
+            }
+            SpeechRecognition = AppSpeechRecognition;
+            enableMic();
+          })
+          .catch(function () {});
+      }
     }
 
     // The palette is open and the user used the mic last time, so switch it on for them. Delayed a

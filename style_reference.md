@@ -174,7 +174,8 @@ dead rather than merely unavailable. Judge it by the page:
 - A page that is only useful in the app, or a long public list where the button
   would be pure noise on web, gates on `request.is_mobile_app` (lot page's
   "Find this lot", `auction.html`'s "Scan lots", the lot-list scanning button in
-  `lot_tile_page.html` / `lot_list_page.html`, Bluetooth label printing).
+  `lot_tile_page.html` / `lot_list_page.html`, Bluetooth label printing, and the
+  command palette's "Lot scanning" / "Tap to Pay" rows in `command_palette.py`).
 
 Reference implementation: the "Payment not available" button in
 `auctions/templates/invoice.html` — a plain `btn btn-secondary` (no `disabled`)

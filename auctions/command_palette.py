@@ -1060,6 +1060,145 @@ def _membership_card_item(user, club):
     )
 
 
+# --- destinations that only exist inside the app -----------------------------
+#
+# Lot scanning (the camera) and Tap to Pay (the card reader) are native screens rather than pages on
+# this site, so the palette can't reach them the way it reaches everything else. Both are already
+# deep links the app intercepts, so they're emitted as ordinary items whose URL happens to use the
+# app's own scheme. Gated on the app's User-Agent: the link is dead in a browser, and an app build
+# that doesn't recognise a ``fishauctions://`` URL ignores it rather than navigating, so a row this
+# server emits before the app can handle it is inert rather than broken.
+#
+# The native palette (the app's fallback when this modal isn't on the page) injects its own copies
+# of both rows, which is why ``search`` can be asked to leave them out -- see
+# ``MobileCommandPaletteView``.
+
+AR_DEEP_LINK = "fishauctions://ar/{slug}"
+TAP_TO_PAY_DEEP_LINK = "fishauctions://tap-to-pay"
+
+# Word-boundary matches, unlike the substring matching the page shortcuts use: "ar" is a substring
+# of car, start and search, and lot scanning has no business under a third of the queries on the
+# site. "find lot" is singular for the same reason -- "find my lots" is a real page on the web.
+_AR_QUERY = re.compile(r"\b(scan\w*|ar|augmented reality|find (?:a |the )?lot)\b")
+_TAP_TO_PAY_QUERY = re.compile(r"\b(tap|cards?|payments?)\b")
+
+# The screens' own names, tighter again, for a navigation request that must *beat* the page catalog
+# rather than sit alongside it -- see ``app_deep_link_by_name``.
+_AR_NAME = re.compile(r"^(lot )?scan(ner|ning)?$|^ar$|^augmented reality$")
+_TAP_TO_PAY_NAME = re.compile(r"^(tap|tap to pay|tap to pay on iphone|card reader)$")
+
+
+def _app_ar_auction(user):
+    """The auction "Lot scanning" would open, or None.
+
+    The user's most recent auction, in person and not yet over: there is nothing to walk to at an
+    online auction, and once one is ``pretty_much_over`` the room has been packed up. The same
+    window the "Find this lot" buttons on the lot lists use.
+    """
+    auction = _last_auction_active(user)
+    return auction if auction and not auction.is_online else None
+
+
+def _can_take_payments(user):
+    """Whether this user administers any auction or club that could take a card payment.
+
+    Deliberately the same check the app's Tap to Pay warm-up endpoint makes, so the palette can't
+    offer a row that the screen behind it turns around and refuses.
+    """
+    from auctions.mobile.services.payments import PaymentService
+
+    return PaymentService._user_can_take_payments(user)
+
+
+def _app_deep_link_items(request, ql=""):
+    """The native destinations worth offering this user, as ordinary palette items.
+
+    ``ql`` is the lower-cased query, or ``""`` for the palette's empty state. A row appears either
+    because the query named it or -- with no query -- because the user is in the situation it exists
+    for: an in-person auction happening now, or a merchant who can take a card.
+    """
+    if not getattr(request, "is_mobile_app", False):
+        return []
+    user = request.user
+    items = []
+    if not ql or _AR_QUERY.search(ql):
+        auction = _app_ar_auction(user)
+        if auction:
+            items.append(
+                _item(
+                    "app",
+                    f"Lot scanning — {auction.title}",
+                    AR_DEEP_LINK.format(slug=auction.slug),
+                    "bi-camera",
+                    "Find lots with your camera",
+                    auction.pk,
+                )
+            )
+    # Cheap test first: _can_take_payments is a few exists() queries, and this runs on every
+    # keystroke in the app.
+    if (not ql or _TAP_TO_PAY_QUERY.search(ql)) and _can_take_payments(user):
+        # Both the label and the missing icon come from Apple's Tap to Pay on iPhone review guide,
+        # not from taste (see the same rules spelled out in quick_checkout_htmx.html): 5.4 allows
+        # only "Tap to Pay on iPhone" or "Tap to Pay" as the label, so the usual " — {auction}"
+        # suffix would break it and the context goes in the subtitle instead; 5.5 requires SF
+        # Symbols' wave.3.right.circle if the control carries an icon at all, and imitating it with
+        # a credit-card glyph is separately forbidden. Every palette row draws a glyph, so this one
+        # gets the palette's neutral "go here" arrow rather than anything that reads as a payment
+        # mark of ours.
+        items.append(
+            _item(
+                "app",
+                "Tap to Pay on iPhone" if getattr(request, "is_ios_app", False) else "Tap to Pay",
+                TAP_TO_PAY_DEEP_LINK,
+                "bi-arrow-right-short",
+                "Take a card payment on this phone",
+            )
+        )
+    return items
+
+
+def app_destinations_for_prompt(request):
+    """``(name, description)`` for each native screen this user could be sent to right now.
+
+    Written into the assistant's system prompt beside the page catalog, because the catalog is a
+    list of *named URLs* and these two aren't URLs at all. Without them the model can only answer
+    "take me to tap to pay" with the nearest real page — the Square payout settings — which is not
+    where the user asked to go. Empty on the web, and empty for anyone the screens aren't available
+    to, so the model is never told about a destination that would then refuse to open.
+
+    The names are the ones :func:`app_deep_link_by_name` accepts, so what the prompt offers and what
+    ``go_to_page`` takes can't drift apart.
+    """
+    destinations = []
+    for item in _app_deep_link_items(request):
+        if item["url"] == TAP_TO_PAY_DEEP_LINK:
+            destinations.append(("tap to pay", "Take a card payment on this phone (a native screen)"))
+        else:
+            destinations.append(("lot scanning", "Point the camera at the room to find a lot (a native screen)"))
+    return destinations
+
+
+def app_deep_link_by_name(request, query):
+    """The native destination a navigation request names outright, or None.
+
+    For ``go_to_page``: on a phone, "take me to tap to pay" means the card reader, not the Square
+    payout settings page that carries "tap to pay" as one of its keywords. Only the screen's own
+    name counts here, so this can't swallow the queries the page catalog answers better.
+    """
+    ql = (query or "").strip().lower()
+    wants_ar = bool(_AR_NAME.match(ql))
+    wants_tap_to_pay = bool(_TAP_TO_PAY_NAME.match(ql))
+    if not (wants_ar or wants_tap_to_pay):
+        return None
+    # Through the same builder, so a named destination is still subject to the permission and
+    # in-person-auction checks that decide whether the row exists for this user at all.
+    for item in _app_deep_link_items(request, ql):
+        is_tap_to_pay = item["url"] == TAP_TO_PAY_DEEP_LINK
+        if is_tap_to_pay == wants_tap_to_pay:
+            return item
+    return None
+
+
 def _auction_admin_items(request, auction, ended):
     items = [
         _item(
@@ -1223,7 +1362,7 @@ def _club_default_items(user):
     return items
 
 
-def default_items(request):
+def default_items(request, *, app_deep_links=True):
     """Groups shown when the palette opens with no query."""
     user = request.user
     groups = []
@@ -1231,6 +1370,10 @@ def default_items(request):
     auction = _last_auction(user)
     if auction:
         primary += _auction_default_items(request, user, auction)
+    # Directly after that auction's own rows: lot scanning is about the auction the user is standing
+    # in, and Tap to Pay is what the admin next to them is holding a phone for.
+    if app_deep_links:
+        primary += _app_deep_link_items(request)
     primary += _club_default_items(user)
     next_auction = (
         Auction.objects.filter(
@@ -1284,17 +1427,22 @@ def default_items(request):
     return groups
 
 
-def search(request, q):
-    """Grouped search results for a query, or the default items when the query is empty."""
+def search(request, q, *, app_deep_links=True):
+    """Grouped search results for a query, or the default items when the query is empty.
+
+    ``app_deep_links=False`` drops the two native app destinations (lot scanning, Tap to Pay) for
+    callers whose client adds its own — see :class:`~auctions.mobile.views.MobileCommandPaletteView`.
+    """
     user = request.user
     q = (q or "").strip()
     if not q:
-        return default_items(request)
+        return default_items(request, app_deep_links=app_deep_links)
     groups = []
     ql = q.lower()
 
     page_items = (
-        _page_items(user, ql)
+        (_app_deep_link_items(request, ql) if app_deep_links else [])
+        + _page_items(user, ql)
         + _auction_field_items(user, q)
         + _user_pref_field_items(user, q)
         + _club_settings_field_items(user, q)

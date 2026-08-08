@@ -1070,6 +1070,7 @@ EXCLUDED: dict[str, str] = {
     "api_club_member_detail": _API,
     "api_club_member_renew": _API,
     "api_club_member_bap_awards": _API,
+    "api_club_bap_lots": _API,
     "inbound_email_routing": _API,
     # Webhooks and machine-to-machine
     "paypal-webhook": _WEBHOOK,

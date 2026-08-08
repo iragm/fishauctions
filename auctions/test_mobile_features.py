@@ -11,6 +11,8 @@ Part T/X — the TSPL printer profile and the v2 command-program schema it needs
 Part U/Y — adding a printer without an app release: what the app can capture about an unknown
 printer, and drafting a profile from it.
 Part W — bulk Bluetooth printing: the lot-set deep link and marking labels printed natively.
+Part PALETTE — the website's command palette inside the app: that it is rendered at all, and the
+two native destinations (lot scanning, Tap to Pay) it emits as fishauctions:// deep links.
 """
 
 import datetime
@@ -2394,3 +2396,219 @@ class MembershipCardWalletButtonsTests(TestCase):
         in_app = self._get("FishAuctionsApp/1.0 (Flutter; iOS)", apple=False)
         self.assertNotContains(in_app, "apple-wallet-explainer")
         self.assertNotContains(in_app, "take a screenshot")
+
+
+# ---------------------------------------------------------------------------
+# Part PALETTE — the website's command palette, inside the app
+# ---------------------------------------------------------------------------
+
+
+class AppCommandPaletteRenderingTests(StandardTestCase):
+    """The palette modal is rendered in the app, not just on the web.
+
+    The app's app-bar title opens ``#command-palette-modal`` and falls back to its own native
+    palette when the element isn't there, so this template line is what decides whether an app user
+    gets the natural-language assistant or plain search.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+
+    def _home(self, user_agent=""):
+        self.client.force_login(self.user)
+        return self.client.get(reverse("home"), follow=True, HTTP_USER_AGENT=user_agent)
+
+    def test_the_palette_is_rendered_in_the_app(self):
+        self.assertContains(self._home(self.APP_UA), "command-palette-modal")
+
+    def test_the_palette_is_still_rendered_on_the_web(self):
+        self.assertContains(self._home(), "command-palette-modal")
+
+    def test_the_keyboard_footer_stays_hidden_on_a_phone(self):
+        """Bootstrap does the hiding, but the class has to survive: there is no Ctrl+K on a phone."""
+        self.assertContains(self._home(self.APP_UA), "d-none d-md-flex")
+
+
+class AppPaletteDeepLinkTests(StandardTestCase):
+    """The two destinations that aren't pages: native lot scanning and native Tap to Pay.
+
+    Both are emitted as ordinary palette items whose URL uses the app's own scheme, gated on the
+    app's User-Agent — the links are dead in a browser.
+    """
+
+    IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+    ANDROID_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
+    WEB_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+
+    def setUp(self):
+        super().setUp()
+        # An in-person auction that is actually happening: StandardTestCase's are days in the past,
+        # and lot scanning stops once an auction is pretty_much_over.
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(hours=4)
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self.ar_link = f"fishauctions://ar/{self.in_person_auction.slug}"
+        self.tap_to_pay_link = "fishauctions://tap-to-pay"
+
+    def _palette(self, query="", user_agent=None, user=None):
+        self.client.force_login(user or self.user)
+        return self.client.get(
+            reverse("command_palette"),
+            {"q": query} if query else {},
+            HTTP_USER_AGENT=self.IOS_UA if user_agent is None else user_agent,
+        )
+
+    def _urls(self, response):
+        return [item["url"] for group in response.json()["groups"] for item in group["items"]]
+
+    def _titles(self, response):
+        return [item["title"] for group in response.json()["groups"] for item in group["items"]]
+
+    # -- lot scanning -----------------------------------------------------
+
+    def test_lot_scanning_is_offered_for_the_auction_the_user_is_at(self):
+        self.assertIn(self.ar_link, self._urls(self._palette()))
+
+    def test_lot_scanning_is_not_offered_on_the_web(self):
+        self.assertNotIn(self.ar_link, self._urls(self._palette(user_agent=self.WEB_UA)))
+
+    def test_lot_scanning_is_not_offered_for_an_online_auction(self):
+        """There is nothing to walk to at an online auction."""
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self.assertFalse([url for url in self._urls(self._palette()) if url.startswith("fishauctions://ar/")])
+
+    def test_lot_scanning_stops_once_the_room_is_packed_up(self):
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=4)
+        self.in_person_auction.date_end = timezone.now() - datetime.timedelta(days=3)
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.pretty_much_over)
+        self.assertNotIn(self.ar_link, self._urls(self._palette()))
+
+    def test_a_query_about_scanning_finds_it(self):
+        for query in ("scan", "scanning", "augmented reality", "find lot"):
+            self.assertIn(self.ar_link, self._urls(self._palette(query)), query)
+
+    def test_an_unrelated_query_does_not_drag_scanning_in(self):
+        """ "ar" is a substring of a great many words; the match is on the word, not the letters."""
+        for query in ("car", "starting price", "search my lots", "find my lots"):
+            self.assertNotIn(self.ar_link, self._urls(self._palette(query)), query)
+
+    # -- tap to pay -------------------------------------------------------
+
+    def test_tap_to_pay_is_offered_to_someone_who_can_take_a_payment(self):
+        self.assertIn(self.tap_to_pay_link, self._urls(self._palette()))
+
+    def test_tap_to_pay_is_not_offered_to_a_buyer(self):
+        """The row is only worth showing to someone the payment screen would actually let in."""
+        self.assertNotIn(self.tap_to_pay_link, self._urls(self._palette(user=self.userB)))
+
+    def test_tap_to_pay_is_not_offered_on_the_web(self):
+        self.assertNotIn(self.tap_to_pay_link, self._urls(self._palette(user_agent=self.WEB_UA)))
+
+    def test_the_label_is_the_one_apples_review_guide_allows(self):
+        """5.4: "Tap to Pay on iPhone" is iPhone-only wording, and neither string takes a suffix."""
+        self.assertIn("Tap to Pay on iPhone", self._titles(self._palette()))
+        android_titles = self._titles(self._palette(user_agent=self.ANDROID_UA))
+        self.assertIn("Tap to Pay", android_titles)
+        self.assertNotIn("Tap to Pay on iPhone", android_titles)
+
+    def test_the_row_carries_no_payment_iconography(self):
+        """5.5: an icon on the control must be SF Symbols' wave.3.right.circle, which we don't have
+        and may not imitate — so the row gets the palette's neutral "go here" arrow."""
+        items = [
+            item
+            for group in self._palette().json()["groups"]
+            for item in group["items"]
+            if item["url"] == self.tap_to_pay_link
+        ]
+        self.assertEqual([item["icon"] for item in items], ["bi-arrow-right-short"])
+
+    def test_a_query_about_payments_finds_it(self):
+        for query in ("tap", "card", "payment"):
+            self.assertIn(self.tap_to_pay_link, self._urls(self._palette(query)), query)
+
+    # -- the native palette -----------------------------------------------
+
+    def test_the_native_palette_is_not_sent_rows_it_injects_itself(self):
+        """``/api/mobile/command-palette/`` backs the app's own fallback palette, which adds both
+        rows natively; sending them from here as well would show the user each one twice."""
+        response = self.client.get(reverse("mobile-command-palette"), HTTP_USER_AGENT=self.IOS_UA, **_bearer(self.user))
+        self.assertEqual(response.status_code, 200)
+        items = [item for group in response.json()["groups"] for item in group["items"]]
+        self.assertFalse([item["url"] for item in items if item["url"].startswith("fishauctions://")], items)
+        # …but the rest of the palette is untouched.
+        self.assertTrue(any("View lots" in item["title"] for item in items), items)
+
+
+class AppPaletteNavigationTests(StandardTestCase):
+    """ "Take me to tap to pay" — the assistant's navigation skill knows the native screens too."""
+
+    IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+
+    def setUp(self):
+        super().setUp()
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(hours=4)
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+
+    def _go(self, page, user_agent=None, user=None):
+        from auctions import palette_actions
+
+        request = self.client.request(HTTP_USER_AGENT=user_agent or "").wsgi_request
+        request.user = user or self.user
+        request.palette_page = {}
+        return palette_actions.run_action(request, "go_to_page", {"page": page})
+
+    def test_tap_to_pay_opens_the_card_reader_rather_than_the_payout_settings(self):
+        """The catalog has a near miss: "tap to pay" is a keyword on the Square payout page."""
+        self.assertEqual(self._go("tap to pay", self.IOS_UA)["url"], "fishauctions://tap-to-pay")
+
+    def test_lot_scanning_opens_the_camera(self):
+        self.assertEqual(
+            self._go("lot scanning", self.IOS_UA)["url"], f"fishauctions://ar/{self.in_person_auction.slug}"
+        )
+
+    def test_on_the_web_the_same_question_still_finds_a_real_page(self):
+        result = self._go("tap to pay")
+        self.assertTrue(result["url"].startswith("/"), result)
+
+    def test_a_page_the_catalog_owns_is_not_hijacked_in_the_app(self):
+        """Only the screens' own names win; everything else still goes through the catalog."""
+        self.assertEqual(self._go("my_invoices", self.IOS_UA)["url"], reverse("my_invoices"))
+
+    def _request(self, user_agent=""):
+        request = self.client.request(HTTP_USER_AGENT=user_agent).wsgi_request
+        request.user = self.user
+        request.palette_page = {}
+        return request
+
+    def test_the_assistant_is_told_about_the_native_screens(self):
+        """The prompt is a catalog of URLs, and these two aren't URLs — so without this the model
+        can only answer "take me to tap to pay" with the nearest real page."""
+        from auctions import command_palette, palette_assist
+
+        destinations = command_palette.app_destinations_for_prompt(self._request(self.IOS_UA))
+        self.assertEqual([name for name, _ in destinations], ["lot scanning", "tap to pay"])
+        prompt = palette_assist.build_system_prompt(self.user, {}, destinations)
+        self.assertIn("lot scanning", prompt)
+        self.assertIn("tap to pay", prompt)
+
+    def test_the_web_prompt_says_nothing_about_screens_the_browser_cannot_open(self):
+        from auctions import command_palette, palette_assist
+
+        self.assertEqual(command_palette.app_destinations_for_prompt(self._request()), [])
+        self.assertNotIn("native screens", palette_assist.build_system_prompt(self.user, {}))
+
+    def test_every_name_the_prompt_offers_is_one_the_navigation_skill_accepts(self):
+        """The two lists are written in different functions; this is what keeps them the same."""
+        from auctions import command_palette
+
+        request = self._request(self.IOS_UA)
+        offered = command_palette.app_destinations_for_prompt(request)
+        self.assertTrue(offered)
+        for name, _ in offered:
+            self.assertIsNotNone(command_palette.app_deep_link_by_name(request, name), name)
