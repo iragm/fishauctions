@@ -1,6 +1,8 @@
+from datetime import timezone as date_tz
+
 from rest_framework import serializers
 
-from .models import ClubMember
+from .models import BapAward, ClubMember, Lot
 
 CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
     {
@@ -163,6 +165,117 @@ class ClubMemberAPIKeySerializer(serializers.ModelSerializer):
             msg = "Provide at least an email address or a name."
             raise serializers.ValidationError(msg)
         return data
+
+
+class BapAwardSummarySerializer(serializers.ModelSerializer):
+    """The points already recorded against a lot, nested inside ClubBapLotSerializer."""
+
+    auto_awarded = serializers.SerializerMethodField()
+
+    def get_auto_awarded(self, obj):
+        """True when the site awarded these points itself; false when a person did."""
+        return obj.awarded_by_id is None
+
+    class Meta:
+        model = BapAward
+        fields = ["id", "date", "points", "hap_points", "cap_points", "notes", "auto_awarded"]
+
+
+class ClubBapLotSerializer(serializers.ModelSerializer):
+    """Read-only view of one lot from a club's auction, for external BAP systems.
+
+    Everything here is already visible to club admins on the BAP pages; this is the same data in a
+    shape an outside breeder-award program can match on (seller/winner email are the join keys),
+    plus everything the site knows about whether the lot earns points.
+    """
+
+    lot_id = serializers.IntegerField(source="pk", read_only=True)
+    # Always a string: Lot.lot_number_display is an int for plain numbering and a string like
+    # "101-1" under seller-dash numbering, and a caller shouldn't have to handle both types.
+    lot_number_display = serializers.CharField(read_only=True)
+    seller_name = serializers.SerializerMethodField()
+    seller_email = serializers.SerializerMethodField()
+    winner_name = serializers.ReadOnlyField()
+    winner_email = serializers.ReadOnlyField()
+    # UTC, so every timestamp in the response reads the same regardless of the club's timezone
+    timestamp = serializers.DateTimeField(source="date_end", read_only=True, default_timezone=date_tz.utc)
+    sold = serializers.ReadOnlyField()
+    category = serializers.SerializerMethodField()
+    program = serializers.CharField(source="bap_placeholder", read_only=True)
+    custom_checkbox_name = serializers.SerializerMethodField()
+    bap_eligible = serializers.SerializerMethodField()
+    bap_ineligible_reason = serializers.SerializerMethodField()
+    bap_ineligible_reason_display = serializers.SerializerMethodField()
+    bap_award = serializers.SerializerMethodField()
+
+    # Lot.seller_name / seller_email return the literal "Unknown" when a lot has neither an
+    # AuctionTOS nor a user; blank is friendlier for a caller matching on these.
+    def get_seller_name(self, obj):
+        return "" if obj.seller_name == "Unknown" else obj.seller_name
+
+    def get_seller_email(self, obj):
+        return "" if obj.seller_email == "Unknown" else obj.seller_email
+
+    def get_category(self, obj):
+        return obj.species_category.name if obj.species_category else ""
+
+    def get_custom_checkbox_name(self, obj):
+        """The auction's label for custom_checkbox, so the flag means something to the caller."""
+        if obj.auction and obj.auction.use_custom_checkbox_field:
+            return obj.auction.custom_checkbox_name or ""
+        return ""
+
+    @staticmethod
+    def _no_bap_reason(obj):
+        """Lot.sold_lot_no_bap_reason hits the database, so evaluate it once per lot."""
+        if not hasattr(obj, "_cached_no_bap_reason"):
+            obj._cached_no_bap_reason = obj.sold_lot_no_bap_reason
+        return obj._cached_no_bap_reason
+
+    def get_bap_eligible(self, obj):
+        return self._no_bap_reason(obj) is None
+
+    def get_bap_ineligible_reason(self, obj):
+        return self._no_bap_reason(obj) or ""
+
+    def get_bap_ineligible_reason_display(self, obj):
+        reason = self._no_bap_reason(obj)
+        return dict(Lot.BAP_REASON_CHOICES).get(reason, reason or "")
+
+    def get_bap_award(self, obj):
+        try:
+            award = obj.bap_award
+        except BapAward.DoesNotExist:
+            return None
+        return BapAwardSummarySerializer(award).data
+
+    class Meta:
+        model = Lot
+        fields = [
+            "lot_id",
+            "lot_number_display",
+            "lot_name",
+            "quantity",
+            "seller_name",
+            "seller_email",
+            "winner_name",
+            "winner_email",
+            "timestamp",
+            "sold",
+            "category",
+            "program",
+            "i_bred_this_fish",
+            "donation",
+            "custom_checkbox",
+            "custom_checkbox_name",
+            "bap_eligible",
+            "bap_ineligible_reason",
+            "bap_ineligible_reason_display",
+            "bap_auto_reason",
+            "bap_points_awarded",
+            "manually_approved",
+            "bap_award",
+        ]
 
 
 class BapAwardAPIKeyCreateSerializer(serializers.Serializer):

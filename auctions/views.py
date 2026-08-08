@@ -74,6 +74,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -255,6 +256,7 @@ from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
+    ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
@@ -21760,6 +21762,11 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk}))
 
 
+def _as_api_timestamp(value):
+    """Format a datetime the way DRF renders one, so doc examples match real responses."""
+    return value.astimezone(date_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """Manage a single ClubAPIKey and its field mappings."""
 
@@ -21791,6 +21798,13 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["example_new_expiration"] = _compute_member_renewal_expiration(
             self.club, ClubMember(club=self.club, membership_expiration_date=None), today
         )
+        # The BAP lot example shows the real default window, formatted the way the API returns it.
+        now = timezone.now()
+        ctx["bap_lot_default_days"] = BAP_LOT_DEFAULT_DAYS
+        ctx["example_bap_range_end"] = _as_api_timestamp(now)
+        ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
+        ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
+        ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
         return ctx
 
 
@@ -22997,6 +23011,124 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
             applies_to="BAP",
         )
         return Response({"id": award.pk, "member_id": member.pk, "points": award.points}, status=201)
+
+
+BAP_LOT_DEFAULT_DAYS = 30
+
+
+def parse_bap_lot_date_range(params):
+    """Resolve the ``start``/``end``/``days`` query params into an aware datetime range.
+
+    Bare dates are inclusive at both ends, so ``end=2026-08-08`` covers all of August 8th.
+    Explicit ``start``/``end`` win over ``days``; with nothing given the range is the last
+    ``BAP_LOT_DEFAULT_DAYS`` days.  Raises ValueError with a caller-facing message.
+    """
+    now = timezone.now()
+
+    def parse_bound(name, *, end_of_day):
+        raw = (params.get(name) or "").strip()
+        if not raw:
+            return None
+        # Bare dates are checked first: parse_datetime() also accepts "2026-03-31" and would silently
+        # turn an inclusive end date into midnight, dropping everything that happened that day.
+        parsed_date = parse_date(raw)
+        if parsed_date is not None:
+            parsed = datetime.combine(parsed_date, datetime.max.time() if end_of_day else datetime.min.time())
+        else:
+            parsed = parse_datetime(raw)
+            if parsed is None:
+                msg = f"Could not read {name}={raw!r}. Use YYYY-MM-DD or an ISO 8601 timestamp."
+                raise ValueError(msg)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        return parsed
+
+    start = parse_bound("start", end_of_day=False)
+    end = parse_bound("end", end_of_day=True)
+    days = None
+    raw_days = (params.get("days") or "").strip()
+    if raw_days:
+        try:
+            days = int(raw_days)
+        except ValueError:
+            msg = f"Could not read days={raw_days!r}. Use a whole number of days."
+            raise ValueError(msg) from None
+        if days < 1:
+            msg = "days must be at least 1."
+            raise ValueError(msg)
+    if start is None and end is None:
+        end = now
+        start = end - timedelta(days=days or BAP_LOT_DEFAULT_DAYS)
+    elif start is None:
+        start = end - timedelta(days=days or BAP_LOT_DEFAULT_DAYS)
+    elif end is None:
+        end = start + timedelta(days=days) if days else now
+    if end < start:
+        msg = "end must not be before start."
+        raise ValueError(msg)
+    return start, end
+
+
+class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
+    """List the lots from this club's auctions that ended in a date range.
+
+    Feeds an external breeder award program: it gets the lot, who sold it, who bought it, and
+    everything this site knows about whether the lot earns points, and does its own matching on the
+    email addresses.  Unsold lots are included with empty winner fields, so the caller can tell
+    "nobody bought it" from "not in this club's auctions".
+
+    ``lot_id`` is the site's permanent id for the lot and never changes or gets reused, so a caller
+    can key on it to avoid awarding points twice for the same lot across overlapping pulls.
+
+    GET /api/v1/clubs/<slug>/bap-lots/?days=30
+        ?days=N                   the last N days (default 30)
+        ?start=YYYY-MM-DD         from this date/timestamp (inclusive)
+        ?end=YYYY-MM-DD           through this date/timestamp (inclusive to end of day)
+    """
+
+    serializer_class = ClubBapLotSerializer
+
+    def get(self, request, slug):
+        club = self.require_club_permission(
+            "permission_manage_bap",
+            "can_add_bap_points",
+            "You do not have permission to view BAP lots for this club.",
+        )
+        if not club.enable_breeder_award_program:
+            raise Http404
+        try:
+            start, end = parse_bap_lot_date_range(request.query_params)
+        except ValueError as error:
+            return Response({"error": str(error)}, status=400)
+        lots = (
+            Lot.objects.filter(
+                auction__club=club,
+                is_deleted=False,
+                banned=False,
+                date_end__gte=start,
+                date_end__lte=end,
+            )
+            .select_related(
+                "auctiontos_seller",
+                "auctiontos_winner",
+                "user",
+                "winner",
+                "auction__club",
+                "species_category",
+                "bap_award",
+            )
+            .order_by("-date_end")
+        )
+        serializer = self.serializer_class(lots, many=True)
+        return Response(
+            {
+                # UTC, to match the timestamp on each lot
+                "start": start.astimezone(date_tz.utc),
+                "end": end.astimezone(date_tz.utc),
+                "count": len(serializer.data),
+                "results": serializer.data,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

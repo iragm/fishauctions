@@ -1030,6 +1030,11 @@ urlpatterns = [
         views.ClubMemberBapAwardAPIView.as_view(),
         name="api_club_member_bap_awards",
     ),
+    path(
+        "api/v1/clubs/<slug:slug>/bap-lots/",
+        views.ClubBapLotListAPIView.as_view(),
+        name="api_club_bap_lots",
+    ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
