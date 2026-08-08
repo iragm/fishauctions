@@ -28,6 +28,7 @@
     var assistUrl = modalEl.dataset.assistUrl;
     var executeUrl = modalEl.dataset.executeUrl;
     var cancelUrl = modalEl.dataset.cancelUrl;
+    var reportUrl = modalEl.dataset.reportUrl;
     var assistEnabled = modalEl.dataset.assistEnabled === "1";
     var csrfToken = modalEl.dataset.csrf;
     var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -663,7 +664,15 @@
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         credentials: "same-origin",
         keepalive: true,
-        body: JSON.stringify({ usage_id: response.usage_id }),
+        // The action and params go with it so the server can spend this action's shortened-countdown
+        // trust window: a cancel is the user saying we got it wrong, and the next card is exactly
+        // where they need the full five seconds back.
+        body: JSON.stringify({
+          usage_id: response.usage_id,
+          action: response.action || "",
+          params: response.params || {},
+          path: window.location.pathname,
+        }),
       }).catch(function () {});
     }
 
@@ -699,11 +708,14 @@
         // the user is told we guessed instead of being left to assume we understood.
         if (response.note) {
           results.insertBefore(renderNote(response.note, "warning", "bi-question-circle"), results.firstChild);
+          appendReportButton(response);
         }
         return;
       }
       if (kind === "navigate" && response.url) {
-        rememberExchange(query, response.message || "Opened a page", "navigate", {});
+        // The subject of a navigation is carried forward like any other answer: "take me to the
+        // fall auction" then "add a lot" has to mean that auction, not whichever one was last used.
+        rememberExchange(query, response.message || "Opened a page", response.action || "navigate", response.data || {});
         navigatedByClick = true;
         finalized = true;
         // Say where we're going before going there. Navigating instantly gets the destination right
@@ -766,6 +778,39 @@
           "bi-exclamation-triangle-fill"
         )
       );
+      appendReportButton(response);
+    }
+
+    // "That didn't work — tell the site owner", under every failure.
+    //
+    // The query that failed is already stored server-side; this only flags the row. It is worth a
+    // button because every other failure signal we have is inferred from behaviour, and this one is
+    // a person deciding it was worth saying so — which makes it the shortest and most useful queue
+    // on the analytics page. Says thank you and stays put rather than closing the box: the failure
+    // is still on screen, and reporting it shouldn't also take away what little we did find.
+    function appendReportButton(response) {
+      if (!reportUrl || !response || !response.usage_id) {
+        return;
+      }
+      var wrap = document.createElement("div");
+      wrap.className = "text-center pt-1 pb-2";
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm btn-outline-secondary";
+      button.innerHTML = '<i class="bi bi-megaphone me-1"></i>That didn\'t work — tell the site owner';
+      button.addEventListener("click", function () {
+        button.disabled = true;
+        button.innerHTML = '<i class="bi bi-check2 me-1"></i>Thanks — passed on';
+        fetch(reportUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+          credentials: "same-origin",
+          keepalive: true,
+          body: JSON.stringify({ usage_id: response.usage_id }),
+        }).catch(function () {});
+      });
+      wrap.appendChild(button);
+      results.appendChild(wrap);
     }
 
     // The single entry point for "act on what's typed": Enter with nothing selected, and the
@@ -821,6 +866,82 @@
     // --- Speech to text ------------------------------------------------------
 
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    // Neither of the app's WebViews has the Web Speech API -- iOS WKWebView has never shipped it,
+    // Android's System WebView doesn't carry the recognizer Chrome does, and the shell denies the
+    // WebView's own getUserMedia besides -- so in the app the phone's own recognizer arrives over
+    // the shell's JS bridge instead. Wrapped in the same shape as the browser API so everything
+    // below this line, buildRecognition() included, is unchanged.
+    function appBridge() {
+      var b = window.flutter_inappwebview;
+      return b && b.callHandler ? b : null;
+    }
+
+    function AppSpeechRecognition() {
+      var self = this;
+      this._handlers = { result: [], end: [], error: [] };
+      window.fishauctionsDictate = {
+        onEvent: function (event) {
+          if (typeof event === "string") {
+            try {
+              event = JSON.parse(event);
+            } catch (err) {
+              return;
+            }
+          }
+          if (!event || !event.type) {
+            return;
+          }
+          if (event.type === "transcript") {
+            // Same shape the browser gives us: results[i][0].transcript, results[i].isFinal.
+            var alternatives = [{ transcript: event.text || "" }];
+            alternatives.isFinal = !event.partial;
+            self._fire("result", { resultIndex: 0, results: [alternatives] });
+          } else if (event.type === "state" && !event.listening) {
+            // The app stops itself on the final transcript -- a command is one sentence, and a
+            // microphone left open would put the rest of the room into the box.
+            self._fire("end", {});
+          } else if (event.type === "error") {
+            self._fire("error", { error: event.code, message: event.message });
+          }
+          // "level" (mic loudness, ~10 Hz) has no counterpart in the browser API and nothing here
+          // draws a meter, so it's dropped rather than fired at handlers that don't expect it.
+        },
+      };
+    }
+    AppSpeechRecognition.prototype._fire = function (name, event) {
+      (this._handlers[name] || []).forEach(function (fn) {
+        fn(event);
+      });
+    };
+    AppSpeechRecognition.prototype.addEventListener = function (name, fn) {
+      if (this._handlers[name]) {
+        this._handlers[name].push(fn);
+      }
+    };
+    AppSpeechRecognition.prototype.start = function () {
+      var self = this;
+      var bridge = appBridge();
+      if (!bridge) {
+        return;
+      }
+      bridge.callHandler("dictateStart").then(function (state) {
+        // No handler ever rejects: a rejected promise would be indistinguishable from an app build
+        // with no dictation at all, so a failure resolves with a state map carrying `error`. A
+        // resolution is therefore not success -- read the error out and put the button back.
+        if (state && state.error) {
+          self._fire("error", { error: "app", message: state.error });
+          self._fire("end", {});
+        }
+      });
+    };
+    AppSpeechRecognition.prototype.stop = function () {
+      var bridge = appBridge();
+      if (bridge) {
+        bridge.callHandler("dictateStop");
+      }
+    };
+
     var recognition = null;
     var listening = false;
     var paletteMic = document.getElementById("command-palette-mic");
@@ -958,21 +1079,51 @@
 
     var micAvailable = false;
 
-    if (assistEnabled && SpeechRecognition && paletteMic) {
+    function onMicClick() {
+      // A deliberate click always wins over the explanation for the automatic one.
+      hideMicHint();
+      if (listening) {
+        stopListening();
+        rememberMicChoice(false);
+      } else {
+        startListening();
+        rememberMicChoice(true);
+      }
+    }
+
+    function enableMic() {
       micAvailable = true;
       recognition = buildRecognition();
       paletteMic.classList.remove("d-none");
-      paletteMic.addEventListener("click", function () {
-        // A deliberate click always wins over the explanation for the automatic one.
-        hideMicHint();
-        if (listening) {
-          stopListening();
-          rememberMicChoice(false);
-        } else {
-          startListening();
-          rememberMicChoice(true);
-        }
-      });
+      paletteMic.addEventListener("click", onMicClick);
+    }
+
+    if (assistEnabled && SpeechRecognition && paletteMic) {
+      enableMic();
+    } else if (assistEnabled && paletteMic && appBridge()) {
+      // The app's answer is async (it asks the OS whether a recognition service exists), so the
+      // button is revealed on the reply rather than synchronously. A build without the handlers
+      // resolves nothing useful and the button stays hidden, exactly as it does in a browser
+      // without the API.
+      //
+      // Guarded rather than chained straight off the call: this runs before the palette's own event
+      // listeners are attached, so a bridge that answers with something other than a promise must
+      // cost the app a microphone, not a working palette.
+      var dictateState = appBridge().callHandler("dictateGetState");
+      if (dictateState && dictateState.then) {
+        dictateState
+          .then(function (state) {
+            // supported is the capability, not the permission: a first visit answers
+            // {supported: true, permission: false} and the tap on this button is what raises the OS
+            // prompt. Hiding the button on a missing permission would leave nothing left to tap.
+            if (!state || !state.supported) {
+              return;
+            }
+            SpeechRecognition = AppSpeechRecognition;
+            enableMic();
+          })
+          .catch(function () {});
+      }
     }
 
     // The palette is open and the user used the mic last time, so switch it on for them. Delayed a

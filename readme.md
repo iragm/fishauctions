@@ -83,6 +83,22 @@ To check if code passes the linting check *without* modifying any files on disk,
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 
+##### Speaker directory
+
+The directory at `/speakers/` was seeded once from a WordPress export of the Northeast Council's
+old site (Tools → Export; export files are gitignored).  A one-time job, kept in case it needs a
+re-run — each command's `--help` and module docstring has the details:
+
+```bash
+manage.py import_nec_speakers <export.xml>              # --dry-run first; re-running updates, never duplicates
+manage.py import_nec_speakers <export.xml> --topics-only  # re-apply just the topics after the vocabulary changes
+manage.py geocode_speakers                              # LLM reads the bios for a location, then geocodes it
+manage.py split_speaker_talks                           # LLM splits the flattened "Programs:" run-on
+```
+
+Topics are a closed vocabulary (`auctions/speaker_topics.py`) — nothing in the UI coins a new one.
+Access needs any club permission in a club flagged **NEC member club** in the Django admin.
+
 ### Developing in VSCode
 
 This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).

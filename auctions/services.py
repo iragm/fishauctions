@@ -181,12 +181,17 @@ def apply_club_member_to_tos(auction, tos, member):
     return tos
 
 
-def check_in_auctiontos(tos, *, acting_user, bidder_number=""):
+def check_in_auctiontos(tos, *, acting_user, bidder_number="", note=""):
     """Check a participant in: stamp ``checked_in``, allow bidding, optionally set their bidder number.
 
     Extracted verbatim from ``views.AuctionCheckIn.post`` so the web check-in modal and the
     command palette's ``check_in`` action share one implementation. Idempotent -- checking in
     someone who is already checked in only writes an auction history entry.
+
+    ``note`` is appended to the history entry. The palette passes "(command palette)" so its own
+    check-ins read the same as every other write it makes -- without it, ``recent_changes`` and any
+    audit built on it were blind to the single most common thing the assistant does at a live event,
+    purely because that one write happens to go through shared code.
 
     Permission is the caller's job (both callers gate on ``can_add_edit_people``).
     Returns the ``AuctionTOS``.
@@ -205,10 +210,46 @@ def check_in_auctiontos(tos, *, acting_user, bidder_number=""):
         tos.force_set_bidder_number(bidder_number, acting_user=acting_user)
     tos.auction.create_history(
         applies_to="USERS",
-        action=f"Checked in {tos.name}",
+        action=f"Checked in {tos.name}{f' {note}' if note else ''}",
         user=acting_user,
     )
     return tos
+
+
+def draw_door_prize(auction, *, acting_user):
+    """Pick a random checked-in participant who hasn't won a door prize yet.
+
+    Extracted verbatim from ``views.AuctionDoorPrizes.post`` so the door-prize page and the command
+    palette's ``draw_door_prize`` action draw from the same pool by the same rule. ``door_prize_called``
+    is a per-person timestamp, so "already won one" is simply "has one set", and drawing twice can
+    never pick the same person.
+
+    ``secrets.choice`` rather than ``random.choice``: this is a draw in front of a room, and the
+    only defensible answer to "was that rigged?" is a cryptographic RNG.
+
+    Permission is the caller's job (both callers gate on ``can_add_edit_people``).
+    Returns the winning ``AuctionTOS``, or ``None`` when nobody is left to draw.
+    """
+    import secrets
+
+    candidate_ids = list(
+        AuctionTOS.objects.filter(
+            auction=auction,
+            checked_in__isnull=False,
+            door_prize_called__isnull=True,
+        ).values_list("pk", flat=True)
+    )
+    if not candidate_ids:
+        return None
+    winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
+    winner.door_prize_called = timezone.now()
+    winner.save(update_fields=["door_prize_called"])
+    auction.create_history(
+        applies_to="USERS",
+        action=f"Picked door prize winner {winner.name}",
+        user=acting_user,
+    )
+    return winner
 
 
 # Why lots can't be added, keyed so each caller can pick its own destination/wording.

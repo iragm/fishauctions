@@ -548,7 +548,13 @@ $(document).ready(function() {
 {% comment %}
   Voice input. Rendered hidden and revealed only once the app answers voiceGetState() with
   supported: true -- is_mobile_app alone isn't enough, because app builds that predate the voice
-  handlers would otherwise show every phone a button that does nothing.
+  handlers, or phones with no recognizer at all, would otherwise show a button that does nothing.
+
+  supported is the capability and nothing else: since the 2026-08-08 build the app answers it from
+  a permission-free check and asks for the microphone inside voiceStart, so
+  {supported: true, permission: false} is the normal first visit and the button must appear -- the
+  tap is what earns the OS prompt. (Answering it by initializing the recognizer is what once hid
+  this button permanently on every phone that hadn't already granted the microphone.)
 {% endcomment %}
 <button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
 <span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>

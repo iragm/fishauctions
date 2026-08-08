@@ -1,0 +1,13 @@
+{% load render_table from django_tables2 %}
+{% comment %}
+htmx response for the speaker list. Renders the table exactly like table_generic.html does,
+then ships the map's data out of band so filtering keeps the map and the list showing the
+same set of speakers without a page reload.
+{% endcomment %}
+{% if no_results %}
+<div class="table-container mt-2 mb-2">{{ no_results|safe }}</div>
+{% else %}
+{% render_table table %}
+{% endif %}
+
+<div id="speaker-map-payload" hx-swap-oob="true">{{ speakers_json|json_script:"speaker-map-data" }}</div>

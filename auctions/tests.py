@@ -172,9 +172,11 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=the_future
         )
-        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
-        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
-        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
+        # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
+        # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
+        # in 500: the auction already holds that number under a different name. These are kept out of
+        # the range tests pick their own numbers from.
         self.in_person_buyer = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
@@ -183,22 +185,30 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+            user=self.admin_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            is_admin=True,
+            bidder_number="501",
         )
         self.admin_in_person_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+            user=self.admin_user,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            is_admin=True,
+            bidder_number="502",
         )
         self.online_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location
+            user=self.user, auction=self.online_auction, pickup_location=self.location, bidder_number="503"
         )
         self.in_person_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location, bidder_number="504"
         )
         self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.online_auction, pickup_location=self.location
+            user=self.userB, auction=self.online_auction, pickup_location=self.location, bidder_number="505"
         )
         self.tosC = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location, bidder_number="506"
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
@@ -7547,6 +7557,50 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         member.refresh_from_db()
         self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
 
+    # --- ClubHistory: a subscription renewal has to leave the same trail a manual one does ---
+
+    def test_subscription_renewal_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=365))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("renewed via PayPal subscription", history.action)
+        self.assertIsNone(history.user)  # a webhook has no acting user
+        self.assertNotIn("I-SUB1", history.action)  # the id is masked, as it is in the logs
+
+    def test_duplicate_subscription_event_writes_history_once(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
+        sub = self._active_subscription()
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, sub)
+            _apply_paypal_subscription_event(self.club, sub)
+        self.assertEqual(ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").count(), 1)
+
+    def test_subscription_created_member_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        with patch("auctions.views.maybe_send_membership_renewal_confirmation"):
+            _apply_paypal_subscription_event(self.club, self._active_subscription(email="new@example.com"))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("from PayPal subscription", history.action)
+
+    def test_cancelled_subscription_writes_club_history(self):
+        from auctions.views import _apply_paypal_subscription_event
+
+        ClubMember.objects.create(
+            club=self.club, name="Sub Member", email="subscriber@example.com", paypal_subscription_id="I-SUB1"
+        )
+        sub = self._active_subscription()
+        sub["status"] = "CANCELLED"
+        _apply_paypal_subscription_event(self.club, sub)
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("stopped auto-renewing", history.action)
+        self.assertIn("paid-through date unchanged", history.action)
+
     def test_cancelled_clears_subscription_but_keeps_expiration(self):
         from auctions.views import _apply_paypal_subscription_event
 
@@ -8113,6 +8167,26 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertTrue(self.member.welcome_email_sent)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Welcome to the {self.club.name}!")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").first()
+        self.assertIsNotNone(history)
+        self.assertIn("Sent welcome letter to", history.action)
+        self.assertIn(self.member.email, history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_daily_membership_task_logs_no_history_when_welcome_email_not_sent(self, mock_send):
+        """A do-not-contact member gets no welcome email, so there's nothing to log."""
+        from auctions.tasks import update_expired_membership_discord_roles
+
+        ClubMember.objects.filter(pk=self.member.pk).update(
+            createdon=timezone.now() - datetime.timedelta(days=2),
+            contact_status="do_not_contact",
+        )
+        update_expired_membership_discord_roles.run()
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.welcome_email_sent)
+        self.assertFalse(mock_send.called)
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, action__contains="welcome letter").exists())
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_30_day_expiration_email(self, mock_send):
@@ -8127,6 +8201,8 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires in 30 days")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent 30-day expiration reminder to", history.action)
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
@@ -8143,6 +8219,29 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_due)
         self.assertEqual(mock_send.call_args.kwargs["subject"], f"Your {self.club.name} membership expires tomorrow")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent final expiration reminder to", history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_renewal_confirmation_email_writes_club_history(self, mock_send):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        self.assertTrue(maybe_send_membership_renewal_confirmation(self.member))
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERSHIP").get()
+        self.assertIn("Sent renewal confirmation to", history.action)
+
+    @patch("auctions.tasks.mail.send")
+    def test_no_renewal_confirmation_history_when_member_cannot_be_emailed(self, mock_send):
+        from auctions.tasks import maybe_send_membership_renewal_confirmation
+
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        self.member.contact_status = "do_not_contact"
+        self.member.save(update_fields=["contact_status"])
+        self.assertFalse(maybe_send_membership_renewal_confirmation(self.member))
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
     @patch("auctions.tasks.mail.send")
     def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):
@@ -9733,9 +9832,11 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=theFuture
         )
-        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
-        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
-        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
+        # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
+        # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
+        # in 500: the auction already holds that number under a different name. These are kept out of
+        # the range tests pick their own numbers from.
         self.in_person_buyer = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
@@ -9744,22 +9845,30 @@ class WebSocketConsumerTests(TransactionTestCase):
         )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+            user=self.admin_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            is_admin=True,
+            bidder_number="501",
         )
         self.admin_in_person_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+            user=self.admin_user,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            is_admin=True,
+            bidder_number="502",
         )
         self.online_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location
+            user=self.user, auction=self.online_auction, pickup_location=self.location, bidder_number="503"
         )
         self.in_person_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location, bidder_number="504"
         )
         self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.online_auction, pickup_location=self.location
+            user=self.userB, auction=self.online_auction, pickup_location=self.location, bidder_number="505"
         )
         self.tosC = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location, bidder_number="506"
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
@@ -19263,6 +19372,309 @@ class ClubAPIKeyMemberPermissionTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class ClubBapLotAPITests(TestCase):
+    """The BAP lot feed: /api/v1/clubs/<slug>/bap-lots/"""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="bap_lot_owner", password="testpass", email="bl@example.com")
+        self.club = Club.objects.create(name="BAP Lot Club", enable_breeder_award_program=True)
+        self.auction = Auction.objects.create(
+            created_by=self.owner,
+            title="BAP Lot Club Auction",
+            is_online=True,
+            club=self.club,
+            date_start=timezone.now() - datetime.timedelta(days=40),
+            date_end=timezone.now() - datetime.timedelta(days=39),
+        )
+        self.location = PickupLocation.objects.create(
+            name="bap lot location", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        self.seller = AuctionTOS.objects.create(
+            name="Mike Smith",
+            email="mike@example.com",
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="601",
+        )
+        self.buyer = AuctionTOS.objects.create(
+            name="Dana Lee",
+            email="dana@example.com",
+            auction=self.auction,
+            pickup_location=self.location,
+            bidder_number="602",
+        )
+        self.recent_lot = self.make_lot("Recent lot", days_ago=2, winner=self.buyer, quantity=6)
+        self.old_lot = self.make_lot("Old lot", days_ago=90, winner=self.buyer)
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="BAP Lot Key",
+            prefix=prefix,
+            key_hash=key_hash,
+            created_by=self.owner,
+        )
+        self.raw_key = raw_key
+        self.url = reverse("api_club_bap_lots", kwargs={"slug": self.club.slug})
+
+    def make_lot(self, lot_name, days_ago, winner=None, quantity=1, **kwargs):
+        lot = Lot.objects.create(
+            lot_name=lot_name,
+            auction=self.auction,
+            auctiontos_seller=self.seller,
+            quantity=quantity,
+            active=False,
+            auctiontos_winner=winner,
+            winning_price=5 if winner else None,
+            **kwargs,
+        )
+        # date_end is set by the ending/selling code paths, not by Lot.save(), so tests set it here
+        Lot.objects.filter(pk=lot.pk).update(date_end=timezone.now() - datetime.timedelta(days=days_ago))
+        lot.refresh_from_db()
+        return lot
+
+    def enable_bap_permission(self):
+        self.api_key.can_add_bap_points = True
+        self.api_key.save(update_fields=["can_add_bap_points"])
+
+    def get(self, **params):
+        return self.client.get(self.url, params, HTTP_X_API_KEY=self.raw_key)
+
+    def test_requires_bap_permission(self):
+        self.assertEqual(self.get().status_code, 403)
+
+    def test_requires_a_key(self):
+        self.assertEqual(self.client.get(self.url).status_code, 401)
+
+    def test_default_range_is_last_30_days(self):
+        self.enable_bap_permission()
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual([lot["lot_name"] for lot in data["results"]], ["Recent lot"])
+
+    def test_returns_the_requested_fields(self):
+        self.enable_bap_permission()
+        lot = self.get().json()["results"][0]
+        self.assertEqual(
+            sorted(lot.keys()),
+            [
+                "bap_auto_reason",
+                "bap_award",
+                "bap_eligible",
+                "bap_ineligible_reason",
+                "bap_ineligible_reason_display",
+                "bap_points_awarded",
+                "category",
+                "custom_checkbox",
+                "custom_checkbox_name",
+                "donation",
+                "i_bred_this_fish",
+                "lot_id",
+                "lot_name",
+                "lot_number_display",
+                "manually_approved",
+                "program",
+                "quantity",
+                "seller_email",
+                "seller_name",
+                "sold",
+                "timestamp",
+                "winner_email",
+                "winner_name",
+            ],
+        )
+        self.assertEqual(lot["lot_number_display"], str(self.recent_lot.lot_number_display))
+        self.assertEqual(lot["quantity"], 6)
+        self.assertEqual(lot["seller_name"], "Mike Smith")
+        self.assertEqual(lot["seller_email"], "mike@example.com")
+        self.assertEqual(lot["winner_name"], "Dana Lee")
+        self.assertEqual(lot["winner_email"], "dana@example.com")
+        self.assertTrue(lot["timestamp"].startswith(str(self.recent_lot.date_end.year)))
+
+    def test_all_times_are_utc(self):
+        """Mixing the club's local offset into some fields and UTC into others would be a trap."""
+        self.enable_bap_permission()
+        with override_settings(TIME_ZONE="America/New_York", USE_TZ=True):
+            data = self.get(start="2026-01-01").json()
+        self.assertTrue(data["start"].endswith("Z"), data["start"])
+        self.assertTrue(data["end"].endswith("Z"), data["end"])
+        self.assertTrue(data["results"][0]["timestamp"].endswith("Z"), data["results"][0]["timestamp"])
+
+    def test_lot_id_is_the_lots_permanent_id(self):
+        """lot_id is the caller's idempotency key, so it has to be the real primary key."""
+        self.enable_bap_permission()
+        lot = self.get().json()["results"][0]
+        self.assertEqual(lot["lot_id"], self.recent_lot.pk)
+        self.recent_lot.lot_name = "Renamed after the fact"
+        self.recent_lot.save()
+        self.assertEqual(self.get().json()["results"][0]["lot_id"], self.recent_lot.pk)
+
+    def test_bap_fields_for_an_eligible_lot(self):
+        self.enable_bap_permission()
+        category = Category.objects.create(name="Test BAP Catfish", bap_points=5)
+        ClubMember.objects.create(club=self.club, name="Mike Smith", email="mike@example.com")
+        self.recent_lot.species_category = category
+        self.recent_lot.i_bred_this_fish = True
+        self.recent_lot.save()
+        lot = self.get().json()["results"][0]
+        self.assertTrue(lot["sold"])
+        self.assertEqual(lot["category"], "Test BAP Catfish")
+        self.assertEqual(lot["program"], "BAP")
+        self.assertTrue(lot["i_bred_this_fish"])
+        self.assertFalse(lot["donation"])
+        self.assertTrue(lot["bap_eligible"])
+        self.assertEqual(lot["bap_ineligible_reason"], "")
+        self.assertEqual(lot["bap_ineligible_reason_display"], "")
+        self.assertIsNone(lot["bap_award"])
+        self.assertEqual(lot["bap_points_awarded"], 0)
+        self.assertFalse(lot["manually_approved"])
+
+    def test_ineligible_lot_says_why(self):
+        self.enable_bap_permission()
+        # Nobody ticked the breeder checkbox, so this lot was never a BAP candidate
+        lot = self.get().json()["results"][0]
+        self.assertFalse(lot["bap_eligible"])
+        self.assertEqual(lot["bap_ineligible_reason"], "not_bred")
+        self.assertEqual(lot["bap_ineligible_reason_display"], "Didn't breed this fish")
+
+    def test_ineligible_reason_is_recomputed_not_read_from_the_stored_one(self):
+        """bap_auto_reason is a historical record; bap_ineligible_reason answers "right now"."""
+        self.enable_bap_permission()
+        Lot.objects.filter(pk=self.recent_lot.pk).update(bap_auto_reason="not_club_member")
+        lot = self.get().json()["results"][0]
+        self.assertEqual(lot["bap_auto_reason"], "not_club_member")
+        self.assertEqual(lot["bap_ineligible_reason"], "not_bred")
+
+    def test_awarded_lot_reports_its_award(self):
+        self.enable_bap_permission()
+        member = ClubMember.objects.create(club=self.club, name="Mike Smith", email="mike@example.com")
+        award = BapAward.objects.create(
+            club_member=member,
+            date=timezone.now().date(),
+            points=5,
+            lot=self.recent_lot,
+            notes="Bred corydoras",
+        )
+        Lot.objects.filter(pk=self.recent_lot.pk).update(bap_points_awarded=5, manually_approved=True)
+        lot = self.get().json()["results"][0]
+        self.assertEqual(lot["bap_points_awarded"], 5)
+        self.assertTrue(lot["manually_approved"])
+        self.assertEqual(lot["bap_award"]["id"], award.pk)
+        self.assertEqual(lot["bap_award"]["points"], 5)
+        self.assertEqual(lot["bap_award"]["hap_points"], 0)
+        self.assertEqual(lot["bap_award"]["cap_points"], 0)
+        self.assertEqual(lot["bap_award"]["notes"], "Bred corydoras")
+        # awarded_by is null on this award, which is how the site records an automatic one
+        self.assertTrue(lot["bap_award"]["auto_awarded"])
+
+    def test_manually_awarded_points_are_not_reported_as_automatic(self):
+        self.enable_bap_permission()
+        member = ClubMember.objects.create(club=self.club, name="Mike Smith", email="mike@example.com")
+        BapAward.objects.create(
+            club_member=member,
+            date=timezone.now().date(),
+            points=5,
+            lot=self.recent_lot,
+            awarded_by=self.owner,
+        )
+        self.assertFalse(self.get().json()["results"][0]["bap_award"]["auto_awarded"])
+
+    def test_custom_checkbox_name_only_when_the_auction_uses_one(self):
+        self.enable_bap_permission()
+        self.assertEqual(self.get().json()["results"][0]["custom_checkbox_name"], "")
+        self.auction.use_custom_checkbox_field = True
+        self.auction.custom_checkbox_name = "Rare species"
+        self.auction.save()
+        self.assertEqual(self.get().json()["results"][0]["custom_checkbox_name"], "Rare species")
+
+    def test_days_widens_the_range(self):
+        self.enable_bap_permission()
+        data = self.get(days=120).json()
+        self.assertEqual(data["count"], 2)
+        # newest first
+        self.assertEqual([lot["lot_name"] for lot in data["results"]], ["Recent lot", "Old lot"])
+
+    def test_explicit_start_and_end_dates(self):
+        self.enable_bap_permission()
+        old_day = (timezone.localtime(self.old_lot.date_end)).date()
+        data = self.get(start=old_day.isoformat(), end=old_day.isoformat()).json()
+        self.assertEqual([lot["lot_name"] for lot in data["results"]], ["Old lot"])
+
+    def test_start_and_end_take_precedence_over_days(self):
+        self.enable_bap_permission()
+        old_day = (timezone.localtime(self.old_lot.date_end)).date()
+        data = self.get(start=old_day.isoformat(), end=old_day.isoformat(), days=1).json()
+        self.assertEqual([lot["lot_name"] for lot in data["results"]], ["Old lot"])
+
+    def test_unparsable_date_is_a_400(self):
+        self.enable_bap_permission()
+        response = self.get(start="last tuesday")
+        self.assertEqual(response.status_code, 400)
+        # The error names the accepted formats without echoing what the caller sent
+        self.assertIn("YYYY-MM-DD", response.json()["error"])
+        self.assertNotIn("last tuesday", response.json()["error"])
+
+    def test_bad_days_is_a_400(self):
+        self.enable_bap_permission()
+        self.assertEqual(self.get(days="lots").status_code, 400)
+        self.assertEqual(self.get(days=0).status_code, 400)
+
+    def test_end_before_start_is_a_400(self):
+        self.enable_bap_permission()
+        self.assertEqual(self.get(start="2026-03-01", end="2026-02-01").status_code, 400)
+
+    def test_unsold_lot_has_blank_winner_fields(self):
+        self.enable_bap_permission()
+        self.make_lot("Nobody wanted it", days_ago=1)
+        results = {lot["lot_name"]: lot for lot in self.get().json()["results"]}
+        self.assertEqual(results["Nobody wanted it"]["winner_name"], "")
+        self.assertEqual(results["Nobody wanted it"]["winner_email"], "")
+
+    def test_deleted_and_banned_lots_are_excluded(self):
+        self.enable_bap_permission()
+        self.make_lot("Deleted lot", days_ago=1, is_deleted=True)
+        self.make_lot("Banned lot", days_ago=1, banned=True)
+        names = [lot["lot_name"] for lot in self.get().json()["results"]]
+        self.assertEqual(names, ["Recent lot"])
+
+    def test_lots_from_another_club_are_excluded(self):
+        self.enable_bap_permission()
+        other_club = Club.objects.create(name="Some Other Club", enable_breeder_award_program=True)
+        other_auction = Auction.objects.create(
+            created_by=self.owner,
+            title="Other Club Auction",
+            is_online=True,
+            club=other_club,
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            date_end=timezone.now() - datetime.timedelta(days=4),
+        )
+        other_lot = Lot.objects.create(lot_name="Other club lot", auction=other_auction, quantity=1, active=False)
+        Lot.objects.filter(pk=other_lot.pk).update(date_end=timezone.now() - datetime.timedelta(days=4))
+        names = [lot["lot_name"] for lot in self.get().json()["results"]]
+        self.assertEqual(names, ["Recent lot"])
+
+    def test_key_cannot_read_another_clubs_lots(self):
+        self.enable_bap_permission()
+        other_club = Club.objects.create(name="Not My Club", enable_breeder_award_program=True)
+        url = reverse("api_club_bap_lots", kwargs={"slug": other_club.slug})
+        response = self.client.get(url, HTTP_X_API_KEY=self.raw_key)
+        self.assertEqual(response.status_code, 403)
+
+    def test_404_when_bap_is_off_for_the_club(self):
+        self.enable_bap_permission()
+        self.club.enable_breeder_award_program = False
+        self.club.save(update_fields=["enable_breeder_award_program"])
+        self.assertEqual(self.get().status_code, 404)
+
+    def test_reading_lots_updates_last_used(self):
+        self.enable_bap_permission()
+        self.get()
+        self.api_key.refresh_from_db()
+        self.assertIsNotNone(self.api_key.last_used_at)
+
+
 class ParseBoolEnvTests(TestCase):
     """Cover fishauctions._env.parse_bool_env, which gates settings.DEBUG."""
 
@@ -21235,6 +21647,10 @@ class ClubAPIKeyUITests(TestCase):
         self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/")
         self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/")
         self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/bap-awards/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/bap-lots/")
+        self.assertContains(response, "lot_number_display")
+        self.assertContains(response, "lot_id")
+        self.assertContains(response, "bap_eligible")
 
 
 class ClubPermissionWildcardTests(TestCase):
@@ -26661,6 +27077,24 @@ class MailchimpWebhookTests(TestCase):
         self.member.refresh_from_db()
         self.assertEqual(self.member.email, "new@example.com")
 
+    def test_webhook_events_write_club_history(self):
+        # These happen at Mailchimp, so the club's history log is the admins' only view of them.
+        self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "hook@example.com"})
+        self.client_http.post(
+            self._url(),
+            {"type": "upemail", "data[old_email]": "hook@example.com", "data[new_email]": "new@example.com"},
+        )
+        actions = list(
+            ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").values_list("action", flat=True)
+        )
+        self.assertEqual(len(actions), 2)
+        self.assertTrue(any("unsubscribed at Mailchimp" in a for a in actions))
+        self.assertTrue(any("changed their email to new@example.com via Mailchimp" in a for a in actions))
+
+    def test_event_for_unknown_email_writes_no_history(self):
+        self.client_http.post(self._url(), {"type": "unsubscribe", "data[email]": "nobody@example.com"})
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
+
 
 class MailchimpSelfServiceTests(TestCase):
     """The UUID merge-field links change only the club contact status."""
@@ -26699,6 +27133,44 @@ class MailchimpSelfServiceTests(TestCase):
         self.client_http.post(url)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "do_not_contact")
+
+    def test_contact_preference_link_writes_club_history(self):
+        # The one-click preference links change the same field the unsubscribe view does, so the
+        # club's admins need the same record of it.
+        url = reverse(
+            "club_member_contact_pref",
+            kwargs={"slug": self.club.slug, "uuid": self.member.uuid, "level": "essential"},
+        )
+        self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.contact_status, "non_essential")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("essential emails only", history.action)
+        self.assertIsNone(history.user)
+
+
+class ClubMemberEmailPropagationTests(TestCase):
+    """Changing a site account email rewrites the member's club records, so the club is told."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Propagation Club")
+        self.user = User.objects.create_user(username="propagate", password="pw", email="before@example.com")
+        self.member = ClubMember.objects.create(club=self.club, user=self.user, name="Pat", email="before@example.com")
+
+    def test_account_email_change_writes_club_history(self):
+        self.user.email = "after@example.com"
+        self.user.save()
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, "after@example.com")
+        history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()
+        self.assertIn("before@example.com", history.action)
+        self.assertIn("after@example.com", history.action)
+        self.assertEqual(history.user, self.user)
+
+    def test_unrelated_account_save_writes_no_history(self):
+        self.user.first_name = "Pat"
+        self.user.save()
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
 
 class BrevoSyncTests(TestCase):
@@ -26973,6 +27445,20 @@ class BrevoWebhookTests(TestCase):
         self._post({"event": "spam", "email": "bhook@example.com"})
         self.member.refresh_from_db()
         self.assertEqual(self.member.brevo_status, "cleaned")
+
+    def test_webhook_events_write_club_history(self):
+        self._post({"event": "unsubscribe", "email": "bhook@example.com"})
+        self._post({"event": "hard_bounce", "email": "bhook@example.com"})
+        actions = list(
+            ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").values_list("action", flat=True)
+        )
+        self.assertEqual(len(actions), 2)
+        self.assertTrue(any("unsubscribed at Brevo" in a for a in actions))
+        self.assertTrue(any("marked undeliverable (hardbounce) by Brevo" in a for a in actions))
+
+    def test_event_for_unknown_email_writes_no_history(self):
+        self._post({"event": "unsubscribe", "email": "nobody@example.com"})
+        self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
 
 class BrevoSelfServiceTests(TestCase):

@@ -476,7 +476,10 @@ window.onload = function() {
             {# Override this in templates to add extra javascript #}
         {% endblock %}
       <div id="modals-here"></div>
-      {% if request.user.is_authenticated and not request.is_mobile_app %}{% include 'command_palette.html' %}{% endif %}
+      {% comment %} Rendered in the app too: the app-bar title opens this modal rather than its own native palette, so
+      the assistant, the confirm countdown and the follow-ups are the same code everywhere. The app falls back to the
+      native palette (over /api/mobile/command-palette/) when #command-palette-modal isn't on the page. {% endcomment %}
+      {% if request.user.is_authenticated %}{% include 'command_palette.html' %}{% endif %}
     </body>
     {# this is to redirect for printing #}
     <script>

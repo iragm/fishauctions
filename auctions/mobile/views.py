@@ -1712,6 +1712,11 @@ class MobileCommandPaletteView(APIView):
 
     Thin wrapper over ``command_palette.search`` (the same function the web view calls) so the
     behaviour is identical; only the auth differs (JWT here, session+CSRF on the web).
+
+    One exception: the native palette this serves injects its own "Lot scanning" and "Tap to Pay"
+    rows, so the server's copies are left out here and the user isn't offered each twice. The web
+    palette — which the app opens in preference to this one, and which can't inject anything —
+    gets them from the same function.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1721,7 +1726,7 @@ class MobileCommandPaletteView(APIView):
     def get(self, request):
         from auctions import command_palette
 
-        groups = command_palette.search(request, request.GET.get("q", ""))
+        groups = command_palette.search(request, request.GET.get("q", ""), app_deep_links=False)
         response = Response({"groups": groups})
         # Results are personalised — keep them out of any intermediary cache (matches the web view).
         response["Cache-Control"] = "private, no-store"

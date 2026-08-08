@@ -35,6 +35,7 @@ from auctions.models import (
     LotImage,
     UserData,
 )
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -2473,3 +2474,633 @@ class AddPersonCollisionTests(PaletteAssistTestCase):
         result = self._add(name="Now Named", email="blank@example.com")
         self.assertNotIn("error", result)
         self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Now Named").exists())
+
+
+class RunActionTestCase(PaletteAssistTestCase):
+    """Base for tests that call resolvers directly rather than through the model.
+
+    Everything below is server behaviour -- what a resolver returns, who it refuses, what it writes.
+    Scripting a model reply to reach it would test the prompt, not the thing under test.
+    """
+
+    def _run(self, action, params=None, user=None, page=None):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user or self.user
+        request.palette_page = page if page is not None else {"auction": self.in_person_auction.slug}
+        return palette_actions.run_action(request, action, params or {})
+
+
+class AuctionNumbersTests(RunActionTestCase):
+    """The running totals an auctioneer asks for mid-event."""
+
+    def test_counts_come_from_the_auction_itself(self):
+        result = self._run("auction_numbers", {"auction": self.online_auction.slug})
+        numbers = result["numbers"]
+        self.assertEqual(numbers["lots_sold"], self.online_auction.total_sold_lots)
+        self.assertEqual(
+            numbers["lots_total"], Lot.objects.filter(auction=self.online_auction, is_deleted=False).count()
+        )
+        # Counted, not subtracted: a removed lot is neither sold nor unsold.
+        self.assertEqual(numbers["lots_unsold"], 1)
+
+    def test_money_is_admin_only(self):
+        mine = self._run("auction_numbers", {"auction": self.online_auction.slug})
+        self.assertIn("_admin", mine["numbers"])
+        theirs = self._run("auction_numbers", {"auction": self.online_auction.slug}, user=self.member)
+        self.assertNotIn("_admin", theirs["numbers"])
+
+    def test_a_private_stats_auction_gives_a_non_admin_only_the_clock(self):
+        self.online_auction.make_stats_public = False
+        self.online_auction.save()
+        result = self._run("auction_numbers", {"auction": self.online_auction.slug}, user=self.member)
+        self.assertNotIn("lots_sold", result["numbers"])
+        self.assertIn("time", result["numbers"])
+
+    def test_an_in_person_auction_with_no_online_bidding_does_not_invent_a_countdown(self):
+        self.in_person_auction.online_bidding = "disable"
+        self.in_person_auction.save()
+        result = self._run("auction_numbers", {"auction": self.in_person_auction.slug})
+        self.assertNotIn("time_left", result["numbers"]["time"])
+        self.assertIn("doesn't count down", result["numbers"]["time"]["note"])
+
+
+class MyActivityTests(RunActionTestCase):
+    """The bidder-side answer path: what did I win, what do I owe, am I paid up."""
+
+    def test_reports_the_users_own_lots_and_invoice(self):
+        result = self._run("my_activity", {"auction": self.online_auction.slug})
+        activity = result["activity"]
+        self.assertEqual(activity["lots_submitted"], 4)
+        self.assertEqual(activity["lots_sold"], 3)
+        self.assertEqual(activity["your_bidder_number"], self.online_tos.bidder_number)
+
+    def test_the_invoice_direction_is_stated_in_words(self):
+        """A bare signed total was read back as "you owe" to somebody who was owed it."""
+        result = self._run("my_activity", {"auction": self.online_auction.slug})
+        invoice = result["activity"]["invoice"]
+        self.assertEqual(invoice["the_club_owes_you"], bool(self.invoice.user_should_be_paid))
+        self.assertNotEqual(invoice["you_owe_the_club"], invoice["the_club_owes_you"])
+        # Never signed: the direction is carried by the booleans above.
+        self.assertFalse(str(invoice["total"]).startswith("-"))
+
+    def test_someone_who_has_not_joined_gets_told_so_rather_than_an_error(self):
+        result = self._run("my_activity", {"auction": self.in_person_auction.slug}, user=self.userB)
+        self.assertNotIn("error", result)
+        self.assertIn("note", result["activity"])
+
+
+class ListTests(RunActionTestCase):
+    """The end-of-auction cleanup questions."""
+
+    def test_listing_people_is_admin_only(self):
+        result = self._run("list_people", {"status": "not_checked_in"}, user=self.member)
+        self.assertIn("error", result)
+        self.assertIn("only admins", result["error"].lower())
+
+    def test_not_checked_in_filters_on_the_stored_timestamp(self):
+        self.in_person_buyer.checked_in = timezone.now()
+        self.in_person_buyer.save()
+        result = self._run("list_people", {"status": "not_checked_in"})
+        self.assertNotIn("555", [row["bidder_number"] for row in result["people"]])
+        arrived = self._run("list_people", {"status": "checked_in"})
+        self.assertIn("555", [row["bidder_number"] for row in arrived["people"]])
+
+    def test_duplicates_reads_the_field_that_was_already_computed(self):
+        other = AuctionTOS.objects.create(
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            name="Bob Twice",
+        )
+        # Set the way the merge tool sets it -- a queryset update, not save() -- because saving an
+        # AuctionTOS re-runs the duplicate detection and would overwrite what this test is asserting.
+        AuctionTOS.objects.filter(pk=other.pk).update(possible_duplicate=self.in_person_buyer.pk)
+        result = self._run("list_people", {"status": "duplicates"})
+        other.refresh_from_db()
+        self.assertIn(other.bidder_number, [row["bidder_number"] for row in result["people"]])
+        flagged = next(row for row in result["people"] if row["bidder_number"] == other.bidder_number)
+        self.assertEqual(flagged["might_be_the_same_as"], self.in_person_buyer.name)
+
+    def test_the_documented_spelling_of_duplicates_works(self):
+        """``possible_duplicates`` is what the parameter docs tell the model to send."""
+        other = AuctionTOS.objects.create(
+            auction=self.in_person_auction, pickup_location=self.in_person_location, name="Bob Twice"
+        )
+        AuctionTOS.objects.filter(pk=other.pk).update(possible_duplicate=self.in_person_buyer.pk)
+        result = self._run("list_people", {"status": "possible_duplicates"})
+        flagged = [row for row in result["people"] if "might_be_the_same_as" in row]
+        self.assertTrue(flagged)
+
+    def test_an_unpaid_invoice_is_reported_unsigned_with_a_direction(self):
+        """Some of the people who "haven't paid" are owed money, not owing it."""
+        result = self._run("list_people", {"status": "unpaid", "auction": self.online_auction.slug})
+        for row in result["people"]:
+            self.assertFalse(str(row["invoice_total"]).startswith("-"))
+            self.assertIn("the_club_owes_them", row)
+
+    def test_a_participant_with_two_invoices_is_listed_once(self):
+        from auctions.models import Invoice
+
+        Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        result = self._run("list_people", {"status": "unpaid", "auction": self.online_auction.slug})
+        numbers = [row["bidder_number"] for row in result["people"]]
+        self.assertEqual(len(numbers), len(set(numbers)))
+
+    def test_mine_needs_no_admin_rights(self):
+        result = self._run("list_lots", {"status": "mine", "auction": self.online_auction.slug}, user=self.member)
+        self.assertNotIn("error", result)
+
+    def test_the_sellers_name_is_only_added_for_admins(self):
+        mine = self._run("list_lots", {"status": "all", "auction": self.online_auction.slug})
+        self.assertIn("seller", mine["lots"][0])
+        theirs = self._run("list_lots", {"status": "all", "auction": self.online_auction.slug}, user=self.member)
+        self.assertNotIn("seller", theirs["lots"][0])
+
+
+class RecentChangesTests(RunActionTestCase):
+    """Reading back the history the palette has been writing all along."""
+
+    def test_palette_writes_are_flagged_as_the_assistants_own(self):
+        self._run("add_lot", {"name": "blue shrimp", "auction": self.in_person_auction.slug})
+        self.in_person_auction.create_history(applies_to="LOTS", action="Something a person did", user=self.user)
+        result = self._run("recent_changes", {})
+        self.assertTrue(any(row["by_the_assistant"] for row in result["changes"]))
+        self.assertTrue(any(not row["by_the_assistant"] for row in result["changes"]))
+
+    def test_it_is_admin_only(self):
+        result = self._run("recent_changes", {}, user=self.member)
+        self.assertIn("error", result)
+
+
+class DescribeLotLiveStateTests(RunActionTestCase):
+    """The three questions most asked about a live lot."""
+
+    def setUp(self):
+        super().setUp()
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.save()
+        self.live_lot = Lot.objects.create(
+            lot_name="Live shrimp lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+            reserve_price=5,
+            active=True,
+        )
+
+    def test_a_live_lot_reports_its_price_bids_and_close_time(self):
+        result = self._run("describe_lot", {"lot": "Live shrimp lot"})
+        lot = result["lot"]
+        self.assertIn("current_price", lot)
+        self.assertIn("bids", lot)
+        self.assertIn("bidding_closes", lot)
+        self.assertFalse(lot["you_are_the_high_bidder"])
+
+    def test_a_sealed_bid_auction_never_reveals_the_price(self):
+        self.online_auction.sealed_bid = True
+        self.online_auction.save()
+        result = self._run("describe_lot", {"lot": "Live shrimp lot"})
+        self.assertIsNone(result["lot"]["current_price"])
+        self.assertIn("sealed", result["lot"]["note"].lower())
+
+    def test_the_top_proxy_bid_is_never_returned(self):
+        """``max_bid`` is the one number on this site that must not reach a bidder."""
+        result = self._run("describe_lot", {"lot": "Live shrimp lot"})
+        self.assertNotIn("max_bid", json.dumps(result, default=str))
+
+
+class NoSaleTests(RunActionTestCase):
+    """ "Pass" — the ordinary outcome for a good fraction of lots."""
+
+    def test_it_ends_the_lot_with_no_winner(self):
+        result = self._run("no_sale", {"lot": "101-1"})
+        self.assertNotIn("error", result)
+        self.in_person_lot.refresh_from_db()
+        self.assertIsNone(self.in_person_lot.auctiontos_winner)
+        self.assertFalse(self.in_person_lot.active)
+
+    def test_it_refuses_a_lot_that_already_sold(self):
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.winning_price = 12
+        self.in_person_lot.save()
+        result = self._run("no_sale", {"lot": "101-1"})
+        self.assertIn("error", result)
+        self.assertIn("undo", result["error"])
+
+    def test_it_is_admin_only(self):
+        result = self._run("no_sale", {"lot": "101-1"}, user=self.member)
+        self.assertIn("error", result)
+
+    def test_undo_sale_puts_a_passed_lot_back_up(self):
+        self._run("no_sale", {"lot": "101-1"})
+        result = self._run("undo_sale", {"lot": "101-1"})
+        self.assertNotIn("error", result)
+        self.in_person_lot.refresh_from_db()
+        self.assertTrue(self.in_person_lot.active)
+
+
+class AddLotsTests(RunActionTestCase):
+    """Batch entry, which is what a drop-off table actually does."""
+
+    def test_a_list_becomes_several_lots(self):
+        result = self._run("add_lots", {"lots": ["java fern", "a heater"], "auction": self.in_person_auction.slug})
+        self.assertNotIn("error", result)
+        self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="Java Fern").count(), 1)
+        self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="A Heater").count(), 1)
+
+    def test_a_comma_separated_string_is_accepted_rather_than_corrected(self):
+        result = self._run("add_lots", {"lots": "java fern, a heater", "auction": self.in_person_auction.slug})
+        self.assertNotIn("error", result)
+        self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="Java Fern").count(), 1)
+
+    def test_batch_level_flags_apply_to_every_lot(self):
+        self._run(
+            "add_lots",
+            {"lots": ["guppies", "endlers"], "auction": self.in_person_auction.slug, "i_bred_this_fish": True},
+        )
+        lots = Lot.objects.filter(auction=self.in_person_auction, lot_name__in=["Guppies", "Endlers"])
+        self.assertEqual(lots.count(), 2)
+        self.assertTrue(all(lot.i_bred_this_fish for lot in lots))
+
+    def test_one_bad_lot_does_not_lose_the_others(self):
+        result = self._run("add_lots", {"lots": ["java fern", ""], "auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="Java Fern").count(), 1)
+
+    def test_a_whole_box_is_refused_and_sent_to_the_bulk_page(self):
+        result = self._run(
+            "add_lots",
+            {"lots": [f"lot {n}" for n in range(30)], "auction": self.in_person_auction.slug},
+        )
+        self.assertIn("error", result)
+        self.assertIn("bulk add", result["error"])
+
+
+class LotCategoryTests(RunActionTestCase):
+    """Item B: a palette-added lot must not be quietly worse than a form-added one."""
+
+    def test_the_category_is_guessed_rather_than_defaulted(self):
+        from auctions.models import Category
+
+        wanted = Category.objects.create(name="Plants")
+        Lot.objects.create(
+            lot_name="Java Fern",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            species_category=wanted,
+            category_automatically_added=False,
+            quantity=1,
+        )
+        self.assertEqual(palette_actions._category_pk("java fern"), wanted.pk)
+
+    def test_an_unguessable_name_still_gets_a_category(self):
+        from auctions.models import Category
+
+        Category.objects.get_or_create(name="Uncategorized")
+        self.assertIsNotNone(palette_actions._category_pk("qqqqzzz"))
+
+
+class CustomLotFieldTests(RunActionTestCase):
+    """Item C: fields the auction uses have to reach the prompt and be asked for."""
+
+    def test_the_clubs_own_label_is_what_the_model_is_told(self):
+        self.in_person_auction.custom_field_1 = "required"
+        self.in_person_auction.custom_field_1_name = "Scientific name"
+        self.in_person_auction.save()
+        fields = palette_actions.lot_fields_in_use(self.in_person_auction)
+        self.assertEqual(fields["custom_field_1"]["label"], "Scientific name")
+        self.assertTrue(fields["custom_field_1"]["required"])
+
+    def test_a_required_field_is_asked_about_by_its_label(self):
+        self.in_person_auction.custom_field_1 = "required"
+        self.in_person_auction.custom_field_1_name = "Scientific name"
+        self.in_person_auction.save()
+        result = self._run("add_lot", {"name": "blue shrimp", "auction": self.in_person_auction.slug})
+        self.assertIn("more_info_needed", result)
+        self.assertIn("Scientific name", result["more_info_needed"])
+
+    def test_the_breeder_flag_is_a_documented_parameter_now(self):
+        """It was applied but never advertised, so the model had no reason to send it."""
+        self.assertIn("i_bred_this_fish", palette_actions.ACTIONS["add_lot"].params)
+
+    def test_the_dropdown_options_come_from_the_clubs_own_rows(self):
+        self.in_person_auction.use_custom_dropdown_field = "allow"
+        self.in_person_auction.custom_dropdown_name = "River"
+        self.in_person_auction.save()
+        AuctionDropdown.objects.create(auction=self.in_person_auction, value="Rio Negro")
+        fields = palette_actions.lot_fields_in_use(self.in_person_auction)
+        self.assertEqual(fields["custom_dropdown"]["options"], ["Rio Negro"])
+
+
+class UpdatePreferencesTests(RunActionTestCase):
+    """Changing one setting without a trip to a page of thirty checkboxes."""
+
+    def test_a_spoken_setting_name_resolves_to_a_real_field(self):
+        self.assertEqual(palette_actions._resolve_preference("new auction emails"), "email_me_about_new_auctions")
+        self.assertEqual(palette_actions._resolve_preference("kilometers"), "distance_unit")
+
+    def test_turning_something_off_saves_through_the_pages_own_form(self):
+        self.user.userdata.email_me_about_new_auctions = True
+        self.user.userdata.save()
+        result = self._run("update_preferences", {"setting": "new auction emails", "value": False})
+        self.assertNotIn("error", result)
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(self.user.userdata.email_me_about_new_auctions)
+
+    def test_switching_to_kilometres_does_not_shrink_the_search_radii(self):
+        """The form converts km back to miles on save, so the data it is given must be in km."""
+        self.user.userdata.distance_unit = "km"
+        self.user.userdata.local_distance = 100
+        self.user.userdata.save()
+        self._run("update_preferences", {"setting": "email visible", "value": True})
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.local_distance, 100)
+
+    def test_an_unknown_setting_asks_rather_than_guessing(self):
+        result = self._run("update_preferences", {"setting": "the thing with the fish", "value": True})
+        self.assertIn("more_info_needed", result)
+
+
+class DoorPrizeTests(RunActionTestCase):
+    """A live-event moment where saying it out loud beats finding a page."""
+
+    def test_only_checked_in_people_are_drawn(self):
+        self.in_person_buyer.checked_in = timezone.now()
+        self.in_person_buyer.save()
+        result = self._run("draw_door_prize", {})
+        self.assertNotIn("error", result)
+        self.in_person_buyer.refresh_from_db()
+        self.assertIsNotNone(self.in_person_buyer.door_prize_called)
+
+    def test_nobody_checked_in_says_so_plainly(self):
+        AuctionTOS.objects.filter(auction=self.in_person_auction).update(checked_in=None)
+        result = self._run("draw_door_prize", {})
+        self.assertIn("error", result)
+        self.assertIn("checked in", result["error"])
+
+    def test_a_winner_is_never_drawn_twice(self):
+        self.in_person_buyer.checked_in = timezone.now()
+        self.in_person_buyer.save()
+        AuctionTOS.objects.filter(auction=self.in_person_auction).exclude(pk=self.in_person_buyer.pk).update(
+            checked_in=None
+        )
+        self._run("draw_door_prize", {})
+        again = self._run("draw_door_prize", {})
+        self.assertIn("error", again)
+        self.assertIn("already won", again["error"])
+
+
+class PrintByBidderTests(RunActionTestCase):
+    """The front-desk scope that was missing even though the route existed."""
+
+    def test_an_admin_gets_that_bidders_label_page(self):
+        result = self._run("print_labels", {"bidder": "555"})
+        self.assertIn("/print/bidder/555/", result["url"])
+
+    def test_unprinted_narrows_it_further(self):
+        result = self._run("print_labels", {"bidder": "555", "scope": "unprinted"})
+        self.assertIn("/unprinted/", result["url"])
+
+    def test_a_participant_cannot_print_somebody_elses(self):
+        result = self._run("print_labels", {"bidder": "555"}, user=self.member)
+        self.assertIn("error", result)
+
+
+class JoinAuctionTests(RunActionTestCase):
+    """Reaching an auction the user has NOT joined — the one thing every other resolver can't do."""
+
+    def test_it_never_agrees_to_the_rules_on_somebodys_behalf(self):
+        result = self._run("join_auction", {"auction": self.in_person_auction.slug}, user=self.userB, page={})
+        self.assertIn("url", result)
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.in_person_auction, user=self.userB).exists())
+
+    def test_it_says_when_a_pickup_location_has_to_be_chosen(self):
+        from auctions.models import PickupLocation
+
+        PickupLocation.objects.create(
+            name="second location",
+            auction=self.in_person_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        result = self._run("join_auction", {"auction": self.in_person_auction.slug}, user=self.userB, page={})
+        self.assertIn("pickup location", result["summary"])
+
+    def test_somebody_already_in_is_told_their_bidder_number(self):
+        result = self._run("join_auction", {"auction": self.in_person_auction.slug}, user=self.member, page={})
+        self.assertIn("already in", result["summary"])
+
+
+class SearchHelpTests(RunActionTestCase):
+    """Grounding platform how-do-I questions in text somebody here wrote."""
+
+    def test_it_finds_a_matching_faq(self):
+        from auctions.models import FAQ
+
+        FAQ.objects.create(
+            category_text="Bidding",
+            question="What is a zorblatt lot?",
+            answer="A zorblatt lot is one nobody has to pay for.",
+        )
+        # A term nothing else on the site uses, so this asserts the search rather than whatever the
+        # seeded FAQ and blog rows happen to say about a real topic.
+        result = self._run("search_help", {"query": "zorblatt"})
+        self.assertTrue(result["found"])
+        self.assertIn("zorblatt lot is one nobody", result["help"][0]["answer"])
+
+    def test_finding_nothing_tells_the_model_not_to_improvise(self):
+        result = self._run("search_help", {"query": "zzzqqq nonexistent topic"})
+        self.assertFalse(result["found"])
+        self.assertIn("general knowledge", result["summary"])
+
+
+class UndoLastTests(RunActionTestCase):
+    """A bounded undo, over actions that describe their own reversal."""
+
+    def setUp(self):
+        super().setUp()
+        cache.delete(palette_actions._undo_key(self.user))
+
+    def _do_and_remember(self, action, params):
+        result = self._run(action, params)
+        palette_actions.remember_undo(self.user, action, result)
+        return result
+
+    def test_a_sale_can_be_undone(self):
+        self._do_and_remember("set_lot_winner", {"lot": "101-1", "winner": "555", "price": "12"})
+        self.in_person_lot.refresh_from_db()
+        self.assertIsNotNone(self.in_person_lot.auctiontos_winner)
+        result = self._run("undo_last", {})
+        self.assertNotIn("error", result)
+        self.in_person_lot.refresh_from_db()
+        self.assertIsNone(self.in_person_lot.auctiontos_winner)
+
+    def test_a_person_edit_is_put_back_exactly(self):
+        self.in_person_buyer.email = "before@example.com"
+        self.in_person_buyer.save()
+        self._do_and_remember("update_person", {"person": "555", "email": "after@example.com"})
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.email, "after@example.com")
+        self._run("undo_last", {})
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.email, "before@example.com")
+
+    def test_adding_something_is_not_undoable(self):
+        """Undoing an add means deleting, and a delete stays a page."""
+        result = self._run("add_lot", {"name": "blue shrimp", "auction": self.in_person_auction.slug})
+        palette_actions.remember_undo(self.user, "add_lot", result)
+        self.assertIn("error", self._run("undo_last", {}))
+
+    def test_undoing_twice_does_not_apply_the_same_reversal_again(self):
+        self._do_and_remember("watch_lot", {"lot_id": self.in_person_lot.pk})
+        self._run("undo_last", {})
+        again = self._run("undo_last", {})
+        self.assertIn("error", again)
+
+    def test_nothing_to_undo_says_so_usefully(self):
+        result = self._run("undo_last", {})
+        self.assertIn("error", result)
+        self.assertIn("undo", result["error"])
+
+    def test_the_window_is_not_extended_by_later_commands(self):
+        """Every write resets the cache TTL, so the age has to be checked per entry."""
+        self._do_and_remember("watch_lot", {"lot_id": self.in_person_lot.pk})
+        stale = cache.get(palette_actions._undo_key(self.user))
+        stale[0]["at"] = (
+            timezone.now() - datetime.timedelta(seconds=palette_actions.UNDO_WINDOW_SECONDS + 60)
+        ).isoformat()
+        cache.set(palette_actions._undo_key(self.user), stale, timeout=palette_actions.UNDO_WINDOW_SECONDS)
+        self.assertEqual(palette_actions._undo_stack(self.user), [])
+        self.assertIn("error", self._run("undo_last", {}))
+
+
+class TrustWindowTests(PaletteAssistTestCase):
+    """The repeat-write countdown: shortened by use, spent by a cancel."""
+
+    def setUp(self):
+        super().setUp()
+        self.action = palette_actions.ACTIONS["add_lot"]
+        self.params = {"name": "blue shrimp", "auction": self.in_person_auction.slug}
+
+    def _request(self, user=None):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user or self.user
+        request.palette_page = {}
+        return request
+
+    def test_the_first_countdown_is_the_full_five_seconds(self):
+        request = self._request()
+        palette_assist.forget_trust(request, self.action, self.params)
+        response = palette_assist._countdown_response(request, self.action, self.params, "")
+        self.assertEqual(response["delay_ms"], palette_assist.COUNTDOWN_MS)
+
+    def test_it_shortens_once_the_same_thing_has_been_approved(self):
+        request = self._request()
+        palette_assist.remember_trust(request, self.action, self.params)
+        response = palette_assist._countdown_response(request, self.action, self.params, "")
+        self.assertEqual(response["delay_ms"], palette_assist.TRUSTED_COUNTDOWN_MS)
+
+    def test_cancelling_spends_it(self):
+        request = self._request()
+        palette_assist.remember_trust(request, self.action, self.params)
+        palette_assist.forget_trust(request, self.action, self.params)
+        response = palette_assist._countdown_response(request, self.action, self.params, "")
+        self.assertEqual(response["delay_ms"], palette_assist.COUNTDOWN_MS)
+
+    def test_an_ordinary_bidder_never_gets_a_shortened_countdown(self):
+        request = self._request(user=self.userB)
+        palette_assist.remember_trust(request, self.action, self.params)
+        response = palette_assist._countdown_response(request, self.action, self.params, "")
+        self.assertEqual(response["delay_ms"], palette_assist.COUNTDOWN_MS)
+
+
+@isolated_cache("palette-lookup-preload")
+class LookupPreloadTests(PaletteAssistTestCase):
+    """Item 26: a phrase always answered from one lookup costs one round, not two."""
+
+    def setUp(self):
+        super().setUp()
+        # preloadable_lookup() caches its verdict per phrase for an hour, and these tests reuse one
+        # phrase with different usage rows behind it. Safe to flush: the decorator above gives this
+        # class a cache of its own instead of the Redis every --parallel worker shares.
+        cache.clear()
+
+    def _record(self, query, destination, times):
+        for _ in range(times):
+            LLMUsage.objects.create(user=self.user, query=query, destination=destination, success=True)
+
+    def test_a_repeated_parameterless_lookup_becomes_a_preload(self):
+        self._record("how is it going", "lookup:auction_numbers", palette_assist.PRELOAD_MIN_COUNT)
+        self.assertEqual(palette_assist.preloadable_lookup("how is it going"), "auction_numbers")
+
+    def test_one_disagreement_leaves_the_phrase_to_the_model(self):
+        self._record("how is it going", "lookup:auction_numbers", palette_assist.PRELOAD_MIN_COUNT)
+        self._record("how is it going", "lookup:my_activity", 1)
+        self.assertIsNone(palette_assist.preloadable_lookup("how is it going"))
+
+    def test_a_navigation_is_never_preloaded_as_a_lookup(self):
+        self._record("take me to my invoice", "invoice", palette_assist.PRELOAD_MIN_COUNT)
+        self.assertIsNone(palette_assist.preloadable_lookup("take me to my invoice"))
+
+    def test_only_a_parameterless_lookup_is_ever_recorded(self):
+        with_params = {("describe_auction", json.dumps({"auction": "x"}, sort_keys=True))}
+        self.assertEqual(palette_assist._answered_from(with_params), "")
+        without = {("auction_numbers", json.dumps({}, sort_keys=True))}
+        self.assertEqual(palette_assist._answered_from(without), "lookup:auction_numbers")
+
+    def test_the_miner_does_not_turn_a_lookup_into_a_page_shortcut(self):
+        self._record("how is it going", "lookup:auction_numbers", palette_assist.PRELOAD_MIN_COUNT)
+        out = StringIO()
+        call_command("mine_palette_shortcuts", "--apply", stdout=out)
+        self.assertFalse(CommandPalettePage.objects.filter(search_term="how is it going").exists())
+        self.assertIn("answered from a single lookup", out.getvalue())
+
+
+class FailureReportTests(PaletteAssistTestCase):
+    """Item 25: turn the worst moments into a queue somebody can read."""
+
+    def test_a_failure_carries_the_id_needed_to_report_it(self):
+        self._script({"error": "I can't do that"})
+        response = self._assist("please launch a rocket into orbit for me").json()
+        self.assertIsNotNone(response.get("usage_id"))
+
+    def test_reporting_flags_the_row(self):
+        usage = LLMUsage.objects.create(user=self.user, query="something that failed", success=False)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("command_palette_report"),
+            data=json.dumps({"usage_id": usage.pk}),
+            content_type="application/json",
+        )
+        usage.refresh_from_db()
+        self.assertTrue(usage.reported)
+
+    def test_one_user_cannot_flag_anothers_row(self):
+        usage = LLMUsage.objects.create(user=self.userB, query="not mine", success=False)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("command_palette_report"),
+            data=json.dumps({"usage_id": usage.pk}),
+            content_type="application/json",
+        )
+        usage.refresh_from_db()
+        self.assertFalse(usage.reported)
+
+
+class CarryOverTests(PaletteAssistTestCase):
+    """Item 28: the second sentence of a conversation must keep the first one's subject."""
+
+    def test_the_auction_is_carried_forward(self):
+        self.assertIn("auction", palette_assist._CARRY_OVER_KEYS)
+        carried = palette_assist._carry_over({"auction": "spring-2026", "lot_id": 3, "irrelevant": "x"})
+        self.assertEqual(carried, {"auction": "spring-2026", "lot_id": 3})
+
+    def test_the_client_will_accept_back_everything_a_resolver_hands_forward(self):
+        """A carry-over key the sanitizer drops is one the next command silently loses."""
+        entries = palette_assist.sanitize_context(
+            [{"query": "q", "result": "r", "data": dict.fromkeys(palette_assist._CARRY_OVER_KEYS, "v")}]
+        )
+        self.assertEqual(set(entries[0]["data"]), set(palette_assist._CARRY_OVER_KEYS))

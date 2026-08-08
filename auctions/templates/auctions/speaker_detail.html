@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ speaker.display_name }} - Speakers{% endblock %}
+
+{% comment %}A speaker's own page. This is what a shared link resolves to, and what the
+sliding panel pushes into the URL bar, so the two show the same content.{% endcomment %}
+
+{% block content %}
+<a href="{% url 'speaker_list' %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> All speakers</a>
+
+<div class="card">
+  <div class="card-body">
+    {% include "auctions/partials/speaker_panel.html" %}
+  </div>
+</div>
+
+<div id="modals-here"></div>
+{% endblock %}

@@ -228,6 +228,11 @@ urlpatterns = [
         login_required(views.CommandPaletteCancelView.as_view()),
         name="command_palette_cancel",
     ),
+    path(
+        "command-palette/report/",
+        login_required(views.CommandPaletteReportView.as_view()),
+        name="command_palette_report",
+    ),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
@@ -747,6 +752,22 @@ urlpatterns = [
         name="club_paypal_subscription_webhook",
     ),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
+    # Speaker directory.  These sit above the clubs/<slug>/ patterns because the list is not
+    # scoped to one club -- a club is passed as ?club=<slug> so the same page can be shared
+    # between officers, and falls back to the viewer's own location when it isn't.
+    path("speakers/", views.SpeakerListView.as_view(), name="speaker_list"),
+    path("speakers/add/", views.SpeakerCreateView.as_view(), name="speaker_add"),
+    path("speakers/<slug:slug>/", views.SpeakerDetailView.as_view(), name="speaker_detail"),
+    path("speakers/<slug:slug>/panel/", views.SpeakerPanelView.as_view(), name="speaker_panel"),
+    path("speakers/<slug:slug>/edit/", views.SpeakerUpdateView.as_view(), name="speaker_edit"),
+    path("speakers/<slug:slug>/delete/", views.SpeakerDeleteView.as_view(), name="speaker_delete"),
+    path("speakers/<slug:slug>/tag/", views.SpeakerTagView.as_view(), name="speaker_tag"),
+    path("speakers/<slug:slug>/comment/", views.SpeakerCommentView.as_view(), name="speaker_comment"),
+    path(
+        "speakers/<slug:slug>/comment/<int:pk>/delete/",
+        views.SpeakerCommentDeleteView.as_view(),
+        name="speaker_comment_delete",
+    ),
     # Club management URLs
     re_path(
         r"^clubs/(?P<slug>[-\w]+)/(?P<tab>bap|hap|culture|my-points)$",
@@ -1008,6 +1029,11 @@ urlpatterns = [
         "api/v1/clubs/<slug:slug>/members/<int:pk>/bap-awards/",
         views.ClubMemberBapAwardAPIView.as_view(),
         name="api_club_member_bap_awards",
+    ),
+    path(
+        "api/v1/clubs/<slug:slug>/bap-lots/",
+        views.ClubBapLotListAPIView.as_view(),
+        name="api_club_bap_lots",
     ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     # Discord integration

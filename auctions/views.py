@@ -74,6 +74,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
 from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -123,6 +124,7 @@ from .filters import (
     ClubMemberFilter,
     LotAdminFilter,
     LotFilter,
+    SpeakerFilter,
     UserBidLotFilter,
     UserLotFilter,
     UserWatchLotFilter,
@@ -178,6 +180,8 @@ from .forms import (
     PickupLocationForm,
     QuickAddLot,
     QuickAddTOS,
+    SpeakerCommentForm,
+    SpeakerForm,
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
@@ -227,6 +231,9 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    Speaker,
+    SpeakerComment,
+    SpeakerTag,
     SquareSeller,
     UserBan,
     UserData,
@@ -249,6 +256,7 @@ from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
+    ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
 )
@@ -258,6 +266,7 @@ from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
     copy_lot_images,
+    draw_door_prize,
     ensure_club_member,
     existing_tos_for_club_member,
     lot_add_block,
@@ -277,6 +286,7 @@ from .tables import (
     ClubMemberHTMxTable,
     LotHTMxTable,
     LotHTMxTableForUsers,
+    SpeakerHTMxTable,
 )
 from .tasks import (
     cancel_invoice_notification,
@@ -435,6 +445,39 @@ def check_club_permission(user, club, permission_name):
     if member.permission_admin:
         return True
     return bool(getattr(member, permission_name, False))
+
+
+#: Every per-member permission flag on ClubMember.  "Has some permission in a club" is the
+#: bar for the speaker directory, so it needs the whole list rather than one named flag.
+CLUB_PERMISSION_FIELDS = (
+    "permission_admin",
+    "permission_view",
+    "permission_export",
+    "permission_add_edit",
+    "permission_edit_club",
+    "permission_money",
+    "permission_manage_auctions",
+    "permission_manage_bap",
+)
+
+
+def clubs_with_any_permission(user, nec_only=True):
+    """Clubs where this user holds at least one permission.
+
+    The permission filters and the user filter go in a single ``filter()`` call on purpose:
+    across a multi-valued relation that constrains one ClubMember row to satisfy all of them,
+    which is the question being asked.  Split across two calls it would instead match a club
+    where the user is a member and *somebody* has a permission.
+    """
+    if not user.is_authenticated:
+        return Club.objects.none()
+    base = Club.objects.filter(is_nec_club=True) if nec_only else Club.objects.all()
+    if user.is_superuser:
+        return base.order_by("name")
+    any_permission = Q()
+    for field in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{f"members__{field}": True})
+    return base.filter(any_permission, members__user=user, members__is_deleted=False).distinct().order_by("name")
 
 
 def user_can_add_edit_people(user, auction):
@@ -4218,24 +4261,12 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         redirect_url = reverse("auction_door_prizes", kwargs={"slug": self.auction.slug})
-        candidate_ids = list(
-            AuctionTOS.objects.filter(
-                auction=self.auction,
-                checked_in__isnull=False,
-                door_prize_called__isnull=True,
-            ).values_list("pk", flat=True)
-        )
-        if not candidate_ids:
+        # The draw itself lives in services.draw_door_prize so the palette's draw_door_prize action
+        # picks from the same pool, by the same rule, with the same RNG.
+        winner = draw_door_prize(self.auction, acting_user=request.user)
+        if not winner:
             messages.warning(request, "No checked-in users are left for door prizes.")
             return redirect(redirect_url)
-        winner = AuctionTOS.objects.get(pk=secrets.choice(candidate_ids))
-        winner.door_prize_called = timezone.now()
-        winner.save(update_fields=["door_prize_called"])
-        self.auction.create_history(
-            applies_to="USERS",
-            action=f"Picked door prize winner {winner.name}",
-            user=request.user,
-        )
         messages.success(request, f"Picked {winner.name}.")
         return redirect(redirect_url)
 
@@ -12917,6 +12948,21 @@ def _ical_escape(value):
     )
 
 
+def _log_esp_member_events(club, members, action_for_member):
+    """Record what a mailing-list provider just told us about a member, one entry each.
+
+    The member did this at Mailchimp/Brevo rather than on the site, so the club's admins have no
+    other way to see it — the on-site equivalent (ClubMemberSelfServiceView) already logs. There is
+    no acting user: the actor is the ESP.
+    """
+    ClubHistory.objects.bulk_create(
+        [
+            ClubHistory(club=club, user=None, action=action_for_member(member), applies_to="MEMBERS")
+            for member in members
+        ]
+    )
+
+
 class MailchimpWebhookView(View):
     """Receive Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
 
@@ -12960,16 +13006,29 @@ class MailchimpWebhookView(View):
             new_email = request.POST.get("data[new_email]")
             if old_email and new_email:
                 # Reflect the new address locally; explicitly NOT a site-wide account change.
+                renamed = list(members.filter(email__iexact=old_email))
                 members.filter(email__iexact=old_email).update(email=new_email)
+                _log_esp_member_events(
+                    club, renamed, lambda member: f"{member} changed their email to {new_email} via Mailchimp"
+                )
             return HttpResponse("ok")
 
         email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
-        if email:
-            members = members.filter(email__iexact=email)
+        if not email:
+            # Every real unsubscribe/cleaned event names a contact. Without one there is nobody to
+            # act on, and acting on the unfiltered queryset would mark the whole club unsubscribed.
+            return HttpResponse("ok")
+        members = members.filter(email__iexact=email)
         if event_type == "unsubscribe":
+            affected = list(members)
             members.update(mailchimp_status="unsubscribed")
+            _log_esp_member_events(club, affected, lambda member: f"{member} unsubscribed at Mailchimp")
         elif event_type == "cleaned":
+            affected = list(members)
             members.update(mailchimp_status="cleaned")
+            _log_esp_member_events(
+                club, affected, lambda member: f"{member} marked undeliverable (cleaned) by Mailchimp"
+            )
         # 'profile' events need no action under one-way sync.
         return HttpResponse("ok")
 
@@ -13337,11 +13396,17 @@ class BrevoWebhookView(View):
         members = ClubMember.objects.filter(club=club, is_deleted=False, email__iexact=email)
 
         if event in ("unsubscribe", "unsubscribed"):
+            affected = list(members)
             members.update(brevo_status="unsubscribed")
+            _log_esp_member_events(club, affected, lambda member: f"{member} unsubscribed at Brevo")
         elif event in ("hardbounce", "spam"):
+            affected = list(members)
             members.update(brevo_status="cleaned")
+            _log_esp_member_events(club, affected, lambda member: f"{member} marked undeliverable ({event}) by Brevo")
         elif event == "contactdeleted":
+            affected = list(members)
             members.update(brevo_status="archived")
+            _log_esp_member_events(club, affected, lambda member: f"{member} deleted from the Brevo list")
         return HttpResponse("ok")
 
 
@@ -17678,7 +17743,14 @@ def _find_or_create_subscription_member(club, subscription_id, email):
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
         if member:
             return member
-        return ClubMember.objects.create(club=club, email=email)
+        member = ClubMember.objects.create(club=club, email=email)
+        # user stays null: a webhook has no acting user, same as the ledger entry below
+        ClubHistory.objects.create(
+            club=club,
+            action=f"Added member {member} from PayPal subscription {_mask_subscription_id(subscription_id)}",
+            applies_to="MEMBERS",
+        )
+        return member
     return None
 
 
@@ -17775,6 +17847,14 @@ def _apply_paypal_subscription_event(club, subscription):
         if member and member.paypal_subscription_id:
             member.paypal_subscription_id = ""
             member.save(update_fields=["paypal_subscription_id"])
+            ClubHistory.objects.create(
+                club=club,
+                action=(
+                    f"{member} stopped auto-renewing (PayPal subscription "
+                    f"{_mask_subscription_id(subscription_id)} {status.lower()}); paid-through date unchanged"
+                ),
+                applies_to="MEMBERSHIP",
+            )
             logger.info(
                 "PayPal subscription %s %s: cleared for member %s",
                 _mask_subscription_id(subscription_id),
@@ -17813,11 +17893,24 @@ def _apply_paypal_subscription_event(club, subscription):
             "PayPal subscription %s: already current for member %s", _mask_subscription_id(subscription_id), member.pk
         )
         return
+    old_expiration = member.membership_expiration_date
     member.paypal_subscription_id = subscription_id
     member.membership_last_paid = timezone.now().date()
     if advanced:
         member.membership_expiration_date = next_date
     member.save()
+    old_exp_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
+    new_exp_str = (
+        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+    )
+    ClubHistory.objects.create(
+        club=club,
+        action=(
+            f"{member} renewed via PayPal subscription {_mask_subscription_id(subscription_id)}; "
+            f"expiration {old_exp_str} → {new_exp_str}"
+        ),
+        applies_to="MEMBERSHIP",
+    )
     maybe_send_membership_renewal_confirmation(member)
     logger.info(
         "PayPal subscription %s (%s): renewed member %s through %s",
@@ -21669,6 +21762,11 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk}))
 
 
+def _as_api_timestamp(value):
+    """Format a datetime the way DRF renders one, so doc examples match real responses."""
+    return value.astimezone(date_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """Manage a single ClubAPIKey and its field mappings."""
 
@@ -21700,6 +21798,13 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["example_new_expiration"] = _compute_member_renewal_expiration(
             self.club, ClubMember(club=self.club, membership_expiration_date=None), today
         )
+        # The BAP lot example shows the real default window, formatted the way the API returns it.
+        now = timezone.now()
+        ctx["bap_lot_default_days"] = BAP_LOT_DEFAULT_DAYS
+        ctx["example_bap_range_end"] = _as_api_timestamp(now)
+        ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
+        ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
+        ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
         return ctx
 
 
@@ -21833,6 +21938,14 @@ class SelfServeContactLinkView(ClubViewMixin, View):
         new_status = self._LEVEL_TO_STATUS[level]
         ClubMember.objects.filter(pk=member.pk).update(contact_status=new_status)
         label = self._STATUS_LABELS[new_status]
+        # The member acts on their own UUID link, so there's no acting user (matches
+        # ClubMemberSelfServiceView, which logs the same kind of change)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=None,
+            action=f"{member} set their email preferences to {label} (self-service)",
+            applies_to="MEMBERS",
+        )
         return render(
             request,
             "auctions/self_serve_contact.html",
@@ -22898,6 +23011,130 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
             applies_to="BAP",
         )
         return Response({"id": award.pk, "member_id": member.pk, "points": award.points}, status=201)
+
+
+BAP_LOT_DEFAULT_DAYS = 30
+
+
+def parse_bap_lot_date_range(params):
+    """Resolve the ``start``/``end``/``days`` query params into an aware datetime range.
+
+    Bare dates are inclusive at both ends, so ``end=2026-08-08`` covers all of August 8th.
+    Explicit ``start``/``end`` win over ``days``; with nothing given the range is the last
+    ``BAP_LOT_DEFAULT_DAYS`` days.  Raises ValueError with a caller-facing message.
+    """
+    now = timezone.now()
+
+    def parse_bound(name, *, end_of_day):
+        raw = (params.get(name) or "").strip()
+        if not raw:
+            return None
+        # Bare dates are checked first: parse_datetime() also accepts "2026-03-31" and would silently
+        # turn an inclusive end date into midnight, dropping everything that happened that day.
+        parsed_date = parse_date(raw)
+        if parsed_date is not None:
+            parsed = datetime.combine(parsed_date, datetime.max.time() if end_of_day else datetime.min.time())
+        else:
+            parsed = parse_datetime(raw)
+            if parsed is None:
+                msg = f"Could not read {name}={raw!r}. Use YYYY-MM-DD or an ISO 8601 timestamp."
+                raise ValueError(msg)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        return parsed
+
+    start = parse_bound("start", end_of_day=False)
+    end = parse_bound("end", end_of_day=True)
+    days = None
+    raw_days = (params.get("days") or "").strip()
+    if raw_days:
+        try:
+            days = int(raw_days)
+        except ValueError:
+            msg = f"Could not read days={raw_days!r}. Use a whole number of days."
+            raise ValueError(msg) from None
+        if days < 1:
+            msg = "days must be at least 1."
+            raise ValueError(msg)
+    if start is None and end is None:
+        end = now
+        start = end - timedelta(days=days or BAP_LOT_DEFAULT_DAYS)
+    elif start is None:
+        start = end - timedelta(days=days or BAP_LOT_DEFAULT_DAYS)
+    elif end is None:
+        end = start + timedelta(days=days) if days else now
+    if end < start:
+        msg = "end must not be before start."
+        raise ValueError(msg)
+    return start, end
+
+
+class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
+    """List the lots from this club's auctions that ended in a date range.
+
+    Feeds an external breeder award program: it gets the lot, who sold it, who bought it, and
+    everything this site knows about whether the lot earns points, and does its own matching on the
+    email addresses.  Unsold lots are included with empty winner fields, so the caller can tell
+    "nobody bought it" from "not in this club's auctions".
+
+    ``lot_id`` is the site's permanent id for the lot and never changes or gets reused, so a caller
+    can key on it to avoid awarding points twice for the same lot across overlapping pulls.
+
+    GET /api/v1/clubs/<slug>/bap-lots/?days=30
+        ?days=N                   the last N days (default 30)
+        ?start=YYYY-MM-DD         from this date/timestamp (inclusive)
+        ?end=YYYY-MM-DD           through this date/timestamp (inclusive to end of day)
+    """
+
+    serializer_class = ClubBapLotSerializer
+
+    def get(self, request, slug):
+        club = self.require_club_permission(
+            "permission_manage_bap",
+            "can_add_bap_points",
+            "You do not have permission to view BAP lots for this club.",
+        )
+        if not club.enable_breeder_award_program:
+            raise Http404
+        try:
+            start, end = parse_bap_lot_date_range(request.query_params)
+        except ValueError as error:
+            # Don't echo the exception back: it can carry internal detail from the datetime parsers,
+            # and the caller only needs to know the accepted shape of the params.
+            logger.info("Rejected BAP lot date range for club %s: %s", club.pk, error)
+            return Response(
+                {"error": "Invalid date range. Use ?days=N, or ?start=YYYY-MM-DD and ?end=YYYY-MM-DD."},
+                status=400,
+            )
+        lots = (
+            Lot.objects.filter(
+                auction__club=club,
+                is_deleted=False,
+                banned=False,
+                date_end__gte=start,
+                date_end__lte=end,
+            )
+            .select_related(
+                "auctiontos_seller",
+                "auctiontos_winner",
+                "user",
+                "winner",
+                "auction__club",
+                "species_category",
+                "bap_award",
+            )
+            .order_by("-date_end")
+        )
+        serializer = self.serializer_class(lots, many=True)
+        return Response(
+            {
+                # UTC, to match the timestamp on each lot
+                "start": start.astimezone(date_tz.utc),
+                "end": end.astimezone(date_tz.utc),
+                "count": len(serializer.data),
+                "results": serializer.data,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -24019,13 +24256,43 @@ class CommandPaletteCancelView(View):
     """
 
     def post(self, request, *args, **kwargs):
+        from auctions import palette_assist, palette_routes
+
+        try:
+            data = json.loads((request.body or b"").decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            data = {}
+        data = data or {}
+        # The page is resolved here for the same reason the execute endpoint resolves it: working
+        # out which auction an action was about is how the trust window is keyed.
+        request.palette_page = palette_routes.page_context_from_path(request.user, data.get("path") or "")
+        recorded = palette_assist.mark_cancelled(
+            request.user,
+            data.get("usage_id"),
+            request=request,
+            action_name=str(data.get("action") or "")[:50],
+            params=data.get("params"),
+        )
+        return JsonResponse({"recorded": recorded})
+
+
+class CommandPaletteReportView(View):
+    """Record that the user told us a palette command didn't work.
+
+    POST JSON: ``{"usage_id": <int>}``. The twin of the cancel endpoint, for the other half of
+    getting it wrong: cancel means "you understood me and picked the wrong thing", this means "you
+    didn't understand me at all". Nothing is emailed — it flags the row so the analytics page can
+    sort the failures somebody actually minded to the top.
+    """
+
+    def post(self, request, *args, **kwargs):
         from auctions import palette_assist
 
         try:
             data = json.loads((request.body or b"").decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             data = {}
-        recorded = palette_assist.mark_cancelled(request.user, (data or {}).get("usage_id"))
+        recorded = palette_assist.mark_reported(request.user, (data or {}).get("usage_id"))
         return JsonResponse({"recorded": recorded})
 
 
@@ -24098,8 +24365,16 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             usage.filter(response_kind__in=palette_assist.FAILURE_KINDS)
             .exclude(query="")
             .values("query", "response_kind")
-            .annotate(count=Count("id"))
-            .order_by("-count")[:15]
+            .annotate(count=Count("id"), reports=Count("id", filter=Q(reported=True)))
+            .order_by("-reports", "-count")[:15]
+        )
+        # The failures somebody minded enough to press a button about. Everything else on this page
+        # is inferred from behaviour; this is the only list where a person deliberately said "that
+        # didn't work", which makes it short, high-signal and the first thing worth reading.
+        reported = usage.filter(reported=True).exclude(query="")
+        context["llm_reported"] = reported.count()
+        context["llm_reported_queries"] = list(
+            reported.values("query", "action", "response_kind").annotate(count=Count("id")).order_by("-count")[:15]
         )
         # Commands the user stopped during the countdown. Everything above records the assistant
         # failing; this records it succeeding at the wrong thing, which nothing else catches -- the
@@ -24116,3 +24391,473 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
         )
         return context
+
+
+class NECSpeakerAccessMixin(LoginRequiredMixin):
+    """Gate the speaker directory to people involved with an NEC member club.
+
+    "Involved with" is any permission in a club an admin has flagged `is_nec_club`.  Rather
+    than a bare 403 this renders a page explaining what the directory is and who can see it,
+    because most people hitting it will be members of clubs that simply aren't NEC members.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.nec_clubs = []
+        self._origin = None
+        if request.user.is_authenticated:
+            self.nec_clubs = list(clubs_with_any_permission(request.user))
+            # A superuser gets in even before any club has been flagged as an NEC member --
+            # otherwise the person who has to tick that box can't reach the page to see why.
+            if not self.nec_clubs and not request.user.is_superuser:
+                return render(request, "auctions/speaker_no_access.html", status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+    @property
+    def nec_club_ids(self):
+        return [club.pk for club in self.nec_clubs]
+
+    def visible_speakers(self):
+        """Speakers this user is allowed to see.
+
+        Today everyone who gets this far is in an NEC club, so this is every speaker.  When
+        the directory opens up to other clubs, only this method changes: `nec_only` rows drop
+        out for everyone else, and the NEC roster stays where it is.
+        """
+        queryset = Speaker.objects.filter(is_deleted=False)
+        if self.nec_clubs or self.request.user.is_superuser:
+            return queryset
+        return queryset.filter(nec_only=False)
+
+    def resolve_origin(self):
+        """Work out what distances on this page are measured from.
+
+        `?club=<slug>` wins when the user has a permission in that club, which is what makes
+        the list shareable between officers of the same club.  Without it we fall back to the
+        user's own coordinates, so the page is still useful before anyone sets a club address.
+        Returns (latitude, longitude, club_or_None, label, change_url_or_None).
+
+        Cached per request: four different hooks on the list view need the same answer, and
+        recomputing it would re-run the club lookup each time.
+        """
+        if self._origin is not None:
+            return self._origin
+        self._origin = self._resolve_origin_uncached()
+        return self._origin
+
+    def _resolve_origin_uncached(self):
+        requested_slug = (self.request.GET.get("club") or "").strip()
+        if requested_slug:
+            club = next((c for c in self.nec_clubs if c.slug == requested_slug), None)
+            if club:
+                change_url = (
+                    reverse("club_edit", kwargs={"slug": club.slug})
+                    if check_club_permission(self.request.user, club, "permission_edit_club")
+                    else None
+                )
+                if club.latitude and club.longitude:
+                    return club.latitude, club.longitude, club, club.name, change_url
+                # A club with no address still scopes the page to that club, it just can't
+                # measure anything -- say so rather than silently using the user's location.
+                return None, None, club, club.name, change_url
+        # contact_info is the page with the location map on it, not preferences.
+        userdata = getattr(self.request.user, "userdata", None)
+        if userdata and userdata.latitude and userdata.longitude:
+            return (
+                userdata.latitude,
+                userdata.longitude,
+                None,
+                "your location",
+                reverse("contact_info"),
+            )
+        return None, None, None, "", reverse("contact_info")
+
+
+class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
+    """The speaker directory, as a sortable table or a map of the same filtered set.
+
+    The map is why this subclasses HTMxTableView rather than just using it: an htmx filter
+    normally swaps the table and nothing else, so the htmx response here also carries an
+    out-of-band payload of every matching speaker's coordinates and the map redraws its
+    markers from that.  Both views therefore always agree, and filtering doesn't reload the
+    page or lose the map's pan/zoom.
+    """
+
+    model = Speaker
+    table_class = SpeakerHTMxTable
+    filterset_class = SpeakerFilter
+    template_name = "auctions/speaker_list.html"
+    htmx_template_name = "auctions/partials/speaker_table.html"
+    htmx_table_header_template = "auctions/partials/speaker_table_header.html"
+
+    def get_queryset(self):
+        """Newest first.
+
+        The model's own ordering is by `name`, which is the NEC export's "Last, First" -- but
+        the list renders `display_name`, so a page sorted that way reads as though it isn't
+        sorted at all.  Recency is the one order that means something on a directory people
+        keep adding to: it puts what changed since your last visit at the top, and the "New"
+        badge marks the same speakers once you sort or filter your way out of this order.
+        Distance is still a click on the Location column (see SpeakerHTMxTable.order_location),
+        which is why the annotation stays whether or not it is being sorted on.
+        """
+        queryset = self.visible_speakers().prefetch_related("topics")
+        latitude, longitude, *_ = self.resolve_origin()
+        if latitude is not None and longitude is not None:
+            queryset = queryset.annotate(distance=distance_to(latitude, longitude))
+        # -pk, not just -createdon: the 405 imported speakers were written in one batch and
+        # share a timestamp to the second, so without it their order is whatever MariaDB feels
+        # like today and pagination can show the same speaker twice.
+        return queryset.order_by("-createdon", "-pk")
+
+    def get_filterset_kwargs(self, filterset_class):
+        kwargs = super().get_filterset_kwargs(filterset_class)
+        latitude, longitude, *_ = self.resolve_origin()
+        kwargs["latitude"] = latitude
+        kwargs["longitude"] = longitude
+        kwargs["nec_club_ids"] = self.nec_club_ids
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        latitude, longitude, *_ = self.resolve_origin()
+        kwargs["has_origin"] = latitude is not None and longitude is not None
+        return kwargs
+
+    def get_filter_placeholder_text(self):
+        # Doubles as the only hint that a radius can be searched for, now that there is no
+        # distance control.  Short, because this box is the width of a phone.
+        return 'Search speakers, or "within 50 miles"'
+
+    def get_possible_filters(self):
+        # photo / mapped / myclub are deliberately absent: they still work as keywords in the
+        # search box, but they aren't how anyone looks for a speaker, and every row in this
+        # menu is a row somebody has to read past to reach the ones that are.
+        return [
+            ("<small class='text-muted'>Tagged as:</small>", ""),
+            ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
+            ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
+            ("<i class='bi bi-car-front'></i> Willing to travel", "travels"),
+            ("<i class='bi bi-box-seam'></i> Brings auction items", "auctionitems"),
+            ("<i class='bi bi-tag'></i> Not tagged yet", "untagged"),
+        ]
+
+    def speakers_for_map(self, filterset):
+        """Coordinates for every speaker matching the current filters, not just this page.
+
+        A map that only plots the current page of results would be actively misleading, so
+        this deliberately ignores pagination.
+        """
+        queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
+        return [
+            {
+                "slug": speaker.slug,
+                "name": speaker.display_name,
+                "location": speaker.location,
+                "lat": speaker.latitude,
+                "lng": speaker.longitude,
+                "thumbnail": speaker.thumbnail_url or "",
+            }
+            for speaker in queryset[:1000]
+        ]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        latitude, longitude, club, label, change_url = self.resolve_origin()
+        filterset = context.get("filter")
+        context["origin_club"] = club
+        context["origin_label"] = label
+        context["origin_change_url"] = change_url
+        context["has_origin"] = latitude is not None and longitude is not None
+        context["origin_latitude"] = latitude
+        context["origin_longitude"] = longitude
+        # The topic menu is markup the template writes itself (radios in a dropdown), so the
+        # choices come through the context rather than off a rendered widget.
+        context["topic_choices"] = filterset.topic_choices() if filterset else []
+        selected_topic = self.request.GET.get("topic", "")
+        context["selected_topic"] = selected_topic
+        # Empty unless a topic is set, so the button falls back to reading "Topics".
+        context["selected_topic_label"] = (
+            dict(context["topic_choices"]).get(selected_topic, "") if selected_topic else ""
+        )
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["is_htmx"] = bool(self.request.htmx)
+        context["speakers_json"] = self.speakers_for_map(filterset) if filterset else []
+        if filterset:
+            total = filterset.qs.count()
+            context["unmapped_count"] = total - len(context["speakers_json"])
+            context["result_count"] = total
+        context["default_view"] = "map" if self.request.GET.get("view") == "map" else "list"
+        context["club_query"] = self.request.GET.get("club", "")
+        # Only the full page renders the suggestion banner, and working it out reads every
+        # speaker name in the directory -- doing that again on each keystroke would be waste.
+        context["has_unlisted_members"] = False if self.request.htmx else self.has_unlisted_club_members()
+        if filterset and context.get("result_count") == 0:
+            context["no_results"] = self._build_no_results_html()
+        return context
+
+    def _build_no_results_html(self):
+        """Empty state that offers to add the person who was just searched for.
+
+        A search that finds nobody is the most likely moment someone realises a speaker is
+        missing, so this is where the Add button belongs.
+        """
+        query = (self.request.GET.get("query") or "").strip()
+        create_url = reverse("speaker_add")
+        params = {}
+        # Only offer to prefill a name when the search looks like one, not when it's a keyword
+        # token like "photo" or a scrap of a bio.
+        keywords = set(SpeakerFilter.TAG_TOKENS) | {
+            "photo",
+            "photos",
+            "mapped",
+            "located",
+            "myclub",
+            "untagged",
+            "needsreview",
+        }
+        if query and re.fullmatch(r"[A-Za-z\s\-'.]{2,60}", query) and query.lower() not in keywords:
+            params["name"] = query
+        club_slug = (self.request.GET.get("club") or "").strip()
+        if club_slug:
+            params["club"] = club_slug
+        if params:
+            create_url += f"?{urlencode(params)}"
+        message = (
+            format_html("<p class='text-muted mb-2'>No speakers match <strong>{}</strong>.</p>", query)
+            if query
+            else format_html("<p class='text-muted mb-2'>No speakers match these filters.</p>")
+        )
+        return format_html(
+            "<div class='text-center py-3'>{}<a class='btn btn-info btn-sm' href='{}'>"
+            "<i class='bi bi-person-plus-fill'></i> Add a speaker</a></div>",
+            message,
+            create_url,
+        )
+
+    def has_unlisted_club_members(self):
+        """Whether any member of the user's NEC clubs is missing from the directory.
+
+        Only ever asked as a yes/no -- the banner names nobody. Matching on name is deliberately
+        loose; a false "already listed" is much better than nagging a club to re-add a speaker.
+        """
+        if not self.nec_clubs:
+            return False
+        # The NEC import stores names as "Last, First" while club members are "First Last", so
+        # index both readings or every imported speaker looks like a new person.
+        existing_names = set()
+        for speaker in Speaker.objects.filter(is_deleted=False).only("name"):
+            existing_names.add(speaker.name.casefold())
+            existing_names.add(speaker.display_name.casefold())
+        member_names = (
+            ClubMember.objects.filter(club__in=self.nec_clubs, is_deleted=False)
+            .exclude(name="")
+            .values_list("name", flat=True)
+        )
+        return any(name.casefold() not in existing_names for name in member_names)
+
+
+class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
+    """The speaker card that slides in beside the list (or fills the screen on mobile).
+
+    Served as a fragment for htmx and, at the same URL family, as a whole page for anyone
+    who follows a shared link -- see SpeakerDetailView.
+    """
+
+    model = Speaker
+    template_name = "auctions/partials/speaker_panel.html"
+    context_object_name = "speaker"
+
+    def get_queryset(self):
+        return self.visible_speakers().prefetch_related("topics")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        speaker = self.object
+        context["tag_counts"] = speaker.tag_counts()
+        context["my_tags"] = speaker.tags_by_user(self.request.user)
+        context["tag_groups"] = SpeakerTag.grouped_definitions()
+        context["comments"] = speaker.comments.filter(is_deleted=False).select_related("user", "club")
+        context["comment_form"] = SpeakerCommentForm()
+        context["can_delete"] = speaker.can_be_deleted_by(self.request.user)
+        context["can_edit"] = speaker.can_be_deleted_by(self.request.user)
+        latitude, longitude, _club, _label, _change_url = self.resolve_origin()
+        if latitude is not None and speaker.has_coordinates:
+            context["distance"] = int(
+                Speaker.objects.filter(pk=speaker.pk)
+                .annotate(distance=distance_to(latitude, longitude))
+                .values_list("distance", flat=True)
+                .first()
+                or 0
+            )
+        return context
+
+
+class SpeakerDetailView(SpeakerPanelView):
+    """A speaker's own page, for when someone shares the URL the panel pushed."""
+
+    template_name = "auctions/speaker_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["standalone"] = True
+        return context
+
+
+class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
+    """Add a speaker.  Anyone who can see the directory can add to it."""
+
+    model = Speaker
+    form_class = SpeakerForm
+    template_name = "auctions/speaker_form.html"
+
+    def get_initial(self):
+        initial = super().get_initial()
+        # Prefilled by the "add your club members" prompt on the list page.
+        for field in ("name", "email", "phone"):
+            value = self.request.GET.get(field)
+            if value:
+                initial[field] = value
+        return initial
+
+    def club_being_represented(self):
+        """The club to record as the source of this entry, without asking for it.
+
+        `?club=` is whichever club's page they came in from, which is the one answer worth
+        having.  Failing that, someone in exactly one NEC club can only be representing that
+        one; someone in several is genuinely ambiguous, and no club is recorded rather than a
+        guessed one.  Same rule as SpeakerCommentView.
+        """
+        club_slug = (self.request.GET.get("club") or "").strip()
+        if club_slug:
+            club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
+            if club:
+                return club
+        return self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        form.instance.club = self.club_being_represented()
+        response = super().form_valid(form)
+        messages.success(self.request, f"{self.object.display_name} has been added to the speaker directory.")
+        return response
+
+    def get_success_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = "Add a speaker"
+        return context
+
+
+class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
+    """Edit a speaker.  Restricted to whoever added them (imported rows: superusers only)."""
+
+    model = Speaker
+    form_class = SpeakerForm
+    template_name = "auctions/speaker_form.html"
+
+    def get_queryset(self):
+        return self.visible_speakers()
+
+    def get_object(self, queryset=None):
+        speaker = super().get_object(queryset)
+        if not speaker.can_be_deleted_by(self.request.user):
+            raise PermissionDenied()
+        return speaker
+
+    def get_success_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = f"Edit {self.object.display_name}"
+        return context
+
+
+class SpeakerDeleteView(NECSpeakerAccessMixin, View):
+    """Soft delete a speaker you added.
+
+    Soft, not hard, because tags and comments other clubs left are worth keeping if this
+    turns out to be a mistake.
+    """
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not speaker.can_be_deleted_by(request.user):
+            raise PermissionDenied()
+        Speaker.objects.filter(pk=speaker.pk).update(is_deleted=True)
+        messages.success(request, f"{speaker.display_name} has been removed from the speaker directory.")
+        return redirect("speaker_list")
+
+
+class SpeakerTagView(NECSpeakerAccessMixin, View):
+    """Toggle one of the current user's tags on a speaker, and re-render the tag block."""
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        tag = (request.POST.get("tag") or "").strip()
+        if tag not in SpeakerTag.TAG_LABELS:
+            raise Http404
+        existing = SpeakerTag.objects.filter(speaker=speaker, user=request.user, tag=tag)
+        if existing.exists():
+            existing.delete()
+        else:
+            SpeakerTag.objects.get_or_create(speaker=speaker, user=request.user, tag=tag)
+        return render(
+            request,
+            "auctions/partials/speaker_tags.html",
+            {
+                "speaker": speaker,
+                "tag_counts": speaker.tag_counts(),
+                "my_tags": speaker.tags_by_user(request.user),
+                "tag_groups": SpeakerTag.grouped_definitions(),
+            },
+        )
+
+
+class SpeakerCommentView(NECSpeakerAccessMixin, View):
+    """Add a comment to a speaker, and re-render the comment list."""
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        form = SpeakerCommentForm(request.POST)
+        if form.is_valid():
+            comment = form.save(commit=False)
+            comment.speaker = speaker
+            comment.user = request.user
+            # Recorded for the admin only -- comments are shown under the person's name, so
+            # there is nothing to pick from: a club is attached only when there's one to attach.
+            comment.club = self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
+            comment.save()
+            form = SpeakerCommentForm()
+        return render(
+            request,
+            "auctions/partials/speaker_comments.html",
+            {
+                "speaker": speaker,
+                "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
+                "comment_form": form,
+            },
+        )
+
+
+class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
+    """Remove your own comment (or, for a superuser, anyone's)."""
+
+    def post(self, request, slug, pk):
+        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        comment = get_object_or_404(SpeakerComment, pk=pk, speaker=speaker)
+        if not comment.can_be_deleted_by(request.user):
+            raise PermissionDenied()
+        SpeakerComment.objects.filter(pk=comment.pk).update(is_deleted=True)
+        return render(
+            request,
+            "auctions/partials/speaker_comments.html",
+            {
+                "speaker": speaker,
+                "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
+                "comment_form": SpeakerCommentForm(),
+            },
+        )

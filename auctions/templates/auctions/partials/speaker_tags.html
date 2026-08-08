@@ -1,0 +1,45 @@
+{% comment %}
+Tag counts and the current user's toggles. Re-rendered on its own by SpeakerTagView, so this
+partial must stand alone — it's both part of the panel and the htmx response to a click.
+{% endcomment %}
+<h6 class="text-muted text-uppercase small">Tags</h6>
+
+{% if tag_counts %}
+<div class="mb-2">
+  {% for value, label, group, count in tag_counts %}
+  <span class="badge bg-primary mb-1">{{ label }} <span class="badge bg-light text-dark ms-1">{{ count }}</span></span>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-muted small mb-2">No tags yet. If your club has hosted this speaker, you're the best person to add the first one.</p>
+{% endif %}
+
+<div class="accordion accordion-flush mb-3" id="speaker-tag-accordion">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed p-2" type="button" data-bs-toggle="collapse" data-bs-target="#speaker-tag-picker">
+        <i class="bi bi-tag me-1"></i> Tag this speaker
+      </button>
+    </h2>
+    <div id="speaker-tag-picker" class="accordion-collapse collapse" data-bs-parent="#speaker-tag-accordion">
+      <div class="accordion-body p-2">
+        {% for group_name, group_tags in tag_groups %}
+        <div class="mb-2">
+          <small class="text-muted">{{ group_name }}</small><br>
+          {% for value, label in group_tags %}
+          <button type="button"
+                  class="btn btn-sm mb-1 {% if value in my_tags %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                  hx-post="{% url 'speaker_tag' speaker.slug %}"
+                  hx-vals='{"tag": "{{ value }}"}'
+                  hx-target="#speaker-tags-block"
+                  hx-swap="innerHTML">
+            {% if value in my_tags %}<i class="bi bi-check-lg"></i> {% endif %}{{ label }}
+          </button>
+          {% endfor %}
+        </div>
+        {% endfor %}
+        <small class="text-muted">Click a tag to add it, click again to take it back off. Only your own tags change.</small>
+      </div>
+    </div>
+  </div>
+</div>

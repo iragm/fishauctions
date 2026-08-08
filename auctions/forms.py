@@ -51,6 +51,9 @@ from .models import (
     MobileDevice,
     PayPalSeller,
     PickupLocation,
+    Speaker,
+    SpeakerComment,
+    SpeakerTopic,
     SquareSeller,
     UserBan,
     UserData,
@@ -5267,3 +5270,153 @@ class VolunteerJobForm(forms.ModelForm):
             msg = "You need at least one person"
             raise forms.ValidationError(msg)
         return value
+
+
+class SpeakerForm(forms.ModelForm):
+    """Add or edit a speaker in the directory.
+
+    Anyone with a permission in an NEC club can add a speaker, and the speaker doesn't need
+    an account here -- most of them don't have one.  Only `name` is required; the rest is
+    whatever the person filling it in happens to know.
+
+    No club picker: `Speaker.club` is still recorded, but SpeakerCreateView works it out from
+    the club whose page the person came from, or their only NEC club.  Asking made the form
+    longer to answer a question almost nobody had a second answer to -- the same reasoning as
+    SpeakerCommentView, which has never asked either.
+    """
+
+    class Meta:
+        model = Speaker
+        fields = [
+            "name",
+            "image",
+            "url",
+            "bio",
+            "programs",
+            "topics",
+            "email",
+            "phone",
+            "website",
+            "facebook_page",
+            "location",
+            "location_coordinates",
+        ]
+        widgets = {
+            "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
+            "bio": forms.Textarea(attrs={"rows": 5, "placeholder": "A paragraph about the speaker."}),
+            "programs": forms.Textarea(
+                attrs={"rows": 4, "placeholder": "One talk per line, or however they list them."}
+            ),
+            "topics": forms.SelectMultiple(attrs={"size": 10}),
+            "website": forms.URLInput(attrs={"placeholder": "https://example.com"}),
+            "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/..."}),
+            "location": forms.TextInput(attrs={"placeholder": "Providence, RI"}),
+        }
+        help_texts = {
+            "location": "Roughly where they travel from. Used for the map and the distance filter.",
+            "programs": "The talks they offer.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["topics"].required = False
+        self.fields["topics"].queryset = SpeakerTopic.objects.all()
+        # Topics are a closed vocabulary (see auctions/speaker_topics.py). Nothing here creates
+        # one, which is what stops the list drifting into three spellings of "cichlids" again.
+        self.fields["topics"].help_text = "Pick everything they talk about. Use Other if nothing fits."
+        # A speaker with no location can't appear on the map or in the distance filter, which is
+        # most of what the directory is for -- so it's required when adding someone. Editing an
+        # imported speaker who never had one stays possible.
+        if not (self.instance and self.instance.pk):
+            self.fields["location"].required = True
+        self.fields["url"].required = False
+        # Marking the input image-only lets the app's WebView file chooser offer the camera; not
+        # setting `capture` keeps the photo library available too. Copied from CreateImageForm.
+        self.fields["image"].widget.attrs["accept"] = "image/*"
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        # Required or the photo silently doesn't upload.
+        self.helper.attrs = {"enctype": "multipart/form-data"}
+        self.helper.layout = Layout(
+            "name",
+            Fieldset(
+                "Photo",
+                "image",
+                "url",
+            ),
+            "bio",
+            "programs",
+            Fieldset(
+                "Topics",
+                "topics",
+            ),
+            Fieldset(
+                "Contact",
+                Div(
+                    Div("email", css_class="col-md-6"),
+                    Div("phone", css_class="col-md-6"),
+                    css_class="row",
+                ),
+                "website",
+                "facebook_page",
+            ),
+            Fieldset(
+                "Location",
+                "location",
+                "location_coordinates",
+            ),
+        )
+        self.helper.add_input(Submit("submit", "Save speaker", css_class="btn-primary"))
+        add_bootstrap_classes(self)
+
+    def clean_name(self):
+        name = (self.cleaned_data.get("name") or "").strip()
+        if not name:
+            msg = "Please enter the speaker's name"
+            raise forms.ValidationError(msg)
+        return name
+
+    def clean_url(self):
+        """Validate that the URL points to an image. Same check LotImage's form runs."""
+        url = self.cleaned_data.get("url")
+        if not url:
+            return url
+        return validate_image_url(url)
+
+    def clean_image(self):
+        """Reject a corrupt upload with a friendly message instead of a 500 during thumbnailing.
+
+        Django's ImageField only runs Pillow's header check, which lets truncated files through
+        to blow up later. See CreateImageForm.clean_image -- this is the same guard.
+        """
+        image = self.cleaned_data.get("image")
+        # Only a freshly uploaded file needs decoding; an unchanged stored image is fine.
+        if isinstance(image, UploadedFile):
+            validate_uploaded_image(image)
+        return image
+
+
+class SpeakerCommentForm(forms.ModelForm):
+    """Leave a note about a speaker on their panel."""
+
+    class Meta:
+        model = SpeakerComment
+        fields = ["body"]
+        labels = {"body": ""}
+        widgets = {
+            "body": forms.Textarea(
+                attrs={"rows": 3, "placeholder": "How did the talk go? Anything another club should know?"}
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["body"].required = True
+        add_bootstrap_classes(self)
+
+    def clean_body(self):
+        body = (self.cleaned_data.get("body") or "").strip()
+        if not body:
+            msg = "Please write something first"
+            raise forms.ValidationError(msg)
+        return body

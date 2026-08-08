@@ -352,8 +352,10 @@ class VoicePageTests(StandardTestCase):
         self.assertNotIn("voice_config", self.client.get(self.url).context)
 
     def test_app_gets_the_bridge_and_a_hidden_button(self):
-        """is_mobile_app alone isn't enough to *show* the button: current app builds ship no voice
-        handlers, so every phone would get a dead control. It's revealed by voiceGetState()."""
+        """is_mobile_app alone isn't enough to *show* the button: an app build with no voice
+        handlers, or a phone with no recognizer, would get a dead control. It's revealed by
+        voiceGetState(), which reports the capability rather than whether the microphone permission
+        is already held -- so a first visit (permission: false) still gets a button to tap."""
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
         self.assertIn('id="voice-btn"', page)
         self.assertIn('class="btn btn-sm btn-primary ms-2 d-none"', page)

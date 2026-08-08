@@ -45,6 +45,10 @@ from .models import (
     Product,
     PushNotificationSent,
     SearchHistory,
+    Speaker,
+    SpeakerComment,
+    SpeakerTag,
+    SpeakerTopic,
     ThermalPrinterProfile,
     UserBan,
     UserData,
@@ -739,7 +743,7 @@ class ClubAPIKeyInline(admin.TabularInline):
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club
-    list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
+    list_display = ("name", "is_nec_club", "contact_email", "date_contacted_for_in_person_auctions")
     search_fields = (
         "name",
         "abbreviation",
@@ -748,6 +752,7 @@ class ClubAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "active",
+        "is_nec_club",
         "use_site_paypal_account",
         "allow_non_oauth_paypal",
         ("date_contacted", admin.EmptyFieldListFilter),
@@ -758,6 +763,9 @@ class ClubAdmin(admin.ModelAdmin):
         "interests",
     )
     readonly_fields = ("connected_paypal_seller", "connected_square_seller")
+    # NEC membership is granted here and nowhere else (it gates the speaker directory), so make it
+    # togglable straight from the list rather than one club edit page at a time.
+    list_editable = ("is_nec_club",)
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
@@ -1252,3 +1260,70 @@ class ClubEventAdmin(admin.ModelAdmin):
 admin.site.register(ClubMember, ClubMemberAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
 admin.site.register(ClubEvent, ClubEventAdmin)
+
+
+class SpeakerTopicAdmin(admin.ModelAdmin):
+    model = SpeakerTopic
+    list_display = ("name", "speaker_count")
+    search_fields = ("name",)
+
+    @admin.display(description="Speakers")
+    def speaker_count(self, obj):
+        return obj.speakers.filter(is_deleted=False).count()
+
+
+class SpeakerTagInline(admin.TabularInline):
+    model = SpeakerTag
+    extra = 0
+    raw_id_fields = ("user",)
+
+
+class SpeakerCommentInline(admin.TabularInline):
+    model = SpeakerComment
+    extra = 0
+    raw_id_fields = ("user", "club")
+
+
+class SpeakerAdmin(admin.ModelAdmin):
+    model = Speaker
+    list_display = (
+        "name",
+        "location",
+        "topics_need_review",
+        "topic_review_note",
+        "nec_only",
+        "imported_from_nec",
+        "created_by",
+        "is_deleted",
+        "createdon",
+    )
+    list_filter = ("topics_need_review", "nec_only", "imported_from_nec", "is_deleted", "topics")
+    search_fields = ("name", "bio", "programs", "location", "email")
+    raw_id_fields = ("created_by", "club")
+    filter_horizontal = ("topics",)
+    readonly_fields = ("slug", "source_url", "wordpress_post_id", "createdon", "lastmodified")
+    inlines = [SpeakerTagInline, SpeakerCommentInline]
+    actions = [export_to_csv, "mark_topics_reviewed"]
+
+    @admin.action(description="Mark topics as reviewed")
+    def mark_topics_reviewed(self, request, queryset):
+        """Clear the retired-topic flag once someone has re-filed these by hand.
+
+        The note goes with it: it named a topic that no longer exists, so keeping it around
+        after the fix would only make the next person wonder what still needs doing.
+        """
+        updated = queryset.update(topics_need_review=False, topic_review_note="")
+        self.message_user(request, f"{updated} speakers marked as reviewed.")
+
+
+class SpeakerCommentAdmin(admin.ModelAdmin):
+    model = SpeakerComment
+    list_display = ("speaker", "user", "club", "is_deleted", "createdon")
+    list_filter = ("is_deleted", "createdon")
+    search_fields = ("body", "speaker__name", "user__username")
+    raw_id_fields = ("speaker", "user", "club")
+
+
+admin.site.register(SpeakerTopic, SpeakerTopicAdmin)
+admin.site.register(Speaker, SpeakerAdmin)
+admin.site.register(SpeakerComment, SpeakerCommentAdmin)

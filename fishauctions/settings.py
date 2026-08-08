@@ -553,6 +553,8 @@ THUMBNAIL_ALIASES = {
         # Club icon: used inline next to club names.
         "club_icon": {"size": (128, 128), "crop": "smart"},
         "club_icon_small": {"size": (32, 32), "crop": "smart"},
+        # Speaker headshot: square, used in the speaker list, map info windows and detail panel.
+        "speaker": {"size": (200, 200), "crop": "smart"},
         # Google Wallet logo: 660×660 JPEG as recommended by Google.
         # PNG/WEBP source images are converted; upscaling is avoided (result may
         # be smaller than 660 if the source is small, which is fine).

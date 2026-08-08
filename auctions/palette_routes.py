@@ -34,6 +34,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from django.db.models import Q
 from django.urls import NoReverseMatch, Resolver404, get_resolver, resolve, reverse
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ SCOPE_LOCATION = "location"
 SCOPE_MEMBER = "member"
 SCOPE_USER = "user"
 SCOPE_BLOG = "blog"
+SCOPE_SPEAKER = "speaker"
 
 # Which permission a route needs before it's worth offering.
 ADMIN_NONE = ""
@@ -115,6 +117,25 @@ ROUTE_LIST: list[Route] = [
     _r("user_lots", "Lots grouped by seller", "Browsing", keywords=["sellers", "who is selling"]),
     _r("userpage", "A seller's public page", "Browsing", scope=SCOPE_USER, keywords=["store", "profile", "user page"]),
     _r("blog_post", "A blog post", "Browsing", scope=SCOPE_BLOG, keywords=["article", "news"]),
+    _r(
+        "speaker_list",
+        "Speaker directory",
+        "Browsing",
+        keywords=["speakers", "find a speaker", "who can speak at our meeting", "programs", "talks"],
+    ),
+    _r(
+        "speaker_detail",
+        "A speaker's page",
+        "Browsing",
+        scope=SCOPE_SPEAKER,
+        keywords=["speaker", "presenter", "who is"],
+    ),
+    _r(
+        "speaker_add",
+        "Add a speaker to the directory",
+        "Browsing",
+        keywords=["new speaker", "add a presenter", "add a program"],
+    ),
     _r("promo", "About this site", "Browsing", keywords=["about", "what is this", "marketing"]),
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "help", "how does this work"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
@@ -901,6 +922,35 @@ ROUTES: dict[str, Route] = {route.key: route for route in ROUTE_LIST}
 # The reason strings are the point of this table: a URL is not allowed to be silently missing from
 # the palette, so anything that isn't a destination has to say why here. The audit test reads it.
 
+
+def _user_sees_nec_speakers(user):
+    """Whether this user holds any club permission in an NEC member club.
+
+    A local copy of the rule in views.clubs_with_any_permission, kept here because views
+    imports this module and importing it back would be circular.
+    """
+    from .models import ClubMember
+
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    permission_fields = [
+        "permission_admin",
+        "permission_view",
+        "permission_export",
+        "permission_add_edit",
+        "permission_edit_club",
+        "permission_money",
+        "permission_manage_auctions",
+        "permission_manage_bap",
+    ]
+    any_permission = Q()
+    for field_name in permission_fields:
+        any_permission |= Q(**{field_name: True})
+    return ClubMember.objects.filter(any_permission, user=user, is_deleted=False, club__is_nec_club=True).exists()
+
+
 _API = "JSON/HTMX endpoint that returns a fragment, not a page a person can be sent to."
 _WEBHOOK = "Webhook. Called by another server, never by a person."
 _CALLBACK = "OAuth callback. Only ever reached by a redirect back from the provider."
@@ -912,6 +962,16 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    # Speaker directory
+    "speaker_panel": _API,
+    "speaker_tag": _API,
+    "speaker_comment": _API,
+    "speaker_comment_delete": _API,
+    "speaker_delete": _ACTION_ONLY,
+    "speaker_edit": (
+        "Editing a speaker is only open to whoever added them, and it is one click from that "
+        "speaker's page, which the palette can already reach."
+    ),
     # Autocomplete feeds
     "auctiontos-autocomplete": _AUTOCOMPLETE,
     "lot-autocomplete": _AUTOCOMPLETE,
@@ -1010,6 +1070,7 @@ EXCLUDED: dict[str, str] = {
     "api_club_member_detail": _API,
     "api_club_member_renew": _API,
     "api_club_member_bap_awards": _API,
+    "api_club_bap_lots": _API,
     "inbound_email_routing": _API,
     # Webhooks and machine-to-machine
     "paypal-webhook": _WEBHOOK,
@@ -1050,6 +1111,7 @@ EXCLUDED: dict[str, str] = {
     "command_palette_assist": _INFRA,
     "command_palette_execute": _INFRA,
     "command_palette_cancel": _INFRA,
+    "command_palette_report": _INFRA,
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",
@@ -1441,6 +1503,26 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             return {"error": "I couldn't find a blog post like that."}
         kwargs["slug"] = post.slug
         about = post.title
+
+    elif route.scope == SCOPE_SPEAKER:
+        from .models import Speaker
+
+        # Scoped to what this user may see, so the directory's NEC-only rule holds here too --
+        # otherwise "who is <name>" would confirm a speaker exists to someone who can't open
+        # the page. Matches the stored "Last, First" and the spoken "First Last" both ways.
+        speakers = Speaker.objects.filter(is_deleted=False)
+        if not _user_sees_nec_speakers(user):
+            speakers = speakers.filter(nec_only=False)
+        speaker = None
+        if hint:
+            words = [word for word in hint.split() if word]
+            speaker = speakers.filter(name__icontains=hint).first()
+            if not speaker and len(words) > 1:
+                speaker = speakers.filter(name__icontains=words[-1]).filter(name__icontains=words[0]).first()
+        if not speaker:
+            return {"error": "I couldn't find a speaker like that."}
+        kwargs["slug"] = speaker.slug
+        about = speaker.display_name
 
     if route.admin == ADMIN_SUPERUSER and not user.is_superuser:
         return _denied("That page is only for site administrators.")

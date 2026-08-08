@@ -153,6 +153,7 @@ def on_save_auction(sender, instance, **kwargs):
 @receiver(pre_save, sender="auctions.UserData")
 @receiver(pre_save, sender="auctions.PickupLocation")
 @receiver(pre_save, sender="auctions.Club")
+@receiver(pre_save, sender="auctions.Speaker")
 def update_user_location(sender, instance, **kwargs):
     """Store lat/lng from location_coordinates field."""
     try:
@@ -630,11 +631,18 @@ def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
     new_email = instance.email or ""
     if not old_email or old_email == new_email:
         return
-    from .models import ClubMember
+    from .models import ClubHistory, ClubMember
 
     for member in ClubMember.objects.filter(user=instance, email__iexact=old_email, is_deleted=False):
         member.email = new_email
         member.save(update_fields=["email"])
+        # The club never sees the account-side change, so tell it where the new address came from
+        ClubHistory.objects.create(
+            club=member.club,
+            user=instance,
+            action=f"{member} changed their account email from {old_email} to {new_email}",
+            applies_to="MEMBERS",
+        )
 
 
 @receiver(pre_save, sender="auctions.Lot")
@@ -896,3 +904,32 @@ def _push_printer_supported(observation, profile):
     # On commit so a rolled-back save can't push about a profile that was never enabled.
     transaction.on_commit(enqueue)
     return True
+
+
+@receiver(pre_save, sender="auctions.Speaker")
+def stash_previous_speaker_location(sender, instance, **kwargs):
+    """Snapshot the location text so post_save can tell whether it needs re-geocoding."""
+    if instance.pk:
+        from .models import Speaker
+
+        prev = Speaker.objects.filter(pk=instance.pk).values("location").first() or {}
+        instance._previous_location = prev.get("location") or ""
+    else:
+        instance._previous_location = ""
+
+
+@receiver(post_save, sender="auctions.Speaker")
+def geocode_speaker_on_location_change(sender, instance, created, **kwargs):
+    """Geocode a speaker whose location text is new or has changed.
+
+    Skipped when the save already produced coordinates for this exact location -- someone who
+    placed the marker themselves shouldn't have it moved by the geocoder.
+    """
+    from .tasks import geocode_speaker
+
+    current_location = instance.location or ""
+    if not current_location:
+        return
+    location_changed = created or (current_location != getattr(instance, "_previous_location", ""))
+    if location_changed and not instance.location_coordinates:
+        transaction.on_commit(lambda: geocode_speaker.delay(instance.pk))

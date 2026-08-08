@@ -1,0 +1,55 @@
+{% comment %}
+Field reference for the BAP lot feed (GET /api/v1/clubs/<slug>/bap-lots/).
+Included from the API key detail page and the Pending BAP lot page so the two can't drift.
+No context required.
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-sm small mb-0">
+    <thead>
+      <tr><th style="width:16rem">Field</th><th>What it is</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>lot_id</code></td>
+        <td>This site's permanent id for the lot. It never changes and is never reused, so use it as your idempotency key &mdash; if you've already awarded points for a <code>lot_id</code>, skip it when it shows up in a later pull.</td>
+      </tr>
+      <tr><td><code>lot_number_display</code></td><td>The number printed on the lot, always a string. Looks like <code>"12"</code> or <code>"101-1"</code> depending on how the auction numbers lots, and is only unique within one auction &mdash; don't key on it.</td></tr>
+      <tr><td><code>lot_name</code></td><td>What the seller called the lot.</td></tr>
+      <tr><td><code>quantity</code></td><td>How many fish/plants were in the lot. Clubs can require a minimum here (see <code>low_quantity</code> below).</td></tr>
+      <tr><td><code>seller_name</code> / <code>seller_email</code></td><td>Who sold the lot &mdash; the breeder, and who BAP points normally go to. Blank if the lot has no seller on file.</td></tr>
+      <tr><td><code>winner_name</code> / <code>winner_email</code></td><td>Who bought the lot. Both blank when it didn't sell.</td></tr>
+      <tr><td><code>timestamp</code></td><td>When the lot ended or was sold, UTC. This is the field the date range filters on, and the date points are awarded for.</td></tr>
+      <tr><td><code>sold</code></td><td>Whether the lot found a buyer.</td></tr>
+      <tr><td><code>category</code></td><td>The species category, e.g. <code>"Cichlids"</code>. Blank if nobody categorized the lot &mdash; an uncategorized lot can't earn points.</td></tr>
+      <tr><td><code>program</code></td><td><code>"BAP"</code>, <code>"HAP"</code> (plants), or <code>"Culture"</code>, following this club's separate-program settings and the lot's category.</td></tr>
+      <tr><td><code>i_bred_this_fish</code></td><td>Whether the seller ticked the breeder checkbox when they entered the lot. False means the lot was never claimed as bred and isn't a BAP candidate.</td></tr>
+      <tr><td><code>donation</code></td><td>Whether the lot was donated to the club. Some clubs only give points for donations.</td></tr>
+      <tr><td><code>custom_checkbox</code> / <code>custom_checkbox_name</code></td><td>The auction's own extra checkbox and its label (e.g. <code>"Rare species"</code>). Clubs can attach bonus points to it. The label is blank when the auction doesn't use one.</td></tr>
+      <tr>
+        <td><code>bap_eligible</code></td>
+        <td>Whether this lot qualifies for points <em>right now</em>, by this club's rules &mdash; the same check the Pending BAP page uses. Recomputed on every request, so it can change if the club's settings or the seller's membership change.</td>
+      </tr>
+      <tr>
+        <td><code>bap_ineligible_reason</code><br><code>bap_ineligible_reason_display</code></td>
+        <td>
+          Why not, when <code>bap_eligible</code> is false &mdash; a stable key plus a human-readable version. Both blank when the lot is eligible. The keys are:
+          <code>not_eligible</code>, <code>not_bred</code>, <code>not_sold</code>, <code>not_donation</code>, <code>has_min_bid</code>,
+          <code>low_quantity</code>, <code>category_not_eligible</code>, <code>not_club_member</code>, <code>not_active_member</code>,
+          <code>not_long_enough</code> (the same seller had a lot with this name too recently).
+        </td>
+      </tr>
+      <tr><td><code>bap_auto_reason</code></td><td>The reason recorded once, when the lot ended, by the automatic pass. Blank if that pass found no problem. Unlike <code>bap_ineligible_reason</code> this is a historical record and is not recomputed &mdash; prefer the live field unless you specifically want to know what happened at the time.</td></tr>
+      <tr><td><code>bap_points_awarded</code></td><td>Points this site has already recorded against the lot. <code>0</code> means none yet.</td></tr>
+      <tr><td><code>manually_approved</code></td><td>Whether a club admin approved this lot by hand on the Pending BAP page, overriding the automatic checks.</td></tr>
+      <tr>
+        <td><code>bap_award</code></td>
+        <td>
+          The award record if points were already given here, otherwise <code>null</code>. Contains
+          <code>id</code>, <code>date</code>, <code>points</code>, <code>hap_points</code>, <code>cap_points</code>,
+          <code>notes</code>, and <code>auto_awarded</code> (true when this site awarded them, false when a person did).
+          A non-null value is a strong signal not to award again elsewhere.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
