@@ -25,7 +25,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from auctions.models import Speaker, SpeakerTopic
-from auctions.speaker_topics import STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics
+from auctions.speaker_topics import STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics, topic_needs_review
 
 NAMESPACES = {
     "wp": "http://wordpress.org/export/1.2/",
@@ -157,6 +157,18 @@ class Command(BaseCommand):
                 orphans.delete()
                 self.stdout.write(f"Removed {orphan_count} topics that are no longer used.")
             self.stdout.write(f"{SpeakerTopic.objects.count()} topics in the shared topic list.")
+            # Loud rather than a database flag nobody goes looking for: the export still uses
+            # topic names that no longer exist here, and only a person can decide where those
+            # speakers belong.
+            flagged = Speaker.objects.filter(topics_need_review=True, is_deleted=False).count()
+            if flagged:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"{flagged} speakers were filed under a retired topic and are now on 'Other'. "
+                        "Fix them in the admin (filter: Topics need review), or in the directory "
+                        "by searching for: needsreview"
+                    )
+                )
 
     def _partition_items(self, channel):
         """Split <item> elements into speakers and attachments, indexed the two ways we need.
@@ -211,6 +223,7 @@ class Command(BaseCommand):
             # Everything here came out of the NEC's own database, so it stays NEC-only
             # Not settable from the add-speaker form: import and the Django admin only.
             "nec_only": True,
+            **self._review_fields(item),
         }
         linked_user = self._user_for_email(self._speaker_email(item))
         if linked_user:
@@ -248,17 +261,45 @@ class Command(BaseCommand):
         speaker = Speaker.objects.filter(wordpress_post_id=post_id).first()
         if not speaker:
             return None
+        review = self._review_fields(item)
         if self.dry_run:
             topics = self._canonical_topic_names(item)
-            self.stdout.write(f"  retag {name} ({', '.join(topics) if topics else 'no topics'})")
+            flag = f", flagged ({review['topic_review_note']})" if review["topics_need_review"] else ""
+            self.stdout.write(f"  retag {name} ({', '.join(topics) if topics else 'no topics'}{flag})")
             return False
         speaker.topics.set(self._topics_for(item))
+        Speaker.objects.filter(pk=speaker.pk).update(**review)
         return False
 
     def _canonical_topic_names(self, item):
         """This speaker's export categories as vocabulary names, dropped ones left out."""
         names = [canonical_topic_name(clean_text(raw)) for raw in self._topic_names(item)]
         return [name for name in names if name]
+
+    def _review_names(self, item):
+        """Export categories whose topic has been retired, in the export's own spelling.
+
+        The export is the only surviving record of what these speakers were filed under, so the
+        raw name goes on the speaker: "Was on: Cichlids" is what makes the manual fix a lookup
+        rather than a re-read of the bio.
+        """
+        seen = []
+        for raw in self._topic_names(item):
+            name = clean_text(raw)
+            if topic_needs_review(name) and name not in seen:
+                seen.append(name)
+        return seen
+
+    def _review_fields(self, item):
+        """`topics_need_review` / `topic_review_note` for this speaker.
+
+        Always both keys, never a partial update: re-running the import after the topics have
+        been fixed by hand would otherwise leave a stale flag set forever.
+        """
+        names = self._review_names(item)
+        if not names:
+            return {"topics_need_review": False, "topic_review_note": ""}
+        return {"topics_need_review": True, "topic_review_note": f"Was on: {', '.join(names)}"[:255]}
 
     def _topics_for(self, item):
         """The vocabulary rows to tag this speaker with."""

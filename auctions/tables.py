@@ -1,6 +1,7 @@
 from urllib.parse import urlencode
 
 import django_tables2 as tables
+from django.db.models import F
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
@@ -1063,6 +1064,11 @@ class SpeakerHTMxTable(tables.Table):
     class Meta:
         model = Speaker
         fields = ("photo", "name", "location", "topics", "speaker_tags")
+        # Same template every other table on the site uses. The django-tables2 default renders
+        # its pagination as bare <li><a> with no .page-item/.page-link, so none of the site's
+        # pagination styling reaches it, and the page links are plain hrefs that reload the
+        # whole page -- losing the map, the panel and the filters with it.
+        template_name = "tables/bootstrap_htmx.html"
         # Row-level click target; the anchor in the name column carries the htmx attributes.
         row_attrs = {"class": "speaker-row"}
 
@@ -1071,6 +1077,20 @@ class SpeakerHTMxTable(tables.Table):
         # suffix -- there is nothing to measure from.
         self.has_origin = kwargs.pop("has_origin", False)
         super().__init__(*args, **kwargs)
+
+    def order_location(self, queryset, is_descending):
+        """Sort the Location column by distance when there is somewhere to measure from.
+
+        The list itself is newest-first (see SpeakerListView.get_queryset); this column header
+        is where "who is nearest?" lives now.  nulls_last matters as much here as it did when
+        distance was the default sort: the annotation is NULL for every speaker without
+        coordinates, and most of the directory has none, so an ascending sort without it fills
+        page one with "No location set".
+        """
+        if not self.has_origin:
+            return queryset.order_by(("-" if is_descending else "") + "location"), True
+        distance = F("distance").desc(nulls_last=True) if is_descending else F("distance").asc(nulls_last=True)
+        return queryset.order_by(distance, "name"), True
 
     def render_photo(self, record):
         url = record.thumbnail_url
@@ -1092,7 +1112,7 @@ class SpeakerHTMxTable(tables.Table):
         as an ordinary link when JavaScript hasn't loaded.
         """
         page_url = reverse("speaker_detail", kwargs={"slug": record.slug})
-        return format_html(
+        link = format_html(
             "<a href='{}' class='speaker-open' hx-get='{}' hx-target='#speaker-panel' "
             "hx-swap='innerHTML' hx-push-url='{}'>{}</a>",
             page_url,
@@ -1100,6 +1120,11 @@ class SpeakerHTMxTable(tables.Table):
             page_url,
             record.display_name,
         )
+        if not record.is_recently_added:
+            return link
+        # text-dark because bg-success is light enough that white text fails AA on it --
+        # see style_reference.md.
+        return format_html("{} <span class='badge bg-success text-dark'>New</span>", link)
 
     def render_location(self, value, record):
         distance = getattr(record, "distance", None)

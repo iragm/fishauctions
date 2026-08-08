@@ -5278,6 +5278,11 @@ class SpeakerForm(forms.ModelForm):
     Anyone with a permission in an NEC club can add a speaker, and the speaker doesn't need
     an account here -- most of them don't have one.  Only `name` is required; the rest is
     whatever the person filling it in happens to know.
+
+    No club picker: `Speaker.club` is still recorded, but SpeakerCreateView works it out from
+    the club whose page the person came from, or their only NEC club.  Asking made the form
+    longer to answer a question almost nobody had a second answer to -- the same reasoning as
+    SpeakerCommentView, which has never asked either.
     """
 
     class Meta:
@@ -5295,7 +5300,6 @@ class SpeakerForm(forms.ModelForm):
             "facebook_page",
             "location",
             "location_coordinates",
-            "club",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
@@ -5314,8 +5318,6 @@ class SpeakerForm(forms.ModelForm):
         }
 
     def __init__(self, *args, **kwargs):
-        # The clubs this user could be adding the speaker on behalf of.
-        self.available_clubs = kwargs.pop("available_clubs", None)
         super().__init__(*args, **kwargs)
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
@@ -5331,18 +5333,10 @@ class SpeakerForm(forms.ModelForm):
         # Marking the input image-only lets the app's WebView file chooser offer the camera; not
         # setting `capture` keeps the photo library available too. Copied from CreateImageForm.
         self.fields["image"].widget.attrs["accept"] = "image/*"
-        self.fields["club"].required = False
-        self.fields["club"].label = "Adding on behalf of"
-        self.fields["club"].help_text = "Optional. Shown as the source of this entry."
-        if self.available_clubs is not None:
-            self.fields["club"].queryset = self.available_clubs
-            if not self.available_clubs:
-                del self.fields["club"]
         self.helper = FormHelper()
         self.helper.form_method = "post"
         # Required or the photo silently doesn't upload.
         self.helper.attrs = {"enctype": "multipart/form-data"}
-        club_row = ["club"] if "club" in self.fields else []
         self.helper.layout = Layout(
             "name",
             Fieldset(
@@ -5371,7 +5365,6 @@ class SpeakerForm(forms.ModelForm):
                 "location",
                 "location_coordinates",
             ),
-            *club_row,
         )
         self.helper.add_input(Submit("submit", "Save speaker", css_class="btn-primary"))
         add_bootstrap_classes(self)

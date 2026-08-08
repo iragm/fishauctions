@@ -5878,7 +5878,11 @@ class AuctionTOS(models.Model):
                 and self.bidder_number != "ERROR"
             ):
                 user_data.preferred_bidder_number = self.bidder_number
-                user_data.save()
+                # Write only this field: self.user.userdata is whatever instance was cached on the
+                # User object, which can predate changes another instance of the same row has
+                # already saved. A full save() here writes that stale copy back and silently
+                # reverts them -- it was wiping a userdata.address set moments earlier.
+                UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
         if not self.bidder_number:
             # I don't ever want this to be null
             self.bidder_number = "ERROR"
@@ -12338,6 +12342,10 @@ class VoiceCommandLog(models.Model):
         return bool(self.corrected_to)
 
 
+#: How long a speaker counts as a new arrival, for the "New" badge in the directory.
+NEW_SPEAKER_DAYS = 30
+
+
 class SpeakerTopic(models.Model):
     """A subject a speaker gives talks about, shared across all speakers.
 
@@ -12435,6 +12443,18 @@ class Speaker(CloudflareImageMixin, models.Model):
         related_name="added_speakers",
         help_text="The club the person adding this speaker was representing, if they picked one.",
     )
+    topics_need_review = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Topics need review",
+        help_text=(
+            "Set when this speaker's topics landed on 'Other' because the topic they were "
+            "filed under has been retired.  Filter on it in the admin to work through them; "
+            "untick it once the topics are right."
+        ),
+    )
+    topic_review_note = models.CharField(max_length=255, blank=True, default="")
+    topic_review_note.help_text = "Which retired topic this speaker was on, so the fix doesn't need guesswork."
     imported_from_nec = models.BooleanField(default=False, editable=False, db_index=True)
     source_url = models.URLField(max_length=500, blank=True, default="", editable=False)
     source_url.help_text = "Where this record came from on the old NEC website."
@@ -12476,6 +12496,23 @@ class Speaker(CloudflareImageMixin, models.Model):
     @property
     def has_coordinates(self):
         return self.latitude is not None and self.longitude is not None
+
+    @property
+    def is_recently_added(self):
+        """Whether to show the "New" badge beside this speaker in the list.
+
+        The directory is sorted newest first, so this is mostly for the person who scrolled:
+        it marks the recent arrivals wherever they end up once the list is re-sorted or
+        filtered.  `createdon` is auto_now_add, so an unsaved speaker has none yet.
+
+        The NEC import is excluded on purpose.  All 405 of those rows were written in one batch,
+        so for the month after an import a literal reading of "added recently" badges the entire
+        directory -- and a badge on every row marks nothing.  They are the directory's starting
+        contents, not arrivals; what this is for is the speakers a club has added since.
+        """
+        if not self.createdon or self.imported_from_nec:
+            return False
+        return self.createdon >= timezone.now() - datetime.timedelta(days=NEW_SPEAKER_DAYS)
 
     @property
     def attribution(self):
@@ -12555,8 +12592,6 @@ class SpeakerTag(models.Model):
         ("remote", "Presents remotely", GROUP_LOGISTICS),
         ("travels", "Willing to travel", GROUP_LOGISTICS),
         ("brings_items", "Brings items for the auction", GROUP_LOGISTICS),
-        ("no_fee", "No fee (expenses only)", GROUP_LOGISTICS),
-        ("responsive", "Quick to respond", GROUP_LOGISTICS),
         # Last on purpose: it's the one tag that says don't bother booking them, so it reads
         # as a warning at the end of the list rather than as another endorsement.
         ("no_longer_speaking", "No longer speaking", GROUP_LOGISTICS),

@@ -1,6 +1,7 @@
 """Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the
 list/map view, tagging, and comments."""
 
+import datetime
 import io
 import tempfile
 from io import StringIO
@@ -12,10 +13,25 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
+from django.utils import timezone
 
 from auctions.management.commands.import_nec_speakers import clean_text
-from auctions.models import Club, ClubMember, Speaker, SpeakerComment, SpeakerTag, SpeakerTopic
-from auctions.speaker_topics import OTHER, STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics
+from auctions.models import (
+    NEW_SPEAKER_DAYS,
+    Club,
+    ClubMember,
+    Speaker,
+    SpeakerComment,
+    SpeakerTag,
+    SpeakerTopic,
+)
+from auctions.speaker_topics import (
+    OTHER,
+    STARTER_TOPICS,
+    canonical_topic_name,
+    ensure_speaker_topics,
+    topic_needs_review,
+)
 
 # A trimmed WXR export with the shapes that actually matter: an entity inside CDATA, the two
 # spellings of cichlids the real file has, a topic that is deliberately thrown away ("General"),
@@ -89,10 +105,40 @@ def tiny_jpeg():
     return buffer.getvalue()
 
 
-def write_sample_export(bio_extra=""):
+class WritableMediaRoot:
+    """Write photos to a throwaway directory instead of the container's mediafiles volume.
+
+    Same pattern as CloudflareImagesTests and ClubIconWalletTests in tests.py, and here for the
+    same reason: MEDIA_ROOT is a bind mount of the repo's `mediafiles/`, which is gitignored and
+    untracked.  A clean checkout doesn't have it, so Docker creates it root-owned and the `app`
+    user can't write into it -- which is CI, every time the runner starts without one.
+
+    The importer catches a failed photo save on purpose (one bad image out of 405 must not abort
+    the import), so an unwritable MEDIA_ROOT doesn't raise here.  It just leaves `speaker.image`
+    empty, and the test that notices reports "<ThumbnailerImageFieldFile: None> is not true"
+    without a word about permissions.  Hence a temp dir rather than a nicer error message.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
+
+
+def write_sample_export(bio_extra="", without=""):
     """Drop SAMPLE_WXR in a temp file and return its path.
 
     `bio_extra` is appended to the first speaker's bio, for the tests that need an email in it.
+    `without` is a line of the export to leave out, for the tests that need a speaker who
+    doesn't carry some category.
     """
     body = SAMPLE_WXR
     if bio_extra:
@@ -101,21 +147,27 @@ def write_sample_export(bio_extra=""):
             f"Kevin breeds Central &amp; South American cichlids.{bio_extra}",
             1,
         )
+    if without:
+        body = body.replace(without, "")
     handle = tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False, encoding="utf-8")
     handle.write(body)
     handle.close()
     return handle.name
 
 
-class ImportNecSpeakersTests(TestCase):
+class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
     """The WordPress importer."""
 
     def setUp(self):
+        super().setUp()
         self.path = write_sample_export()
+        # Everything the importer decided not to raise about. Kept so a photo assertion can
+        # say *why* it failed -- the command reports a skipped photo here and nowhere else.
+        self.warnings = StringIO()
 
     def run_import(self, *args):
         out = StringIO()
-        call_command("import_nec_speakers", self.path, "--skip-images", *args, stdout=out, stderr=StringIO())
+        call_command("import_nec_speakers", self.path, "--skip-images", *args, stdout=out, stderr=self.warnings)
         return out.getvalue()
 
     def test_imports_published_speakers_only(self):
@@ -134,12 +186,41 @@ class ImportNecSpeakersTests(TestCase):
         self.assertIn("Central & South American", speaker.bio)
         self.assertIn("Reef & Invertebrates", list(speaker.topics.values_list("name", flat=True)))
 
-    def test_merges_duplicate_topic_spellings(self):
-        """ "CIchlids" and "Cichids" are the same subject and must not become two rows."""
+    def test_the_retired_cichlids_topic_is_not_recreated_by_an_import(self):
+        """Both of the export's spellings of it; neither may put the row back."""
         self.run_import()
-        self.assertEqual(SpeakerTopic.objects.filter(name__iexact="cichlids").count(), 1)
-        topic = SpeakerTopic.objects.get(name="Cichlids")
-        self.assertEqual(topic.speakers.count(), 2)
+        self.assertEqual(SpeakerTopic.objects.filter(name__iexact="cichlids").count(), 0)
+        self.assertEqual(SpeakerTopic.objects.get(name=OTHER).speakers.count(), 2)
+
+    def test_a_speaker_on_a_retired_topic_is_flagged_for_a_human(self):
+        """The import can't tell which cichlids Kevin means, so it says so instead of guessing."""
+        self.run_import()
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        self.assertTrue(speaker.topics_need_review)
+        self.assertEqual(speaker.topic_review_note, "Was on: CIchlids")
+
+    def test_the_flag_keeps_the_exports_own_spelling(self):
+        """ "Cichids" is the typo the old site had; the fix is easier if the note says so."""
+        self.run_import()
+        self.assertEqual(Speaker.objects.get(wordpress_post_id=673).topic_review_note, "Was on: Cichids")
+
+    def test_a_speaker_on_no_retired_topic_is_not_flagged(self):
+        self.run_import()
+        Speaker.objects.update(topics_need_review=True, topic_review_note="stale")
+        # Kevin's other topics are all still real, so re-importing him with the cichlids
+        # category taken out has to clear the flag rather than leave it set forever.
+        self.path = write_sample_export(
+            without='<category domain="speaker_topics" nicename="cichlids"><![CDATA[CIchlids]]></category>'
+        )
+
+        self.run_import()
+
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        self.assertFalse(speaker.topics_need_review)
+        self.assertEqual(speaker.topic_review_note, "")
+
+    def test_the_import_says_how_many_speakers_need_a_look(self):
+        self.assertIn("2 speakers were filed under a retired topic", self.run_import())
 
     def test_rift_lakes_imports_onto_the_one_rift_lake_topic(self):
         self.run_import()
@@ -147,11 +228,14 @@ class ImportNecSpeakersTests(TestCase):
         self.assertIn("Rift Lake Cichlids", speaker.topics.values_list("name", flat=True))
 
     def test_a_discarded_topic_is_dropped_rather_than_imported_as_other(self):
-        """Esther's "General" says nothing about her, so it leaves her with just Cichlids."""
+        """Esther's "General" says nothing about her, so it adds nothing to her topics.
+
+        Her other category ("Cichids") is retired, so Other is all she is left with -- which is
+        the retirement's doing, not "General"'s: a discarded name contributes no topic at all.
+        """
         self.run_import()
         speaker = Speaker.objects.get(wordpress_post_id=673)
-        self.assertEqual(list(speaker.topics.values_list("name", flat=True)), ["Cichlids"])
-        self.assertFalse(SpeakerTopic.objects.get(name=OTHER).speakers.exists())
+        self.assertEqual(list(speaker.topics.values_list("name", flat=True)), [OTHER])
 
     def test_topics_only_re_tags_and_touches_nothing_else(self):
         """The path for re-applying the vocabulary after it changes, on an import already done."""
@@ -167,8 +251,17 @@ class ImportNecSpeakersTests(TestCase):
         self.assertEqual(speaker.bio, "hand edited")
         self.assertEqual(speaker.programs, "Talk one\nTalk two")
         names = list(speaker.topics.values_list("name", flat=True))
-        self.assertIn("Cichlids", names)
+        self.assertIn("Rift Lake Cichlids", names)
         self.assertNotIn("Killifish", names)
+
+    def test_topics_only_re_applies_the_review_flag(self):
+        """The path that exists for exactly this: a vocabulary change after an import."""
+        self.run_import()
+        Speaker.objects.update(topics_need_review=False, topic_review_note="")
+        self.run_import("--topics-only")
+        speaker = Speaker.objects.get(wordpress_post_id=672)
+        self.assertTrue(speaker.topics_need_review)
+        self.assertEqual(speaker.topic_review_note, "Was on: CIchlids")
 
     def test_topics_only_never_creates_a_speaker(self):
         out = self.run_import("--topics-only")
@@ -227,7 +320,7 @@ class ImportNecSpeakersTests(TestCase):
         """Kevin's photo is linked by _thumbnail_id, Esther's only by post_parent."""
         mock_get.return_value.content = tiny_jpeg()
         mock_get.return_value.raise_for_status.return_value = None
-        call_command("import_nec_speakers", self.path, stdout=StringIO(), stderr=StringIO())
+        call_command("import_nec_speakers", self.path, stdout=StringIO(), stderr=self.warnings)
         fetched = sorted(call.args[0] for call in mock_get.call_args_list)
         self.assertEqual(
             fetched,
@@ -236,8 +329,11 @@ class ImportNecSpeakersTests(TestCase):
                 "https://northeastcouncil.org/wp-content/uploads/kevin.jpg",
             ],
         )
-        self.assertTrue(Speaker.objects.get(wordpress_post_id=672).image)
-        self.assertTrue(Speaker.objects.get(wordpress_post_id=673).image)
+        # The importer swallows a failed save, so without the warnings a broken MEDIA_ROOT
+        # shows up here as nothing more informative than "None is not true".
+        why = self.warnings.getvalue()
+        self.assertTrue(Speaker.objects.get(wordpress_post_id=672).image, why)
+        self.assertTrue(Speaker.objects.get(wordpress_post_id=673).image, why)
 
     @patch("auctions.management.commands.import_nec_speakers.requests.get")
     def test_an_unreachable_photo_does_not_abort_the_import(self, mock_get):
@@ -280,10 +376,25 @@ class ImportNecSpeakersTests(TestCase):
         self.assertEqual(clean_text("a\xa0\xa0 b\n\nc"), "a b c")
 
     def test_canonical_topic_name_folds_aliases_onto_the_vocabulary(self):
-        self.assertEqual(canonical_topic_name("CIchlids"), "Cichlids")
-        self.assertEqual(canonical_topic_name("Cichids"), "Cichlids")
         self.assertEqual(canonical_topic_name("Africa"), "African Cichlids")
+        self.assertEqual(canonical_topic_name("Reef & Brackish"), "Reef & Invertebrates")
         self.assertIsNone(canonical_topic_name("   "))
+
+    def test_a_retired_topic_lands_on_other_and_asks_for_a_human(self):
+        """Both spellings of the old generic cichlids topic, and the invertebrates one."""
+        for name in ("CIchlids", "Cichids", "Invertebrates", "Freshwater Invertebrates"):
+            self.assertEqual(canonical_topic_name(name), OTHER, name)
+            self.assertTrue(topic_needs_review(name), name)
+
+    def test_a_topic_still_in_the_vocabulary_is_not_flagged(self):
+        for name in ("Africa", "Shrimp", "Plants", "Underwater Basket Weaving", ""):
+            self.assertFalse(topic_needs_review(name), name)
+
+    def test_shrimp_is_its_own_topic_and_snails_are_not(self):
+        """The invertebrates split: shrimp got a row of their own, snails go to Other."""
+        self.assertIn("Shrimp", STARTER_TOPICS)
+        self.assertEqual(canonical_topic_name("Shrimp"), "Shrimp")
+        self.assertEqual(canonical_topic_name("Snails"), OTHER)
 
     def test_every_lake_lands_on_the_one_rift_lake_topic(self):
         """One topic for all three lakes: the export's "Rift Lakes" doesn't say which."""
@@ -310,6 +421,14 @@ class ImportNecSpeakersTests(TestCase):
 
         self.assertEqual(sorted(DISCARDED_TOPICS & set(TOPIC_ALIASES)), [])
         self.assertEqual(sorted(DISCARDED_TOPICS & {name.casefold() for name in STARTER_TOPICS}), [])
+
+    def test_a_review_name_is_not_also_an_alias_or_a_topic(self):
+        """Review beats both in canonical_topic_name, so an overlap would silence the flag."""
+        from auctions.speaker_topics import DISCARDED_TOPICS, REVIEW_TOPICS, TOPIC_ALIASES
+
+        self.assertEqual(sorted(REVIEW_TOPICS & set(TOPIC_ALIASES)), [])
+        self.assertEqual(sorted(REVIEW_TOPICS & DISCARDED_TOPICS), [])
+        self.assertEqual(sorted(REVIEW_TOPICS & {name.casefold() for name in STARTER_TOPICS}), [])
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
@@ -431,20 +550,20 @@ class SpeakerListTests(TestCase):
 
         # get_or_create, not create: migration 0374 seeds the vocabulary, so these rows already
         # exist -- but a --keepdb run after a full-suite flush starts without them.
-        self.cichlids, _ = SpeakerTopic.objects.get_or_create(name="Cichlids")
+        self.catfish, _ = SpeakerTopic.objects.get_or_create(name="Catfish")
         self.plants, _ = SpeakerTopic.objects.get_or_create(name="Plants")
         # ~40 miles from Providence
         self.nearby = Speaker.objects.create(
             name="Boston, Bob", location="Boston, MA", latitude=42.3601, longitude=-71.0589
         )
-        self.nearby.topics.add(self.cichlids)
+        self.nearby.topics.add(self.catfish)
         # ~2500 miles away
         self.faraway = Speaker.objects.create(
             name="Angeles, Los", location="Los Angeles, CA", latitude=34.0522, longitude=-118.2437
         )
         self.faraway.topics.add(self.plants)
         self.unlocated = Speaker.objects.create(name="Nowhere, Nora")
-        self.unlocated.topics.add(self.cichlids)
+        self.unlocated.topics.add(self.catfish)
 
     def list_url(self, **params):
         query = "&".join(f"{key}={value}" for key, value in params.items())
@@ -463,12 +582,53 @@ class SpeakerListTests(TestCase):
         self.assertContains(response, "miles")
         self.assertContains(response, self.club.name)
 
+    def test_the_list_is_newest_first(self):
+        """Sorting by `name` sorted "Last, First" under a column showing "First Last"."""
+        body = self.client.get(self.list_url()).content.decode()
+        self.assertLess(body.index("Nora Nowhere"), body.index("Los Angeles"))
+        self.assertLess(body.index("Los Angeles"), body.index("Bob Boston"))
+
+    def test_newest_first_wins_even_with_an_origin(self):
+        """Distance used to take over the moment a club had coordinates."""
+        body = self.client.get(self.list_url(club=self.club.slug)).content.decode()
+        self.assertLess(body.index("Nora Nowhere"), body.index("Bob Boston"))
+
+    def test_sorting_by_location_puts_the_nearest_first(self):
+        """Distance didn't go away, it moved to the column header."""
+        body = self.client.get(self.list_url(club=self.club.slug, sort="location")).content.decode()
+        self.assertLess(body.index("Bob Boston"), body.index("Los Angeles"))
+
     def test_speakers_without_coordinates_sort_last(self):
         """A plain ascending sort on a NULL distance would fill page one with them."""
-        response = self.client.get(self.list_url(club=self.club.slug))
-        body = response.content.decode()
+        body = self.client.get(self.list_url(club=self.club.slug, sort="location")).content.decode()
         self.assertLess(body.index("Bob Boston"), body.index("Nora Nowhere"))
         self.assertLess(body.index("Los Angeles"), body.index("Nora Nowhere"))
+
+    def test_sorting_by_location_without_an_origin_sorts_by_the_text(self):
+        """There is nothing to measure from, but the column still has to do something."""
+        body = self.client.get(self.list_url(sort="location")).content.decode()
+        self.assertLess(body.index("Bob Boston"), body.index("Los Angeles"))
+
+    def test_a_speaker_added_today_gets_a_new_badge(self):
+        body = self.client.get(self.list_url()).content.decode()
+        self.assertIn("New</span>", body)
+
+    def test_an_old_speaker_does_not(self):
+        old = timezone.now() - datetime.timedelta(days=NEW_SPEAKER_DAYS + 1)
+        Speaker.objects.update(createdon=old)
+        self.assertNotIn("New</span>", self.client.get(self.list_url()).content.decode())
+
+    def test_the_imported_batch_does_not_badge_the_whole_directory(self):
+        Speaker.objects.update(imported_from_nec=True)
+        self.assertNotIn("New</span>", self.client.get(self.list_url()).content.decode())
+
+    def test_the_page_controls_are_styled(self):
+        """The django-tables2 default template renders them as unstyled bare <li><a>."""
+        for index in range(30):
+            Speaker.objects.create(name=f"Filler, Number {index}", location="Providence, RI")
+        body = self.client.get(self.list_url()).content.decode()
+        self.assertIn("page-item", body)
+        self.assertIn("page-link", body)
 
     def test_distance_filter_excludes_speakers_that_are_too_far(self):
         response = self.client.get(self.list_url(club=self.club.slug, distance=100))
@@ -501,7 +661,7 @@ class SpeakerListTests(TestCase):
         self.assertContains(response, "miles")
 
     def test_topic_filter(self):
-        response = self.client.get(self.list_url(topic=self.cichlids.slug))
+        response = self.client.get(self.list_url(topic=self.catfish.slug))
         names = self.names_in(response)
         self.assertEqual(names, {"Bob Boston", "Nora Nowhere"})
 
@@ -562,13 +722,13 @@ class SpeakerListTests(TestCase):
 
     def test_the_topic_menu_lists_every_topic_in_use(self):
         response = self.client.get(self.list_url())
-        self.assertContains(response, f'value="{self.cichlids.slug}"')
+        self.assertContains(response, f'value="{self.catfish.slug}"')
         self.assertContains(response, f'value="{self.plants.slug}"')
         self.assertContains(response, "Any topic")
 
     def test_the_topic_menu_button_names_the_topic_being_filtered_by(self):
-        response = self.client.get(self.list_url(topic=self.cichlids.slug))
-        self.assertEqual(response.context["selected_topic_label"], "Cichlids")
+        response = self.client.get(self.list_url(topic=self.catfish.slug))
+        self.assertEqual(response.context["selected_topic_label"], "Catfish")
         self.assertEqual(self.client.get(self.list_url()).context["selected_topic_label"], "")
 
     def test_keywords_without_a_menu_entry_still_filter(self):
@@ -641,15 +801,30 @@ class SpeakerTaggingTests(TestCase):
         response = self.client.get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
         self.assertContains(response, "Would book again")
 
+    def test_the_panel_does_not_badge_a_speaker_as_nec_only(self):
+        """The directory is NEC-only, so the badge told its readers nothing."""
+        Speaker.objects.filter(pk=self.speaker.pk).update(nec_only=True)
+        response = self.client.get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
+        self.assertNotContains(response, "NEC only")
+
     def test_no_longer_speaking_is_available(self):
         response = self.client.post(self.url, {"tag": "no_longer_speaking"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No longer speaking")
         self.assertTrue(SpeakerTag.objects.filter(speaker=self.speaker, tag="no_longer_speaking").exists())
 
-    def test_the_donates_fee_tag_is_gone(self):
-        self.assertNotIn("donates_fee", SpeakerTag.TAG_LABELS)
-        self.assertEqual(self.client.post(self.url, {"tag": "donates_fee"}).status_code, 404)
+    def test_the_retired_tags_are_gone(self):
+        """donates_fee, then no_fee and responsive: what a speaker charges isn't a badge, and
+        "quick to respond" was a fact about one club's emails, not about the talk."""
+        for tag in ("donates_fee", "no_fee", "responsive"):
+            with self.subTest(tag=tag):
+                self.assertNotIn(tag, SpeakerTag.TAG_LABELS)
+                self.assertEqual(self.client.post(self.url, {"tag": tag}).status_code, 404)
+
+    def test_the_retired_tags_are_not_offered_as_filters(self):
+        from auctions.filters import SpeakerFilter
+
+        self.assertNotIn("nofee", SpeakerFilter.TAG_TOKENS)
 
     def test_every_tag_definition_has_a_group(self):
         groups = dict(SpeakerTag.grouped_definitions())
@@ -732,10 +907,13 @@ class SpeakerCreateDeleteTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
-    def add(self, **extra):
+    def payload(self, **extra):
         payload = {"name": "Nobody, Ned", "bio": "", "programs": "", "location": "Providence, RI"}
         payload.update(extra)
-        return self.client.post(reverse("speaker_add"), payload)
+        return payload
+
+    def add(self, **extra):
+        return self.client.post(reverse("speaker_add"), self.payload(**extra))
 
     def test_anyone_with_access_can_add_a_speaker_who_has_no_account(self):
         response = self.add()
@@ -755,7 +933,7 @@ class SpeakerCreateDeleteTests(TestCase):
         from auctions.forms import SpeakerForm
 
         speaker = Speaker.objects.create(name="Imported, Ivy", imported_from_nec=True)
-        form = SpeakerForm(instance=speaker, available_clubs=Club.objects.none())
+        form = SpeakerForm(instance=speaker)
         self.assertFalse(form.fields["location"].required)
 
     def test_new_speakers_default_to_not_nec_only(self):
@@ -766,7 +944,7 @@ class SpeakerCreateDeleteTests(TestCase):
         """Import and the Django admin only."""
         from auctions.forms import SpeakerForm
 
-        self.assertNotIn("nec_only", SpeakerForm(available_clubs=Club.objects.none()).fields)
+        self.assertNotIn("nec_only", SpeakerForm().fields)
         self.add(nec_only="on")
         self.assertFalse(Speaker.objects.get(name="Nobody, Ned").nec_only)
 
@@ -774,7 +952,7 @@ class SpeakerCreateDeleteTests(TestCase):
         """The vocabulary is closed; the form offers no way to add to it."""
         from auctions.forms import SpeakerForm
 
-        self.assertNotIn("new_topics", SpeakerForm(available_clubs=Club.objects.none()).fields)
+        self.assertNotIn("new_topics", SpeakerForm().fields)
         before = set(SpeakerTopic.objects.values_list("name", flat=True))
         self.add()
         self.assertEqual(set(SpeakerTopic.objects.values_list("name", flat=True)), before)
@@ -785,10 +963,33 @@ class SpeakerCreateDeleteTests(TestCase):
         self.add(topics=[topic.pk])
         self.assertEqual(list(Speaker.objects.get(name="Nobody, Ned").topics.all()), [topic])
 
-    def test_attribution_names_the_user_and_their_club(self):
-        self.add(club=self.club.pk)
+    def test_the_form_does_not_ask_which_club(self):
+        """It's worked out from where they came from, not asked for."""
+        from auctions.forms import SpeakerForm
+
+        self.assertNotIn("club", SpeakerForm().fields)
+        response = self.client.get(reverse("speaker_add"))
+        self.assertNotContains(response, "Adding on behalf of")
+
+    def test_attribution_names_the_user_and_their_only_club(self):
+        self.add()
         speaker = Speaker.objects.get(name="Nobody, Ned")
         self.assertEqual(speaker.attribution, "Added by Ada Officer (NEC Club)")
+
+    def test_the_club_the_page_was_opened_from_wins(self):
+        second = Club.objects.create(name="Second Club", is_nec_club=True)
+        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_view=True)
+        self.client.post(f"{reverse('speaker_add')}?club={second.slug}", self.payload())
+        self.assertEqual(Speaker.objects.get(name="Nobody, Ned").club, second)
+
+    def test_no_club_is_recorded_when_the_user_is_in_several(self):
+        """Two clubs and no hint which is a guess, and a wrong attribution is worse than none."""
+        second = Club.objects.create(name="Second Club", is_nec_club=True)
+        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_view=True)
+        self.add()
+        speaker = Speaker.objects.get(name="Nobody, Ned")
+        self.assertIsNone(speaker.club)
+        self.assertEqual(speaker.attribution, "Added by Ada Officer")
 
     def test_attribution_without_a_club(self):
         speaker = Speaker.objects.create(name="Nobody, Ned", created_by=self.user)
@@ -885,6 +1086,22 @@ class SpeakerModelTests(TestCase):
 
         names = set(FakeView().visible_speakers().values_list("name", flat=True))
         self.assertEqual(names, {"Public, Paula"})
+
+    def test_a_speaker_added_today_is_recently_added(self):
+        self.assertTrue(Speaker.objects.create(name="Fresh, Fred").is_recently_added)
+
+    def test_a_speaker_added_last_year_is_not(self):
+        Speaker.objects.create(name="Old, Ollie")
+        Speaker.objects.update(createdon=timezone.now() - datetime.timedelta(days=NEW_SPEAKER_DAYS + 1))
+        self.assertFalse(Speaker.objects.get(name="Old, Ollie").is_recently_added)
+
+    def test_the_imported_batch_is_never_new(self):
+        """All 405 landed at once; badging them all would make the badge mean nothing."""
+        self.assertFalse(Speaker.objects.create(name="Seeded, Sam", imported_from_nec=True).is_recently_added)
+
+    def test_an_unsaved_speaker_has_no_created_date_to_go_on(self):
+        """`createdon` is auto_now_add, so it's None until the first save."""
+        self.assertFalse(Speaker(name="Unsaved, Uma").is_recently_added)
 
 
 class SplitSpeakerTalksTests(TestCase):
@@ -986,7 +1203,7 @@ class SplitSpeakerTalksTests(TestCase):
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
-class SpeakerPhotoTests(TestCase):
+class SpeakerPhotoTests(WritableMediaRoot, TestCase):
     """The photo field reuses LotImage's handling: upload or URL, with the same validation."""
 
     def setUp(self):
@@ -1001,7 +1218,7 @@ class SpeakerPhotoTests(TestCase):
 
         payload = {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"}
         payload.update(data)
-        return SpeakerForm(payload, available_clubs=Club.objects.none())
+        return SpeakerForm(payload)
 
     def test_a_photo_url_is_accepted(self):
         form = self.form(url="https://example.com/photo.jpg")
@@ -1021,7 +1238,6 @@ class SpeakerPhotoTests(TestCase):
         form = SpeakerForm(
             {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"},
             {"image": broken},
-            available_clubs=Club.objects.none(),
         )
         self.assertFalse(form.is_valid())
         self.assertIn("image", form.errors)
@@ -1035,7 +1251,6 @@ class SpeakerPhotoTests(TestCase):
         form = SpeakerForm(
             {"name": "Nobody, Ned", "bio": "", "programs": "", "url": "", "location": "Providence, RI"},
             {"image": good},
-            available_clubs=Club.objects.none(),
         )
         self.assertTrue(form.is_valid(), form.errors)
         speaker = form.save()

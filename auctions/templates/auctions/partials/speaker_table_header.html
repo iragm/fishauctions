@@ -31,9 +31,9 @@ rearranged for a phone.  The form filters as you type, so there is no apply butt
 
   {% include "auctions/partials/htmx_table_filters.html" %}
 
-  {% comment %}Where distances are measured from. There is no picker for it: the origin follows the club whose page you came from, or your own location.{% endcomment %}
+  {% comment %}Where distances are measured from. There is no picker for it: the origin follows the club whose page you came from, or your own location. The list is newest first, so the "sort by the Location column" hint is the only place that says distance is still an option.{% endcomment %}
   {% if has_origin %}
-    <small class="text-muted">Distances from {{ origin_label }}.{% if origin_change_url %} <a href="{{ origin_change_url }}">Change</a>{% endif %}</small>
+    <small class="text-muted">Newest first. Distances from {{ origin_label }} &mdash; sort by the Location column for the closest.{% if origin_change_url %} <a href="{{ origin_change_url }}">Change</a>{% endif %}</small>
   {% elif origin_club %}
     <small class="text-warning">{{ origin_club.name }} has no address set, so distances are unavailable.
       {% if origin_change_url %}<a href="{{ origin_change_url }}">Set the club address</a>{% endif %}</small>

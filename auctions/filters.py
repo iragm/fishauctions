@@ -1454,17 +1454,16 @@ class SpeakerFilter(django_filters.FilterSet):
     tokens, driven by the Filters dropdown chips -- plus a topic menu of the same shape.
 
     Everything else the box understands has no control of its own: the keyword tokens the
-    Filters menu doesn't list (photo, mapped, myclub) and a distance phrase like "within 50
-    miles".  Distance needs an origin, so the view hands one in (a club's coordinates, or the
-    user's own); with no origin the radius and the distance column quietly do nothing rather
-    than filtering everything away.
+    Filters menu doesn't list (photo, mapped, myclub, needsreview) and a distance phrase like
+    "within 50 miles".  Distance needs an origin, so the view hands one in (a club's
+    coordinates, or the user's own); with no origin the radius and the distance column quietly
+    do nothing rather than filtering everything away.
     """
 
     #: query token -> tag value.  These read as plain words in the search box.
     TAG_TOKENS = {
         "remote": "remote",
         "travels": "travels",
-        "nofee": "no_fee",
         "recommended": "book_again",
         "auctionitems": "brings_items",
     }
@@ -1552,6 +1551,7 @@ class SpeakerFilter(django_filters.FilterSet):
         require_mapped = False
         require_my_club = False
         require_untagged = False
+        require_review = False
         remaining = []
         for token in tokens:
             if token in self.TAG_TOKENS:
@@ -1564,6 +1564,8 @@ class SpeakerFilter(django_filters.FilterSet):
                 require_my_club = True
             elif token == "untagged":
                 require_untagged = True
+            elif token in ("needsreview", "needs_review"):
+                require_review = True
             else:
                 remaining.append(token)
 
@@ -1577,6 +1579,11 @@ class SpeakerFilter(django_filters.FilterSet):
             queryset = queryset.filter(club_id__in=list(self.nec_club_ids))
         if require_untagged:
             queryset = queryset.filter(tags__isnull=True)
+        if require_review:
+            # The worklist for a retired topic (see auctions/speaker_topics.py). Not a chip in
+            # the Filters menu: it means something to whoever is clearing the flags and nothing
+            # to everyone else, and the admin is where they'd actually be edited.
+            queryset = queryset.filter(topics_need_review=True)
         for tag_value in wanted_tags:
             queryset = queryset.filter(tags__tag=tag_value)
         if wanted_tags:

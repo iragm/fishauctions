@@ -64,10 +64,10 @@ link. Nothing here assumes which — `standalone` only controls the close button
 
   <hr>
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-    <small class="text-muted">
-      {{ speaker.attribution }}
-      {% if speaker.nec_only %}<span class="badge bg-secondary ms-1" title="Not shown to clubs outside the NEC">NEC only</span>{% endif %}
-    </small>
+    {% comment %}No "NEC only" badge: everything imported carries the flag and the directory is
+    NEC-only anyway, so it appeared on most cards and told the people who could see it nothing
+    they didn't already know. The flag itself still scopes who the speaker is shown to.{% endcomment %}
+    <small class="text-muted">{{ speaker.attribution }}</small>
     <div class="d-flex gap-2">
       {% if not standalone %}
       <a class="btn btn-sm btn-secondary" href="{% url 'speaker_detail' speaker.slug %}"><i class="bi bi-box-arrow-up-right"></i> Open page</a>

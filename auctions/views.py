@@ -24352,16 +24352,24 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
     htmx_table_header_template = "auctions/partials/speaker_table_header.html"
 
     def get_queryset(self):
+        """Newest first.
+
+        The model's own ordering is by `name`, which is the NEC export's "Last, First" -- but
+        the list renders `display_name`, so a page sorted that way reads as though it isn't
+        sorted at all.  Recency is the one order that means something on a directory people
+        keep adding to: it puts what changed since your last visit at the top, and the "New"
+        badge marks the same speakers once you sort or filter your way out of this order.
+        Distance is still a click on the Location column (see SpeakerHTMxTable.order_location),
+        which is why the annotation stays whether or not it is being sorted on.
+        """
         queryset = self.visible_speakers().prefetch_related("topics")
         latitude, longitude, *_ = self.resolve_origin()
         if latitude is not None and longitude is not None:
-            # nulls_last matters more than it looks: the distance expression is NULL for every
-            # speaker without coordinates, and most speakers don't have any yet, so a plain
-            # ascending sort fills the entire first page with "no location set".
-            queryset = queryset.annotate(distance=distance_to(latitude, longitude)).order_by(
-                F("distance").asc(nulls_last=True), "name"
-            )
-        return queryset
+            queryset = queryset.annotate(distance=distance_to(latitude, longitude))
+        # -pk, not just -createdon: the 405 imported speakers were written in one batch and
+        # share a timestamp to the second, so without it their order is whatever MariaDB feels
+        # like today and pagination can show the same speaker twice.
+        return queryset.order_by("-createdon", "-pk")
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
@@ -24392,7 +24400,6 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
             ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
             ("<i class='bi bi-car-front'></i> Willing to travel", "travels"),
-            ("<i class='bi bi-cash'></i> No fee", "nofee"),
             ("<i class='bi bi-box-seam'></i> Brings auction items", "auctionitems"),
             ("<i class='bi bi-tag'></i> Not tagged yet", "untagged"),
         ]
@@ -24462,7 +24469,15 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         params = {}
         # Only offer to prefill a name when the search looks like one, not when it's a keyword
         # token like "photo" or a scrap of a bio.
-        keywords = set(SpeakerFilter.TAG_TOKENS) | {"photo", "photos", "mapped", "located", "myclub", "untagged"}
+        keywords = set(SpeakerFilter.TAG_TOKENS) | {
+            "photo",
+            "photos",
+            "mapped",
+            "located",
+            "myclub",
+            "untagged",
+            "needsreview",
+        }
         if query and re.fullmatch(r"[A-Za-z\s\-'.]{2,60}", query) and query.lower() not in keywords:
             params["name"] = query
         club_slug = (self.request.GET.get("club") or "").strip()
@@ -24558,11 +24573,6 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
     form_class = SpeakerForm
     template_name = "auctions/speaker_form.html"
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["available_clubs"] = Club.objects.filter(pk__in=self.nec_club_ids).order_by("name")
-        return kwargs
-
     def get_initial(self):
         initial = super().get_initial()
         # Prefilled by the "add your club members" prompt on the list page.
@@ -24570,15 +24580,26 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
             value = self.request.GET.get(field)
             if value:
                 initial[field] = value
-        club_slug = self.request.GET.get("club")
+        return initial
+
+    def club_being_represented(self):
+        """The club to record as the source of this entry, without asking for it.
+
+        `?club=` is whichever club's page they came in from, which is the one answer worth
+        having.  Failing that, someone in exactly one NEC club can only be representing that
+        one; someone in several is genuinely ambiguous, and no club is recorded rather than a
+        guessed one.  Same rule as SpeakerCommentView.
+        """
+        club_slug = (self.request.GET.get("club") or "").strip()
         if club_slug:
             club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
             if club:
-                initial["club"] = club
-        return initial
+                return club
+        return self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
+        form.instance.club = self.club_being_represented()
         response = super().form_valid(form)
         messages.success(self.request, f"{self.object.display_name} has been added to the speaker directory.")
         return response
@@ -24607,11 +24628,6 @@ class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
         if not speaker.can_be_deleted_by(self.request.user):
             raise PermissionDenied()
         return speaker
-
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["available_clubs"] = Club.objects.filter(pk__in=self.nec_club_ids).order_by("name")
-        return kwargs
 
     def get_success_url(self):
         return reverse("speaker_detail", kwargs={"slug": self.object.slug})
