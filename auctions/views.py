@@ -23099,7 +23099,13 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
         try:
             start, end = parse_bap_lot_date_range(request.query_params)
         except ValueError as error:
-            return Response({"error": str(error)}, status=400)
+            # Don't echo the exception back: it can carry internal detail from the datetime parsers,
+            # and the caller only needs to know the accepted shape of the params.
+            logger.info("Rejected BAP lot date range for club %s: %s", club.pk, error)
+            return Response(
+                {"error": "Invalid date range. Use ?days=N, or ?start=YYYY-MM-DD and ?end=YYYY-MM-DD."},
+                status=400,
+            )
         lots = (
             Lot.objects.filter(
                 auction__club=club,

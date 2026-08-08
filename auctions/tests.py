@@ -19612,7 +19612,9 @@ class ClubBapLotAPITests(TestCase):
         self.enable_bap_permission()
         response = self.get(start="last tuesday")
         self.assertEqual(response.status_code, 400)
-        self.assertIn("start", response.json()["error"])
+        # The error names the accepted formats without echoing what the caller sent
+        self.assertIn("YYYY-MM-DD", response.json()["error"])
+        self.assertNotIn("last tuesday", response.json()["error"])
 
     def test_bad_days_is_a_400(self):
         self.enable_bap_permission()
