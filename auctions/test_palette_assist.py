@@ -35,6 +35,7 @@ from auctions.models import (
     LotImage,
     UserData,
 )
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -3016,11 +3017,15 @@ class TrustWindowTests(PaletteAssistTestCase):
         self.assertEqual(response["delay_ms"], palette_assist.COUNTDOWN_MS)
 
 
+@isolated_cache("palette-lookup-preload")
 class LookupPreloadTests(PaletteAssistTestCase):
     """Item 26: a phrase always answered from one lookup costs one round, not two."""
 
     def setUp(self):
         super().setUp()
+        # preloadable_lookup() caches its verdict per phrase for an hour, and these tests reuse one
+        # phrase with different usage rows behind it. Safe to flush: the decorator above gives this
+        # class a cache of its own instead of the Redis every --parallel worker shares.
         cache.clear()
 
     def _record(self, query, destination, times):
