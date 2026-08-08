@@ -172,9 +172,11 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=the_future
         )
-        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
-        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
-        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
+        # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
+        # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
+        # in 500: the auction already holds that number under a different name. These are kept out of
+        # the range tests pick their own numbers from.
         self.in_person_buyer = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
@@ -183,22 +185,30 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+            user=self.admin_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            is_admin=True,
+            bidder_number="501",
         )
         self.admin_in_person_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+            user=self.admin_user,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            is_admin=True,
+            bidder_number="502",
         )
         self.online_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location
+            user=self.user, auction=self.online_auction, pickup_location=self.location, bidder_number="503"
         )
         self.in_person_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location, bidder_number="504"
         )
         self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.online_auction, pickup_location=self.location
+            user=self.userB, auction=self.online_auction, pickup_location=self.location, bidder_number="505"
         )
         self.tosC = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location, bidder_number="506"
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
@@ -9822,9 +9832,11 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=theFuture
         )
-        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
-        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
-        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
+        # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
+        # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
+        # in 500: the auction already holds that number under a different name. These are kept out of
+        # the range tests pick their own numbers from.
         self.in_person_buyer = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
@@ -9833,22 +9845,30 @@ class WebSocketConsumerTests(TransactionTestCase):
         )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+            user=self.admin_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            is_admin=True,
+            bidder_number="501",
         )
         self.admin_in_person_tos = AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+            user=self.admin_user,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            is_admin=True,
+            bidder_number="502",
         )
         self.online_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location
+            user=self.user, auction=self.online_auction, pickup_location=self.location, bidder_number="503"
         )
         self.in_person_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location, bidder_number="504"
         )
         self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.online_auction, pickup_location=self.location
+            user=self.userB, auction=self.online_auction, pickup_location=self.location, bidder_number="505"
         )
         self.tosC = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location, bidder_number="506"
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
