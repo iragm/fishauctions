@@ -38,9 +38,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.56
+boto3==1.43.62
     # via django-ses
-botocore==1.43.56
+botocore==1.43.62
     # via
     #   boto3
     #   s3transfer
@@ -94,7 +94,7 @@ crispy-bootstrap5==2026.3
     # via -r requirements.in
 cron-descriptor==1.4.5
     # via django-celery-beat
-cryptography==49.0.0
+cryptography==50.0.0
     # via
     #   -r requirements.in
     #   django-encrypted-model-fields
@@ -149,7 +149,7 @@ django-celery-beat==2.9.0
     # via -r requirements.in
 django-chartjs==2.3.0
     # via -r requirements.in
-django-crispy-forms==2.6
+django-crispy-forms==2.7
     # via
     #   -r requirements.in
     #   crispy-bootstrap5
@@ -283,7 +283,7 @@ linkify-it-py==2.1.0
     # via django-markdownfield
 mailchimp-marketing==3.0.80
     # via -r requirements.in
-markdown==3.10.2
+markdown==3.10.3
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via
@@ -382,7 +382,7 @@ pyjwt[crypto]==2.13.0
     #   -r requirements.in
     #   djangorestframework-simplejwt
     #   firebase-admin
-pyopenssl==26.3.0
+pyopenssl==26.4.0
     # via -r requirements.in
 pyparsing==3.3.2
     # via -r requirements.in
@@ -412,7 +412,7 @@ pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   uvicorn
-redis==8.0.1
+redis==8.1.0
     # via
     #   -r requirements.in
     #   channels-redis
@@ -499,7 +499,7 @@ urllib3==2.7.0
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.51.0
+uvicorn[standard]==0.52.1
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -521,7 +521,7 @@ webencodings==0.5.1
     #   cssselect2
     #   tinycss2
     #   tinyhtml5
-websockets==16.1.1
+websockets==17.0.1
     # via uvicorn
 yarl==1.24.5
     # via aiohttp
