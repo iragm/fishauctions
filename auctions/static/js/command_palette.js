@@ -1038,6 +1038,56 @@
       }
     }
 
+    // What to say when the recognizer refuses. The app sends its own written sentence with the
+    // error ("Microphone access is off for this app…") and that is shown as it arrives; the browser
+    // sends a code and an empty message, so the codes it can raise are written out here. Anything
+    // unrecognised gets the generic line rather than a code the user can't act on.
+    var MIC_ERROR_MESSAGES = {
+      "not-allowed":
+        "Microphone access is off for this site. Turn it on in your browser settings, then tap the mic again.",
+      "service-not-allowed": "This browser wouldn't start speech recognition. You can still type your command.",
+      "audio-capture": "No microphone was found. Check that one is connected and not in use by another app.",
+      network: "Speech recognition needs a connection and couldn't reach one. You can still type your command.",
+      "language-not-supported":
+        "Speech recognition doesn't handle this page's language. You can still type your command.",
+    };
+
+    // Two errors are never worth reporting, message or no message: "aborted" is us -- stopListening()
+    // calls stop(), and the ordinary way that happens is the user typing while the mic is on -- and
+    // "no-speech" is a microphone that heard nothing. Putting a red box in front of somebody for
+    // either one would fire on the most common path there is.
+    var MIC_ERRORS_NOT_WORTH_SAYING = { aborted: true, "no-speech": true };
+
+    function micErrorMessage(event) {
+      var code = (event && event.error) || "";
+      if (MIC_ERRORS_NOT_WORTH_SAYING[code] === true) {
+        return "";
+      }
+      if (event && event.message) {
+        return event.message;
+      }
+      return typeof MIC_ERROR_MESSAGES[code] === "string"
+        ? MIC_ERROR_MESSAGES[code]
+        : "The microphone didn't start. You can still type your command.";
+    }
+
+    // A refused microphone and a broken button look identical unless the reason is on screen, so it
+    // goes at the top of the results pane, where the answer it replaces would have been. Inserted
+    // rather than replacing: anything already listed stays there to be clicked, and the next
+    // keystroke's search empties the box anyway. Only ever one at a time.
+    function showMicError(message) {
+      if (!message) {
+        return;
+      }
+      var previous = results.querySelector(".cp-mic-error");
+      if (previous) {
+        previous.parentNode.removeChild(previous);
+      }
+      var note = renderNote(message, "danger", "bi-exclamation-triangle-fill");
+      note.classList.add("cp-mic-error");
+      results.insertBefore(note, results.firstChild);
+    }
+
     function buildRecognition() {
       var speech = new SpeechRecognition();
       speech.continuous = false;
@@ -1071,8 +1121,9 @@
       speech.addEventListener("end", function () {
         setListening(false);
       });
-      speech.addEventListener("error", function () {
+      speech.addEventListener("error", function (event) {
         setListening(false);
+        showMicError(micErrorMessage(event));
       });
       return speech;
     }
@@ -1098,9 +1149,13 @@
       paletteMic.addEventListener("click", onMicClick);
     }
 
-    if (assistEnabled && SpeechRecognition && paletteMic) {
-      enableMic();
-    } else if (assistEnabled && paletteMic && appBridge()) {
+    // The bridge is asked first, ahead of any feature detection: inside the app the phone's own
+    // recognizer is the right answer whatever the WebView's engine claims to have. Android's System
+    // WebView *defines* webkitSpeechRecognition and cannot use it -- the Blink binding is exposed,
+    // but WebView never wires it to a recognition service, and the shell denies the page's own
+    // microphone request besides -- so taking that branch gives an immediate error from start() and
+    // a mic button that does nothing when tapped. Presence is not capability.
+    if (assistEnabled && paletteMic && appBridge()) {
       // The app's answer is async (it asks the OS whether a recognition service exists), so the
       // button is revealed on the reply rather than synchronously. A build without the handlers
       // resolves nothing useful and the button stays hidden, exactly as it does in a browser
@@ -1124,6 +1179,8 @@
           })
           .catch(function () {});
       }
+    } else if (assistEnabled && SpeechRecognition && paletteMic) {
+      enableMic();
     }
 
     // The palette is open and the user used the mic last time, so switch it on for them. Delayed a

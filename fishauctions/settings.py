@@ -586,6 +586,25 @@ SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 # when behind a reverse proxy
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# HSTS tells browsers to refuse plain http for this hostname, closing the window where a
+# cookie-bearing request reaches port 80 before nginx's 301. Django only emits it on secure
+# requests, which is why it belongs next to SECURE_PROXY_SSL_HEADER -- that setting is what makes
+# request.is_secure() true behind nginx/Cloudflare.
+#
+# Off by default and driven by env rather than DEBUG, deliberately. The header is sticky: a browser
+# that receives it will not speak http to that hostname until max-age expires, and a lowered
+# max-age only reaches a visitor when they next load a page. So it is ramped per environment --
+# 3600, then 86400, then 604800, then 31536000 once it has ridden a week without trouble -- which
+# is an .env edit instead of four deploys. DEBUG would be the wrong gate: dev boxes mirroring the
+# prod compose config run DEBUG=False over https on 127.0.0.1, and pinning HSTS to that shared
+# hostname would break every other local project served over plain http.
+#
+# Leave INCLUDE_SUBDOMAINS off until every subdomain is confirmed https-only, and PRELOAD off
+# unless you accept that getting back off the preload list takes months.
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = parse_bool_env(os.environ.get("SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=False)
+SECURE_HSTS_PRELOAD = parse_bool_env(os.environ.get("SECURE_HSTS_PRELOAD"), default=False)
+
 # Sign in with Apple. Two different identifiers, and mixing them up is the classic way a native
 # Apple integration fails: the *web* OAuth flow is a Services ID, while the token the iOS app gets
 # natively is issued to the app's **bundle id**. Both are valid audiences for the same Apple ID, so

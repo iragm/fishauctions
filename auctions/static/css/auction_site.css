@@ -379,9 +379,18 @@ a.ad:hover {
    lifecycle fights being opened from an htmx:afterSwap handler.
    --------------------------------------------------------------------------- */
 
+/* The four offsets are spelled out rather than using `inset: 0`.  An engine that doesn't
+   know the shorthand (Safari below 14.1, iOS below 14.5, older Android WebViews -- the app
+   renders this page in one) drops the whole declaration, and a fixed box with auto offsets
+   sits at its static position: the panel then renders in the flow at the bottom of the page,
+   below the table, instead of over it.  Nothing else in this file uses `inset`, so this was
+   the only feature that broke that way. */
 .speaker-panel-shell {
     position: fixed;
-    inset: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
     z-index: 1045;
 }
 
@@ -391,7 +400,10 @@ a.ad:hover {
 
 .speaker-panel-backdrop {
     position: absolute;
-    inset: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
     background: rgba(0, 0, 0, 0.5);
     opacity: 0;
     transition: opacity 0.25s ease-out;
@@ -406,7 +418,10 @@ a.ad:hover {
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(38rem, 100%);
+    /* width + max-width rather than min(): same result, and the vendor Bootstrap build uses
+       neither min() nor inset, so this file shouldn't be the one thing an older engine trips on. */
+    width: 38rem;
+    max-width: 100%;
     background: #303030;
     border-left: 1px solid #444;
     overflow-y: auto;

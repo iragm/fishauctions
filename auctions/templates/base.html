@@ -84,6 +84,19 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
         {% endif %}
         {% endblock %}
+        {% comment %}
+        Cookies we set from JS get Secure whenever the page is https, so they can't be read off -- or
+        overwritten on -- a plain-http request. Port 80 still answers with a 301 and we don't send HSTS,
+        so that cleartext request is reachable. Secure is skipped on http to keep local dev on port 80
+        working; this mirrors SESSION_COOKIE_SECURE in settings.py. Deliberately outside core_js so a
+        template overriding that block can't drop it.
+        {% endcomment %}
+        <script type="text/javascript">
+          function setSiteCookie(name, value) {
+            const secure = window.location.protocol === "https:" ? "; Secure" : "";
+            document.cookie = name + "=" + value + "; SameSite=Strict; path=/" + secure;
+          }
+        </script>
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}
         <script>
@@ -396,7 +409,7 @@ window.onload = function() {
         <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="{% url 'tos' %}">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
           function agreeTos() {
-            document.cookie = "hide_tos_banner=true; SameSite=Strict; path=/";
+            setSiteCookie("hide_tos_banner", "true");
             window.location.reload();
           }
         </script>
@@ -410,7 +423,7 @@ window.onload = function() {
                 if (!tz) {
                   throw "Unable to set time zone";
                 }
-                document.cookie = "user_timezone=" + tz + "; SameSite=Strict; path=/";
+                setSiteCookie("user_timezone", tz);
               } catch(e) {}
             });
           </script>
@@ -433,8 +446,8 @@ window.onload = function() {
         function setLocation(){
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(function(data){
-              document.cookie = "latitude=" + data.coords['latitude'] + "; SameSite=Strict; path=/";
-              document.cookie = "longitude=" + data.coords['longitude'] + "; SameSite=Strict; path=/";
+              setSiteCookie("latitude", data.coords['latitude']);
+              setSiteCookie("longitude", data.coords['longitude']);
               window.location.reload();
             });
           } else {
