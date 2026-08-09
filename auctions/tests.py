@@ -7084,6 +7084,74 @@ class InvoiceViewTests(StandardTestCase):
         assert amount_value in ["", None]
 
 
+class MyInvoicesListTests(StandardTestCase):
+    """/invoices/ -- the user's own invoice list, an htmx table sorted newest first"""
+
+    def setUp(self):
+        super().setUp()
+        # A second invoice for the same user, deliberately created out of date order so that
+        # "newest first" can't pass by accident on insertion order.
+        self.older_invoice = self.invoice
+        self.newer_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        Invoice.objects.filter(pk=self.older_invoice.pk).update(
+            date=timezone.now() - datetime.timedelta(days=10),
+        )
+        Invoice.objects.filter(pk=self.newer_invoice.pk).update(date=timezone.now())
+
+    def invoice_pks(self, response):
+        return [row.record.pk for row in response.context["table"].rows]
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code in [301, 302, 403]
+
+    def test_default_sort_is_newest_first(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code == 200
+        self.assertEqual(response.context["table"].order_by, ("-date",))
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk, self.older_invoice.pk])
+
+    def test_date_column_can_be_sorted_oldest_first(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"sort": "date"})
+        self.assertEqual(self.invoice_pks(response), [self.older_invoice.pk, self.newer_invoice.pk])
+
+    def test_other_users_invoices_are_not_listed(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert self.invoiceB.pk not in self.invoice_pks(response)
+
+    def test_query_filters_by_auction_name(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "in-person"})
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk])
+
+    def test_query_filters_by_status_word(self):
+        Invoice.objects.filter(pk=self.newer_invoice.pk).update(status="PAID")
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "paid"})
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk])
+
+    def test_htmx_request_returns_only_the_table(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), HTTP_HX_REQUEST="true")
+        assert response.status_code == 200
+        self.assertNotContains(response, "<html")
+        self.assertContains(response, f"/invoices/{self.newer_invoice.pk}/")
+
+    def test_user_with_no_invoices_sees_the_empty_state(self):
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code == 200
+        self.assertContains(response, "any invoices yet")
+
+    def test_no_search_results_says_so(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "nothing matches this"})
+        self.assertContains(response, "No invoices match")
+
+
 class InvoiceStatusButtonTests(StandardTestCase):
     """Test invoice status buttons can be clicked and update correctly"""
 

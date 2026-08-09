@@ -14,6 +14,7 @@ from .models import (
     ClubBapCategoryOverride,
     ClubHistory,
     ClubMember,
+    Invoice,
     Lot,
     Speaker,
 )
@@ -379,6 +380,68 @@ class AuctionHTMxTable(tables.Table):
             # 'hx-trigger':"click",
             # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
         }
+
+
+class InvoiceHTMxTable(tables.Table):
+    """The current user's own invoices -- /invoices/
+
+    Sorted newest first by default (Meta.order_by); every column here is backed by a real
+    database field so each header is a working sort, not just a label.
+    """
+
+    #: status code -> badge class.  Success fills need dark text, see style_reference.md.
+    STATUS_BADGES = {
+        "DRAFT": "bg-secondary",
+        "UNPAID": "bg-info",
+        "PAID": "bg-success text-dark",
+    }
+
+    # These two accessors are `pk` rather than the field they display: django-tables2 skips
+    # render_*() entirely when the accessed value is empty, and both an auction-less invoice
+    # and an unstamped calculated_total are empty.  pk is never empty, so render always runs
+    # and order_by carries the real sort.
+    invoice = tables.Column(accessor="pk", verbose_name="Invoice", order_by=("auction__title",))
+    total = tables.Column(accessor="pk", verbose_name="Total", order_by=("calculated_total",))
+    status = tables.Column(accessor="status", verbose_name="Status")
+    date = tables.Column(accessor="date", verbose_name="Date")
+
+    def render_invoice(self, value, record):
+        return format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.label or str(record))
+
+    def render_total(self, value, record):
+        """Money the user owes the club shows red and parenthesized, a payout owed to them plain.
+
+        `calculated_total` is the stamped copy of `rounded_net`, so reading it here keeps the
+        displayed number and the column's sort in agreement -- and spares this page the handful
+        of queries per row that recomputing `net` costs.  It is only ever NULL on a draft that
+        was never recalculated, which is the one case that falls back.
+        """
+        amount = record.calculated_total
+        if amount is None:
+            amount = record.rounded_net
+        # format_html() escapes its arguments into SafeString first, which has no numeric
+        # format codes, so the rounding has to happen before it gets there.
+        if amount < 0:
+            return format_html("<span class='text-danger'>({}{})</span>", record.currency_symbol, f"{abs(amount):.2f}")
+        return format_html("{}{}", record.currency_symbol, f"{amount:.2f}")
+
+    def render_status(self, value, record):
+        return format_html(
+            "<span class='badge {}'>{}</span>",
+            self.STATUS_BADGES.get(value, "bg-secondary"),
+            record.get_status_display(),
+        )
+
+    class Meta:
+        model = Invoice
+        template_name = "tables/bootstrap_htmx.html"
+        fields = (
+            "invoice",
+            "total",
+            "status",
+            "date",
+        )
+        order_by = "-date"
 
 
 class LotHTMxTableForUsers(tables.Table):

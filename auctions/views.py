@@ -122,6 +122,7 @@ from .filters import (
     ClubBapLotFilter,
     ClubHistoryFilter,
     ClubMemberFilter,
+    InvoiceFilter,
     LotAdminFilter,
     LotFilter,
     SpeakerFilter,
@@ -284,6 +285,7 @@ from .tables import (
     ClubBapLotHTMxTable,
     ClubHistoryHTMxTable,
     ClubMemberHTMxTable,
+    InvoiceHTMxTable,
     LotHTMxTable,
     LotHTMxTableForUsers,
     SpeakerHTMxTable,
@@ -9997,22 +9999,51 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
-class Invoices(ListView, LoginRequiredMixin):
+class Invoices(LoginRequiredMixin, HTMxTableView):
     """Get all invoices for the current user"""
 
     model = Invoice
+    table_class = InvoiceHTMxTable
+    filterset_class = InvoiceFilter
     template_name = "all_invoices.html"
-    ordering = ["-date"]
+    filter_placeholder_text = "Search your invoices"
 
     def get_queryset(self):
-        qs = Invoice.objects.filter(
-            Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
-        ).order_by("-date")
-        return qs
+        """Newest first.
 
-    # def get_context_data(self, **kwargs):
-    #     context = super().get_context_data(**kwargs)
-    #     return context
+        The table's own default sort (`InvoiceHTMxTable.Meta.order_by`) is the one that
+        actually decides what the page opens on; this order_by keeps the queryset itself
+        sensible for anything reading it without the table.
+        """
+        return (
+            Invoice.objects.filter(
+                Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
+            )
+            .select_related("auction", "auction__club", "auctiontos_user")
+            .order_by("-date")
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        filterset = context.get("filter")
+        if filterset is not None and not filterset.qs.exists():
+            context["no_results"] = self._build_no_results_html()
+        return context
+
+    def _build_no_results_html(self):
+        """Empty state: nothing matched a search, or there is nothing here at all yet."""
+        query = (self.request.GET.get("query") or "").strip()
+        if query:
+            return format_html(
+                "<div class='text-center text-muted p-4'>No invoices match <strong>{}</strong>.</div>", query
+            )
+        return (
+            "<div class='text-center text-muted p-4'>"
+            "<i class='bi bi-bag fs-1 d-block mb-2'></i>"
+            "<p class='mb-0'>You don't have any invoices yet. An invoice is created automatically "
+            "once you buy or sell a lot in an auction.</p>"
+            "</div>"
+        )
 
 
 class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):

@@ -28,6 +28,7 @@ from .models import (
     Category,
     ClubHistory,
     ClubMember,
+    Invoice,
     Location,
     Lot,
     LotPosition,
@@ -451,6 +452,54 @@ class AuctionHistoryFilter(django_filters.FilterSet):
 
     def auction_history_search(self, queryset, name, value):
         return self.generic(queryset, value)
+
+
+class InvoiceFilter(django_filters.FilterSet):
+    """Filter the current user's own invoices -- one text box, no dropdowns.
+
+    The box searches the auction (and its club) by name.  It also understands the status
+    words, typed as they're displayed, because "paid" is the thing people actually come to
+    this page looking for and it isn't a word that appears in any auction title we'd want
+    to match instead.
+    """
+
+    #: what someone would type -> status stored on the invoice
+    STATUS_TOKENS = {
+        "open": "DRAFT",
+        "draft": "DRAFT",
+        "ready": "UNPAID",
+        "unpaid": "UNPAID",
+        "paid": "PAID",
+    }
+
+    query = django_filters.CharFilter(
+        method="invoice_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Type to filter...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+                "hx-indicator": ".progress",
+            }
+        ),
+    )
+
+    class Meta:
+        model = Invoice
+        fields = []  # nothing here so no buttons show up
+
+    def invoice_search(self, queryset, name, value):
+        value = value.strip()
+        if not value:
+            return queryset
+        search = Q(auction__title__icontains=value) | Q(auction__club__name__icontains=value)
+        status = self.STATUS_TOKENS.get(value.lower())
+        if status:
+            search |= Q(status=status)
+        return queryset.filter(search)
 
 
 class LotFilter(django_filters.FilterSet):
