@@ -302,6 +302,19 @@ a.ad:hover {
     transition: width 0.1s linear;
 }
 
+/* Voice settings panel. Capped rather than full-bleed: it is read on a phone held in one hand
+   while an auction runs, and a slider stretched across a tablet in landscape makes a 0.01 step
+   into a pixel of travel. */
+.voice-settings {
+    max-width: 28rem;
+}
+
+/* The end labels are the slider's only reading -- it shows no number on purpose -- so keep them
+   tight under the track rather than floating between it and the help text. */
+.voice-settings .form-range {
+    margin-bottom: 0.25rem;
+}
+
 /* --- Command palette: voice + assist -------------------------------------- */
 
 /* The microphone lives inside the palette (see command_palette.html for its styles); there is

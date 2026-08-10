@@ -4,9 +4,10 @@ import datetime
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.db.models import Count
 from django.http import HttpResponse
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from .models import (
     FAQ,
@@ -658,17 +659,68 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
         return not VoiceGrammar.objects.exists()
 
 
+class VoiceOutcomeFilter(admin.SimpleListFilter):
+    """Split the log by what actually happened, which the ``slot`` filter can't do.
+
+    "Nothing matched" is a blank slot, and blank isn't one of the field's choices, so it would
+    otherwise be unreachable — despite being the pile worth reading first.
+    """
+
+    title = "outcome"
+    parameter_name = "outcome"
+
+    def lookups(self, request, model_admin):
+        return [
+            ("unmatched", "Nothing matched"),
+            ("corrected", "Filled in, then corrected"),
+            ("stood", "Filled in, and it stood"),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == "unmatched":
+            return queryset.filter(slot="")
+        if self.value() == "corrected":
+            return queryset.exclude(corrected_to="")
+        if self.value() == "stood":
+            return queryset.exclude(slot="").filter(corrected_to="")
+        return queryset
+
+
+@admin.action(description="Count what was heard")
+def count_what_was_heard(modeladmin, request, queryset):
+    """Group the selected rows by ``heard`` and show the commonest first.
+
+    This is the query the log exists to answer: select the "Nothing matched" rows and the phrases at
+    the top of this list are the words the auctioneer keeps saying that the grammar has never heard
+    of. Each one is an ``anchors`` entry in Voice grammar, and ships without an app release.
+    """
+    counts = queryset.values("heard").annotate(times=Count("id")).order_by("-times", "heard")[:25]
+    if not counts:
+        messages.warning(request, "Nothing selected to count.")
+        return
+    messages.info(
+        request,
+        format_html(
+            "Commonest of the {} selected: {}",
+            queryset.count(),
+            format_html_join(", ", "{} × “{}”", ((row["times"], row["heard"] or "(silence)") for row in counts)),
+        ),
+    )
+
+
 @admin.register(VoiceCommandLog)
 class VoiceCommandLogAdmin(admin.ModelAdmin):
     """What voice heard, what it filled in, and what the operator changed it to.
 
-    The tuning queue: filter to rows with a correction (search a value in ``corrected_to``, or sort
-    by it) and each one names a word the grammar gets wrong. Fix it in Voice grammar above.
-    Read-only — these are observations, and editing them would only corrupt the sample.
+    The tuning queue, in two piles. Filter to rows with a correction (or search a value in
+    ``corrected_to``) and each one names a word the grammar gets *wrong*. Filter to "Nothing
+    matched" and each one names a word the grammar has never heard of at all — select them and run
+    "Count what was heard" to see which phrases keep coming back. Both are fixed in Voice grammar
+    above. Read-only — these are observations, and editing them would only corrupt the sample.
     """
 
     list_display = ("createdon", "auction", "user", "slot", "heard", "chosen", "confidence", "corrected_to")
-    list_filter = ("slot", "auction")
+    list_filter = (VoiceOutcomeFilter, "slot", "auction")
     search_fields = ("heard", "chosen", "corrected_to", "user__username", "auction__title")
     raw_id_fields = ("auction", "user")
     readonly_fields = (
@@ -683,7 +735,7 @@ class VoiceCommandLogAdmin(admin.ModelAdmin):
         "updatedon",
     )
     date_hierarchy = "createdon"
-    actions = [export_to_csv]
+    actions = [count_what_was_heard, export_to_csv]
 
     def has_add_permission(self, request):
         return False

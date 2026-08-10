@@ -12311,13 +12311,19 @@ class VoiceCommandLog(models.Model):
     that field before saving, which makes "the word we get wrong most often" a query rather than a
     hunch, and every fix an edit to :class:`VoiceGrammar`.
 
-    Written by the page (it is the side that sees both the command and the correction), so it is
-    session-authenticated and scoped to an auction the user administers.
+    A blank ``slot`` is the other half of that, and the more useful one: an utterance that matched
+    *nothing*. "Bitter" for "bidder" opens no slot, produces no command and reaches no table, so a
+    log of accepted commands can only ever return words we already handle. Group the blank-slot rows
+    by ``heard`` and order by count, and anything frequent is a word to add to ``anchors``.
+
+    Written by the page (it is the side that sees the command, the correction, and the transcript
+    that led nowhere), so it is session-authenticated and scoped to an auction the user administers.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-    slot = models.CharField(max_length=20, choices=voice.SLOT_CHOICES)
+    slot = models.CharField(max_length=20, choices=voice.SLOT_CHOICES, blank=True, default="")
+    slot.help_text = "Which field was filled. Blank means nothing matched — those are the rows to mine for new words."
     heard = models.CharField(max_length=300, blank=True, default="")
     heard.help_text = "The recognizer's transcript of what was said."
     chosen = models.CharField(max_length=100, blank=True, default="")
@@ -12332,6 +12338,8 @@ class VoiceCommandLog(models.Model):
         ordering = ["-createdon"]
 
     def __str__(self):
+        if self.nothing_matched:
+            return f"nothing matched: heard '{self.heard}'"
         result = f"{self.slot}: heard '{self.heard}' → {self.chosen}"
         if self.corrected_to:
             result += f" (corrected to {self.corrected_to})"
@@ -12340,6 +12348,11 @@ class VoiceCommandLog(models.Model):
     @property
     def was_corrected(self):
         return bool(self.corrected_to)
+
+    @property
+    def nothing_matched(self):
+        """No slot was opened: the recognizer heard this and the grammar had nothing for it."""
+        return not self.slot
 
 
 #: How long a speaker counts as a new arrival, for the "New" badge in the directory.

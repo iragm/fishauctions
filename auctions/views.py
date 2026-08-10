@@ -5028,12 +5028,29 @@ class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
     speech engine — it was having no record of *what* it misheard, which left grammar changes as
     guesswork. Every row with a ``corrected_to`` names a word to fix in the Voice grammar admin.
 
+    A post with no ``slot`` is the utterance that matched nothing, which is the row we most needed
+    and never had: a log of accepted commands can only return words that already work. Those are
+    rate-limited per session in :func:`auctions.voice.log_unmatched`, because a continuous
+    recognizer hears the room and would otherwise file a transcript of the whole auction.
+
     Admin-only via ``AuctionViewMixin`` (which raises PermissionDenied for non-admins), and
-    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out, and never an error that
-    could interrupt a sale.
+    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out (``null`` when the row was
+    dropped), and never an error that could interrupt a sale.
     """
 
     def post(self, request, *args, **kwargs):
+        if not request.POST.get("slot", ""):
+            return JsonResponse(
+                {
+                    "id": voice.log_unmatched(
+                        request.user,
+                        self.auction,
+                        heard=request.POST.get("heard", ""),
+                        confidence=request.POST.get("confidence"),
+                        session_key=request.session.session_key or "",
+                    )
+                }
+            )
         log_id = request.POST.get("id")
         try:
             log_id = int(log_id) if log_id else None

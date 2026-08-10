@@ -8,9 +8,12 @@ an app release. ``GET /api/mobile/config/`` serves the block from
 :class:`~auctions.models.VoiceGrammar`; the app merges it over the defaults it ships with, so a
 deployment that has never touched the admin page still works.
 
-Nothing in here imports models — ``models.py`` uses these functions as JSONField defaults, so they
-have to stay importable from it (and stay put: migrations reference them by dotted path).
+Nothing in here imports models at module level — ``models.py`` uses these functions as JSONField
+defaults, so they have to stay importable from it (and stay put: migrations reference them by
+dotted path).
 """
+
+from django.core.cache import cache
 
 # How the app should listen. 'platform' is the phone's own recognizer; 'biased' feeds it the
 # auction's vocabulary as a contextual hint where the OS supports that; 'cloud' is a server-side
@@ -48,6 +51,20 @@ SLOT_CHOICES = [
     (SLOT_CONFIRM, "Confirm"),
 ]
 SLOTS = [slot for slot, _label in SLOT_CHOICES]
+
+# An utterance that opened no slot is stored with the slot left blank. Those rows are the whole
+# reason the log is honest: "bitter" for "bidder" matched nothing, produced no command and reached
+# no table, so a log of accepted commands can only ever show words we already handle. Group these by
+# `heard`, order by count, and anything frequent is a candidate anchor synonym — a VoiceGrammar edit
+# that ships without an app release.
+SLOT_UNMATCHED = ""
+
+# What an unmatched utterance has to clear to be worth a row. The recognizer listens continuously
+# and hears the whole room, so most of what it transcribes was never addressed to the app; logging
+# every phrase would bury the misheard commands under a transcript of the auction hall. One row per
+# session per interval, and only for something long enough to be a command in the first place.
+UNMATCHED_MIN_SECONDS = 5
+UNMATCHED_MIN_TOKENS = 2
 
 
 def default_anchors():
@@ -141,6 +158,14 @@ def default_thresholds():
     return {"confident": 0.85, "unsure": 0.5}
 
 
+def _as_confidence(value):
+    """A score as a float, or None for anything that isn't one. Never raises: see ``log_command``."""
+    try:
+        return None if value in (None, "") else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", confidence=None, corrected_to=""):
     """Record (or amend) one voice command the set-winners page acted on. Returns the row's id.
 
@@ -160,11 +185,8 @@ def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", con
         "heard": str(heard or "")[:300],
         "chosen": str(chosen or "")[:100],
         "corrected_to": str(corrected_to or "")[:100],
+        "confidence": _as_confidence(confidence),
     }
-    try:
-        fields["confidence"] = None if confidence in (None, "") else float(confidence)
-    except (TypeError, ValueError):
-        fields["confidence"] = None
 
     if log_id:
         existing = VoiceCommandLog.objects.filter(pk=log_id, auction=auction, user=user).first()
@@ -177,6 +199,42 @@ def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", con
             existing.save()
             return existing.pk
     return VoiceCommandLog.objects.create(auction=auction, user=user, slot=slot, **fields).pk
+
+
+def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
+    """Record one utterance that matched nothing — the row a log of accepted commands can't hold.
+
+    Written for a final transcript that produced no command at all (``confidence`` None: there was
+    no score, because nothing scored), and for one that produced a command below the ``unsure``
+    cutoff, which is a near miss and names a word the grammar nearly knows. The slot is blank
+    because none was opened, and ``chosen`` stays blank because nothing was filled in.
+
+    Dropped rather than logged when the utterance is shorter than :data:`UNMATCHED_MIN_TOKENS`
+    words, or when this session already logged one inside :data:`UNMATCHED_MIN_SECONDS` — the page
+    applies the same two rules before posting, and this is the side that decides, because the table
+    is the thing being protected. Returns the row's id, or None when it was dropped.
+
+    Never raises for bad input, for the reason :func:`log_command` doesn't: losing a sale to a
+    logging error would be a considerably worse bug than losing the sample.
+    """
+    from auctions.models import VoiceCommandLog
+
+    heard = " ".join(str(heard or "").split())[:300]
+    if len(heard.split(" ")) < UNMATCHED_MIN_TOKENS:
+        return None
+    # cache.add only succeeds when nothing is there and the key expires by itself, so the rate limit
+    # needs no window stored anywhere and nothing to clean up. Per session rather than per user: an
+    # operator running two handsets is two microphones in two parts of the room, not one.
+    scope = session_key or f"user-{getattr(user, 'pk', '')}"
+    if not cache.add(f"voice-unmatched:{auction.pk}:{scope}", 1, UNMATCHED_MIN_SECONDS):
+        return None
+    return VoiceCommandLog.objects.create(
+        auction=auction,
+        user=user,
+        slot=SLOT_UNMATCHED,
+        heard=heard,
+        confidence=_as_confidence(confidence),
+    ).pk
 
 
 def serialize_grammar(grammar):

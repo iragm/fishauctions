@@ -180,6 +180,12 @@
   let voiceLogIds = {};
   let voiceUnsure = {};
   let voiceListening = false;
+  // The cutoff between "filled it in" and "filled it in, look at this". Starts at the admin's
+  // grammar, which is what the app runs on until someone touches it, and is replaced by the
+  // device's own confident_at as soon as the app reports one (VOICE-7) -- otherwise the slider
+  // would move the app's threshold while the amber flag on this page kept using the site's, and
+  // the operator would drag it and watch nothing change.
+  let voiceConfidentAt = voiceConfig.confident;
 
   function voiceStatus(text) {
     $("#voice-status").text(text || '');
@@ -195,9 +201,7 @@
     sale, and a missing row only costs us one sample. Passing the returned id back with
     corrected_to is what pairs a correction with the command that caused it.
   {% endcomment %}
-  function voiceLogCommand(slot, fields, onSaved) {
-    if (!slot) { return; }
-    const data = $.extend({slot: slot}, fields);
+  function voicePostLog(data, onSaved) {
     $.ajax({
       url: "{% url 'auction_voice_command_log' slug=auction.slug %}",
       method: 'POST',
@@ -210,6 +214,71 @@
       },
       error: function () {}
     });
+  }
+
+  function voiceLogCommand(slot, fields, onSaved) {
+    if (!slot) { return; }
+    voicePostLog($.extend({slot: slot}, fields), onSaved);
+  }
+
+  {% comment %}
+    VOICE-6: the utterances that matched nothing. Everything above logs commands the page acted on,
+    which means the log can only ever return words that already work -- "bitter" for "bidder" opened
+    no slot, produced no command, and was the row we most needed. So a final transcript that draws
+    no command inside voiceUnmatchedGraceMs gets logged with no slot and no confidence, and one that
+    draws a command below the unsure cutoff gets logged too, as the near miss it is.
+
+    Two rules keep this from filing a transcript of the room: two words minimum, and one row per
+    voiceUnmatchedMinSeconds. The server applies both again (it owns the table); doing it here as
+    well just saves the request. The grace timer exists because the command event follows its
+    transcript rather than arriving with it -- there is nothing else to pair them by.
+  {% endcomment %}
+  const voiceUnmatchedMinSeconds = 5;
+  const voiceUnmatchedMinTokens = 2;
+  const voiceUnmatchedGraceMs = 1200;
+  let voicePendingTranscript = null;
+  let voiceLastUnmatchedAt = 0;
+
+  function voiceForgetTranscript() {
+    if (voicePendingTranscript) { clearTimeout(voicePendingTranscript.timer); }
+    voicePendingTranscript = null;
+  }
+
+  function voiceLogUnmatched(text, confidence) {
+    if (Date.now() - voiceLastUnmatchedAt < voiceUnmatchedMinSeconds * 1000) { return; }
+    voiceLastUnmatchedAt = Date.now();
+    const data = {heard: text};
+    if (typeof confidence === 'number') { data.confidence = confidence; }
+    voicePostLog(data);
+  }
+
+  function voiceHeardTranscript(text, partial) {
+    if (partial) { return; }
+    voiceForgetTranscript();
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    // One word is as likely to be someone walking past the phone as a command, and the room never
+    // stops talking. Below two, nothing is worth writing down.
+    if (words.length < voiceUnmatchedMinTokens) { return; }
+    const heard = words.join(' ');
+    voicePendingTranscript = {
+      text: heard,
+      timer: setTimeout(function () {
+        voicePendingTranscript = null;
+        voiceLogUnmatched(heard, null);
+      }, voiceUnmatchedGraceMs)
+    };
+  }
+
+  function voiceSettleTranscript(confidence) {
+    // A command arrived for what was last heard, so this transcript is accounted for -- unless the
+    // app was barely sure of it, in which case it is a word the grammar nearly knows, and that is
+    // worth exactly as much as one it doesn't know at all.
+    const pending = voicePendingTranscript;
+    voiceForgetTranscript();
+    if (!pending) { return; }
+    if (typeof confidence === 'number' && confidence < voiceConfig.unsure) {
+      voiceLogUnmatched(pending.text, confidence);
+    }
   }
 
   function voiceClearUnsure(field) {
@@ -272,7 +341,7 @@
     // Fire the field's own blur: that already runs sendFormData() validation (which paints the
     // is-valid green, or red for a bidder who doesn't exist) and, for #lot, getLotPicture().
     $("#" + field).trigger('blur');
-    if (confidence >= voiceConfig.confident) {
+    if (confidence >= voiceConfidentAt) {
       voiceClearUnsure(field);
     } else {
       voiceShowUnsure(field, heard, value, candidates);
@@ -316,6 +385,7 @@
     const value = (event.value === null || event.value === undefined) ? '' : String(event.value);
     const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;
     const heard = event.heard || '';
+    voiceSettleTranscript(confidence);
     const field = voiceSlotToField[slot];
     if (field) {
       voiceFillField(slot, field, value, confidence, heard, event.candidates);
@@ -370,6 +440,54 @@
     // Unknown slot: ignore it. That's what lets either side add one without shipping the other.
   }
 
+  {% comment %}
+    VOICE-7: the settings panel. Three controls, all of which the app already answers -- it owns the
+    values and stores them per device, so nothing here is posted anywhere. voiceSetSettings merges
+    field by field and takes effect on the next utterance, so each control sends only itself and
+    nobody has to stop and restart listening to change their mind.
+  {% endcomment %}
+  function voiceRenderSettings(state) {
+    const settings = state && state.settings;
+    // An app build old enough to have no settings handlers answers without this block. Leave the
+    // button hidden rather than showing a control that leads to three dead inputs.
+    if (!settings) { return; }
+    $("#voice-settings-btn").removeClass('d-none');
+    const range = state.settings_range || {};
+    const slider = $("#voice-confident");
+    // Set the bounds before the value: the browser clamps to whatever min/max say at the time.
+    if (typeof range.confident_min === 'number') { slider.attr('min', range.confident_min); }
+    if (typeof range.confident_max === 'number') { slider.attr('max', range.confident_max); }
+    // The device's cutoff wins over the site's from here on: it is the one the operator can see
+    // and move, and green here has to mean what the slider says it means.
+    if (typeof settings.confident_at === 'number') { voiceConfidentAt = settings.confident_at; }
+    // Don't write to the slider while a thumb is on it -- a state event arriving mid-drag would
+    // yank it out from under them. The checkboxes have no such moment and are always written, so
+    // they show what is actually in force: the app can decline to process on this phone when the
+    // language pack turns out to be missing, and the box has to come back unticked when it does.
+    if (document.getElementById('voice-confident') !== document.activeElement
+        && typeof settings.confident_at === 'number') {
+      slider.val(settings.confident_at);
+    }
+    $("#voice-on-device").prop('checked', !!settings.prefer_on_device);
+    $("#voice-bias-low").prop('checked', !!settings.bias_low_prices);
+    // A note, not a gate: picking the smaller of two readings the recognizer already returned works
+    // on every phone, and that half of the setting is on whatever this says. What it reports is
+    // whether this device is also handed the auction's real lot and bidder numbers before it
+    // listens -- false until Listen has been tapped once, and false below Android 13, which has no
+    // way to be given a vocabulary at all.
+    $("#voice-bias-note").text(state.bias_supported
+      ? "This phone is also given the auction's own lot and bidder numbers to listen for."
+      : "Listening for this auction's own lot and bidder numbers needs one tap on Listen first, and Android 13 or newer.");
+  }
+
+  function voiceSaveSettings(patch) {
+    const bridge = voiceBridge();
+    if (!bridge) { return; }
+    bridge.callHandler('voiceSetSettings', patch).then(voiceRenderSettings).catch(function () {
+      voiceStatus('Could not save that setting');
+    });
+  }
+
   function voiceRenderState(state) {
     const listening = !!(state && state.listening);
     voiceListening = listening;
@@ -386,6 +504,10 @@
       $("#voice-level-bar").css('width', '0%');
       voiceStatus('');
     }
+    // voiceGetState carries the settings too, and so does what voiceStart answers with -- which is
+    // the moment bias_supported can first be true, since the app won't make a platform call on page
+    // load just to answer it. Harmless for the states that carry nothing.
+    voiceRenderSettings(state);
   }
 
   {% comment %}
@@ -409,6 +531,7 @@
         // v1 had no transcript and no meter, which made "dead microphone" and "bad model" look
         // exactly alike. Showing what was heard, even when nothing matched, is the difference.
         voiceStatus(event.text ? 'heard: "' + event.text + '"' : '');
+        voiceHeardTranscript(event.text, event.partial);
       } else if (event.type === 'command') {
         voiceHandleCommand(event);
       } else if (event.type === 'error') {
@@ -457,6 +580,27 @@
     $("#voice-first-run-dismiss").on('click', function () {
       $("#voice-first-run").addClass('d-none');
       try { window.localStorage.setItem(voiceHelpSeenKey, '1'); } catch (err) {}
+    });
+    $("#voice-settings-btn").on('click', function () {
+      const panel = $("#voice-settings");
+      const opening = panel.hasClass('d-none');
+      panel.toggleClass('d-none', !opening);
+      $(this).attr('aria-expanded', opening ? 'true' : 'false');
+      // Ask again on open rather than trusting what page load said: bias_supported flips to true
+      // the first time Listen is tapped, and the operator opening this panel is usually asking
+      // about exactly that.
+      if (opening) { bridge.callHandler('voiceGetSettings').then(voiceRenderSettings).catch(function () {}); }
+    });
+    // On release, not on every input event: a drag is dozens of events, and each one would be a
+    // platform call. The app merges what it gets, so each control sends only itself.
+    $("#voice-confident").on('change', function () {
+      voiceSaveSettings({confident_at: parseFloat(this.value)});
+    });
+    $("#voice-on-device").on('change', function () {
+      voiceSaveSettings({prefer_on_device: this.checked});
+    });
+    $("#voice-bias-low").on('change', function () {
+      voiceSaveSettings({bias_low_prices: this.checked});
     });
     // Typing over a field voice filled is the correction we most want to know about.
     $("#lot, #price, #winner").on('change', function () {
@@ -557,6 +701,7 @@ $(document).ready(function() {
   this button permanently on every phone that hadn't already granted the microphone.)
 {% endcomment %}
 <button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
+<button type="button" id="voice-settings-btn" class="btn btn-sm btn-outline-secondary ms-1 d-none" aria-expanded="false" aria-controls="voice-settings" aria-label="Voice settings"><i class="bi bi-sliders"></i></button>
 <span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>
 <small id="voice-status" class="ms-2 text-muted"></small>
 <div id="voice-first-run" class="alert alert-info mt-2 d-none" role="alert">
@@ -564,6 +709,37 @@ $(document).ready(function() {
   A phone in your pocket 20 ft from the podium can't hear well enough for this to work, and no
   amount of software fixes that. Use a Bluetooth headset or a clip-on mic, or hold the phone up.
   <button type="button" id="voice-first-run-dismiss" class="btn btn-sm btn-primary ms-2">Got it</button>
+</div>
+{% comment %}
+  Voice settings (VOICE-7). The operator tunes voice in the middle of a live auction, on the phone
+  in their hand, so this lives next to the microphone rather than in preferences. The app owns these
+  settings and stores them per device on purpose: they describe this phone in this room -- its
+  microphone, its language pack, its noise floor -- and syncing them to the account would fight an
+  operator running two handsets. Django stores nothing.
+
+  The slider deliberately shows no number. 0.72 means nothing to anyone; "how often do you want to
+  retype it" is the actual question, and the ends of the track ask it.
+{% endcomment %}
+<div id="voice-settings" class="voice-settings card card-body mt-2 d-none">
+  <label for="voice-confident" class="form-label mb-1">Filling in fields</label>
+  <input type="range" class="form-range" id="voice-confident" min="0.6" max="0.9" step="0.01">
+  <div class="d-flex justify-content-between">
+    <small class="text-muted">Fill it in, I'll check</small>
+    <small class="text-muted">Only when you're sure</small>
+  </div>
+  <small class="text-muted mt-1">How certain the app must be before it fills a field without flagging it. Lower catches more, and gets more wrong; higher means retyping more often.</small>
+  <div class="form-check mt-3">
+    <input class="form-check-input" type="checkbox" id="voice-on-device">
+    <label class="form-check-label" for="voice-on-device">Process on this phone</label>
+    <small class="text-muted d-block">Faster and works without a connection. Uncheck for better accuracy.</small>
+  </div>
+  <div class="form-check mt-3">
+    <input class="form-check-input" type="checkbox" id="voice-bias-low">
+    <label class="form-check-label" for="voice-bias-low">Bias towards lower numbers</label>
+    <small class="text-muted d-block">If in doubt, guess 17 instead of 70. Only for sell prices.</small>
+    <small class="text-muted d-block" id="voice-bias-note"></small>
+  </div>
+  <small class="text-muted mt-3">Saved on this phone only, not to your account.</small>
 </div>
 {% endif %}
 
