@@ -38,9 +38,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.62
+boto3==1.43.67
     # via django-ses
-botocore==1.43.62
+botocore==1.43.67
     # via
     #   boto3
     #   s3transfer
@@ -59,7 +59,7 @@ certifi==2026.7.22
     #   httpx
     #   mailchimp-marketing
     #   requests
-cffi==2.1.0
+cffi==2.1.1
     # via
     #   -r requirements.in
     #   cryptography
@@ -71,7 +71,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.4.3
+chardet==7.5.1
     # via -r requirements.in
 charset-normalizer==3.4.9
     # via
@@ -109,7 +109,7 @@ cssselect2==0.9.0
     # via weasyprint
 defusedxml==0.7.1
     # via -r requirements.in
-django==5.2.16
+django==5.2.17
     # via
     #   -r requirements.in
     #   channels
@@ -137,7 +137,7 @@ django==5.2.16
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-django-allauth==65.18.0
+django-allauth==65.19.0
     # via -r requirements.in
 django-autocomplete-light==5.0.0
     # via -r requirements.in
@@ -163,7 +163,7 @@ django-extensions==4.1
     # via -r requirements.in
 django-filter==26.1
     # via -r requirements.in
-django-htmx==1.28.0
+django-htmx==1.29.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
@@ -187,7 +187,7 @@ django-weasyprint==2.5.0
     # via -r requirements.in
 django-webpush==0.3.6
     # via -r requirements.in
-djangorestframework==3.17.1
+djangorestframework==3.18.0
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
@@ -203,34 +203,34 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core[grpc]==2.33.0
+google-api-core[grpc]==2.34.0
     # via
     #   firebase-admin
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.56.2
+google-auth==2.56.3
     # via
     #   -r requirements.in
     #   google-api-core
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-cloud-core==2.6.0
+google-cloud-core==2.6.1
     # via
     #   google-cloud-firestore
     #   google-cloud-storage
-google-cloud-firestore==2.28.0
+google-cloud-firestore==2.28.1
     # via firebase-admin
-google-cloud-storage==3.13.0
+google-cloud-storage==3.13.1
     # via firebase-admin
 google-crc32c==1.8.0
     # via
     #   google-cloud-storage
     #   google-resumable-media
-google-resumable-media==2.10.0
+google-resumable-media==2.10.1
     # via google-cloud-storage
-googleapis-common-protos==1.75.0
+googleapis-common-protos==1.75.1
     # via
     #   google-api-core
     #   grpcio-status
@@ -247,7 +247,7 @@ h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
-h2==4.4.0
+h2==4.4.1
     # via httpx
 heif-image-plugin==0.7.0
     # via -r requirements.in
@@ -315,7 +315,7 @@ oauthlib==3.3.1
     # via
     #   -r requirements.in
     #   requests-oauthlib
-packaging==26.2
+packaging==26.3
     # via
     #   -r requirements.in
     #   gunicorn
@@ -334,7 +334,7 @@ propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
-proto-plus==1.28.2
+proto-plus==1.28.3
     # via
     #   google-api-core
     #   google-cloud-firestore
@@ -369,7 +369,7 @@ pydantic-core==2.46.4
     # via
     #   pydantic
     #   squareup
-pydantic-settings==2.14.2
+pydantic-settings==2.15.0
     # via django-bootstrap-datepicker-plus
 pydyf==0.12.1
     # via weasyprint
@@ -406,7 +406,7 @@ python-dotenv==1.2.2
     #   uvicorn
 pytz==2026.3.post1
     # via -r requirements.in
-pywebpush==2.3.0
+pywebpush==2.4.0
     # via django-webpush
 pyyaml==6.0.3
     # via
@@ -445,7 +445,7 @@ six==1.17.0
     #   -r requirements.in
     #   mailchimp-marketing
     #   python-dateutil
-soupsieve==2.9.1
+soupsieve==2.9.2
     # via beautifulsoup4
 sqlparse==0.5.5
     # via
