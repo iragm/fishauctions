@@ -546,6 +546,22 @@ ROUTE_LIST: list[Route] = [
         keywords=["email", "sender", "from address"],
     ),
     _r(
+        "club_donation_vendors",
+        "Donation tracking",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["donations", "vendors", "sponsors", "raffle prizes", "who has donated", "ask for a donation"],
+    ),
+    _r(
+        "club_donation_settings",
+        "Donation tracking settings",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["turn on donations", "donation email", "donation settings"],
+    ),
+    _r(
         "club_link_payment_account",
         "Link a payment account to the club",
         "Club admin",
@@ -1072,6 +1088,13 @@ EXCLUDED: dict[str, str] = {
     "api_club_member_bap_awards": _API,
     "api_club_bap_lots": _API,
     "inbound_email_routing": _API,
+    # Donation tracking. The two real pages are in the catalog; these are the modals opened from
+    # them, all of which need a vendor or a stored email the user can't be asked to name.
+    "club_donation_vendor": _API,
+    "club_donation_vendor_create": _API,
+    "club_donation_contact": _API,
+    "club_donation_email": _API,
+    "club_donation_vendor_delete": _ACTION_ONLY,
     # Webhooks and machine-to-machine
     "paypal-webhook": _WEBHOOK,
     "club_paypal_subscription_webhook": _WEBHOOK,
@@ -1081,6 +1104,7 @@ EXCLUDED: dict[str, str] = {
     "handle-event-webhook": _WEBHOOK,
     "apple_server_notifications": _WEBHOOK,
     "discord_interactions": _WEBHOOK,
+    "inbound_donation_email": _WEBHOOK,
     "passkit_registration": _WEBHOOK,
     "passkit_device_registrations": _WEBHOOK,
     "passkit_pass": _WEBHOOK,
@@ -1098,6 +1122,10 @@ EXCLUDED: dict[str, str] = {
     "club_member_by_uuid": _TOKEN,
     "club_member_by_number": _TOKEN,
     "club_member_unsubscribe": _TOKEN,
+    "donation_unsubscribe": (
+        "Vendor-facing opt-out, keyed on the vendor's uuid and only ever reached from a link in the "
+        "mail we sent them. The vendors it is for don't have accounts here."
+    ),
     "club_member_resubscribe": _TOKEN,
     "club_member_nocomm": _TOKEN,
     "club_member_contact_pref": _TOKEN,

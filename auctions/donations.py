@@ -82,9 +82,22 @@ def check_rate_limit(club, bucket="incoming", limit=MAX_INCOMING_LLM_CALLS_PER_D
 
 # --- text handling -----------------------------------------------------------
 
-_IMG_TAG_RE = re.compile(r"<img[^>]*>", re.IGNORECASE)
-_STYLE_SCRIPT_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
-_TAG_RE = re.compile(r"<[^>]+>")
+#
+# Every pattern here runs over a body written by whoever emailed the vendor, so each one has to
+# fail *fast* as well as match correctly. That is why the tag patterns exclude ``<`` as well as
+# ``>``: with a plain ``[^>]*``, a body of "<img<img<img..." makes the engine scan from every
+# ``<img`` to the end of the string looking for a ``>`` that isn't there, which is quadratic in the
+# length of the body -- a few megabytes of that is a CPU burn triggered by sending an email. With
+# ``<`` excluded, an unterminated tag stops at the next one and costs nothing. A tag whose
+# attribute holds a raw unescaped ``<`` is malformed anyway, and the worst that happens to it is
+# that it survives as text.
+_IMG_TAG_RE = re.compile(r"<img[^<>]*>", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^<>]+>")
+_SCRIPT_STYLE_OPEN_RE = re.compile(r"<(script|style)\b[^<>]*>", re.IGNORECASE)
+_SCRIPT_STYLE_CLOSE_RE = {
+    "script": re.compile(r"</script\s*>", re.IGNORECASE),
+    "style": re.compile(r"</style\s*>", re.IGNORECASE),
+}
 _DATA_URI_RE = re.compile(r"data:[^\s\"'>]{40,}", re.IGNORECASE)
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 
@@ -96,6 +109,40 @@ _QUOTE_MARKERS = (
 _ON_WROTE_RE = re.compile(r"^\s*On .{0,120}\bwrote:\s*$", re.IGNORECASE | re.MULTILINE)
 
 
+def _strip_script_and_style(text):
+    """Drop ``<script>``/``<style>`` blocks, contents included.
+
+    Walked by hand rather than matched with one ``<script.*?</script>`` pattern for the same reason
+    the patterns above exclude ``<``: that regex re-scans from every opening tag to a closing tag
+    that may not exist, so "<script>" repeated across a megabyte costs a megabyte of scanning per
+    repeat. Here each region of the body is scanned once, and the first time a closing tag turns out
+    to be missing, that tag name is written off -- there is no closer later in the body either, so
+    every remaining opening tag of that name is ordinary text and needs no second search.
+
+    An unclosed opening tag is left alone rather than swallowing the rest of the message: a vendor
+    who writes about HTML in a reply should still be read, and :data:`_TAG_RE` removes the tag.
+    """
+    pieces = []
+    position = 0
+    exhausted: set[str] = set()
+    while True:
+        opening = _SCRIPT_STYLE_OPEN_RE.search(text, position)
+        if not opening:
+            break
+        name = opening.group(1).lower()
+        closing = None if name in exhausted else _SCRIPT_STYLE_CLOSE_RE[name].search(text, opening.end())
+        if not closing:
+            exhausted.add(name)
+            pieces.append(text[position : opening.end()])
+            position = opening.end()
+            continue
+        pieces.append(text[position : opening.start()])
+        pieces.append(" ")
+        position = closing.end()
+    pieces.append(text[position:])
+    return "".join(pieces)
+
+
 def strip_email_html(raw):
     """Reduce an HTML (or plain) email body to readable plain text.
 
@@ -103,7 +150,7 @@ def strip_email_html(raw):
     of base64 that would otherwise be stored and, worse, billed for as prompt tokens.
     """
     text = raw or ""
-    text = _STYLE_SCRIPT_RE.sub(" ", text)
+    text = _strip_script_and_style(text)
     text = _IMG_TAG_RE.sub(" ", text)
     text = _DATA_URI_RE.sub("[image removed]", text)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)

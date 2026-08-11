@@ -797,6 +797,26 @@ class TextHandlingTests(TestCase):
         self.assertNotIn("color:red", cleaned)
         self.assertIn("Hi", cleaned)
 
+    def test_an_unclosed_script_tag_does_not_eat_the_reply(self):
+        """A stray "<script>" in a vendor's message must not hide what they wrote after it."""
+        cleaned = donations.strip_email_html("<script>oops<p>Yes, we can donate a filter.</p>")
+        self.assertIn("Yes, we can donate a filter.", cleaned)
+
+    def test_a_body_built_to_be_slow_is_still_fast(self):
+        """Bodies arrive from strangers, so the stripping has to stay linear in their length.
+
+        Each of these used to backtrack from every opening tag to the end of the string looking for
+        a closer that never comes: at this size the script/style pattern alone took ~13 seconds, and
+        a real multi-megabyte email would have taken hours of CPU. Anything near the old cost fails
+        this even on a slow machine.
+        """
+        import time
+
+        for payload in ("<img" * 20000, "<" * 20000, "<script>" * 20000, "<style " * 20000):
+            started = time.monotonic()
+            donations.strip_email_html(payload)
+            self.assertLess(time.monotonic() - started, 2.0, f"stripping {payload[:8]!r}... was too slow")
+
     def test_entities_are_unescaped(self):
         self.assertEqual(donations.strip_email_html("<p>Tom &amp; Jerry</p>"), "Tom & Jerry")
 
