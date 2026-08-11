@@ -1191,6 +1191,10 @@ class ClubViewMixin:
         return self.user_has_club_permission("permission_manage_bap")
 
     @property
+    def can_manage_donations(self):
+        return self.user_has_club_permission("permission_manage_donations")
+
+    @property
     def can_manage_money(self):
         return self.user_has_club_permission("permission_money") or self.user_has_club_permission(
             "permission_edit_club"
@@ -1212,10 +1216,20 @@ class ClubViewMixin:
     @property
     def club_sidebar_can_view(self):
         """Whether the current user may see the club sidebar on a club page.
-        Mirrors the union of permissions that gated the old club_ribbon tabs."""
+
+        Mirrors the union of permissions that gated the old club_ribbon tabs, plus donations: the
+        sidebar is the only way to reach the donation pages, so leaving it out would make
+        permission_manage_donations a permission that grants access to a page nobody can find.
+        """
         if not self.club:
             return False
-        return bool(self.can_access_admin or self.can_edit_settings or self.can_manage_bap or self.can_manage_money)
+        return bool(
+            self.can_access_admin
+            or self.can_edit_settings
+            or self.can_manage_bap
+            or self.can_manage_money
+            or self.can_manage_donations
+        )
 
 
 class AdminOnlyViewMixin:

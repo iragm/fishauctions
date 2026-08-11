@@ -567,6 +567,16 @@ class DonationViewAccessTests(DonationTestMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fishy Business")
 
+    def test_the_donation_permission_alone_still_gets_a_sidebar(self):
+        """The sidebar link is the only way in, so it has to render for a donations-only member."""
+        staffer = User.objects.create_user(username="don_only", password="pw", email="o@example.com")
+        ClubMember.objects.create(club=self.club, user=staffer, permission_manage_donations=True)
+        self.client.force_login(staffer)
+        response = self.client.get(self.list_url)
+        # The offcanvas id only exists when club_sidebar_can_view let the sidebar render at all.
+        self.assertContains(response, 'id="clubSidebar"')
+        self.assertContains(response, "Donation Tracking")
+
     def test_managing_the_member_list_no_longer_grants_donations(self):
         """Membership managers used to get these pages for free; donations is its own job now."""
         manager = User.objects.create_user(username="don_mgr", password="pw", email="m@example.com")

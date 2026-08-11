@@ -20401,6 +20401,40 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.expiring_soon_closing, "Renew today to stay connected.")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
 
+    def test_email_text_still_rejects_html_and_links(self):
+        from auctions.forms import ClubEmailSettingsForm
+
+        for value, message in (
+            ("<b>Welcome</b>", "HTML tags are not allowed in email text."),
+            ("Read https://example.com", "Links (URLs) are not allowed in email text."),
+        ):
+            form = ClubEmailSettingsForm(
+                {"welcome_opening": value},
+                instance=self.club,
+                show_email_routing=False,
+            )
+            form.is_valid()
+            self.assertIn(message, form.errors.get("welcome_opening", []), value)
+
+    def test_a_value_built_to_be_slow_is_validated_quickly(self):
+        """The tag check runs on submitted text, so it has to stay linear in its length.
+
+        The old ``<[^>]+>`` scanned to the end of the value from every "<" in it, and took ~15
+        seconds on this input; it now takes milliseconds.
+        """
+        import time
+
+        from auctions.forms import ClubEmailSettingsForm
+
+        form = ClubEmailSettingsForm(
+            {"welcome_opening": "<" * 200000},
+            instance=self.club,
+            show_email_routing=False,
+        )
+        started = time.monotonic()
+        form.is_valid()
+        self.assertLess(time.monotonic() - started, 2.0)
+
 
 class ClubEmailRoutingTests(TestCase):
     @override_settings(

@@ -4668,7 +4668,11 @@ class ClubEmailSettingsForm(forms.ModelForm):
         "expiring_soon_opening",
         "expiring_soon_closing",
     ]
-    _HTML_TAG_RE = re.compile(r"<[^>]+>")
+    # ``<`` is excluded as well as ``>`` so an unterminated "<" stops at the next one instead of
+    # scanning to the end of the value from every "<" in it, which is quadratic (see the same fix in
+    # auctions/donations.py). A real tag never contains a bare "<", so nothing this rejected before
+    # gets through now.
+    _HTML_TAG_RE = re.compile(r"<[^<>]+>")
     _URL_RE = re.compile(r"https?://", re.IGNORECASE)
 
     def clean(self):
