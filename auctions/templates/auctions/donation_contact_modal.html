@@ -1,0 +1,132 @@
+{% comment %}
+The write-an-email dialog. Both steps render through this one template so the modal is replaced in
+place: step "context" collects what the model should know, step "review" shows what it wrote.
+{% endcomment %}
+{{ form.media }}
+<div data-htmx-modal-root>
+  <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+  <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ modal_title }}</h5>
+          <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
+        </div>
+
+        {% if error %}
+        <div class="modal-header">
+          <div class="alert alert-danger mb-0 w-100 py-2" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i> {{ error }}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if step == "context" %}
+        <form method="post" action="{{ post_url }}" hx-post="{{ post_url }}" hx-target="#modals-here"
+              hx-indicator="#donation-generating">
+          {% csrf_token %}
+          <input type="hidden" name="step" value="generate">
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.context.id_for_label }}">{{ form.context.label }}</label>
+              {{ form.context }}
+              <div class="form-text">{{ form.context.help_text }}</div>
+              {% if form.context.errors %}<div class="invalid-feedback d-block">{{ form.context.errors|join:" " }}</div>{% endif %}
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.last_email.id_for_label }}">{{ form.last_email.label }}</label>
+              {{ form.last_email }}
+              <div class="form-text">{{ form.last_email.help_text }}</div>
+              {% if form.last_email.errors %}<div class="invalid-feedback d-block">{{ form.last_email.errors|join:" " }}</div>{% endif %}
+            </div>
+            {% comment %}htmx-indicator is display:none until the request is in flight, so this is the spinner while the model writes.{% endcomment %}
+            <div id="donation-generating" class="htmx-indicator text-center py-2">
+              <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Writing…</span></div>
+              <div class="text-muted mt-2">Writing the email&hellip; this takes a few seconds.</div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
+            <button type="submit" class="btn btn-primary">Next</button>
+          </div>
+        </form>
+
+        {% else %}
+        {% comment %}The buttons carry their own hx-post and hx-vals rather than submitting the
+        form, so which step was asked for never depends on whether the submitter's name/value made
+        it into the POST. There is no form-level hx-post for the same reason.{% endcomment %}
+        <form method="post" action="{{ post_url }}">
+          {% csrf_token %}
+          {{ form.context }}
+          {{ form.last_email }}
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.subject.id_for_label }}">Subject</label>
+              {{ form.subject }}
+              {% if form.subject.errors %}<div class="invalid-feedback d-block">{{ form.subject.errors|join:" " }}</div>{% endif %}
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.body.id_for_label }}">Email</label>
+              {{ form.body }}
+              <div class="form-text">Edit anything you like before sending.</div>
+              {% if form.body.errors %}<div class="invalid-feedback d-block">{{ form.body.errors|join:" " }}</div>{% endif %}
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Added automatically</label>
+              <pre class="border rounded p-2 small text-muted mb-1" style="white-space:pre-wrap;">{{ footer_preview }}</pre>
+              <div class="form-text">Required on donation email: who sent it, a postal address, and a way to opt out.</div>
+            </div>
+            <div id="donation-regenerating" class="htmx-indicator text-center py-2">
+              <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Working…</span></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
+            <button type="button" class="btn btn-secondary"
+                    hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
+                    hx-vals='{"step": "generate"}' hx-indicator="#donation-regenerating">
+              <i class="bi bi-arrow-clockwise me-1"></i> Rewrite
+            </button>
+            {% if can_send %}
+            <button type="button" class="btn btn-success text-dark"
+                    hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
+                    hx-vals='{"step": "send"}' hx-indicator="#donation-regenerating">
+              <i class="bi bi-send me-1"></i> Send
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-success text-dark" id="donation-copy-button"
+                    hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
+                    hx-vals='{"step": "send"}' hx-indicator="#donation-regenerating">
+              <i class="bi bi-clipboard me-1"></i> Copy
+            </button>
+            {% endif %}
+          </div>
+        </form>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+</div>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
+
+{% if step == "review" and not can_send %}
+<script>
+(function () {
+  // Copy/paste mode: put the message on the clipboard on the way out, so "Copy" really copies
+  // rather than only recording that the admin intends to send it by hand.
+  var button = document.getElementById('donation-copy-button');
+  if (!button) { return; }
+  button.addEventListener('click', function () {
+    var form = button.closest('form');
+    if (!form) { return; }
+    var subject = form.querySelector('[name="subject"]');
+    var body = form.querySelector('[name="body"]');
+    var text = 'Subject: ' + (subject ? subject.value : '') + '\n\n' + (body ? body.value : '');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () { /* the row is still recorded */ });
+    }
+  });
+})();
+</script>
+{% endif %}

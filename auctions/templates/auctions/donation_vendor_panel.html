@@ -1,0 +1,116 @@
+{% comment %}
+The panel behind a vendor's name: their email history plus an edit form, modeled on the
+create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way.
+{% endcomment %}
+{% load crispy_forms_tags %}
+{{ form.media }}
+<div data-htmx-modal-root>
+  <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+  <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ modal_title }}</h5>
+          <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+
+          {% if editing %}
+            {% crispy form form.helper %}
+          {% else %}
+
+            <dl class="row mb-3">
+              {% if vendor.contact_name %}
+              <dt class="col-sm-3">Contact</dt><dd class="col-sm-9">{{ vendor.contact_name }}</dd>
+              {% endif %}
+              <dt class="col-sm-3">Email</dt>
+              <dd class="col-sm-9">{% if vendor.email %}{{ vendor.email }}{% else %}<span class="text-muted">None</span>{% endif %}</dd>
+              <dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ vendor.get_status_display }}</dd>
+              <dt class="col-sm-3">Last contact</dt>
+              <dd class="col-sm-9">{% if vendor.last_contact %}{{ vendor.last_contact|date:"N j, Y" }}{% else %}<span class="text-muted">Never</span>{% endif %}</dd>
+              <dt class="col-sm-3">Follow-up</dt>
+              <dd class="col-sm-9">{% if vendor.followup_due %}{{ vendor.followup_due|date:"N j, Y" }}{% else %}<span class="text-muted">None set</span>{% endif %}</dd>
+              {% if vendor.context %}
+              <dt class="col-sm-3">Context</dt><dd class="col-sm-9">{{ vendor.context|linebreaksbr }}</dd>
+              {% endif %}
+              {% if reply_to_address %}
+              <dt class="col-sm-3">Replies to</dt>
+              <dd class="col-sm-9"><span class="text-warning">{{ reply_to_address }}</span></dd>
+              {% endif %}
+            </dl>
+
+            {% if vendor.unsubscribed %}
+            <div class="alert alert-danger py-2" role="alert">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              This vendor unsubscribed. They can't be contacted again from any club on this site.
+            </div>
+            {% endif %}
+
+            <h6 class="border-bottom pb-2">Emails</h6>
+            {% if emails %}
+            <div class="table-responsive mb-3">
+              <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                  <tr><th>Date</th><th>Subject</th><th>Direction</th></tr>
+                </thead>
+                <tbody>
+                  {% for email in emails %}
+                  <tr>
+                    <td class="text-nowrap">{{ email.date|date:"N j, Y" }}</td>
+                    <td>
+                      <a href="" hx-noget hx-get="{% url 'club_donation_email' email.pk %}" hx-target="#modals-here" hx-trigger="click">{{ email.subject|default:"(no subject)" }}</a>
+                      {% if email.summary %}<br><small class="text-muted">{{ email.summary }}</small>{% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                      {% if email.is_incoming %}
+                      <span class="badge bg-info"><i class="bi bi-arrow-down-left me-1"></i>Incoming</span>
+                      {% else %}
+                      <span class="badge bg-secondary"><i class="bi bi-arrow-up-right me-1"></i>Outgoing</span>
+                      {% endif %}
+                      {% if email.bounced %}<span class="badge bg-danger ms-1">Bounced</span>{% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No emails yet.</p>
+            {% endif %}
+
+          {% endif %}
+        </div>
+
+        <div class="modal-footer">
+          {% if not editing %}
+            {% if cannot_contact_reason %}
+            {% comment %}Unavailable, not hidden: keep it clickable and say why (style_reference.md).{% endcomment %}
+            <button type="button" class="btn btn-secondary donation-contact-blocked" data-reason="{{ cannot_contact_reason }}">
+              <i class="bi bi-envelope-slash me-1"></i> Contact
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-primary" hx-get="{{ contact_url }}" hx-target="#modals-here" hx-trigger="click">
+              <i class="bi bi-envelope me-1"></i> Contact
+            </button>
+            {% endif %}
+            <button type="button" class="btn btn-secondary" hx-get="{% url 'club_donation_vendor' vendor.pk %}?edit=1" hx-target="#modals-here" hx-trigger="click">
+              <i class="bi bi-pencil me-1"></i> Edit
+            </button>
+            <form method="post" action="{% url 'club_donation_vendor_delete' vendor.pk %}"
+                  hx-post="{% url 'club_donation_vendor_delete' vendor.pk %}" hx-target="#modals-here"
+                  data-confirm="Remove {{ vendor.name }} from donation tracking? Their email history goes with them."
+                  data-confirm-title="Remove this vendor?"
+                  data-confirm-ok="Remove vendor"
+                  data-confirm-variant="danger"
+                  class="d-inline">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          {% endif %}
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>

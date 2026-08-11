@@ -39,6 +39,9 @@ def club_sidebar(context):
     can_manage_bap = perm("permission_manage_bap")
     can_manage_money = perm("permission_money") or perm("permission_edit_club")
     can_manage_auctions = perm("permission_admin") or perm("permission_manage_auctions")
+    # Donation tracking holds third-party contact details and sends mail in the club's name, so it
+    # takes the same permission as editing members rather than the read-only view permission.
+    can_manage_donations = perm("permission_admin") or perm("permission_add_edit")
 
     # In managed/check-in mode the auction's participant list is the member list,
     # so "Members" points at the enhanced auction users table (single entry).
@@ -56,6 +59,7 @@ def club_sidebar(context):
         "mailchimp",
         "brevo",
         "api_keys",
+        "donation_settings",
     }
 
     bap_lots_base = reverse("club_bap_lots", kwargs={"slug": club.slug})
@@ -78,6 +82,7 @@ def club_sidebar(context):
         "active_tab": active_tab,
         "setup_active": active_tab in setup_tabs,
         "bap_url": bap_url,
+        "show_donation_tracking": club.enable_donation_tracking and can_manage_donations,
         # The speaker directory is only for NEC member clubs, so the link only exists for them.
         # Anyone in this sidebar already holds a club permission, which is the access bar.
         "show_speakers": club.is_nec_club,

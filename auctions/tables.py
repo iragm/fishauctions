@@ -1,6 +1,7 @@
 from urllib.parse import urlencode
 
 import django_tables2 as tables
+from django.contrib.humanize.templatetags.humanize import naturalday
 from django.db.models import F
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
@@ -14,6 +15,7 @@ from .models import (
     ClubBapCategoryOverride,
     ClubHistory,
     ClubMember,
+    DonationVendor,
     Invoice,
     Lot,
     Speaker,
@@ -1217,4 +1219,106 @@ class SpeakerHTMxTable(tables.Table):
             " ",
             "<span class='badge bg-primary'>{} {}</span>",
             ((label, count) for _value, label, _group, count in counts),
+        )
+
+
+class DonationVendorHTMxTable(tables.Table):
+    """Vendors a club is asking for donations, with where each conversation stands."""
+
+    hide_string = "d-md-table-cell d-none"
+
+    name = tables.Column(accessor="name", verbose_name="Vendor")
+    contact_name = tables.Column(
+        accessor="contact_name",
+        verbose_name="Contact",
+        default="—",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    email = tables.Column(
+        accessor="email",
+        verbose_name="Email",
+        default="—",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    status = tables.Column(accessor="status", verbose_name="Status")
+    last_contact = tables.Column(accessor="last_contact", verbose_name="Last contact", default="—")
+    followup_due = tables.Column(accessor="followup_due", verbose_name="Follow-up", default="—")
+    contact = tables.Column(accessor="pk", verbose_name="Contact", orderable=False)
+
+    #: Bootstrap background for each status, so the pipeline reads at a glance. Kept here rather
+    #: than in the template because the status column is rendered as HTML either way.
+    STATUS_BADGES = {
+        "new": "bg-secondary",
+        "sent": "bg-info",
+        "interested": "bg-primary",
+        # success and warning fills need dark text on this theme -- see style_reference.md.
+        "promised": "bg-warning text-dark",
+        "received": "bg-success text-dark",
+        "not_interested": "bg-dark",
+        "do_not_contact": "bg-danger",
+    }
+
+    class Meta:
+        model = DonationVendor
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ()
+
+    def render_name(self, value, record):
+        """The vendor name opens the side panel with their email history and edit form."""
+        return format_html(
+            "<a href='' hx-noget hx-get='{}' hx-target='#modals-here' hx-trigger='click'>"
+            "<i class='bi bi-shop me-1'></i>{}</a>",
+            reverse("club_donation_vendor", kwargs={"pk": record.pk}),
+            value,
+        )
+
+    def render_status(self, value, record):
+        badge = self.STATUS_BADGES.get(record.status, "bg-secondary")
+        label = record.get_status_display()
+        if record.unsubscribed:
+            return format_html(
+                "<span class='badge {}' title='This vendor unsubscribed'>"
+                "<i class='bi bi-slash-circle me-1'></i>{}</span>",
+                badge,
+                label,
+            )
+        return format_html("<span class='badge {}'>{}</span>", badge, label)
+
+    def render_last_contact(self, value, record):
+        if not record.last_contact:
+            return "—"
+        return format_html("<span title='{}'>{}</span>", record.last_contact, naturalday(record.last_contact))
+
+    def render_followup_due(self, value, record):
+        if not record.followup_due:
+            return "—"
+        formatted = naturalday(record.followup_due)
+        if record.is_followup_due:
+            return format_html(
+                "<span class='text-warning' title='{}'><i class='bi bi-exclamation-circle me-1'></i>{}</span>",
+                record.followup_due,
+                formatted,
+            )
+        return format_html("<span title='{}'>{}</span>", record.followup_due, formatted)
+
+    def render_contact(self, value, record):
+        """A button that opens the write-an-email dialog.
+
+        A vendor we may not write to keeps a clickable button that explains why rather than a
+        disabled one -- see the unavailable-action standard in style_reference.md.
+        """
+        reason = record.cannot_contact_reason
+        if reason:
+            # Stays clickable and explains itself in a toast; the handler is delegated from
+            # club_donation_vendors.html so it survives htmx swaps of the table.
+            return format_html(
+                "<button type='button' class='btn btn-sm btn-secondary donation-contact-blocked' "
+                "data-reason='{}'><i class='bi bi-envelope-slash me-1'></i>Contact</button>",
+                reason,
+            )
+        return format_html(
+            "<button type='button' class='btn btn-sm btn-primary' hx-get='{}' "
+            "hx-target='#modals-here' hx-trigger='click'>"
+            "<i class='bi bi-envelope me-1'></i>Contact</button>",
+            reverse("club_donation_contact", kwargs={"pk": record.pk}),
         )

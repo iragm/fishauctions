@@ -24,6 +24,8 @@ from django.forms import (
 )
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -44,6 +46,7 @@ from .models import (
     ClubEvent,
     ClubMember,
     ClubMoney,
+    DonationVendor,
     Invoice,
     InvoiceAdjustment,
     Lot,
@@ -4490,6 +4493,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         fields = [
             "auction_email_member",
             "contact_email_member",
+            "donation_email_member",
             "contact_email",
             "send_welcome_email_to_new_members",
             "send_membership_expiration_reminders_30_days",
@@ -4525,6 +4529,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
                     "Incoming email routing",
                     "auction_email_member",
                     "contact_email_member",
+                    "donation_email_member",
                 )
             )
         else:
@@ -4556,6 +4561,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             # Drop the dropdown routing fields entirely so they are not posted.
             self.fields.pop("auction_email_member", None)
             self.fields.pop("contact_email_member", None)
+            self.fields.pop("donation_email_member", None)
             if "contact_email" in self.fields:
                 self.fields["contact_email"].label = "Membership email address"
                 self.fields[
@@ -4607,6 +4613,23 @@ class ClubEmailSettingsForm(forms.ModelForm):
                     f"Replies sent to {club.contact_sender_email or 'club-slug-contact@your-domain'} are routed to this member. "
                     f"Leave blank to fall back to the first club admin or membership manager with an email address{_fallback_label(contact_fallback)}."
                 ),
+            )
+            donation_enabled = bool(club and club.pk and club.enable_donation_tracking)
+            if donation_enabled:
+                donation_help = (
+                    "Vendor replies are always recorded against the vendor. Leave this blank "
+                    "(recommended) so they are recorded and nothing else — forwarding them to a "
+                    "person invites a reply from that person's own inbox, which this site never "
+                    "sees and can't track. Set it only if someone needs a copy in their inbox."
+                )
+            else:
+                donation_help = "Turn on donation tracking in Setup to route donation replies."
+            self.fields["donation_email_member"] = _ClubEmailMemberChoiceField(
+                queryset=contact_qs if donation_enabled else ClubMember.objects.none(),
+                required=False,
+                label="Donation replies",
+                help_text=donation_help,
+                disabled=not donation_enabled,
             )
         self.fields["send_welcome_email_to_new_members"].label = "Send welcome letter to new club members"
         self.fields[
@@ -5418,5 +5441,227 @@ class SpeakerCommentForm(forms.ModelForm):
         body = (self.cleaned_data.get("body") or "").strip()
         if not body:
             msg = "Please write something first"
+            raise forms.ValidationError(msg)
+        return body
+
+
+class ClubDonationSettingsForm(forms.ModelForm):
+    """Configure donation tracking for a club: whether it's on, and how mail goes out."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "enable_donation_tracking",
+            "donation_email_mode",
+            "donation_followup_days",
+            "donation_context",
+            "donation_mailing_address",
+        ]
+        widgets = {
+            "donation_email_mode": forms.RadioSelect(),
+            "donation_context": forms.Textarea(
+                attrs={
+                    "rows": 4,
+                    "placeholder": "nonprofit id number or other information to use in the context of outgoing emails",
+                }
+            ),
+            "donation_mailing_address": forms.Textarea(
+                attrs={"rows": 3, "placeholder": "Club name\n123 Main St\nCity, State 12345"}
+            ),
+        }
+
+    def __init__(self, *args, routing_enabled=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.fields["enable_donation_tracking"].label = "Enable donation tracking"
+        self.fields["donation_email_mode"].label = "How to send donation emails"
+        # RadioSelect renders each choice's label, so the routed option has to name the real
+        # address here rather than leaning on help_text the way the other fields do.
+        club = self.instance
+        # Must match DONATION_ALIAS_RE in email_routing.py: the club slug leads, matching the
+        # existing -auctions / -contact aliases, and the trailing digits identify the vendor.
+        routed_example = (
+            f"{club.slug}-donations-1234567890@{settings.EMAIL_ROUTING_DOMAIN}"
+            if club and club.pk and settings.EMAIL_ROUTING_DOMAIN
+            else "a tracked address on this site"
+        )
+        # mark_safe so each option can carry its own help line underneath. Django escapes choice
+        # labels with conditional_escape, so a SafeString passes through and anything else can't
+        # inject markup. Nothing user-supplied is interpolated here.
+        self.fields["donation_email_mode"].choices = [
+            (
+                Club.DONATION_EMAIL_MODE_ROUTED,
+                mark_safe(  # noqa: S308 - both branches are literals built from settings, not user input
+                    f"Send mail from this site<br><small class='text-muted'>Sent as {escape(routed_example)}, "
+                    "so replies are tracked against the vendor</small>"
+                ),
+            ),
+            (
+                Club.DONATION_EMAIL_MODE_COPY,
+                mark_safe(  # noqa: S308 - literal
+                    "Copy/paste to my email<br><small class='text-muted'>No way to track replies</small>"
+                ),
+            ),
+        ]
+        if not routing_enabled:
+            # Without SES routing there is no tracked address to send from, so copy/paste is the
+            # only mode that can work. Leave it visible but fixed rather than silently switching.
+            self.fields["donation_email_mode"].disabled = True
+            self.fields["donation_email_mode"].help_text = (
+                "Email routing is not enabled on this site, so donation emails have to be "
+                "copy/pasted into your own email program."
+            )
+            self.initial["donation_email_mode"] = Club.DONATION_EMAIL_MODE_COPY
+        add_bootstrap_classes(self)
+        # form-select on a radio group makes each radio render as a dropdown-sized box.
+        self.fields["donation_email_mode"].widget.attrs["class"] = "form-check-input"
+
+    def clean_donation_email_mode(self):
+        # A disabled field returns its initial value, but be explicit: nothing should be able to
+        # persist "send from this site" on an install that has no address to send from.
+        mode = self.cleaned_data.get("donation_email_mode")
+        if not settings.SES_ROUTE_EMAILS_ENABLED:
+            return Club.DONATION_EMAIL_MODE_COPY
+        return mode
+
+
+class DonationVendorForm(forms.ModelForm):
+    """Add or edit a vendor. Rendered in the modal that opens from the vendor's name."""
+
+    class Meta:
+        model = DonationVendor
+        fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
+        widgets = {
+            "name": forms.TextInput(attrs={"placeholder": "Business name"}),
+            "contact_name": forms.TextInput(attrs={"placeholder": "Who you talk to there"}),
+            "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
+            "followup_due": DateTimePickerInput(),
+            "context": forms.Textarea(
+                attrs={
+                    "rows": 3,
+                    "placeholder": "What they sell, past donations, who introduced you — passed to the "
+                    "language model when it writes an email",
+                }
+            ),
+        }
+        labels = {"followup_due": "Follow up on"}
+        help_texts = {
+            "context": "Better context, better results.",
+            "email": "",
+            "status": "",
+        }
+
+    def __init__(self, *args, post_url=None, club=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._club = club
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        if post_url:
+            self.helper.form_action = post_url
+        self.fields["contact_name"].required = False
+        self.fields["email"].required = False
+        self.fields["followup_due"].required = False
+        vendor = self.instance if self.instance and self.instance.pk else None
+        if vendor and vendor.unsubscribed:
+            # The vendor asked us to stop. A club admin editing this row must not be able to
+            # click the status back to something contactable.
+            self.fields["status"].disabled = True
+            self.fields[
+                "status"
+            ].help_text = "This vendor unsubscribed. They cannot be contacted again from any club on this site."
+            self.fields["email"].disabled = True
+        add_bootstrap_classes(self)
+        base_fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
+        if post_url:
+            # Submitted over HTMX, like the club member and AuctionTOS modals: the POST answers
+            # with the script that closes the modal, which only makes sense swapped into the page.
+            # A plain Submit here would navigate to that script as if it were a page.
+            self.helper.layout = Layout(
+                *base_fields,
+                Div(
+                    HTML(
+                        '<button type="button" class="btn btn-secondary" '
+                        'onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    ),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" '
+                        'type="button" class="btn btn-primary ms-2">Save</button>'
+                    ),
+                    css_class="modal-footer",
+                ),
+            )
+        else:
+            self.helper.layout = Layout(*base_fields)
+            self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip().lower()
+        if not email or not self._club:
+            return email
+        duplicates = DonationVendor.objects.filter(club=self._club, email=email, is_deleted=False)
+        if self.instance and self.instance.pk:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        existing = duplicates.first()
+        if existing:
+            msg = f"{existing.name} already uses this email address."
+            raise forms.ValidationError(msg)
+        return email
+
+    def save(self, commit=True):
+        vendor = super().save(commit=False)
+        if self._club and not vendor.club_id:
+            vendor.club = self._club
+        if commit:
+            vendor.save()
+        return vendor
+
+
+class DonationContactForm(forms.Form):
+    """Step one of the contact dialog: what the model should know before it writes."""
+
+    context = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 4}),
+        label="Context",
+        help_text=(
+            "Information about what this vendor does, any history of donations, or relevant "
+            "information. This will be passed to the LLM; better context, better results."
+        ),
+    )
+    last_email = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 6}),
+        label="Last email",
+        help_text="Paste their last message here if you've been emailing them outside this site.",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+
+
+class DonationEmailEditForm(forms.Form):
+    """Step two: the generated email, before it is sent or copied.
+
+    ``context`` and ``last_email`` ride along hidden so the Rewrite button can hand them straight
+    back to the model instead of making the admin retype what they already told it.
+    """
+
+    subject = forms.CharField(max_length=200, widget=forms.TextInput())
+    body = forms.CharField(widget=forms.Textarea(attrs={"rows": 16}))
+    context = forms.CharField(required=False, widget=forms.HiddenInput())
+    last_email = forms.CharField(required=False, widget=forms.HiddenInput())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
+
+    def clean_body(self):
+        body = (self.cleaned_data.get("body") or "").strip()
+        if not body:
+            msg = "The email can't be empty"
             raise forms.ValidationError(msg)
         return body

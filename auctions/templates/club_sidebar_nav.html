@@ -64,6 +64,10 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-megaphone me-1"></i> Find speakers</a>
   {% endif %}
 
+  {% if show_donation_tracking %}
+  <a class="nav-link {% if active_tab == 'donations' %}active{% endif %}" href="{% url 'club_donation_vendors' club.slug %}"><i class="bi bi-gift me-1"></i> Donation Tracking</a>
+  {% endif %}
+
   {% if can_edit_settings %}
   <a class="nav-link {% if setup_active %}active{% endif %}" href="{% url 'club_setup' club.slug %}"><i class="bi bi-gear me-1"></i> Setup</a>
   {% endif %}

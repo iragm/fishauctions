@@ -1,0 +1,42 @@
+{% comment %}One stored message, opened from the history list in the vendor panel.{% endcomment %}
+<div data-htmx-modal-root>
+  <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+  <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ modal_title }}</h5>
+          <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <dl class="row">
+            <dt class="col-sm-3">Direction</dt>
+            <dd class="col-sm-9">
+              {% if email.is_incoming %}
+              <span class="badge bg-info"><i class="bi bi-arrow-down-left me-1"></i>Incoming</span>
+              {% else %}
+              <span class="badge bg-secondary"><i class="bi bi-arrow-up-right me-1"></i>Outgoing</span>
+              {% endif %}
+              {% if email.bounced %}<span class="badge bg-danger ms-1">Bounced</span>{% endif %}
+            </dd>
+            <dt class="col-sm-3">Date</dt><dd class="col-sm-9">{{ email.date|date:"N j, Y, P" }}</dd>
+            <dt class="col-sm-3">From</dt><dd class="col-sm-9">{{ email.sender|default:"—" }}</dd>
+            <dt class="col-sm-3">To</dt><dd class="col-sm-9">{{ email.recipients|default:"—" }}</dd>
+            {% if email.summary %}
+            <dt class="col-sm-3">Summary</dt><dd class="col-sm-9">{{ email.summary }}</dd>
+            {% endif %}
+          </dl>
+          <h6 class="border-bottom pb-2">Message</h6>
+          <pre class="small mb-0" style="white-space:pre-wrap;">{{ email.body }}</pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" hx-get="{% url 'club_donation_vendor' vendor.pk %}" hx-target="#modals-here" hx-trigger="click">
+            <i class="bi bi-arrow-left me-1"></i> Back to {{ vendor.name }}
+          </button>
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>

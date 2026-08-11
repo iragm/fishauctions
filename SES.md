@@ -1,6 +1,6 @@
 # SES Email Setup
 
-This guide covers setting up Amazon SES for both outbound sending and inbound email routing. Inbound routing lets replies sent to `auction-slug@yourdomain.com`, `club-slug-auctions@yourdomain.com`, and `club-slug-contact@yourdomain.com` reach the right club member automatically.
+This guide covers setting up Amazon SES for both outbound sending and inbound email routing. Inbound routing lets replies sent to `auction-slug@yourdomain.com`, `club-slug-auctions@yourdomain.com`, and `club-slug-contact@yourdomain.com` reach the right club member automatically, and records replies to `club-slug-donations-<digits>@yourdomain.com` against the donation vendor who sent them.
 
 ---
 
@@ -57,6 +57,7 @@ Lambda → *Configuration* → *Environment variables*:
 | Key | Example value | Notes |
 |---|---|---|
 | `DJANGO_API_URL` | `https://yourdomain.com/api/v1/email-routing/resolve/` | Full URL including trailing slash |
+| `DJANGO_DONATION_API_URL` | `https://yourdomain.com/api/v1/email-routing/donation/` | Optional. Where vendor replies are posted so they're recorded against the vendor. Defaults to `donation/` beside `DJANGO_API_URL` |
 | `INBOUND_ROUTING_SECRET` | *(see below)* | Must match `INBOUND_ROUTING_SECRET` in Django `.env` |
 | `RELAY_SENDER` | `relay@yourdomain.com` | Address used as From when forwarding |
 | `RELAY_DISPLAY_NAME` | `Club Relay` | Display name in forwarded From field (optional) |
@@ -92,6 +93,11 @@ import boto3
 SES = boto3.client("ses")
 
 DJANGO_API_URL = os.environ["DJANGO_API_URL"]
+# Donation replies are posted here as well as forwarded, so the message body is recorded
+# against the vendor who sent it. Defaults to "donation/" beside the resolve endpoint.
+DJANGO_DONATION_API_URL = os.environ.get("DJANGO_DONATION_API_URL", "").strip() or (
+    DJANGO_API_URL.rstrip("/").rsplit("/", 1)[0] + "/donation/"
+)
 ROUTING_SECRET = os.environ["INBOUND_ROUTING_SECRET"]
 RELAY_SENDER = os.environ["RELAY_SENDER"]
 RELAY_DISPLAY_NAME = os.environ.get("RELAY_DISPLAY_NAME", "Club Relay")
@@ -143,9 +149,14 @@ def is_autoreply(msg):
 def resolve_recipient(local_part):
     """Ask Django which address to forward this alias to.
 
-    Returns a (recipient, display_name) tuple, _DROP if Django says 404
-    (unknown alias), or (FALLBACK_RECIPIENT, None) if Django is unreachable
+    Returns a (recipient, display_name, kind) tuple, _DROP as the recipient if Django says 404
+    (unknown alias), or (FALLBACK_RECIPIENT, None, "") if Django is unreachable
     or returns any other error so the email is never silently lost.
+
+    ``kind`` is "donation" for a vendor reply to a donation address, and "" for everything else.
+    Donation addresses are the one case where an *empty* recipient is a real answer rather than a
+    missing one: the club may have chosen to have replies recorded on the site and forwarded to
+    nobody, so an empty recipient must NOT be turned into FALLBACK_RECIPIENT here.
     """
     params = urllib.parse.urlencode({"address": local_part})
     req = urllib.request.Request(
@@ -155,19 +166,77 @@ def resolve_recipient(local_part):
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
-            return data.get("recipient") or FALLBACK_RECIPIENT, data.get("display_name")
+            kind = data.get("kind") or ""
+            recipient = data.get("recipient") or ""
+            if kind != "donation":
+                recipient = recipient or FALLBACK_RECIPIENT
+            return recipient, data.get("display_name"), kind
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             # Django says this alias doesn't exist — drop silently.
-            return _DROP, None
+            return _DROP, None, ""
         # Any other HTTP error (401, 503, 500 …) — forward to fallback so
         # mail is never lost due to a misconfiguration or temporary outage.
         print(f"[ses-router] resolve_recipient HTTP error {exc.code} for {local_part!r}: {exc}")
-        return FALLBACK_RECIPIENT, None
+        return FALLBACK_RECIPIENT, None, ""
     except Exception as exc:
         # Django unreachable (timeout, DNS failure, etc.) — forward to fallback.
         print(f"[ses-router] resolve_recipient failed for {local_part!r}: {exc}")
-        return FALLBACK_RECIPIENT, None
+        return FALLBACK_RECIPIENT, None, ""
+
+
+def extract_text_body(msg):
+    """Return the readable body of a message as a string.
+
+    Prefers text/plain; falls back to text/html, which Django strips down itself. Attachments and
+    inline images are skipped — the record kept against a vendor is the words they wrote.
+    """
+    plain = []
+    html = []
+    for part in msg.walk() if msg.is_multipart() else [msg]:
+        if part.get_content_maintype() == "multipart":
+            continue
+        if "attachment" in (part.get_content_disposition() or "").lower():
+            continue
+        content_type = part.get_content_type()
+        if content_type not in ("text/plain", "text/html"):
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        except Exception:
+            continue
+        (plain if content_type == "text/plain" else html).append(text)
+    return "\n".join(plain).strip() or "\n".join(html).strip()
+
+
+def post_donation_email(to_addr, msg):
+    """Hand a donation vendor's reply to Django so it lands on the vendor's row.
+
+    Best effort: a failure here must never stop the message being forwarded, and Django answers
+    200 for anything it can't match so this never retries a message that will never land.
+    """
+    payload = json.dumps(
+        {
+            "address": to_addr,
+            "from": msg.get("From", ""),
+            "recipients": to_addr,
+            "subject": msg.get("Subject", ""),
+            "body": extract_text_body(msg),
+            "message_id": msg.get("Message-ID", ""),
+        }
+    ).encode()
+    req = urllib.request.Request(
+        DJANGO_DONATION_API_URL,
+        data=payload,
+        headers={"X-Routing-Secret": ROUTING_SECRET, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[ses-router] donation reply posted: {resp.read()[:200]!r}")
+    except Exception as exc:
+        print(f"[ses-router] could not post donation reply for {to_addr!r}: {exc}")
 
 
 def strip_attachments(msg):
@@ -260,10 +329,22 @@ def lambda_handler(event, context):
 
     # Resolve the forwarding target; drop only if Django explicitly says 404.
     # Any other failure (Django down, 5xx, timeout) falls back to FALLBACK_RECIPIENT.
-    forward_to, display_name = resolve_recipient(local_part) if local_part else (_DROP, None)
+    forward_to, display_name, kind = (
+        resolve_recipient(local_part) if local_part else (_DROP, None, "")
+    )
     if forward_to is _DROP:
         print(f"[ses-router] dropping message to unrecognised alias: {to_addr!r}")
         return {"status": "dropped", "reason": "unknown alias"}
+
+    # Donation vendor replies are recorded on the site as well as (optionally) forwarded. Post
+    # before the headers below are rewritten, so Django sees the vendor's own From address.
+    if kind == "donation":
+        post_donation_email(to_addr, msg)
+        if not forward_to:
+            # The club chose to have replies recorded here and forwarded to nobody — which is the
+            # recommended setup, because a reply sent from a personal inbox is never tracked.
+            print(f"[ses-router] donation reply recorded, no forwarding recipient: {to_addr!r}")
+            return {"status": "recorded", "to": None}
 
     # Remove all attachments before forwarding.
     strip_attachments(msg)
@@ -407,6 +488,7 @@ Once `POST_OFFICE_EMAIL_BACKEND=django_ses.SESBackend` and `SITE_DOMAIN` are set
 2. Send to `yourclub-auctions@yourdomain.com` — confirm it routes to the configured club member (or admin fallback)
 3. Send to `yourclub-contact@yourdomain.com` — same check
 4. Send to an unknown alias — confirm it is silently dropped (no bounce, nothing in your inbox)
+5. With donation tracking on, reply to a donation request and confirm the reply appears in the vendor's panel under Donation Tracking
 5. Check Lambda *Monitor* → *Logs* in CloudWatch for any errors
 
 ---
@@ -426,6 +508,9 @@ SNS Topic ──► Lambda
                 │   GET /api/v1/email-routing/resolve/?address=<alias>
                 │
                 ├─ 200: forward to returned recipient, prefix subject with [Name]
+                ├─ 200 + "kind": "donation": also POST the body to
+                │   /api/v1/email-routing/donation/ so it is recorded against
+                │   the vendor; forward only if "recipient" is non-empty
                 ├─ 404: drop silently (unknown alias)
                 └─ error/timeout: forward to FALLBACK_RECIPIENT
 ```
@@ -437,6 +522,7 @@ Recognised alias patterns:
 | `info@yourdomain.com` | — | Site admin (`ADMINS[0]` or `DEFAULT_FROM_EMAIL`) |
 | `<club-slug>-auctions@yourdomain.com` | Configured member → oldest non-admin auction manager → oldest admin | Site admin |
 | `<club-slug>-contact@yourdomain.com` | Configured member → oldest non-admin membership manager → oldest admin | **Dropped** (no fallback) |
+| `<club-slug>-donations-<10 digits>@yourdomain.com` | Configured donation contact only | **Recorded on the site, forwarded to nobody** |
 | `<auction-slug>@yourdomain.com` | Club's non-admin auction manager → club admin → auction creator | Dropped if no creator email |
 | anything else | — | Dropped |
 
@@ -444,4 +530,5 @@ Recognised alias patterns:
 - "Configured member" means the specific club member selected on the Email Settings page; this takes precedence over the automatic fallback order.
 - For `*-auctions` and auction slugs, non-admin members with the **Manage auctions** permission are preferred over admins, keeping auction replies away from full admins unless no specialist is available.
 - For `*-contact`, non-admin members with the **Manage membership** permission are preferred. If no such member exists and there are no admins, the message is **dropped silently** — configure at least one member with admin or membership permissions to receive contact mail.
+- `*-donations-*` is the one alias whose reply is worth keeping even when nobody is forwarded a copy: the trailing 10 digits identify a donation vendor, and the message body is stored against that vendor and summarized. It has **no fallback chain** by design — a reply that lands in an officer's personal inbox is one they will answer from that inbox, and the site never sees the rest of the conversation. Clubs are told to leave the donation contact unset for exactly this reason. Replies that don't match a live vendor (deleted vendor, tracking turned off, made-up digits) are dropped silently.
 - When SES routing is active, outbound auction emails no longer set a `Reply-To` header. Replies naturally reach `<auction-slug>@yourdomain.com` (the `From` address) and are routed by Lambda, adding a `[Auction Name]` subject prefix so recipients know the context.

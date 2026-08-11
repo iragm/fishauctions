@@ -1,0 +1,38 @@
+{% comment %}
+Search and filters for the donation tracking table, rendered by HTMxTableView via
+htmx_table_header_template.
+
+Stacked, not laid out in a row: the search box gets a full-width line of its own and the status
+filter is a dropdown button under it, so the controls are the same size on a phone as they are on
+a desktop.  The table filters as you type, so there is no apply button.
+{% endcomment %}
+<div class="input-group mb-2">
+  <span class="input-group-text"><i class="bi bi-search"></i></span>
+  {{ filter.form.query }}
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  <span class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-funnel"></i> {{ selected_status_label|default:"Any status" }}
+    </button>
+    {% comment %}htmx sits on the menu rather than on each radio: change events bubble, so one set of attributes covers the lot. Keep these in step with donation_filter_attrs() in filters.py.{% endcomment %}
+    <div class="dropdown-menu" hx-get="" hx-target="div.table-container" hx-trigger="change" hx-swap="outerHTML" hx-indicator=".progress" hx-include=".donation-filter-control">
+      <label class="dropdown-item">
+        <input type="radio" name="status" value="" class="donation-filter-control" {% if not selected_status %}checked{% endif %}> Any status
+      </label>
+      {% for status_value, status_label in status_choices %}
+      <label class="dropdown-item">
+        <input type="radio" name="status" value="{{ status_value }}" class="donation-filter-control" {% if status_value == selected_status %}checked{% endif %}> {{ status_label }}
+      </label>
+      {% endfor %}
+    </div>
+  </span>
+
+  <a class="btn btn-sm btn-info" href="{% url 'club_donation_vendor_create' club.slug %}"
+     hx-get="{% url 'club_donation_vendor_create' club.slug %}" hx-target="#modals-here" hx-trigger="click">
+    <i class="bi bi-plus-circle"></i> Add vendor
+  </a>
+
+  <small class="text-muted">Type <span class="text-warning">due</span> to see only vendors needing a follow-up.</small>
+</div>

@@ -1,0 +1,62 @@
+{% extends "auctions/htmx_table_view.html" %}
+
+{% block title %}Donation Tracking &mdash; {{ club.name }}{% endblock %}
+
+{% block htmx_table_ribbon %}
+{% include "club_ribbon.html" %}
+<h3 class="mb-3">Donation Tracking</h3>
+
+{% if followup_due_count %}
+<div class="alert alert-warning text-dark py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  {{ followup_due_count }} vendor{{ followup_due_count|pluralize }} due for a follow-up.
+</div>
+{% endif %}
+
+{% if needs_mailing_address %}
+<div class="alert alert-warning text-dark py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  <strong>Add a donation mailing address before sending.</strong>
+  Donation emails sent from this site have to carry a postal address for the club.
+  <a href="{% url 'club_donation_settings' club.slug %}">Add one in donation settings</a>.
+</div>
+{% endif %}
+
+{% if not can_send %}
+<div class="alert alert-info py-2" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Donation emails are copied into your own email program, so replies won't be tracked here.
+  <a href="{% url 'club_donation_settings' club.slug %}">Change this in donation settings</a>.
+</div>
+{% endif %}
+
+{% if not assist_enabled %}
+<div class="alert alert-info py-2" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Automatic email writing isn't set up on this site, so you'll be writing donation emails yourself.
+</div>
+{% endif %}
+{% endblock %}
+
+{% comment %}The header partial renders the search box and status menu, so the default crispy filter form would only duplicate them.{% endcomment %}
+{% block htmx_table_filter_form %}{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+  // Vendors we may not write to keep a clickable button that says why, rather than a disabled one
+  // (see "Unavailable actions stay clickable" in style_reference.md). Delegated from the document
+  // so it survives every htmx swap of the table body.
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('.donation-contact-blocked');
+    if (!button) { return; }
+    event.preventDefault();
+    window.jQuery.toast({
+      title: 'Cannot contact this vendor',
+      content: button.getAttribute('data-reason') || '',
+      type: 'info',
+      delay: 8000
+    });
+  });
+</script>
+{% endblock %}

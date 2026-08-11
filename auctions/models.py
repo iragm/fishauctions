@@ -1,6 +1,7 @@
 import datetime
 import logging
 import re
+import secrets
 import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -53,7 +54,7 @@ from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
 from . import cloudflare_images, printer_programs, voice
-from .email_routing import admin_routing_email, build_routed_sender_address
+from .email_routing import admin_routing_email, build_routed_sender_address, email_routing_enabled
 from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
@@ -1151,6 +1152,63 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
+    # Donation tracking: asking local businesses to donate to a raffle or auction, and keeping
+    # track of who was asked, who said yes, and who needs chasing.  See auctions/donations.py.
+    enable_donation_tracking = models.BooleanField(
+        default=False,
+        verbose_name="Enable donation tracking",
+        help_text="Track which vendors you've asked for donations, and what they said.",
+    )
+    DONATION_EMAIL_MODE_ROUTED = "routed"
+    DONATION_EMAIL_MODE_COPY = "copy"
+    DONATION_EMAIL_MODE_CHOICES = (
+        (DONATION_EMAIL_MODE_ROUTED, "Send mail from this site"),
+        (DONATION_EMAIL_MODE_COPY, "Copy/paste to my email"),
+    )
+    donation_email_mode = models.CharField(
+        max_length=20,
+        choices=DONATION_EMAIL_MODE_CHOICES,
+        default=DONATION_EMAIL_MODE_ROUTED,
+        verbose_name="How to send donation emails",
+    )
+    donation_email_member = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_donation_email_destinations",
+        verbose_name="Donation contact",
+        help_text="Incoming mail for club-slug-donations-*@your-domain is forwarded to this member.",
+    )
+    donation_context = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Club information for donation emails",
+        help_text=(
+            "Passed to the language model with every donation email it writes, so it doesn't have "
+            "to be retyped for each vendor."
+        ),
+    )
+    donation_mailing_address = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Donation mailing address",
+        help_text="Where vendors should send physical donations. Included in donation emails.",
+    )
+    DONATION_FOLLOWUP_CHOICES = (
+        (1, "1 day"),
+        (3, "3 days"),
+        (7, "1 week"),
+        (14, "2 weeks"),
+        (30, "1 month"),
+    )
+    donation_followup_days = models.PositiveSmallIntegerField(
+        default=7,
+        choices=DONATION_FOLLOWUP_CHOICES,
+        verbose_name="Follow up after",
+        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
+    )
+
     class Meta:
         ordering = ["name"]
 
@@ -1303,12 +1361,58 @@ class Club(CloudflareImageMixin, models.Model):
         return None
 
     @property
+    def donation_email_recipient(self):
+        """The member donation replies are forwarded to, or None to keep them on the site only.
+
+        Unlike the auction and contact addresses this deliberately has no fallback: a club that
+        hasn't named a donation contact gets its replies recorded against the vendor here and
+        nowhere else, which is the recommended setup (a reply sent straight to a person's inbox
+        is a reply this site can never see).
+        """
+        member = self.donation_email_member
+        if (
+            member
+            and member.club_id == self.pk
+            and member.routing_email
+            and not member.is_deleted
+            and (member.permission_admin or member.permission_add_edit)
+        ):
+            return member
+        return None
+
+    @property
+    def donation_routing_email(self):
+        """Where to forward donation replies, or None to record them without forwarding."""
+        recipient = self.donation_email_recipient
+        return recipient.routing_email if recipient else None
+
+    @property
     def auction_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-auctions")
 
     @property
     def contact_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-contact")
+
+    @property
+    def donation_tracking_enabled(self):
+        """True when this club may use donation tracking at all."""
+        return bool(self.enable_donation_tracking)
+
+    @property
+    def sends_donation_email(self):
+        """True when donation emails go out from this site rather than the admin's own mail client.
+
+        Routing has to actually be available, not merely selected: a site with no inbound routing
+        has no per-vendor address to send from, and a club whose stored mode still says "routed"
+        (set before routing was turned off, or never saved through the settings form) would
+        otherwise be offered a Send button that can only fail. Copy/paste is the honest fallback.
+        """
+        return (
+            self.enable_donation_tracking
+            and self.donation_email_mode == self.DONATION_EMAIL_MODE_ROUTED
+            and email_routing_enabled()
+        )
 
     @property
     def effective_paypal_seller(self):
@@ -2357,6 +2461,7 @@ class ClubHistory(models.Model):
             ("MEMBERSHIP", "Membership"),
             ("SETTINGS", "Settings"),
             ("BAP", "BAP"),
+            ("DONATIONS", "Donations"),
         ),
         blank=True,
         null=True,
@@ -2370,6 +2475,239 @@ class ClubHistory(models.Model):
     class Meta:
         ordering = ["-timestamp"]
         verbose_name_plural = "Club history"
+
+
+def _default_donation_routing_key():
+    """Return a random 10-digit key that isn't already in use by another vendor.
+
+    This is the part of ``<club-slug>-donations-<key>@<domain>`` that says *which vendor*.  It has
+    to survive a round trip through a stranger's mail client, so it's digits only: no case to be
+    folded, nothing that looks like a typo, and short enough that a vendor who retypes the address
+    by hand gets it right.  Globally unique rather than per-club so an inbound message can be tied
+    to exactly one vendor even if the club slug in the address has since changed.
+    """
+    for _attempt in range(20):
+        key = str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+        if not DonationVendor.objects.filter(routing_key=key).exists():
+            return key
+    # 9 billion keys and 20 misses means something is very wrong; let the unique constraint say so.
+    return str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+
+
+class DonationUnsubscribe(models.Model):
+    """A vendor who has asked, from their own inbox, never to be contacted about donations again.
+
+    Deliberately keyed on the email address rather than on a vendor row, and deliberately global
+    rather than per-club: the person who clicked the link was telling *this site* to stop, not one
+    club, and re-adding them under a new vendor record in a different club must not start the mail
+    flowing again.  There is no un-unsubscribe path in the club UI on purpose -- see
+    :meth:`DonationVendor.can_be_contacted`.
+    """
+
+    email = models.CharField(max_length=255, unique=True, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    club = models.ForeignKey(
+        Club,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The club whose email carried the unsubscribe link that was clicked.",
+    )
+
+    class Meta:
+        verbose_name = "Donation unsubscribe"
+        verbose_name_plural = "Donation unsubscribes"
+
+    def __str__(self):
+        return str(self.email)
+
+    @classmethod
+    def is_unsubscribed(cls, email):
+        email = normalize_email(email)
+        if not email:
+            return False
+        return cls.objects.filter(email=email).exists()
+
+
+class DonationVendor(models.Model):
+    """A business a club is asking to donate, and where that conversation has got to."""
+
+    STATUS_NEW = "new"
+    STATUS_EMAIL_SENT = "sent"
+    STATUS_INTERESTED = "interested"
+    STATUS_PROMISED = "promised"
+    STATUS_RECEIVED = "received"
+    STATUS_NOT_INTERESTED = "not_interested"
+    STATUS_DO_NOT_CONTACT = "do_not_contact"
+    STATUS_CHOICES = (
+        (STATUS_NEW, "New"),
+        (STATUS_EMAIL_SENT, "Initial email sent"),
+        (STATUS_INTERESTED, "Interested"),
+        (STATUS_PROMISED, "Donation promised"),
+        (STATUS_RECEIVED, "Donation received"),
+        (STATUS_NOT_INTERESTED, "Not interested"),
+        (STATUS_DO_NOT_CONTACT, "Do not contact"),
+    )
+    #: The only statuses the language model is allowed to move a vendor to when a reply arrives.
+    #: "Donation received" is left to a human -- a promise in an email is not a box of fish food --
+    #: and "Do not contact" only ever comes from the vendor clicking unsubscribe.
+    LLM_ASSIGNABLE_STATUSES = (STATUS_INTERESTED, STATUS_PROMISED, STATUS_NOT_INTERESTED)
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="donation_vendors")
+    name = models.CharField(max_length=255, verbose_name="Vendor name")
+    contact_name = models.CharField(max_length=255, blank=True, default="")
+    email = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    last_contact = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this vendor was last emailed, or last replied.",
+    )
+    followup_due = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When to chase this vendor again if they haven't replied.",
+    )
+    context = models.TextField(
+        blank=True,
+        default="",
+        help_text="What this vendor does, any history of donations, and anything else worth telling the model.",
+    )
+    routing_key = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        default=_default_donation_routing_key,
+        editable=False,
+        help_text="Identifies this vendor in the reply-to address so their replies land on their row.",
+    )
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    unsubscribed = models.BooleanField(
+        default=False,
+        help_text="The vendor used the unsubscribe link. Permanent, and applies to every club on this site.",
+    )
+    createdon = models.DateTimeField(auto_now_add=True)
+    createdby = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["name"]
+        # No DB-level uniqueness on (club, email): it would have to be conditional to allow the
+        # several blank-email vendors a club may legitimately have, and MariaDB silently declines
+        # to create conditional unique indexes (W036) -- leaving a constraint that looks enforced
+        # and isn't. Duplicate addresses are caught in DonationVendorForm.clean_email instead.
+        indexes = [models.Index(fields=["club", "status"])]
+
+    def __str__(self):
+        return str(self.name)
+
+    def save(self, *args, **kwargs):
+        self.email = normalize_email(self.email)
+        # A vendor who unsubscribed anywhere on this site is unsubscribed here too, even though
+        # this row may have been typed in by a different club that never heard about it.
+        if self.email and not self.unsubscribed and DonationUnsubscribe.is_unsubscribed(self.email):
+            self.unsubscribed = True
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(kwargs["update_fields"]) + ["unsubscribed"]
+        if self.unsubscribed and self.status != self.STATUS_DO_NOT_CONTACT:
+            self.status = self.STATUS_DO_NOT_CONTACT
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(kwargs["update_fields"]) + ["status"]
+        super().save(*args, **kwargs)
+
+    @property
+    def can_be_contacted(self):
+        """Whether we're allowed to write to this vendor at all."""
+        if self.is_deleted or not self.email:
+            return False
+        if self.unsubscribed or self.status == self.STATUS_DO_NOT_CONTACT:
+            return False
+        return not DonationUnsubscribe.is_unsubscribed(self.email)
+
+    @property
+    def cannot_contact_reason(self):
+        """Why the Contact button is unavailable, or "" when it isn't. Shown as a tooltip."""
+        if not self.email:
+            return "Add an email address for this vendor first"
+        if self.unsubscribed:
+            return "This vendor unsubscribed and cannot be contacted again"
+        if self.status == self.STATUS_DO_NOT_CONTACT:
+            return "This vendor is marked do not contact"
+        if DonationUnsubscribe.is_unsubscribed(self.email):
+            return "This email address unsubscribed from donation requests"
+        return ""
+
+    @property
+    def reply_to_address(self):
+        """The per-vendor address their replies come back to, or None when routing is off."""
+        return build_routed_sender_address(f"{self.club.slug}-donations-{self.routing_key}")
+
+    @property
+    def unsubscribe_url(self):
+        return reverse("donation_unsubscribe", kwargs={"uuid": self.uuid})
+
+    @property
+    def is_followup_due(self):
+        return bool(self.followup_due and self.followup_due <= timezone.now())
+
+    def schedule_followup(self, *, from_time=None):
+        """Set the follow-up date to the club's configured interval from now."""
+        base = from_time or timezone.now()
+        self.followup_due = base + datetime.timedelta(days=self.club.donation_followup_days or 7)
+        return self.followup_due
+
+
+class DonationEmail(models.Model):
+    """One message to or from a donation vendor.
+
+    Outgoing rows are written when an admin sends (or copies) a request; incoming rows are written
+    by the inbound mail webhook.  The body is stored as plain text with images stripped -- this is
+    a record of the conversation, not a mail client.
+    """
+
+    DIRECTION_INCOMING = "in"
+    DIRECTION_OUTGOING = "out"
+    DIRECTION_CHOICES = (
+        (DIRECTION_INCOMING, "Incoming"),
+        (DIRECTION_OUTGOING, "Outgoing"),
+    )
+
+    vendor = models.ForeignKey(DonationVendor, on_delete=models.CASCADE, related_name="emails")
+    direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES, db_index=True)
+    sender = models.CharField(max_length=255, blank=True, default="")
+    recipients = models.CharField(max_length=1000, blank=True, default="")
+    subject = models.CharField(max_length=500, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    summary = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="One-line summary, written by the language model for incoming mail.",
+    )
+    date = models.DateTimeField(default=timezone.now, db_index=True)
+    message_id = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="The Message-ID header, used to drop duplicates when a message is delivered twice.",
+    )
+    bounced = models.BooleanField(
+        default=False,
+        help_text="Set when a bounce notification comes back for this message.",
+    )
+    sent_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.get_direction_display()} {self.subject or '(no subject)'}"
+
+    @property
+    def is_incoming(self):
+        return self.direction == self.DIRECTION_INCOMING
 
 
 class ClubEvent(models.Model):

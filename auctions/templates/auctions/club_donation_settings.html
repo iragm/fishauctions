@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Donation Tracking Settings &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+{{ form.media }}
+{% include "club_ribbon.html" %}
+<h3 class="mb-3">Donation tracking</h3>
+
+<p class="text-muted">
+  Keep track of which local businesses you've asked to donate to a raffle or auction, what they
+  said, and who still needs chasing.
+</p>
+
+<div class="alert alert-info" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Donation emails sent from this site automatically carry the club's postal address and an
+  unsubscribe link, which US law requires on a bulk solicitation. The mailing address below is
+  what gets used, so a club sending from this site has to fill it in. If you copy/paste instead,
+  the message is yours to send and those lines are still added to what you copy &mdash; leave
+  them in.
+</div>
+
+{% if not assist_enabled %}
+<div class="alert alert-info" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Automatic email writing isn't set up on this site. You can still track vendors and record what
+  you sent, but you'll be writing the emails yourself.
+</div>
+{% endif %}
+
+<form method="post" novalidate>
+  {% csrf_token %}
+  {% crispy form %}
+
+  {% if routing_enabled %}
+  <div class="alert alert-info" role="alert">
+    <i class="bi bi-info-circle me-1"></i>
+    <strong>Leave the donation contact blank.</strong>
+    Vendor replies are recorded against the vendor either way. If you also forward them to a
+    person, they'll be tempted to reply from their own inbox &mdash; and that reply never reaches
+    this site, so it won't show up in the vendor's history or move their status along. Set a
+    donation contact on the
+    <a href="{% url 'club_email_settings' club.slug %}">email settings page</a> only if someone
+    genuinely needs a copy in their inbox.
+    {% if donation_contact %}
+    <hr>
+    Donation replies are currently also forwarded to <span class="text-warning">{{ donation_contact.routing_email }}</span>.
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary">Save donation settings</button>
+</form>
+
+{% if club.enable_donation_tracking %}
+<hr class="my-4">
+<a class="btn btn-secondary" href="{% url 'club_donation_vendors' club.slug %}">
+  <i class="bi bi-gift me-1"></i> Go to donation tracking
+</a>
+{% endif %}
+{% endblock %}

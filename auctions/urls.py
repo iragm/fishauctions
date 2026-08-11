@@ -4,7 +4,7 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import apple_notifications, passkit_views, views
+from . import apple_notifications, donation_views, passkit_views, views
 
 urlpatterns = [
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
@@ -1036,6 +1036,53 @@ urlpatterns = [
         name="api_club_bap_lots",
     ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
+    path(
+        "api/v1/email-routing/donation/",
+        donation_views.InboundDonationEmailView.as_view(),
+        name="inbound_donation_email",
+    ),
+    # Donation tracking. The unsubscribe link goes out in email to people with no account here,
+    # so it sits outside the clubs/<slug>/ admin block and is keyed on an unguessable uuid.
+    path(
+        "donations/unsubscribe/<uuid:uuid>/",
+        donation_views.DonationUnsubscribeView.as_view(),
+        name="donation_unsubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/",
+        donation_views.ClubDonationVendorsView.as_view(),
+        name="club_donation_vendors",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/settings/",
+        donation_views.ClubDonationSettingsView.as_view(),
+        name="club_donation_settings",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/add/",
+        donation_views.DonationVendorPanelView.as_view(),
+        name="club_donation_vendor_create",
+    ),
+    path(
+        "donations/vendor/<int:pk>/",
+        donation_views.DonationVendorPanelView.as_view(),
+        name="club_donation_vendor",
+    ),
+    path(
+        "donations/vendor/<int:pk>/delete/",
+        donation_views.DonationVendorDeleteView.as_view(),
+        name="club_donation_vendor_delete",
+    ),
+    path(
+        "donations/vendor/<int:pk>/contact/",
+        donation_views.DonationContactView.as_view(),
+        name="club_donation_contact",
+    ),
+    path(
+        "donations/email/<int:pk>/",
+        donation_views.DonationEmailPreviewView.as_view(),
+        name="club_donation_email",
+    ),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),

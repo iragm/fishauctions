@@ -28,6 +28,7 @@ from .models import (
     Category,
     ClubHistory,
     ClubMember,
+    DonationVendor,
     Invoice,
     Location,
     Lot,
@@ -1648,3 +1649,82 @@ class SpeakerFilter(django_filters.FilterSet):
                 | Q(topics__name__icontains=text)
             ).distinct()
         return queryset
+
+
+#: Marks every donation filter control so one hx-include picks up the whole set.
+DONATION_FILTER_CONTROL_CLASS = "donation-filter-control"
+
+
+def donation_filter_attrs(trigger, css_class, **extra):
+    """Shared htmx wiring for the donation filter controls, mirroring speaker_filter_attrs."""
+    attrs = {
+        "class": f"{css_class} {DONATION_FILTER_CONTROL_CLASS}",
+        "hx-get": "",
+        "hx-target": "div.table-container",
+        "hx-trigger": trigger,
+        "hx-swap": "outerHTML",
+        "hx-indicator": ".progress",
+        "hx-include": f".{DONATION_FILTER_CONTROL_CLASS}",
+    }
+    attrs.update(extra)
+    return attrs
+
+
+class DonationVendorFilter(django_filters.FilterSet):
+    """Text search plus a status menu for the donation tracking table.
+
+    Laid out the way style_reference.md prescribes: the search box gets a full-width line and the
+    status filter is a dropdown button below it, so the controls are the same size on a phone as
+    on a desktop.  The status widget is never rendered -- donation_table_header.html writes the
+    radios itself -- but stays declared because ``?status=promised`` is a link somebody can be sent.
+    """
+
+    query = django_filters.CharFilter(
+        method="vendor_search",
+        label="",
+        widget=TextInput(
+            attrs=donation_filter_attrs(
+                "keyup changed delay:300ms",
+                "form-control",
+                placeholder="Search vendors, contacts, or emails",
+            )
+        ),
+    )
+    status = django_filters.ChoiceFilter(
+        label="Status",
+        choices=DonationVendor.STATUS_CHOICES,
+        method="filter_by_status",
+        widget=HiddenInput(),
+    )
+
+    class Meta:
+        model = DonationVendor
+        fields = []
+
+    def __init__(self, data=None, *args, **kwargs):
+        # Same reasoning as ClubMemberFilter: FilterView hands us `request.GET or None`, and an
+        # unbound filterset never calls filter_queryset, which would leak deleted vendors.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        self.helper.form_id = "donation-vendor-filter-form"
+
+    def filter_queryset(self, queryset):
+        return super().filter_queryset(queryset).filter(is_deleted=False)
+
+    def filter_by_status(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(status=value)
+
+    def vendor_search(self, queryset, name, value):
+        value = (value or "").strip()
+        if not value:
+            return queryset
+        # No control of its own: chasing overdue vendors is the one thing worth a keyword, and a
+        # permanent dropdown row for it would be read past by everyone who isn't doing it today.
+        if value.lower() in ("due", "overdue", "followup", "follow up"):
+            return queryset.filter(followup_due__lte=timezone.now())
+        return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))
