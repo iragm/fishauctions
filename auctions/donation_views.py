@@ -51,18 +51,19 @@ logger = logging.getLogger(__name__)
 
 
 class DonationPermissionMixin(ClubViewMixin):
-    """Gate every donation page behind the club's add/edit permission and the feature flag.
+    """Gate every donation page behind the donation permission and the feature flag.
 
-    Donation tracking holds third-party contact details and can send mail in the club's name, so
-    it takes the same permission as editing members rather than the read-only view permission.
+    Donation tracking holds third-party contact details and can send mail in the club's name, so it
+    has a permission of its own rather than riding on member management: the people a club trusts
+    with its member list are not necessarily the ones it wants writing to businesses in its name.
+    ``check_club_permission`` grants everything to ``permission_admin``, so club admins are covered
+    without naming them here.
     """
 
     def check_donation_permission(self):
         if not self.club.enable_donation_tracking:
             raise Http404
-        if self.request.user.is_authenticated and (
-            self.user_has_club_permission("permission_add_edit") or self.user_has_club_permission("permission_admin")
-        ):
+        if self.request.user.is_authenticated and self.user_has_club_permission("permission_manage_donations"):
             return True
         raise PermissionDenied
 

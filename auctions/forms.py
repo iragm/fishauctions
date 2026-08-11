@@ -4575,12 +4575,17 @@ class ClubEmailSettingsForm(forms.ModelForm):
             )
             auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
             contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_add_edit=True))
+            # Donation replies go to whoever may open the vendor pages, which is its own permission
+            # now -- offering a membership manager here would name a recipient that
+            # Club.donation_email_recipient then refuses, and the setting would look silently broken.
+            donation_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_donations=True))
             # Determine the fallback person shown in the help text
             auction_fallback = club._first_email_member_by_priority(Q(permission_manage_auctions=True))
             contact_fallback = club._first_email_member_by_priority(Q(permission_add_edit=True))
         else:
             auction_qs = ClubMember.objects.none()
             contact_qs = ClubMember.objects.none()
+            donation_qs = ClubMember.objects.none()
             auction_fallback = None
             contact_fallback = None
 
@@ -4625,7 +4630,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             else:
                 donation_help = "Turn on donation tracking in Setup to route donation replies."
             self.fields["donation_email_member"] = _ClubEmailMemberChoiceField(
-                queryset=contact_qs if donation_enabled else ClubMember.objects.none(),
+                queryset=donation_qs if donation_enabled else ClubMember.objects.none(),
                 required=False,
                 label="Donation replies",
                 help_text=donation_help,
@@ -5132,6 +5137,7 @@ class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm
             "permission_money",
             "permission_manage_auctions",
             "permission_manage_bap",
+            "permission_manage_donations",
             "permission_export",
             "permission_add_edit",
             "permission_view",
@@ -5145,12 +5151,22 @@ class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm
             "permission_money": "Manage membership and payments — membership/payment settings and treasurer's report",
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
+            "permission_manage_donations": "Manage donations",
             "permission_export": "CSV import/export — can import and export member data as CSV",
             "permission_add_edit": "Manage membership — add, delete, and edit member records, renew memberships",
             "permission_view": "View members — can see the member list, but not edit",
         }
         for field_name, label in labels.items():
             self.fields[field_name].label = label
+        # The donation permission is worth nothing until the club turns donation tracking on, so say
+        # so where the checkbox is rather than letting an admin grant it and wonder why the person
+        # they granted it to still sees no Donation Tracking link.
+        club = getattr(self.instance, "club", None)
+        self.fields["permission_manage_donations"].help_text = (
+            "Allow the user to add and email vendors and manage club donations"
+            if club and club.enable_donation_tracking
+            else "Donation tracking is off right now, enable it in setup"
+        )
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_tag = True

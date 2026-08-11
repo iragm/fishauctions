@@ -460,6 +460,7 @@ CLUB_PERMISSION_FIELDS = (
     "permission_money",
     "permission_manage_auctions",
     "permission_manage_bap",
+    "permission_manage_donations",
 )
 
 
@@ -18514,6 +18515,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     | Q(permission_manage_auctions=True)
                     | Q(permission_export=True)
                     | Q(permission_manage_bap=True)
+                    | Q(permission_manage_donations=True)
                 )
                 .exists()
             )
@@ -20775,6 +20777,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         "permission_edit_club",
                         "permission_manage_auctions",
                         "permission_manage_bap",
+                        "permission_manage_donations",
                     ]:
                         if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
                             setattr(target, perm_field, True)

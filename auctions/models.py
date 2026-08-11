@@ -1375,7 +1375,7 @@ class Club(CloudflareImageMixin, models.Model):
             and member.club_id == self.pk
             and member.routing_email
             and not member.is_deleted
-            and (member.permission_admin or member.permission_add_edit)
+            and (member.permission_admin or member.permission_manage_donations)
         ):
             return member
         return None
@@ -1686,6 +1686,10 @@ class ClubMember(ContactRecord):
     )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
+    permission_manage_donations = models.BooleanField(
+        default=False,
+        help_text="Add and email donation vendors.  Separate from member management: it sends mail in the club's name.",
+    )
     possible_duplicate = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -1777,6 +1781,7 @@ class ClubMember(ContactRecord):
                 self.permission_money,
                 self.permission_manage_auctions,
                 self.permission_manage_bap,
+                self.permission_manage_donations,
             ]
         )
 
@@ -10660,6 +10665,7 @@ class UserData(models.Model):
                     "permission_money",
                     "permission_manage_auctions",
                     "permission_manage_bap",
+                    "permission_manage_donations",
                 ]:
                     if getattr(source_member, field) and not getattr(target_member, field):
                         setattr(target_member, field, True)

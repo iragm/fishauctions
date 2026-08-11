@@ -26,6 +26,7 @@ CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
         "permission_money",
         "permission_manage_auctions",
         "permission_manage_bap",
+        "permission_manage_donations",
         "bap_points",
         "hap_points",
         "culture_points",

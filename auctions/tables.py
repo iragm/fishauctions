@@ -557,6 +557,7 @@ _PERMISSION_BADGES = [
     ("permission_money", "Manage membership and payments"),
     ("permission_manage_auctions", "Manage auctions"),
     ("permission_manage_bap", "Award points"),
+    ("permission_manage_donations", "Manage donations"),
     ("permission_export", "Export data"),
     ("permission_add_edit", "Manage membership"),
     ("permission_view", "View members"),

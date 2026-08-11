@@ -960,6 +960,7 @@ def _user_sees_nec_speakers(user):
         "permission_money",
         "permission_manage_auctions",
         "permission_manage_bap",
+        "permission_manage_donations",
     ]
     any_permission = Q()
     for field_name in permission_fields:

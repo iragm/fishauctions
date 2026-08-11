@@ -104,7 +104,7 @@ class DonationRoutingTests(DonationTestMixin, TestCase):
     @override_settings(**ROUTING_SETTINGS)
     def test_a_donation_contact_is_forwarded_to(self):
         member = ClubMember.objects.create(
-            club=self.club, name="Treasurer", email="treasurer@example.com", permission_add_edit=True
+            club=self.club, name="Treasurer", email="treasurer@example.com", permission_manage_donations=True
         )
         self.club.donation_email_member = member
         self.club.save()
@@ -559,6 +559,23 @@ class DonationViewAccessTests(DonationTestMixin, TestCase):
         self.client.force_login(viewer)
         self.assertEqual(self.client.get(self.list_url).status_code, 403)
 
+    def test_a_member_with_the_donation_permission_sees_the_vendor_table(self):
+        staffer = User.objects.create_user(username="don_staff", password="pw", email="s@example.com")
+        ClubMember.objects.create(club=self.club, user=staffer, permission_manage_donations=True)
+        self.client.force_login(staffer)
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Fishy Business")
+
+    def test_managing_the_member_list_no_longer_grants_donations(self):
+        """Membership managers used to get these pages for free; donations is its own job now."""
+        manager = User.objects.create_user(username="don_mgr", password="pw", email="m@example.com")
+        ClubMember.objects.create(club=self.club, user=manager, permission_add_edit=True)
+        self.client.force_login(manager)
+        self.assertEqual(self.client.get(self.list_url).status_code, 403)
+        vendor_url = reverse("club_donation_vendor", kwargs={"pk": self.vendor.pk})
+        self.assertEqual(self.client.get(vendor_url).status_code, 403)
+
     def test_the_page_is_gone_when_the_feature_is_off(self):
         self.club.enable_donation_tracking = False
         self.club.save()
@@ -777,6 +794,47 @@ class DonationContactOnEmailSettingsTests(DonationTestMixin, TestCase):
 
     def test_it_recommends_leaving_the_contact_unset(self):
         self.assertIn("Leave this blank", self.form().fields["donation_email_member"].help_text)
+
+    def test_only_members_who_manage_donations_can_be_the_contact(self):
+        """Offering anyone else would name a recipient donation_email_recipient then refuses."""
+        staffer = ClubMember.objects.create(
+            club=self.club, name="Donations", email="don@example.com", permission_manage_donations=True
+        )
+        manager = ClubMember.objects.create(
+            club=self.club, name="Membership", email="mem@example.com", permission_add_edit=True
+        )
+        choices = list(self.form().fields["donation_email_member"].queryset)
+        self.assertIn(staffer, choices)
+        self.assertNotIn(manager, choices)
+
+    def test_a_membership_manager_is_no_longer_a_valid_recipient(self):
+        manager = ClubMember.objects.create(
+            club=self.club, name="Membership", email="mem@example.com", permission_add_edit=True
+        )
+        self.club.donation_email_member = manager
+        self.club.save()
+        self.club.refresh_from_db()
+        self.assertIsNone(self.club.donation_email_recipient)
+
+
+@isolated_cache("donations")
+class DonationPermissionHelpTextTests(DonationTestMixin, TestCase):
+    """The Manage donations checkbox in the member permissions dialog."""
+
+    def field(self):
+        from auctions.forms import ClubMemberPermissionsForm
+
+        self.club.refresh_from_db()
+        member = ClubMember.objects.create(club=self.club, name="Somebody")
+        return ClubMemberPermissionsForm(instance=member).fields["permission_manage_donations"]
+
+    def test_it_describes_the_permission_when_tracking_is_on(self):
+        self.assertEqual(self.field().help_text, "Allow the user to add and email vendors and manage club donations")
+
+    def test_it_says_where_to_switch_tracking_on_when_it_is_off(self):
+        self.club.enable_donation_tracking = False
+        self.club.save()
+        self.assertEqual(self.field().help_text, "Donation tracking is off right now, enable it in setup")
 
     @override_settings(SES_ROUTE_EMAILS_ENABLED=False)
     def test_it_is_absent_when_the_site_has_no_email_routing(self):

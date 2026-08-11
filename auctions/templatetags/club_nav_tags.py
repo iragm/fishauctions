@@ -40,8 +40,9 @@ def club_sidebar(context):
     can_manage_money = perm("permission_money") or perm("permission_edit_club")
     can_manage_auctions = perm("permission_admin") or perm("permission_manage_auctions")
     # Donation tracking holds third-party contact details and sends mail in the club's name, so it
-    # takes the same permission as editing members rather than the read-only view permission.
-    can_manage_donations = perm("permission_admin") or perm("permission_add_edit")
+    # has its own permission rather than riding on member management. perm() grants everything to
+    # permission_admin, which is why admin isn't named here.
+    can_manage_donations = perm("permission_manage_donations")
 
     # In managed/check-in mode the auction's participant list is the member list,
     # so "Members" points at the enhanced auction users table (single entry).
