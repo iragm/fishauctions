@@ -87,6 +87,14 @@ curl -L -o auctions/static/js/vendor/Chart.min.js \
   "https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"
 echo "✓ Chart.min.js downloaded"
 
+echo ""
+echo "10. Downloading ZXing 0.21.3..."
+# Barcode decoding for browsers without a native BarcodeDetector -- which means every iPhone.
+# Loaded on demand by camera_scanner.js, so it costs nothing on pages with no camera scanner.
+curl -L -o auctions/static/js/vendor/zxing.min.js \
+  "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"
+echo "✓ zxing.min.js downloaded"
+
 # Note: Popper.js is included in Bootstrap 5.3.3 bundle, no need to download separately
 # Note: Bootstrap 4.5.2 is not needed - all templates now use Bootstrap 5.3.3
 # Note: jQuery 3.6.1 is not needed - all templates use jQuery 3.5.1

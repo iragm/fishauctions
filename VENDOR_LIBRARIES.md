@@ -22,6 +22,7 @@ Located in `auctions/static/js/vendor/`:
 - **Bootstrap 5.3.3** (`bootstrap.bundle.min.js`) - Includes Popper.js for tooltips/popovers
 - **Select2 4.0.13** (`select2.min.js`) - Enhanced select boxes
 - **Chart.js 2.9.3** (`Chart.min.js`) - Data visualization and charting
+- **ZXing 0.21.3** (`zxing.min.js`) - Barcode/QR decoding for browsers with no native `BarcodeDetector` (i.e. Safari, so every iPhone). Loaded on demand by `camera_scanner.js`, not from `base.html`
 
 ### CSS Libraries
 
