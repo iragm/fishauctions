@@ -9836,6 +9836,42 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         self.assertTrue(new_image.is_primary)
 
 
+class WebsocketClientDisconnectTests(TestCase):
+    """A user closing the tab (or losing signal) mid-handshake makes uvicorn raise
+    ClientDisconnected out of accept().  That's routine, so it must not be logged at ERROR:
+    auctions.consumers is wired to mail_admins in settings.LOGGING, and it would email admins."""
+
+    def test_client_disconnected_during_connect_is_not_logged_as_an_error(self):
+        import logging as logging_module
+
+        from auctions.consumers import ClientDisconnected, LotConsumer
+
+        user = User.objects.create_user(username="ws_gone", password="testpassword", email="gone@example.com")
+        lot = Lot.objects.create(
+            lot_name="A test lot",
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            reserve_price=5,
+            user=user,
+            quantity=1,
+        )
+
+        class FakeChannelLayer:
+            async def group_add(self, group, channel):
+                return None
+
+        consumer = LotConsumer()
+        consumer.scope = {"url_route": {"kwargs": {"lot_number": lot.pk}}, "user": user}
+        consumer.channel_name = "test.channel"
+        consumer.channel_layer = FakeChannelLayer()
+
+        with (
+            patch.object(LotConsumer, "accept", side_effect=ClientDisconnected),
+            self.assertLogs("auctions.consumers", level="INFO") as captured,
+        ):
+            consumer.connect()
+        self.assertFalse([record for record in captured.records if record.levelno >= logging_module.ERROR])
+
+
 @unittest.skipUnless(CHANNELS_TESTING_AVAILABLE, "channels.testing requires daphne (test-only dependency)")
 class WebSocketConsumerTests(TransactionTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
