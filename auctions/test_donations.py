@@ -37,14 +37,15 @@ class FakeProvider(LLMProvider):
 
     name = "fake"
 
-    def __init__(self, payload=None, error=None):
+    def __init__(self, payload=None, error=None, configured=True):
         super().__init__(model="fake-model", api_key="key")
         self.payload = payload if payload is not None else {}
         self.error = error
+        self.configured = configured
         self.calls = []
 
     def is_configured(self):
-        return True
+        return self.configured
 
     def complete_json(self, system, messages, max_tokens=2000):
         self.calls.append({"system": system, "messages": messages})
@@ -332,16 +333,62 @@ class DraftingTests(DonationTestMixin, TestCase):
             donations.draft_request(self.vendor)
 
     def test_the_daily_draft_budget_is_capped(self):
-        for _ in range(donations.MAX_DRAFT_LLM_CALLS_PER_DAY):
+        for _ in range(donations.MAX_DONATION_EMAILS_PER_DAY):
             donations.draft_request(self.vendor)
         with self.assertRaises(LLMError):
             donations.draft_request(self.vendor)
 
     def test_the_draft_and_summary_budgets_are_separate(self):
-        for _ in range(donations.MAX_DRAFT_LLM_CALLS_PER_DAY):
+        for _ in range(donations.MAX_DONATION_EMAILS_PER_DAY):
             donations.draft_request(self.vendor)
         # The incoming budget is untouched, so a reply arriving now is still summarized.
         self.assertTrue(donations.check_rate_limit(self.club, "incoming"))
+
+    def test_a_draft_spends_the_clubs_daily_allowance(self):
+        """Nothing was sent, but the call was made and paid for."""
+        donations.draft_request(self.vendor)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 1)
+
+    def test_a_draft_that_is_then_sent_is_only_counted_once(self):
+        donations.draft_request(self.vendor)
+        donations.send_request(self.vendor, subject="Hello", body="Please donate", user=self.admin)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 1)
+
+    def test_a_failed_draft_still_counts(self):
+        """The tokens are spent by the time the model falls over."""
+        self.use_provider(FakeProvider(error=LLMError("model is down")))
+        with self.assertRaises(LLMError):
+            donations.draft_request(self.vendor)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 1)
+
+    def test_a_site_with_no_model_configured_charges_nothing(self):
+        self.use_provider(FakeProvider(payload={"subject": "s", "body": "b"}, configured=False))
+        with self.assertRaises(LLMError):
+            donations.draft_request(self.vendor)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+
+    def test_drafting_stops_once_the_day_is_spent_on_sending(self):
+        for index in range(donations.MAX_DONATION_EMAILS_PER_DAY):
+            DonationEmail.objects.create(
+                vendor=self.vendor,
+                direction=DonationEmail.DIRECTION_OUTGOING,
+                subject=f"Request {index}",
+                body="Please donate",
+            )
+        with self.assertRaises(LLMError) as caught:
+            donations.draft_request(self.vendor)
+        self.assertIn("limit", str(caught.exception))
+
+    def test_a_follow_up_to_our_own_email_is_prompted_as_a_nudge(self):
+        donations.draft_request(self.vendor, last_email="Our first request", last_email_is_outgoing=True)
+        prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("The last email the club sent this vendor", prompt)
+        self.assertIn("Our first request", prompt)
+
+    def test_a_reply_from_the_vendor_is_prompted_as_a_reply(self):
+        donations.draft_request(self.vendor, last_email="What did you have in mind?")
+        prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("Their last message to the club", prompt)
 
 
 @isolated_cache("donations")
@@ -439,7 +486,30 @@ class SendingTests(DonationTestMixin, TestCase):
     def test_the_message_says_it_is_a_donation_request(self):
         donations.send_request(self.vendor, subject="Hi", body="Please donate", user=self.admin)
         email = DonationEmail.objects.get(vendor=self.vendor)
-        self.assertIn("donation request from Test Aquarium Society", email.body)
+        self.assertIn("This message is a donation request from:", email.body)
+        self.assertIn("Test Aquarium Society", email.body)
+
+    def test_a_club_named_in_its_own_address_is_not_named_twice(self):
+        """Most clubs type their name at the top of the address, and it read as a stutter."""
+        self.club.donation_mailing_address = "Test Aquarium Society\n1 Main St\nSpringfield, IL 62701"
+        self.club.save()
+        self.vendor.refresh_from_db()
+        footer = donations.unsubscribe_footer(self.vendor)
+        self.assertEqual(footer.count("Test Aquarium Society"), 1)
+        self.assertIn("Test Aquarium Society\n1 Main St", footer)
+
+    def test_a_club_missing_from_its_own_address_is_still_named(self):
+        self.club.donation_mailing_address = "1 Main St\nSpringfield, IL 62701"
+        self.club.save()
+        self.vendor.refresh_from_db()
+        footer = donations.unsubscribe_footer(self.vendor)
+        self.assertIn("Test Aquarium Society\n1 Main St", footer)
+
+    def test_the_draft_prompt_keeps_the_address_out_of_the_body(self):
+        """It is in the footer of every email already; repeating it is what made them long."""
+        self.assertIn("Never put the club's mailing address in the body", donations._DRAFT_SYSTEM_PROMPT)
+        prompt = donations.build_draft_prompt(self.vendor)
+        self.assertIn("only to be used if they have asked where to send a donation", prompt)
 
     def test_a_copied_request_still_carries_the_address_and_opt_out(self):
         """Copy/paste mode has no postal-address gate, but the text it hands over still has both."""
@@ -704,6 +774,16 @@ class ContactDialogTests(DonationTestMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "model is down")
 
+    def test_a_model_failure_keeps_the_context_that_was_typed(self):
+        """Making them retype what they told the model, because the model went down, is the worst of both."""
+        self.use_provider(FakeProvider(error=LLMError("model is down")))
+        response = self.client.post(
+            self.url,
+            {"step": "generate", "context": "They sold us tanks last year", "last_email": ""},
+        )
+        self.assertContains(response, "model is down")
+        self.assertContains(response, "They sold us tanks last year")
+
     def test_an_unsubscribed_vendor_cannot_be_contacted(self):
         donations.unsubscribe_vendor(self.vendor)
         self.assertEqual(self.client.get(self.url).status_code, 403)
@@ -711,6 +791,164 @@ class ContactDialogTests(DonationTestMixin, TestCase):
     def test_an_outsider_cannot_open_the_dialog(self):
         self.client.force_login(self.outsider)
         self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_opening_the_dialog_costs_nothing(self):
+        """Only asking for a draft spends the allowance; looking at the form doesn't."""
+        self.client.get(self.url)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+
+    def test_a_draft_the_admin_walks_away_from_is_still_counted(self):
+        """There is no Cancel button to press in a test: closing the modal posts nothing at all."""
+        self.client.post(self.url, {"step": "generate", "context": "", "last_email": ""})
+        self.assertEqual(donations.donation_email_quota(self.club).used, 1)
+        self.assertFalse(DonationEmail.objects.filter(vendor=self.vendor).exists())
+
+
+@isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class FollowUpEmailTests(DonationTestMixin, TestCase):
+    """The second email to a vendor: what it is written from, and what it is called."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("club_donation_contact", kwargs={"pk": self.vendor.pk})
+        self.provider = self.use_provider(
+            FakeProvider({"subject": "A brand new subject line", "body": "Dear Pat,\n\nAny thoughts?"})
+        )
+        self.client.force_login(self.admin)
+
+    def send_first_request(self):
+        return donations.send_request(
+            self.vendor, subject="A donation for our spring auction", body="Please donate", user=self.admin
+        )
+
+    def receive_reply(self, subject="Re: A donation for our spring auction", message_id="<vendor-1@example.com>"):
+        return donations.record_incoming(
+            self.vendor,
+            sender=self.vendor.email,
+            recipients="club@example.com",
+            subject=subject,
+            body="What did you have in mind?",
+            message_id=message_id,
+        )[0]
+
+    def open_dialog(self):
+        return self.client.get(self.url)
+
+    def test_the_email_we_already_sent_prefills_the_last_email_box(self):
+        """The commonest follow-up of all: they never wrote back, so our own request is the context."""
+        self.send_first_request()
+        self.assertContains(self.open_dialog(), "Please donate")
+
+    def test_our_own_footer_is_not_fed_back_in(self):
+        self.send_first_request()
+        response = self.open_dialog()
+        self.assertNotContains(response, donations.FOOTER_MARKER)
+
+    def test_a_reply_from_the_vendor_wins_over_our_own_email(self):
+        self.send_first_request()
+        self.receive_reply()
+        response = self.open_dialog()
+        self.assertContains(response, "What did you have in mind?")
+        self.assertContains(response, "Their last message")
+
+    def test_the_box_says_which_way_the_last_email_went(self):
+        self.send_first_request()
+        response = self.open_dialog()
+        self.assertContains(response, "The last email you sent them")
+        self.assertContains(response, f'value="{DonationEmail.DIRECTION_OUTGOING}"')
+
+    def test_our_own_email_is_prompted_as_a_nudge_not_a_first_approach(self):
+        self.send_first_request()
+        self.client.post(
+            self.url,
+            {
+                "step": "generate",
+                "context": "",
+                "last_email": "Please donate",
+                "last_email_direction": DonationEmail.DIRECTION_OUTGOING,
+            },
+        )
+        prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("The last email the club sent this vendor", prompt)
+
+    def test_a_second_email_keeps_the_subject_of_the_first(self):
+        self.send_first_request()
+        response = self.client.post(self.url, {"step": "generate", "context": "", "last_email": "Please donate"})
+        self.assertContains(response, "RE: A donation for our spring auction")
+        self.assertNotContains(response, "A brand new subject line")
+
+    def test_a_reply_does_not_stack_up_re_prefixes(self):
+        self.send_first_request()
+        self.receive_reply()
+        response = self.client.post(self.url, {"step": "generate", "context": "", "last_email": "Anything?"})
+        self.assertContains(response, "RE: A donation for our spring auction")
+        self.assertNotContains(response, "RE: Re:")
+
+    def test_a_first_email_keeps_the_subject_the_model_wrote(self):
+        response = self.client.post(self.url, {"step": "generate", "context": "", "last_email": ""})
+        self.assertContains(response, "A brand new subject line")
+
+    def test_a_follow_up_is_threaded_onto_the_vendors_own_message(self):
+        from post_office.models import Email
+
+        self.receive_reply(message_id="<vendor-42@example.com>")
+        donations.send_request(self.vendor, subject="RE: Donations", body="Thanks for getting back", user=self.admin)
+        queued = Email.objects.order_by("-id").first()
+        self.assertEqual(queued.headers.get("In-Reply-To"), "<vendor-42@example.com>")
+        self.assertEqual(queued.headers.get("References"), "<vendor-42@example.com>")
+
+    def test_a_message_id_that_arrived_without_brackets_is_still_a_valid_header(self):
+        from post_office.models import Email
+
+        self.receive_reply(message_id="vendor-43@example.com")
+        donations.send_request(self.vendor, subject="RE: Donations", body="Thanks", user=self.admin)
+        queued = Email.objects.order_by("-id").first()
+        self.assertEqual(queued.headers.get("In-Reply-To"), "<vendor-43@example.com>")
+
+    def test_a_first_email_is_not_threaded_onto_anything(self):
+        from post_office.models import Email
+
+        donations.send_request(self.vendor, subject="Donations", body="Please donate", user=self.admin)
+        queued = Email.objects.order_by("-id").first()
+        self.assertNotIn("In-Reply-To", queued.headers)
+
+
+@isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class VendorListOrderTests(DonationTestMixin, TestCase):
+    """What order the vendor table comes back in."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("club_donation_vendors", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.admin)
+        now = timezone.now()
+        self.vendor.followup_due = now + datetime.timedelta(days=2)
+        self.vendor.save()
+        self.soonest = DonationVendor.objects.create(
+            club=self.club, name="Aaa Overdue", email="a@example.com", followup_due=now - datetime.timedelta(days=5)
+        )
+        self.latest = DonationVendor.objects.create(
+            club=self.club, name="Zzz Later", email="z@example.com", followup_due=now + datetime.timedelta(days=30)
+        )
+        self.no_date = DonationVendor.objects.create(club=self.club, name="Aaa No Date", email="n@example.com")
+
+    def listed(self):
+        return list(self.client.get(self.url).context["table"].data)
+
+    def test_the_most_overdue_vendor_is_first(self):
+        self.assertEqual(self.listed()[:3], [self.soonest, self.vendor, self.latest])
+
+    def test_vendors_with_no_follow_up_date_come_last(self):
+        """Nobody is waiting on them -- they unsubscribed, or the date was cleared by hand."""
+        self.assertEqual(self.listed()[-1], self.no_date)
+
+    def test_an_unsubscribed_vendor_drops_to_the_bottom(self):
+        donations.unsubscribe_vendor(self.soonest)
+        listed = self.listed()
+        self.assertIn(self.soonest, listed[-2:])
+        self.assertEqual(listed[0], self.vendor)
 
 
 @isolated_cache("donations")
@@ -748,7 +986,7 @@ class DonationSettingsTests(DonationTestMixin, TestCase):
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_ROUTED,
                 "donation_followup_days": 7,
                 "donation_context": "",
-                "donation_mailing_address": "",
+                "donation_mailing_address": "PO Box 1",
             },
         )
         self.club.refresh_from_db()
@@ -855,6 +1093,344 @@ class DonationPermissionHelpTextTests(DonationTestMixin, TestCase):
 
 
 @isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class DailyEmailLimitTests(DonationTestMixin, TestCase):
+    """The cap on donation emails a club may send in one day."""
+
+    def fill_the_day(self, count=None):
+        """Record *count* outgoing emails today without going through the sending path."""
+        count = donations.MAX_DONATION_EMAILS_PER_DAY if count is None else count
+        for index in range(count):
+            DonationEmail.objects.create(
+                vendor=self.vendor,
+                direction=DonationEmail.DIRECTION_OUTGOING,
+                subject=f"Request {index}",
+                body="Please donate",
+            )
+
+    def test_the_quota_counts_what_went_out_today(self):
+        self.fill_the_day(3)
+        quota = donations.donation_email_quota(self.club)
+        self.assertEqual(quota.used, 3)
+        self.assertEqual(quota.remaining, donations.MAX_DONATION_EMAILS_PER_DAY - 3)
+        self.assertFalse(quota.exhausted)
+
+    def test_yesterdays_emails_do_not_count(self):
+        self.fill_the_day()
+        DonationEmail.objects.update(date=timezone.now() - datetime.timedelta(days=1))
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+
+    def test_incoming_replies_do_not_count(self):
+        DonationEmail.objects.create(
+            vendor=self.vendor, direction=DonationEmail.DIRECTION_INCOMING, subject="Re:", body="Sure"
+        )
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+
+    def test_another_clubs_emails_do_not_count(self):
+        other_club = Club.objects.create(name="Other Club", enable_donation_tracking=True)
+        other_vendor = DonationVendor.objects.create(club=other_club, name="Elsewhere", email="e@example.com")
+        DonationEmail.objects.create(
+            vendor=other_vendor, direction=DonationEmail.DIRECTION_OUTGOING, subject="Hi", body="Please"
+        )
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+
+    def test_sending_past_the_limit_is_refused(self):
+        self.fill_the_day()
+        with self.assertRaises(donations.DonationSendError) as caught:
+            donations.send_request(self.vendor, subject="Hi", body="Please donate", user=self.admin)
+        self.assertIn("limit", str(caught.exception))
+        self.assertEqual(
+            DonationEmail.objects.filter(direction=DonationEmail.DIRECTION_OUTGOING).count(),
+            donations.MAX_DONATION_EMAILS_PER_DAY,
+        )
+
+    def test_copy_paste_mode_is_held_to_the_same_limit(self):
+        """Copying a request out is still asking a vendor for something, so it counts."""
+        self.club.donation_email_mode = Club.DONATION_EMAIL_MODE_COPY
+        self.club.save()
+        self.vendor.refresh_from_db()
+        self.fill_the_day()
+        with self.assertRaises(donations.DonationSendError):
+            donations.record_copied_request(self.vendor, subject="Hi", body="Please donate", user=self.admin)
+
+    def test_the_contact_dialog_closes_itself_instead_of_offering_a_send(self):
+        self.fill_the_day()
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("club_donation_contact", kwargs={"pk": self.vendor.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "limit")
+        self.assertNotContains(response, 'hx-vals=\'{"step": "send"}\'')
+
+    def test_the_dialog_will_not_send_even_when_posted_to_directly(self):
+        self.fill_the_day()
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("club_donation_contact", kwargs={"pk": self.vendor.pk}),
+            {"step": "send", "subject": "Hello", "body": "Please donate", "context": "", "last_email": ""},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            DonationEmail.objects.filter(direction=DonationEmail.DIRECTION_OUTGOING).count(),
+            donations.MAX_DONATION_EMAILS_PER_DAY,
+        )
+
+    def test_the_table_button_says_when_the_limit_lifts(self):
+        self.fill_the_day()
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("club_donation_vendors", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "donation-contact-blocked")
+        self.assertContains(response, "Try again")
+
+    def test_the_vendor_page_shows_how_much_is_left(self):
+        self.fill_the_day(4)
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("club_donation_vendors", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Donation emails today")
+        self.assertContains(response, f"4 of {donations.MAX_DONATION_EMAILS_PER_DAY}")
+
+    def test_a_blocked_vendor_still_says_what_is_wrong_with_the_vendor(self):
+        """Both kinds of "no" exist at once; the one about this vendor is the more useful."""
+        self.fill_the_day()
+        self.vendor.email = ""
+        self.vendor.save()
+        self.assertEqual(donations.contact_blocked_reason(self.vendor), "Add an email address for this vendor first")
+
+    def test_the_bar_never_runs_past_its_track(self):
+        self.fill_the_day(donations.MAX_DONATION_EMAILS_PER_DAY + 10)
+        quota = donations.donation_email_quota(self.club)
+        self.assertEqual(quota.percent_used, 100)
+        self.assertEqual(quota.remaining, 0)
+
+
+@isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class ReviewStepButtonsTests(DonationTestMixin, TestCase):
+    """The buttons on the drafted-email step, which is where an email is actually committed."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("club_donation_contact", kwargs={"pk": self.vendor.pk})
+        self.client.force_login(self.admin)
+        self.use_provider(FakeProvider({"subject": "A donation for our auction", "body": "Dear Pat,"}))
+
+    def review(self):
+        return self.client.post(self.url, {"step": "generate", "context": "", "last_email": ""})
+
+    def test_a_club_that_sends_from_here_gets_a_send_button(self):
+        response = self.review()
+        self.assertContains(response, 'hx-vals=\'{"step": "send"}\'')
+        self.assertContains(response, "Send")
+
+    def test_a_copy_paste_club_gets_a_record_button_instead(self):
+        self.club.donation_email_mode = Club.DONATION_EMAIL_MODE_COPY
+        self.club.save()
+        response = self.review()
+        self.assertContains(response, 'hx-vals=\'{"step": "send"}\'')
+        self.assertContains(response, "Copy &amp; record")
+
+    def test_there_is_no_separate_copy_button_or_rewrite(self):
+        """One way to commit an email, in either mode: send it, or copy-and-record it."""
+        for mode in (Club.DONATION_EMAIL_MODE_ROUTED, Club.DONATION_EMAIL_MODE_COPY):
+            self.club.donation_email_mode = mode
+            self.club.save()
+            response = self.review()
+            self.assertNotContains(response, "Copy to clipboard", msg_prefix=mode)
+            self.assertNotContains(response, "Rewrite", msg_prefix=mode)
+            self.assertNotContains(response, 'hx-vals=\'{"step": "generate"}\'', msg_prefix=mode)
+
+    def test_the_footer_is_not_clipped_out_of_a_scrollable_modal(self):
+        """The buttons live in a <form> inside .modal-content, which Bootstrap alone would hide.
+
+        See the .modal-dialog-scrollable rule in auction_site.css: without it a long email pushes
+        the footer past the content box and it is silently cropped away.
+        """
+        response = self.review()
+        self.assertContains(response, "modal-dialog-scrollable")
+        self.assertContains(response, '<div class="modal-footer flex-wrap">')
+
+    def test_a_step_that_makes_no_sense_keeps_what_was_typed(self):
+        response = self.client.post(self.url, {"context": "They sell tanks", "last_email": ""})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "They sell tanks")
+
+    def test_an_edited_email_is_what_gets_recorded(self):
+        self.client.post(
+            self.url,
+            {"step": "send", "subject": "Hello", "body": "Please donate a tank", "context": "", "last_email": ""},
+        )
+        email = DonationEmail.objects.get(vendor=self.vendor)
+        self.assertIn("Please donate a tank", email.body)
+
+
+@isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class VendorFormTests(DonationTestMixin, TestCase):
+    """Adding and editing a vendor through the modal."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+        self.create_url = reverse("club_donation_vendor_create", kwargs={"slug": self.club.slug})
+
+    def form(self, instance=None):
+        from auctions.forms import DonationVendorForm
+
+        return DonationVendorForm(instance=instance, club=self.club)
+
+    def test_a_new_vendor_is_not_asked_when_to_follow_up(self):
+        self.assertNotIn("followup_due", self.form().fields)
+        self.assertIn("followup_due", self.form(instance=self.vendor).fields)
+
+    def test_a_new_vendor_is_due_for_a_follow_up_straight_away(self):
+        before = timezone.now()
+        self.client.post(
+            self.create_url,
+            {"name": "New Vendor", "contact_name": "", "email": "new@example.com", "status": "new", "context": ""},
+        )
+        vendor = DonationVendor.objects.get(name="New Vendor")
+        self.assertIsNotNone(vendor.followup_due)
+        self.assertGreaterEqual(vendor.followup_due, before)
+        self.assertTrue(vendor.is_followup_due)
+
+    def test_the_follow_up_date_uses_a_native_calendar(self):
+        """The site's datepicker widget can't start itself inside a modal, so this one is plain."""
+        response = self.client.get(reverse("club_donation_vendor", kwargs={"pk": self.vendor.pk}) + "?edit=1")
+        self.assertContains(response, 'type="date"')
+        self.assertNotContains(response, "data-dbdp-config")
+
+    def test_a_picked_date_is_stored_as_a_datetime(self):
+        self.client.post(
+            reverse("club_donation_vendor", kwargs={"pk": self.vendor.pk}),
+            {
+                "name": self.vendor.name,
+                "contact_name": "",
+                "email": self.vendor.email,
+                "status": DonationVendor.STATUS_NEW,
+                "followup_due": "2026-09-15",
+                "context": "",
+            },
+        )
+        self.vendor.refresh_from_db()
+        self.assertEqual(timezone.localtime(self.vendor.followup_due).date(), datetime.date(2026, 9, 15))
+
+    def test_an_existing_date_comes_back_as_the_day_it_falls_on(self):
+        self.vendor.followup_due = timezone.now()
+        self.vendor.save()
+        expected = timezone.localtime(self.vendor.followup_due).date()
+        self.assertEqual(self.form(instance=self.vendor).initial["followup_due"], expected)
+
+    def test_the_edit_dialog_has_one_set_of_buttons(self):
+        """Crispy draws Cancel/Save; a second footer holding another Close is just clutter."""
+        response = self.client.get(reverse("club_donation_vendor", kwargs={"pk": self.vendor.pk}) + "?edit=1")
+        self.assertNotContains(response, 'data-modal-close-action="none">Close')
+
+
+@isolated_cache("donations")
+@override_settings(**ROUTING_SETTINGS)
+class UnsubscribeIsFinalTests(DonationTestMixin, TestCase):
+    """A vendor who opts out is never written to again, by any route this site offers."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+        donations.unsubscribe_vendor(self.vendor)
+        self.vendor.refresh_from_db()
+
+    def test_neither_way_of_sending_will_touch_them(self):
+        for send in (donations.send_request, donations.record_copied_request):
+            with self.assertRaises(donations.DonationSendError):
+                send(self.vendor, subject="Hi", body="Please donate", user=self.admin)
+        self.assertEqual(DonationEmail.objects.count(), 0)
+
+    def test_the_form_will_not_let_an_admin_edit_their_way_back(self):
+        from auctions.forms import DonationVendorForm
+
+        form = DonationVendorForm(instance=self.vendor, club=self.club)
+        self.assertTrue(form.fields["status"].disabled)
+        self.assertTrue(form.fields["email"].disabled)
+
+    def test_removing_and_re_adding_them_does_not_reset_it(self):
+        self.vendor.is_deleted = True
+        self.vendor.save()
+        self.client.post(
+            reverse("club_donation_vendor_create", kwargs={"slug": self.club.slug}),
+            {
+                "name": "Fishy Business",
+                "contact_name": "",
+                "email": "pat@fishybusiness.example",
+                "status": DonationVendor.STATUS_NEW,
+                "context": "",
+            },
+        )
+        added = DonationVendor.objects.filter(name="Fishy Business", is_deleted=False).first()
+        self.assertIsNotNone(added)
+        self.assertTrue(added.unsubscribed)
+        self.assertFalse(added.can_be_contacted)
+
+    def test_the_opt_out_line_speaks_to_the_vendor(self):
+        footer = donations.unsubscribe_footer(self.vendor)
+        self.assertIn("If you don't want to be contacted again", footer)
+        self.assertIn(self.vendor.unsubscribe_url, footer)
+
+
+@isolated_cache("donations")
+class DonationSettingsFormTests(DonationTestMixin, TestCase):
+    """What the settings page insists on before a club can start asking for donations."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("club_donation_settings", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.admin)
+
+    def post(self, **overrides):
+        data = {
+            "enable_donation_tracking": "on",
+            "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
+            "donation_followup_days": 7,
+            "donation_context": "",
+            "donation_mailing_address": "PO Box 1\nSpringfield, IL 62701",
+        }
+        data.update(overrides)
+        return self.client.post(self.url, data)
+
+    def test_a_mailing_address_is_required_to_turn_it_on(self):
+        response = self.post(donation_mailing_address="")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "postal address")
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.donation_mailing_address, "TAS\n1 Main St\nSpringfield, IL 62701")
+
+    def test_turning_it_off_does_not_need_an_address(self):
+        response = self.post(enable_donation_tracking="", donation_mailing_address="")
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.enable_donation_tracking)
+
+    def test_saving_lands_on_the_page_the_settings_were_for(self):
+        response = self.post()
+        self.assertRedirects(
+            response,
+            reverse("club_donation_vendors", kwargs={"slug": self.club.slug}),
+            fetch_redirect_response=False,
+        )
+
+    def test_turning_it_off_stays_on_the_settings_page(self):
+        """The vendor page 404s once tracking is off, so there is nowhere else to go."""
+        response = self.post(enable_donation_tracking="")
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+
+    def test_the_terms_are_readable_from_the_page(self):
+        response = self.client.get(self.url)
+        self.assertContains(response, "terms and conditions")
+        self.assertContains(response, "donation-terms-modal")
+        self.assertContains(response, "hold harmless")
+
+    def test_the_page_warns_about_state_nonprofit_rules(self):
+        response = self.client.get(self.url)
+        self.assertContains(response, "registered non-profit")
+
+
+@isolated_cache("donations")
 class TextHandlingTests(TestCase):
     def test_html_is_reduced_to_text(self):
         self.assertEqual(donations.strip_email_html("<p>Hello</p><p>World</p>"), "Hello\n\nWorld")
@@ -904,3 +1480,28 @@ class TextHandlingTests(TestCase):
 
     def test_a_sender_header_is_reduced_to_the_address(self):
         self.assertEqual(donations.sender_address("Pat Smith <pat@example.com>"), "pat@example.com")
+
+    def test_reply_prefixes_are_stripped_however_many_there_are(self):
+        self.assertEqual(donations.strip_reply_prefix("Re: Fwd: RE: Donations"), "Donations")
+        self.assertEqual(donations.strip_reply_prefix("Re[2]: Donations"), "Donations")
+        self.assertEqual(donations.strip_reply_prefix("Donations"), "Donations")
+
+    def test_a_subject_that_is_only_prefixes_does_not_loop_forever(self):
+        self.assertEqual(donations.strip_reply_prefix("Re: " * 500), "")
+
+    def test_a_follow_up_subject_replies_to_the_thread(self):
+        self.assertEqual(donations.followup_subject("Re: Donations"), "RE: Donations")
+
+    def test_a_follow_up_subject_falls_back_when_the_thread_has_none(self):
+        self.assertEqual(donations.followup_subject("", "A donation for our auction"), "RE: A donation for our auction")
+        self.assertEqual(donations.followup_subject("", ""), "")
+
+    def test_a_follow_up_subject_fits_the_form_that_holds_it(self):
+        self.assertLessEqual(len(donations.followup_subject("x" * 400)), 200)
+
+    def test_our_own_footer_is_cut_off_a_stored_message(self):
+        body = "Please donate.\n\n---\nThis message is a donation request from:\nTAS\n1 Main St\n\nUnsubscribe: ..."
+        self.assertEqual(donations.strip_donation_footer(body), "Please donate.")
+
+    def test_a_message_with_no_footer_is_left_alone(self):
+        self.assertEqual(donations.strip_donation_footer("  Please donate.  "), "Please donate.")

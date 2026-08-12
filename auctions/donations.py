@@ -15,13 +15,18 @@ their inputs hard: a vendor can put a megabyte of quoted history in a reply, and
 worth paying for.
 
 Rate limiting is per club per day rather than per user, because the thing being protected is the
-API bill, and a club with ten admins is still one club.
+API bill, and a club with ten admins is still one club.  Outgoing work -- drafting and sending --
+shares one allowance, so the number the vendor page shows is the whole story; incoming replies are
+budgeted separately, since a club should not be able to spend its way out of reading its own mail.
 """
 
 from __future__ import annotations
 
+import datetime
 import logging
+import math
 import re
+from dataclasses import dataclass
 from email.utils import parseaddr
 
 from django.core.cache import cache
@@ -36,11 +41,15 @@ logger = logging.getLogger(__name__)
 
 #: Incoming messages we'll pay to summarize, per club per day. Anything past this is still stored,
 #: just without a summary or an automatic status change -- the record is the important part.
+#: Kept separate from the outgoing allowance below so a club being written to can still write.
 MAX_INCOMING_LLM_CALLS_PER_DAY = 30
 
-#: Donation requests we'll draft per club per day. Separate budget from the incoming one so a club
-#: being spammed can still write its own mail.
-MAX_DRAFT_LLM_CALLS_PER_DAY = 30
+#: Donation emails a club may send -- or record as copied, or ask the model to write -- in one day.
+#: It is what keeps donation tracking from being usable as a mailing tool, and it is also what caps
+#: the API bill: asking for a draft spends one whether or not the email is ever sent, because the
+#: call was made and paid for either way. Thirty is more vendors than a volunteer-run club
+#: approaches in a week.
+MAX_DONATION_EMAILS_PER_DAY = 30
 
 #: How much of an incoming email to send for summarizing. Real replies say yes or no in the first
 #: paragraph; past this it's quoted threads and signatures.
@@ -60,7 +69,9 @@ _RATE_LIMIT_WINDOW_SECONDS = 60 * 60 * 24
 
 
 def _rate_limit_key(club, bucket):
-    return f"donation_llm_{bucket}_{club.pk}_{timezone.now():%Y%m%d}"
+    # Local date, not UTC: this has to name the same day as _day_bounds below, or the counter a
+    # club can see on the page and the counter behind it would roll over hours apart.
+    return f"donation_llm_{bucket}_{club.pk}_{timezone.localtime():%Y%m%d}"
 
 
 def check_rate_limit(club, bucket="incoming", limit=MAX_INCOMING_LLM_CALLS_PER_DAY):
@@ -78,6 +89,94 @@ def check_rate_limit(club, bucket="incoming", limit=MAX_INCOMING_LLM_CALLS_PER_D
         cache.set(key, 1, timeout=_RATE_LIMIT_WINDOW_SECONDS)
         used = 1
     return used <= limit
+
+
+def calls_used_today(club, bucket):
+    """How much of *club*'s daily budget for *bucket* is gone, without consuming any of it."""
+    try:
+        return int(cache.get(_rate_limit_key(club, bucket)) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+@dataclass(frozen=True)
+class DonationEmailQuota:
+    """How much of a club's daily donation-email allowance is left, and when it comes back."""
+
+    used: int
+    limit: int
+    resets_at: datetime.datetime
+
+    @property
+    def remaining(self):
+        return max(self.limit - self.used, 0)
+
+    @property
+    def exhausted(self):
+        return self.used >= self.limit
+
+    @property
+    def percent_used(self):
+        """0-100, for a progress bar. Capped so a bar can't run off the end of its track."""
+        if self.limit <= 0:
+            return 100
+        return min(round(self.used * 100 / self.limit), 100)
+
+    @property
+    def resets_in_words(self):
+        """How long until the allowance refills, as words: "in 3 hours", or "tomorrow"."""
+        seconds = (self.resets_at - timezone.now()).total_seconds()
+        if seconds <= 0:
+            return "now"
+        hours = math.ceil(seconds / 3600)
+        if hours <= 1:
+            return "in less than an hour"
+        if hours < 24:
+            return f"in {hours} hours"
+        return "tomorrow"
+
+    @property
+    def exhausted_message(self):
+        """Shown wherever an admin tries to contact a vendor with nothing left in the tank."""
+        return f"You've hit your limit of {self.limit} donation emails for today. Try again {self.resets_in_words}."
+
+
+def _day_bounds(now=None):
+    """The start of today and the moment it rolls over, both in the site's own timezone.
+
+    Local rather than UTC because the club reads "today" off a wall clock, and a limit that
+    resets in the middle of their afternoon reads as a bug.
+    """
+    local = timezone.localtime(now or timezone.now())
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + datetime.timedelta(days=1)
+
+
+def donation_email_quota(club, *, now=None):
+    """How much of *club*'s daily donation-email allowance is gone.
+
+    Two things spend it, and the larger of the two counts:
+
+      * emails that actually went out, counted in the database -- this one gates real mail going to
+        real businesses, so it has to survive a cache flush and be auditable afterwards, and
+        copy/paste requests count too, because the club still asked a vendor for something;
+      * drafts the model was asked to write, counted in the cache -- asking for one costs an API
+        call whether or not the admin goes on to send it, so cancelling the dialog does not hand
+        the allowance back.
+
+    The larger rather than the sum: an ordinary send is one draft *and* one email, and charging
+    twice for one message would halve a limit the page states plainly. Where the two disagree it is
+    because drafts were thrown away (drafts lead) or because the cache was flushed under us (sends
+    lead), and in both cases the bigger number is the honest one.
+    """
+    start, end = _day_bounds(now)
+    sent = DonationEmail.objects.filter(
+        vendor__club=club,
+        direction=DonationEmail.DIRECTION_OUTGOING,
+        date__gte=start,
+    ).count()
+    drafted = calls_used_today(club, "draft")
+    return DonationEmailQuota(used=max(sent, drafted), limit=MAX_DONATION_EMAILS_PER_DAY, resets_at=end)
 
 
 # --- text handling -----------------------------------------------------------
@@ -199,6 +298,36 @@ def truncate_for_model(text, limit):
 def sender_address(raw):
     """Pull the bare address out of a ``From:`` header value."""
     return (parseaddr(raw or "")[1] or "").strip().lower()
+
+
+#: One reply or forward marker at the front of a subject line. Applied in a loop rather than with a
+#: trailing ``+`` on the group: a repeated group whose parts can each match nothing is the classic
+#: shape that backtracks exponentially, and subject lines arrive from strangers.
+_REPLY_PREFIX_RE = re.compile(r"^\s*(?:re|fwd?)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
+
+
+def strip_reply_prefix(subject):
+    """Take "Re: Fwd: Re: Donations" down to "Donations"."""
+    text = (subject or "").strip()
+    while True:
+        shorter = _REPLY_PREFIX_RE.sub("", text, count=1)
+        if shorter == text:
+            return text
+        text = shorter
+
+
+def followup_subject(previous_subject, fallback=""):
+    """The subject for a second email in an existing conversation, or "" when there isn't one.
+
+    Everything after the first email to a vendor is part of one thread -- a nudge about the request
+    we sent, or an answer to what they wrote back -- so it goes out as ``RE:`` the subject the
+    thread already has. Mail clients group on the subject as well as the message headers, and a
+    fresh subject line every time reads to the vendor as a fresh cold approach.
+    """
+    base = strip_reply_prefix(previous_subject) or strip_reply_prefix(fallback)
+    if not base:
+        return ""
+    return f"RE: {base}"[:200]
 
 
 # --- incoming mail -----------------------------------------------------------
@@ -356,7 +485,9 @@ Rules for the body:
   - Say who the club is and what the event is, using only the facts you were given.
   - Make one clear, modest ask. Do not suggest a dollar value.
   - Say what the business gets: their name in front of local hobbyists who buy their products.
-  - If a mailing address was supplied, include it as the place to send a donation.
+  - Never put the club's mailing address in the body. It is added underneath the sign-off \
+automatically, so writing it out again only makes the email longer. The one exception is a vendor \
+who has asked where to send something: answer them.
   - If a tax or nonprofit identifier was supplied, mention it plainly as part of the club's details.
   - Never state or imply that a donation is tax deductible, and never describe the club as a \
 registered charity or nonprofit, unless you were explicitly given a nonprofit or tax identifier. \
@@ -369,8 +500,14 @@ or any fact you were not given.
 separately."""
 
 
-def build_draft_prompt(vendor, *, context="", last_email=""):
-    """Assemble the user-turn prompt for a donation request. Public so tests can read it."""
+def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgoing=False):
+    """Assemble the user-turn prompt for a donation request. Public so tests can read it.
+
+    *last_email* is whatever came last in this conversation, and *last_email_is_outgoing* says who
+    wrote it. The difference matters: answering a vendor who wrote back and nudging one who never
+    did are different emails, and a nudge that re-introduces the club from scratch reads as though
+    nobody at the club remembers sending the first one.
+    """
     club = vendor.club
     lines = [
         f"Club: {club.name}",
@@ -381,17 +518,27 @@ def build_draft_prompt(vendor, *, context="", last_email=""):
     if club.donation_context.strip():
         lines.append(f"About the club: {truncate_for_model(club.donation_context, CONTEXT_LIMIT)}")
     if club.donation_mailing_address.strip():
-        lines.append(f"Send donations to: {club.donation_mailing_address.strip()}")
+        # Handed over with the rule attached: every email already carries this address in its
+        # footer, so repeating it in the body is noise unless the vendor asked the question.
+        lines.append(
+            "Club mailing address, only to be used if they have asked where to send a donation:\n"
+            + club.donation_mailing_address.strip()
+        )
     next_event = _next_event_line(club)
     if next_event:
         lines.append(f"Next event: {next_event}")
     if context.strip():
         lines.append(f"About this vendor: {truncate_for_model(context, CONTEXT_LIMIT)}")
     if last_email.strip():
-        lines.append(
-            "Their last communication with the club (write a follow-up that acknowledges it):\n"
-            + truncate_for_model(strip_quoted_reply(last_email), LAST_EMAIL_LIMIT)
+        heading = (
+            "The last email the club sent this vendor. They have not replied to it, so write a "
+            "short follow-up: refer back to it, do not repeat the whole pitch, and make it easy "
+            "for them to say no. Do not greet them as though this were a first approach:"
+            if last_email_is_outgoing
+            else "Their last message to the club. Write a reply that answers it and picks the "
+            "conversation up where they left it, rather than starting again:"
         )
+        lines.append(f"{heading}\n{truncate_for_model(strip_quoted_reply(last_email), LAST_EMAIL_LIMIT)}")
     else:
         lines.append("There has been no previous contact with this vendor. Write a first approach.")
     return "\n".join(lines)
@@ -415,22 +562,30 @@ def _next_event_line(club):
     return f"{event.title} on {when}{where}"
 
 
-def draft_request(vendor, *, context="", last_email="", user=None):
+def draft_request(vendor, *, context="", last_email="", last_email_is_outgoing=False, user=None):
     """Ask the model for a donation request. Returns ``(subject, body)``.
 
     Raises :class:`LLMError` when the model can't be reached or won't answer -- the caller shows
     that to the admin, who can still write the email themselves.
     """
     club = vendor.club
-    if not check_rate_limit(club, "draft", MAX_DRAFT_LLM_CALLS_PER_DAY):
-        msg = "This club has used up its donation email drafts for today. Try again tomorrow."
-        raise LLMError(msg)
+    quota = donation_email_quota(club)
+    if quota.exhausted:
+        raise LLMError(quota.exhausted_message)
     provider = get_provider()
     if not provider.is_configured():
+        # Checked before charging: nothing was asked of anyone, so nothing is owed.
         msg = "Automatic email writing is not set up on this site."
         raise LLMError(msg)
+    # Charged up front and never refunded. The call is made and paid for the moment it is asked
+    # for, so an admin who reads the draft and hits Cancel has still spent one, and the number on
+    # the vendor page has to say so -- otherwise a club can burn the whole day's API budget while
+    # the page insists nothing has been used.
+    check_rate_limit(club, "draft", MAX_DONATION_EMAILS_PER_DAY)
 
-    prompt = build_draft_prompt(vendor, context=context, last_email=last_email)
+    prompt = build_draft_prompt(
+        vendor, context=context, last_email=last_email, last_email_is_outgoing=last_email_is_outgoing
+    )
     result = None
     try:
         result = provider.complete_json(_DRAFT_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=3000)
@@ -463,24 +618,80 @@ def _check_contactable(vendor):
         raise DonationSendError(vendor.cannot_contact_reason or "This vendor cannot be contacted.")
 
 
+def contact_blocked_reason(vendor, quota=None):
+    """Why an admin can't write to *vendor* right now, or "" when they can.
+
+    One place for both kinds of "no" -- something about the vendor, and the club's daily
+    allowance -- so the table button, the vendor panel and the dialog all say the same thing.
+    Pass *quota* when rendering a list, so a page of vendors doesn't count the same rows again
+    for every row.
+    """
+    reason = vendor.cannot_contact_reason
+    if reason:
+        return reason
+    quota = donation_email_quota(vendor.club) if quota is None else quota
+    return quota.exhausted_message if quota.exhausted else ""
+
+
+def _check_daily_quota(club):
+    """Refuse a request that would take the club past its daily allowance.
+
+    Checked here rather than only in the view so every path -- sent from the site, copied out by
+    hand, or anything added later -- is held to the same number.
+    """
+    quota = donation_email_quota(club)
+    if quota.exhausted:
+        raise DonationSendError(quota.exhausted_message)
+
+
+#: The line that opens the footer below. Named once so :func:`strip_donation_footer` can find it
+#: again in a stored message without the two drifting apart.
+FOOTER_MARKER = "This message is a donation request from:"
+
+#: The separator drawn above the footer, plus any trailing whitespace, so cutting the footer off a
+#: stored message doesn't leave a dangling rule behind.
+_FOOTER_SEPARATOR_RE = re.compile(r"\n\s*-{2,}\s*$")
+
+
+def strip_donation_footer(text):
+    """Cut the footer this site appends off a message we stored.
+
+    Used when an earlier email is fed back in as context for the next one: the address block and
+    opt-out link are added again on the way out, so carrying them into the prompt only pays for
+    tokens and invites the model to write its own version of them.
+    """
+    body = text or ""
+    index = body.find(FOOTER_MARKER)
+    if index == -1:
+        return body.strip()
+    return _FOOTER_SEPARATOR_RE.sub("", body[:index].rstrip()).strip()
+
+
 def unsubscribe_footer(vendor):
     """The physical address and opt-out line every donation email must carry.
 
     This is not decoration: US bulk commercial email has to name a physical mailing address for the
     sender and give a working, no-cost way to opt out. Both live here so no caller can send a
     donation request without them.
+
+    The club is named once, as the first line of the address block. Almost every club types its own
+    name at the top of that address, and a separate "a donation request from <club>" sentence above
+    it read as a stutter; when a club has left its name out, it goes in here instead, so the sender
+    is always identified either way.
     """
     from django.contrib.sites.models import Site
 
     domain = Site.objects.get_current().domain
     club = vendor.club
     address = club.donation_mailing_address.strip()
-    lines = ["", "---", f"This message is a donation request from {club.name}."]
-    if address:
-        lines.append(address)
-    lines.append(
-        f"To stop receiving donation requests from every club on this site: https://{domain}{vendor.unsubscribe_url}"
-    )
+    if not address:
+        block = club.name
+    elif club.name.strip().lower() in address.lower():
+        block = address
+    else:
+        block = f"{club.name}\n{address}"
+    lines = ["", "---", FOOTER_MARKER, block, ""]
+    lines.append(f"If you don't want to be contacted again: https://{domain}{vendor.unsubscribe_url}")
     return "\n".join(lines)
 
 
@@ -511,6 +722,29 @@ def _record_outgoing(vendor, *, subject, body, user, sender, recipients, message
     return email_row
 
 
+def _thread_headers(vendor):
+    """``In-Reply-To``/``References`` pointing at the vendor's last message, when there is one.
+
+    A ``RE:`` subject alone leaves it to the mail client to guess; these headers are what actually
+    file the email under the vendor's own message instead of starting a second thread beside it.
+    Only their messages are referenced -- ours are handed to post_office without a Message-ID, so
+    there is nothing of ours to point at.
+    """
+    previous = (
+        vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING).exclude(message_id="").first()
+        if vendor.pk
+        else None
+    )
+    if not previous:
+        return {}
+    message_id = previous.message_id.strip()
+    if not message_id.startswith("<"):
+        # Stored as it arrived, and not every relay brackets it. An unbracketed msg-id is not a
+        # valid header value, and a mail client that can't parse it ignores the threading entirely.
+        message_id = f"<{message_id.strip('<>')}>"
+    return {"In-Reply-To": message_id, "References": message_id}
+
+
 def send_request(vendor, *, subject, body, user):
     """Send a donation request through the site and record it.
 
@@ -521,6 +755,7 @@ def send_request(vendor, *, subject, body, user):
 
     _check_contactable(vendor)
     club = vendor.club
+    _check_daily_quota(club)
     if not club.sends_donation_email:
         msg = "This club is set up to copy/paste donation emails, not send them from this site."
         raise DonationSendError(msg)
@@ -548,7 +783,7 @@ def send_request(vendor, *, subject, body, user):
             f'"{club.name}" <{from_address}>',
             subject=subject,
             message=text,
-            headers={"Reply-To": from_address},
+            headers={"Reply-To": from_address, **_thread_headers(vendor)},
         )
     except Exception as error:
         logger.exception("Could not queue donation email to vendor %s", vendor.pk)
@@ -580,6 +815,7 @@ def record_copied_request(vendor, *, subject, body, user):
     can't be tracked.
     """
     _check_contactable(vendor)
+    _check_daily_quota(vendor.club)
     email_row = _record_outgoing(
         vendor,
         subject=subject,

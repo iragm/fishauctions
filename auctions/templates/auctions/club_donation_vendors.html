@@ -36,6 +36,72 @@
   Automatic email writing isn't set up on this site, so you'll be writing donation emails yourself.
 </div>
 {% endif %}
+
+{% comment %}The daily allowance, spent and remaining. A bar rather than a number because the thing worth knowing at a glance is how close to the end of it you are.{% endcomment %}
+<div class="mb-3">
+  <div class="d-flex justify-content-between align-items-center small">
+    <span>Donation emails today</span>
+    <span class="{% if quota.exhausted %}text-warning{% else %}text-muted{% endif %}">
+      {{ quota.used }} of {{ quota.limit }}
+    </span>
+  </div>
+  <div class="progress" style="height: 8px;" role="progressbar"
+       aria-label="Donation emails sent today" aria-valuenow="{{ quota.used }}"
+       aria-valuemin="0" aria-valuemax="{{ quota.limit }}">
+    <div class="progress-bar {% if quota.exhausted %}bg-warning{% endif %}" style="width: {{ quota.percent_used }}%;"></div>
+  </div>
+  {% if quota.exhausted %}
+  <div class="alert alert-warning text-dark py-2 mt-2 mb-0" role="alert">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    That's all {{ quota.limit }} donation emails for today &mdash; you can start again {{ quota.resets_in_words }}.
+    Replies still arrive and are recorded in the meantime.
+  </div>
+  {% else %}
+  <div class="form-text">
+    {{ quota.remaining }} left before the daily limit; it resets {{ quota.resets_in_words }}.
+    {% if assist_enabled %}Asking for an email to be written counts, even if you don't send it.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% comment %}Collapsed, not hidden: three things about this feature that surprise people, worth reading once and never again.{% endcomment %}
+<p class="mb-2">
+  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+          data-bs-target="#donation-tracking-help" aria-expanded="false" aria-controls="donation-tracking-help">
+    <i class="bi bi-info-circle me-1"></i> How donation tracking works
+  </button>
+</p>
+<div class="collapse mb-3" id="donation-tracking-help">
+  <div class="card card-body py-2">
+    <ul class="mb-0 ps-3">
+      <li>
+        There's no way to import a list of vendors, and you're capped at {{ quota.limit }} emails a
+        day. This isn't a spam system, it's donation tracking.
+      </li>
+      {% if can_send %}
+      <li>
+        Replies are routed back to this page, and nothing tells you when one arrives. That's
+        deliberate &mdash; a reply landing in your own inbox is one you'd answer from there, and
+        this site would never see it. Get in the habit of checking this page.
+      </li>
+      <li>
+        When a vendor replies, their follow-up date is set to today, so they show up in the list
+        of vendors waiting on you.
+      </li>
+      {% else %}
+      <li>
+        You're copying emails into your own email program, so replies arrive in your inbox and
+        this site never sees them. Open the vendor and set their status by hand when one comes in.
+      </li>
+      {% endif %}
+      <li>
+        Vendors are listed most overdue first, so the top of the list is what to do next. Anyone
+        with no date at the bottom is someone nobody is waiting on &mdash; they unsubscribed, or
+        the date was cleared by hand.
+      </li>
+    </ul>
+  </div>
+</div>
 {% endblock %}
 
 {% comment %}The header partial renders the search box and status menu, so the default crispy filter form would only duplicate them.{% endcomment %}
@@ -52,7 +118,7 @@
     if (!button) { return; }
     event.preventDefault();
     window.jQuery.toast({
-      title: 'Cannot contact this vendor',
+      title: 'Not right now',
       content: button.getAttribute('data-reason') || '',
       type: 'info',
       delay: 8000

@@ -18,6 +18,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
+from django.db.models import F
 from django.http import Http404
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -85,13 +86,25 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        return DonationVendor.objects.filter(club=self.club).order_by("name")
+        # Most overdue first: this is a work queue, and the vendor who has been waiting longest is
+        # the one to write to next. Vendors with no date at all go to the bottom -- a blank date
+        # means nobody is waiting on anything, because they unsubscribed or an admin cleared it.
+        # Name breaks the ties.
+        return DonationVendor.objects.filter(club=self.club).order_by(F("followup_due").asc(nulls_last=True), "name")
+
+    def get_table_kwargs(self, **kwargs):
+        # Counted once for the page rather than once per row: every Contact button needs the same
+        # answer to "has this club got any sends left today?".
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["quota"] = donations.donation_email_quota(self.club)
+        return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["can_send"] = self.club.sends_donation_email
         context["assist_enabled"] = assist_enabled()
+        context["quota"] = donations.donation_email_quota(self.club)
         vendors = self.get_queryset().filter(is_deleted=False)
         context["followup_due_count"] = vendors.filter(followup_due__lte=timezone.now()).count()
         # Sending from this site is blocked without a postal address (see donations.send_request);
@@ -140,6 +153,10 @@ class ClubDonationSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_success_url(self):
         messages.success(self.request, "Donation tracking settings saved.")
+        if self.object.enable_donation_tracking:
+            # Settings are a means to an end: what the admin came here to do is track vendors.
+            return reverse("club_donation_vendors", kwargs={"slug": self.club.slug})
+        # Tracking is off, and the vendor page 404s in that state -- stay put.
         return reverse("club_donation_settings", kwargs={"slug": self.club.slug})
 
     def form_valid(self, form):
@@ -186,7 +203,7 @@ class DonationVendorPanelView(LoginRequiredMixin, DonationPermissionMixin, View)
             "modal_title": vendor.name if vendor else "Add vendor",
             "can_send": self.club.sends_donation_email,
             "contact_url": reverse("club_donation_contact", kwargs={"pk": vendor.pk}) if vendor else "",
-            "cannot_contact_reason": vendor.cannot_contact_reason if vendor else "",
+            "cannot_contact_reason": donations.contact_blocked_reason(vendor) if vendor else "",
             "reply_to_address": vendor.reply_to_address if vendor else "",
         }
 
@@ -267,11 +284,36 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         self.check_donation_permission()
         if not self.vendor.can_be_contacted:
             raise PermissionDenied(self.vendor.cannot_contact_reason)
+        self.quota = donations.donation_email_quota(self.club)
 
-    def _last_email_text(self):
-        """Their most recent incoming message, to prefill the 'last email' box."""
-        last = self.vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING).first()
-        return last.body if last else ""
+    def _previous_email(self):
+        """The last message in this conversation, whoever wrote it.
+
+        Either direction, because both are context for what comes next: their reply is something to
+        answer, and our own unanswered request is something to nudge about. Only looking at incoming
+        mail left the box empty in the commonest case of all -- a vendor who hasn't written back.
+        """
+        return self.vendor.emails.first()
+
+    def _last_email_initial(self, previous):
+        """Prefill for the 'last email' box: the previous message, without our own footer."""
+        if not previous:
+            return {"last_email": "", "last_email_direction": ""}
+        return {
+            "last_email": donations.strip_donation_footer(previous.body),
+            "last_email_direction": previous.direction,
+        }
+
+    def _blocked_context(self):
+        """The whole dialog replaced by "not today". Used when the daily allowance is gone."""
+        return {
+            "club": self.club,
+            "vendor": self.vendor,
+            "step": "blocked",
+            "modal_title": f"Contact {self.vendor.name}",
+            "error": self.quota.exhausted_message,
+            "quota": self.quota,
+        }
 
     def _step_one_context(self, form):
         return {
@@ -299,10 +341,12 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
 
     def get(self, request, pk):
         self._load(request, pk)
+        if self.quota.exhausted:
+            return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
         form = DonationContactForm(
             initial={
                 "context": self.vendor.context,
-                "last_email": self._last_email_text(),
+                **self._last_email_initial(self._previous_email()),
             }
         )
         return render(request, "auctions/donation_contact_modal.html", self._step_one_context(form))
@@ -310,6 +354,10 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
     def post(self, request, pk):
         self._load(request, pk)
         step = request.POST.get("step")
+        if self.quota.exhausted:
+            # Nothing may be written or recorded past the limit, so there is no point offering a
+            # screen that ends in a refusal.
+            return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
         if step == "generate":
             return self._generate(request)
         if step == "send":
@@ -320,36 +368,48 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         form.is_valid()
         if form.is_bound and form.data.get("body"):
             return render(request, "auctions/donation_contact_modal.html", self._step_two_context(form))
-        return render(request, "auctions/donation_contact_modal.html", self._step_one_context(DonationContactForm()))
+        # Step 1 again, but bound, so whatever they had typed is still on the screen.
+        return render(
+            request, "auctions/donation_contact_modal.html", self._step_one_context(DonationContactForm(request.POST))
+        )
+
+    def _remember_context(self, context):
+        """Keep what the admin told us about this vendor so the next email doesn't start blank."""
+        if context.strip() and context.strip() != self.vendor.context.strip():
+            self.vendor.context = context.strip()
+            self.vendor.save(update_fields=["context"])
 
     def _generate(self, request):
-        # Reached from step 1 (the Next button) and from step 2 (Rewrite). Step 2 carries the same
-        # two values in hidden inputs, so one form reads both cases.
+        # Only ever reached from step 1: there is no way back here from the drafted email, so a
+        # failure below lands the admin on step 1 with their typing intact rather than anywhere else.
         form = DonationContactForm(request.POST)
         if not form.is_valid():
             return render(request, "auctions/donation_contact_modal.html", self._step_one_context(form))
         context = form.cleaned_data["context"]
         last_email = form.cleaned_data["last_email"]
-        # Remember what the admin told us about this vendor so the next email doesn't start blank.
-        if context.strip() and context.strip() != self.vendor.context.strip():
-            self.vendor.context = context.strip()
-            self.vendor.save(update_fields=["context"])
+        self._remember_context(context)
         try:
             subject, body = donations.draft_request(
                 self.vendor,
                 context=context,
                 last_email=last_email,
+                last_email_is_outgoing=form.cleaned_data["last_email_direction"] == DonationEmail.DIRECTION_OUTGOING,
                 user=request.user,
             )
         except LLMError as error:
-            # Keep them on step 1 with their typing intact and say what went wrong.
             step_one = self._step_one_context(form)
             step_one["error"] = str(error)
             return render(request, "auctions/donation_contact_modal.html", step_one)
-        edit_form = DonationEmailEditForm(
-            initial={"subject": subject, "body": body, "context": context, "last_email": last_email}
+        previous = self._previous_email()
+        if previous:
+            # Anything after the first email belongs to the thread that is already running, so it
+            # goes out as a reply to it rather than as another cold subject line.
+            subject = donations.followup_subject(previous.subject, subject) or subject
+        return render(
+            request,
+            "auctions/donation_contact_modal.html",
+            self._step_two_context(DonationEmailEditForm(initial={"subject": subject, "body": body})),
         )
-        return render(request, "auctions/donation_contact_modal.html", self._step_two_context(edit_form))
 
     def _send(self, request):
         form = DonationEmailEditForm(request.POST)

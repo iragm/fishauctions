@@ -72,6 +72,22 @@ a.ad:hover {
     z-index: 1040 !important;
 }
 
+/* A <form> wrapping the body and footer of a scrollable modal hides the footer.
+   Bootstrap makes .modal-content a flex column with `max-height:100%; overflow:hidden` and lets
+   .modal-body scroll inside it. That only works while the body and footer are flex children of
+   .modal-content: a <form> between them is one flex item whose automatic minimum size is its full
+   content height, so a long body pushes it past the content box and .modal-content's overflow
+   clips whatever is at the bottom -- the footer, buttons and all. Nothing looks broken; the Send
+   and Copy buttons simply are not on the screen, and only on the dialogs with enough text to
+   overflow. Making the form the flex column .modal-content expected puts the scrolling back on
+   .modal-body and pins the footer where it belongs. */
+.modal-dialog-scrollable .modal-content > form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .magic {
   animation: magic_animation 1s linear infinite .5s;
 }

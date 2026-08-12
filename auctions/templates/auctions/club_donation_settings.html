@@ -19,6 +19,11 @@
   what gets used, so a club sending from this site has to fill it in. If you copy/paste instead,
   the message is yours to send and those lines are still added to what you copy &mdash; leave
   them in.
+  <hr>
+  Some states require your club to be a registered non-profit before asking for donations. It's
+  your responsibility to comply with state and federal regulations, and to read the
+  <a href="#" data-bs-toggle="modal" data-bs-target="#donation-terms-modal">terms and conditions</a>
+  before you turn this on.
 </div>
 
 {% if not assist_enabled %}
@@ -59,4 +64,99 @@
   <i class="bi bi-gift me-1"></i> Go to donation tracking
 </a>
 {% endif %}
+
+{% comment %}A plain Bootstrap modal rather than one of the htmx ones: the terms are part of this page, they never change, and they have to be readable while the checkbox above them is still unticked.{% endcomment %}
+<div class="modal fade" id="donation-terms-modal" tabindex="-1" aria-labelledby="donation-terms-title" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="donation-terms-title">Donation tracking terms and conditions</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted">
+          These terms apply to donation tracking specifically. They're in addition to this site's
+          <a href="{% url 'tos' %}" target="_blank" rel="noopener">terms and conditions</a>, which
+          still apply to everything else. By switching donation tracking on, your club accepts
+          them.
+        </p>
+
+        <h6>Your club is the sender</h6>
+        <p>
+          Every donation email is your club's message, asking on your club's behalf, whether it
+          leaves from this site or you copy it into your own email program. This site provides the
+          tools; it does not solicit donations, is not a party to any arrangement you reach with a
+          vendor, and takes no share of what you're given.
+        </p>
+
+        <h6>Following the law is your job</h6>
+        <p>
+          Asking businesses and the public for donations is regulated, and the rules vary by state.
+          Some states require a club to be a registered non-profit, or to register as a charitable
+          solicitor, before asking at all. Others have rules about raffles specifically. Your club
+          is responsible for knowing which rules apply to it and following them, including US
+          federal email law (CAN&#8209;SPAM) and any state equivalent.
+        </p>
+        <p>
+          Don't describe your club as a registered charity, or a donation as tax deductible, unless
+          that's true of your club and you're prepared to back it up. The email this site writes
+          for you is instructed never to claim either on its own.
+        </p>
+
+        <h6>What you type about other people</h6>
+        <p>
+          You're responsible for the vendor names, addresses and notes you enter, for having a
+          legitimate reason to contact each vendor, and for keeping what you write about them
+          accurate and civil. Don't upload lists you bought, scraped, or were given for another
+          purpose.
+        </p>
+
+        <h6>Opting out is permanent</h6>
+        <p>
+          Every donation email carries an unsubscribe link. When a vendor uses it, that address is
+          blocked for every club on this site, immediately and permanently, and there is no way for
+          you or for us to put them back. Don't work around it by adding the same business under a
+          different address.
+        </p>
+
+        <h6>Automatically written email</h6>
+        <p>
+          When a language model drafts a request or summarizes a reply, the result is a starting
+          point and can be wrong. Read it before you send it. What you send is what you approved,
+          not what the model wrote. Summaries and statuses attached to incoming replies are a
+          convenience, not a record of what a vendor actually said &mdash; the original message is
+          kept, and it's the one that counts.
+        </p>
+
+        <h6>Limits, and no guarantees</h6>
+        <p>
+          Donation tracking is offered as-is, with no warranty of any kind. Email may be delayed,
+          rejected, filtered as spam, or lost, and replies may never reach this site. Daily limits
+          apply and may change. This site may suspend or withdraw the feature, for one club or for
+          everyone, at any time and without notice &mdash; including where it looks like it's being
+          used to send bulk unsolicited mail.
+        </p>
+
+        <h6>Hold harmless</h6>
+        <p>
+          Your club agrees to defend, indemnify and hold harmless this site, its operator and its
+          volunteers from any claim, demand, penalty, loss or expense (including reasonable legal
+          fees) arising out of your club's use of donation tracking &mdash; including messages your
+          club sent, statements it made about itself or its tax status, its handling of vendor
+          information, and any failure to comply with a law or regulation that applies to it. To
+          the fullest extent the law allows, this site is not liable to you for any indirect,
+          incidental or consequential loss arising from your use of the feature.
+        </p>
+
+        <p class="text-muted mb-0">
+          None of the above is legal advice. If you aren't sure whether your club may ask for
+          donations where it operates, ask somebody who is.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

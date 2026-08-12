@@ -1,8 +1,9 @@
 {% comment %}
-The write-an-email dialog. Both steps render through this one template so the modal is replaced in
-place: step "context" collects what the model should know, step "review" shows what it wrote.
+The write-an-email dialog. Every step renders through this one template so the modal is replaced in
+place: step "context" collects what the model should know, step "review" shows the email itself, and
+step "blocked" is what a club sees once it has used up its donation emails for the day.
 {% endcomment %}
-{{ form.media }}
+{% if form %}{{ form.media }}{% endif %}
 <div data-htmx-modal-root>
   <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
   <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
@@ -21,7 +22,19 @@ place: step "context" collects what the model should know, step "review" shows w
         </div>
         {% endif %}
 
-        {% if step == "context" %}
+        {% if step == "blocked" %}
+        <div class="modal-body">
+          <p class="mb-0 text-muted">
+            The limit is there to keep donation tracking a tracking tool rather than a mailing
+            list. Replies that arrive in the meantime are still recorded, and anything you've
+            already written is still on the vendor's page.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
+        </div>
+
+        {% elif step == "context" %}
         <form method="post" action="{{ post_url }}" hx-post="{{ post_url }}" hx-target="#modals-here"
               hx-indicator="#donation-generating">
           {% csrf_token %}
@@ -36,6 +49,7 @@ place: step "context" collects what the model should know, step "review" shows w
             <div class="mb-3">
               <label class="form-label" for="{{ form.last_email.id_for_label }}">{{ form.last_email.label }}</label>
               {{ form.last_email }}
+              {{ form.last_email_direction }}
               <div class="form-text">{{ form.last_email.help_text }}</div>
               {% if form.last_email.errors %}<div class="invalid-feedback d-block">{{ form.last_email.errors|join:" " }}</div>{% endif %}
             </div>
@@ -45,7 +59,7 @@ place: step "context" collects what the model should know, step "review" shows w
               <div class="text-muted mt-2">Writing the email&hellip; this takes a few seconds.</div>
             </div>
           </div>
-          <div class="modal-footer">
+          <div class="modal-footer flex-wrap">
             <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
             <button type="submit" class="btn btn-primary">Next</button>
           </div>
@@ -57,8 +71,6 @@ place: step "context" collects what the model should know, step "review" shows w
         it into the POST. There is no form-level hx-post for the same reason.{% endcomment %}
         <form method="post" action="{{ post_url }}">
           {% csrf_token %}
-          {{ form.context }}
-          {{ form.last_email }}
           <div class="modal-body">
             <div class="mb-3">
               <label class="form-label" for="{{ form.subject.id_for_label }}">Subject</label>
@@ -73,20 +85,17 @@ place: step "context" collects what the model should know, step "review" shows w
             </div>
             <div class="mb-2">
               <label class="form-label">Added automatically</label>
-              <pre class="border rounded p-2 small text-muted mb-1" style="white-space:pre-wrap;">{{ footer_preview }}</pre>
+              {% comment %}Capped and scrollable for the same reason the email box is only seven rows: everything here competes with the buttons underneath it for the height of the modal.{% endcomment %}
+              <pre id="donation-footer-preview" class="border rounded p-2 small text-muted mb-1"
+                   style="white-space:pre-wrap; max-height:7rem; overflow-y:auto;">{{ footer_preview }}</pre>
               <div class="form-text">Required on donation email: who sent it, a postal address, and a way to opt out.</div>
             </div>
             <div id="donation-regenerating" class="htmx-indicator text-center py-2">
               <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Working…</span></div>
             </div>
           </div>
-          <div class="modal-footer">
+          <div class="modal-footer flex-wrap">
             <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
-            <button type="button" class="btn btn-secondary"
-                    hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
-                    hx-vals='{"step": "generate"}' hx-indicator="#donation-regenerating">
-              <i class="bi bi-arrow-clockwise me-1"></i> Rewrite
-            </button>
             {% if can_send %}
             <button type="button" class="btn btn-success text-dark"
                     hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
@@ -97,7 +106,7 @@ place: step "context" collects what the model should know, step "review" shows w
             <button type="button" class="btn btn-success text-dark" id="donation-copy-button"
                     hx-post="{{ post_url }}" hx-target="#modals-here" hx-include="closest form"
                     hx-vals='{"step": "send"}' hx-indicator="#donation-regenerating">
-              <i class="bi bi-clipboard me-1"></i> Copy
+              <i class="bi bi-check2 me-1"></i> Copy &amp; record
             </button>
             {% endif %}
           </div>
@@ -110,22 +119,26 @@ place: step "context" collects what the model should know, step "review" shows w
 </div>
 <script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
 
-{% if step == "review" and not can_send %}
+{% if step == "review" %}
 <script>
 (function () {
-  // Copy/paste mode: put the message on the clipboard on the way out, so "Copy" really copies
-  // rather than only recording that the admin intends to send it by hand.
-  var button = document.getElementById('donation-copy-button');
-  if (!button) { return; }
-  button.addEventListener('click', function () {
-    var form = button.closest('form');
+  // Copy/paste mode only: the button that records the email also puts it on the clipboard, since
+  // the next thing that happens is the admin pasting it into their own email program. There is no
+  // separate copy button -- one action, one click, and the record is what the site is for.
+  var recordButton = document.getElementById('donation-copy-button');
+  if (!recordButton) { return; }
+
+  recordButton.addEventListener('click', function () {
+    var form = recordButton.closest('form');
     if (!form) { return; }
     var subject = form.querySelector('[name="subject"]');
     var body = form.querySelector('[name="body"]');
-    var text = 'Subject: ' + (subject ? subject.value : '') + '\n\n' + (body ? body.value : '');
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).catch(function () { /* the row is still recorded */ });
-    }
+    var footer = document.getElementById('donation-footer-preview');
+    // The email as it would leave here: what the admin wrote, plus the footer this site appends.
+    var text = 'Subject: ' + (subject ? subject.value : '') + '\n\n' +
+      (body ? body.value.replace(/\s+$/, '') : '') + '\n' + (footer ? footer.textContent : '');
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { return; }
+    navigator.clipboard.writeText(text).catch(function () { /* recorded either way */ });
   });
 })();
 </script>

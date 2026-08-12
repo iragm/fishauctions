@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
+from . import donations
 from .models import (
     Auction,
     AuctionHistory,
@@ -1264,6 +1265,12 @@ class DonationVendorHTMxTable(tables.Table):
         template_name = "tables/bootstrap_htmx.html"
         fields = ()
 
+    def __init__(self, *args, **kwargs):
+        # Counted once by the view and handed down, so rendering a page of vendors doesn't ask the
+        # same question of the database for every row.
+        self.quota = kwargs.pop("quota", None)
+        super().__init__(*args, **kwargs)
+
     def render_name(self, value, record):
         """The vendor name opens the side panel with their email history and edit form."""
         return format_html(
@@ -1290,6 +1297,19 @@ class DonationVendorHTMxTable(tables.Table):
             return "—"
         return format_html("<span title='{}'>{}</span>", record.last_contact, naturalday(record.last_contact))
 
+    def order_followup_due(self, queryset, is_descending):
+        """Sort by follow-up date, keeping the vendors that have none at the bottom either way.
+
+        Without this the database decides where nulls go, which puts every vendor who unsubscribed
+        or had their date cleared at the top of the ascending sort -- a screenful of rows there is
+        nothing to do about, above the overdue ones the page is meant to surface.
+        """
+        field = F("followup_due")
+        return (
+            queryset.order_by(field.desc(nulls_last=True) if is_descending else field.asc(nulls_last=True), "name"),
+            True,
+        )
+
     def render_followup_due(self, value, record):
         if not record.followup_due:
             return "—"
@@ -1306,9 +1326,10 @@ class DonationVendorHTMxTable(tables.Table):
         """A button that opens the write-an-email dialog.
 
         A vendor we may not write to keeps a clickable button that explains why rather than a
-        disabled one -- see the unavailable-action standard in style_reference.md.
+        disabled one -- see the unavailable-action standard in style_reference.md. Running out of
+        the club's daily allowance blocks the button the same way, and says when it comes back.
         """
-        reason = record.cannot_contact_reason
+        reason = donations.contact_blocked_reason(record, self.quota)
         if reason:
             # Stays clickable and explains itself in a toast; the handler is delegated from
             # club_donation_vendors.html so it survives htmx swaps of the table.

@@ -81,34 +81,35 @@ create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way
           {% endif %}
         </div>
 
-        <div class="modal-footer">
-          {% if not editing %}
-            {% if cannot_contact_reason %}
-            {% comment %}Unavailable, not hidden: keep it clickable and say why (style_reference.md).{% endcomment %}
-            <button type="button" class="btn btn-secondary donation-contact-blocked" data-reason="{{ cannot_contact_reason }}">
-              <i class="bi bi-envelope-slash me-1"></i> Contact
-            </button>
-            {% else %}
-            <button type="button" class="btn btn-primary" hx-get="{{ contact_url }}" hx-target="#modals-here" hx-trigger="click">
-              <i class="bi bi-envelope me-1"></i> Contact
-            </button>
-            {% endif %}
-            <button type="button" class="btn btn-secondary" hx-get="{% url 'club_donation_vendor' vendor.pk %}?edit=1" hx-target="#modals-here" hx-trigger="click">
-              <i class="bi bi-pencil me-1"></i> Edit
-            </button>
-            <form method="post" action="{% url 'club_donation_vendor_delete' vendor.pk %}"
-                  hx-post="{% url 'club_donation_vendor_delete' vendor.pk %}" hx-target="#modals-here"
-                  data-confirm="Remove {{ vendor.name }} from donation tracking? Their email history goes with them."
-                  data-confirm-title="Remove this vendor?"
-                  data-confirm-ok="Remove vendor"
-                  data-confirm-variant="danger"
-                  class="d-inline">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-outline-danger"><i class="bi bi-trash"></i></button>
-            </form>
+        {% comment %}Only when not editing: the form draws its own footer with Cancel and Save, and a second row holding one more Close button under it is just clutter.{% endcomment %}
+        {% if not editing %}
+        <div class="modal-footer flex-wrap">
+          {% if cannot_contact_reason %}
+          {% comment %}Unavailable, not hidden: keep it clickable and say why (style_reference.md).{% endcomment %}
+          <button type="button" class="btn btn-secondary donation-contact-blocked" data-reason="{{ cannot_contact_reason }}">
+            <i class="bi bi-envelope-slash me-1"></i> Contact
+          </button>
+          {% else %}
+          <button type="button" class="btn btn-primary" hx-get="{{ contact_url }}" hx-target="#modals-here" hx-trigger="click">
+            <i class="bi bi-envelope me-1"></i> Contact
+          </button>
           {% endif %}
+          <button type="button" class="btn btn-secondary" hx-get="{% url 'club_donation_vendor' vendor.pk %}?edit=1" hx-target="#modals-here" hx-trigger="click">
+            <i class="bi bi-pencil me-1"></i> Edit
+          </button>
+          <form method="post" action="{% url 'club_donation_vendor_delete' vendor.pk %}"
+                hx-post="{% url 'club_donation_vendor_delete' vendor.pk %}" hx-target="#modals-here"
+                data-confirm="Remove {{ vendor.name }} from donation tracking? Their email history goes with them."
+                data-confirm-title="Remove this vendor?"
+                data-confirm-ok="Remove vendor"
+                data-confirm-variant="danger"
+                class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-danger"><i class="bi bi-trash"></i></button>
+          </form>
           <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
         </div>
+        {% endif %}
       </div>
     </div>
   </div>

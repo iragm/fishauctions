@@ -1,3 +1,4 @@
+import datetime
 import logging
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -46,6 +47,7 @@ from .models import (
     ClubEvent,
     ClubMember,
     ClubMoney,
+    DonationEmail,
     DonationVendor,
     Invoice,
     InvoiceAdjustment,
@@ -5497,6 +5499,14 @@ class ClubDonationSettingsForm(forms.ModelForm):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.fields["enable_donation_tracking"].label = "Enable donation tracking"
+        # The terms live in a modal on the settings page (club_donation_settings.html): a club is
+        # agreeing to them by switching this on, so they have to be readable from right here.
+        self.fields["enable_donation_tracking"].help_text = mark_safe(  # noqa: S308 - literal
+            "Track which vendors you've asked for donations, and what they said. By using this "
+            "feature you confirm that your club has read and accepted the "
+            '<a href="#" data-bs-toggle="modal" data-bs-target="#donation-terms-modal">terms and '
+            "conditions</a> that go along with it."
+        )
         self.fields["donation_email_mode"].label = "How to send donation emails"
         # RadioSelect renders each choice's label, so the routed option has to name the real
         # address here rather than leaning on help_text the way the other fields do.
@@ -5547,9 +5557,37 @@ class ClubDonationSettingsForm(forms.ModelForm):
             return Club.DONATION_EMAIL_MODE_COPY
         return mode
 
+    def clean(self):
+        # Every donation email carries the club's postal address, whichever way it goes out: US
+        # law wants one on a solicitation sent in bulk, and donations.send_request refuses without
+        # it. Ask for it here, where it can still be typed, rather than at the end of the contact
+        # dialog once an admin has written an email they can't send.
+        cleaned_data = super().clean()
+        if (
+            cleaned_data.get("enable_donation_tracking")
+            and not (cleaned_data.get("donation_mailing_address") or "").strip()
+        ):
+            self.add_error(
+                "donation_mailing_address",
+                "Donation emails have to carry a postal address for the club, so this is required "
+                "while donation tracking is on.",
+            )
+        return cleaned_data
+
 
 class DonationVendorForm(forms.ModelForm):
     """Add or edit a vendor. Rendered in the modal that opens from the vendor's name."""
+
+    #: A plain ``<input type="date">`` rather than the site's usual DateTimePickerInput. That
+    #: widget wires itself up on DOMContentLoaded, which has long since fired by the time HTMX
+    #: swaps this form into a modal, so its calendar never appeared here. The native control needs
+    #: no JavaScript at all, and gives phones their own date wheel.
+    followup_due = forms.DateField(
+        required=False,
+        label="Follow up on",
+        widget=forms.DateInput(attrs={"type": "date"}),
+        help_text="When this vendor should show up as needing a nudge.",
+    )
 
     class Meta:
         model = DonationVendor
@@ -5558,7 +5596,6 @@ class DonationVendorForm(forms.ModelForm):
             "name": forms.TextInput(attrs={"placeholder": "Business name"}),
             "contact_name": forms.TextInput(attrs={"placeholder": "Who you talk to there"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
-            "followup_due": DateTimePickerInput(),
             "context": forms.Textarea(
                 attrs={
                     "rows": 3,
@@ -5567,7 +5604,6 @@ class DonationVendorForm(forms.ModelForm):
                 }
             ),
         }
-        labels = {"followup_due": "Follow up on"}
         help_texts = {
             "context": "Better context, better results.",
             "email": "",
@@ -5583,8 +5619,11 @@ class DonationVendorForm(forms.ModelForm):
             self.helper.form_action = post_url
         self.fields["contact_name"].required = False
         self.fields["email"].required = False
-        self.fields["followup_due"].required = False
         vendor = self.instance if self.instance and self.instance.pk else None
+        if vendor and vendor.followup_due:
+            # The stored value is a datetime; a date input can only render "YYYY-MM-DD", and the
+            # day it belongs to is the one the club would read off a calendar, not the UTC one.
+            self.initial["followup_due"] = timezone.localtime(vendor.followup_due).date()
         if vendor and vendor.unsubscribed:
             # The vendor asked us to stop. A club admin editing this row must not be able to
             # click the status back to something contactable.
@@ -5595,6 +5634,12 @@ class DonationVendorForm(forms.ModelForm):
             self.fields["email"].disabled = True
         add_bootstrap_classes(self)
         base_fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
+        if not vendor:
+            # Nothing has happened to a vendor being typed in for the first time, so there is no
+            # date to choose: save() starts their clock today, which puts them straight onto the
+            # follow-up list as somebody who still needs a first email.
+            del self.fields["followup_due"]
+            base_fields.remove("followup_due")
         if post_url:
             # Submitted over HTMX, like the club member and AuctionTOS modals: the POST answers
             # with the script that closes the modal, which only makes sense swapped into the page.
@@ -5630,10 +5675,24 @@ class DonationVendorForm(forms.ModelForm):
             raise forms.ValidationError(msg)
         return email
 
+    def clean_followup_due(self):
+        """Turn the picked day into the datetime the model stores.
+
+        Pinned to the start of that day locally, so a vendor picked for today reads as due today
+        rather than at some hour of it.
+        """
+        day = self.cleaned_data.get("followup_due")
+        if not day:
+            return None
+        return timezone.make_aware(datetime.datetime.combine(day, datetime.time.min), timezone.get_current_timezone())
+
     def save(self, commit=True):
+        creating = not self.instance.pk
         vendor = super().save(commit=False)
         if self._club and not vendor.club_id:
             vendor.club = self._club
+        if creating and not vendor.followup_due:
+            vendor.followup_due = timezone.now()
         if commit:
             vendor.save()
         return vendor
@@ -5641,6 +5700,9 @@ class DonationVendorForm(forms.ModelForm):
 
 class DonationContactForm(forms.Form):
     """Step one of the contact dialog: what the model should know before it writes."""
+
+    #: What the "last email" box holds, when it was filled in from the vendor's history.
+    KNOWN_DIRECTIONS = (DonationEmail.DIRECTION_INCOMING, DonationEmail.DIRECTION_OUTGOING)
 
     context = forms.CharField(
         required=False,
@@ -5657,23 +5719,44 @@ class DonationContactForm(forms.Form):
         label="Last email",
         help_text="Paste their last message here if you've been emailing them outside this site.",
     )
+    #: Which way the prefilled message went. Carried through the POST because the prompt reads
+    #: differently for each: a reply of theirs is something to answer, and a request of ours they
+    #: ignored is something to nudge about. Anything unrecognised means "typed in by hand", never a
+    #: validation error -- the box is hidden, so an error on it would be an invisible dead end.
+    last_email_direction = forms.CharField(required=False, widget=forms.HiddenInput())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # A prefilled box is not the same box as an empty one: the label has to say where the text
+        # came from, or an admin reads "paste their last message here" over the top of an email
+        # they are already looking at and wonders what it wants from them.
+        direction = self._direction()
+        if direction == DonationEmail.DIRECTION_INCOMING:
+            self.fields["last_email"].label = "Their last message"
+            self.fields["last_email"].help_text = "From this vendor's history. The email will reply to it."
+        elif direction == DonationEmail.DIRECTION_OUTGOING:
+            self.fields["last_email"].label = "The last email you sent them"
+            self.fields[
+                "last_email"
+            ].help_text = "From this vendor's history — they haven't replied. The email will follow it up."
         add_bootstrap_classes(self)
+
+    def _direction(self):
+        source = self.data if self.is_bound else self.initial
+        value = (source.get("last_email_direction") or "").strip()
+        return value if value in self.KNOWN_DIRECTIONS else ""
+
+    def clean_last_email_direction(self):
+        return self._direction()
 
 
 class DonationEmailEditForm(forms.Form):
-    """Step two: the generated email, before it is sent or copied.
-
-    ``context`` and ``last_email`` ride along hidden so the Rewrite button can hand them straight
-    back to the model instead of making the admin retype what they already told it.
-    """
+    """Step two: the generated email, before it is sent or copied."""
 
     subject = forms.CharField(max_length=200, widget=forms.TextInput())
-    body = forms.CharField(widget=forms.Textarea(attrs={"rows": 16}))
-    context = forms.CharField(required=False, widget=forms.HiddenInput())
-    last_email = forms.CharField(required=False, widget=forms.HiddenInput())
+    # Seven rows, not sixteen: the dialog's Send and Copy buttons sit under this box, and a taller
+    # one pushed them off the bottom of the modal on an ordinary laptop window. The box scrolls.
+    body = forms.CharField(widget=forms.Textarea(attrs={"rows": 7}))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
