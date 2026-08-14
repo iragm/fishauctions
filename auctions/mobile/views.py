@@ -1327,7 +1327,7 @@ class MobileLotLabelView(APIView):
         """
         tos = lot.auctiontos_seller
         if tos:
-            if tos.user_id and tos.user_id == user.pk:
+            if lot.is_owned_by(user):
                 return True
             return bool(tos.auction and tos.auction.permission_check(user))
         return bool(lot.user_id and lot.user_id == user.pk)

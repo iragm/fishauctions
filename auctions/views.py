@@ -2111,7 +2111,7 @@ class LotDeactivate(APIView):
             messages.error(request, "Your account doesn't have permission to view this page")
             return redirect(reverse("home"))
 
-        if lot.user.pk != request.user.pk and not request.user.is_superuser:
+        if not lot.is_owned_by(request.user) and not request.user.is_superuser:
             messages.error(request, "Your account doesn't have permission to view this page")
             return redirect(reverse("home"))
 
@@ -2245,14 +2245,8 @@ class Feedback(APIView):
                 # Truncate text to max length to prevent database errors
                 lot.feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
                 lot.save()
-        if leave_as == "seller":
-            if lot.user:
-                if lot.user.pk == request.user.pk:
-                    seller_checks_pass = True
-            if lot.auctiontos_seller:
-                if lot.auctiontos_seller.user:
-                    if lot.auctiontos_seller.user.pk == request.user.pk:
-                        seller_checks_pass = True
+        if leave_as == "seller" and lot.is_owned_by(request.user):
+            seller_checks_pass = True
         if seller_checks_pass:
             rating = data.get("rating")
             if rating:
@@ -6532,8 +6526,9 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 else:
                     lot.auctiontos_seller = self.tos
                     lot.auction = self.auction
-                    if self.tos.user:
-                        lot.user = self.tos.user
+                    owner = self.tos.lot_owner(self.request.user)
+                    if owner:
+                        lot.user = owner
                     lot.save()
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
@@ -6783,7 +6778,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                 lot = Lot(
                     auction=self.auction,
                     auctiontos_seller=self.tos,
-                    user=self.tos.user or None,
+                    user=self.tos.lot_owner(request.user),
                     added_by=request.user,
                 )
                 is_new = True
@@ -7276,8 +7271,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             auction=self.auction,
             added_by=self.request.user,
         )
-        if seller.user:
-            new_lot.user = seller.user
+        owner = seller.lot_owner(self.request.user)
+        if owner:
+            new_lot.user = owner
         if fields.get("category_id"):
             new_lot.species_category_id = fields["category_id"]
         new_lot.save()
@@ -7572,7 +7568,7 @@ class ViewLot(DetailView):
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
         # this should be visible only to people running the auction or the seller
         if lot.auction and lot.auction.is_online and lot.sold:
-            if context["is_auction_admin"] or self.request.user == lot.user:
+            if context["is_auction_admin"] or lot.is_owned_by(self.request.user):
                 context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user)
         context["show_bap_badge"] = False
@@ -7609,13 +7605,10 @@ class ViewLot(DetailView):
                     if _bap_override is not None
                     else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
                 )
-        is_lot_creator = bool(
-            self.request.user.is_authenticated
-            and (
-                (lot.user and lot.user == self.request.user)
-                or (lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user)
-            )
-        )
+        is_lot_creator = lot.is_owned_by(self.request.user)
+        # The template gates the edit/delete/deactivate buttons and the seller-only notes on this,
+        # rather than on lot.user, because lot.user is null on lots added through an unlinked TOS.
+        context["is_lot_creator"] = is_lot_creator
         if lot.use_images_from and is_lot_creator:
             context["images_managed_from_lot"] = lot.use_images_from
         # The seller of a lot in an in-person auction gets the per-source view breakdown: the AR
@@ -7629,13 +7622,9 @@ class ViewLot(DetailView):
             context["show_chat_subscriptions_checkbox"] = True
             context["autocheck_chat_subscriptions"] = "false"
             existing_subscription = ChatSubscription.objects.filter(lot=lot, user=self.request.user).first()
-            if (
-                lot.user
-                and lot.user == self.request.user
-                and not self.request.user.userdata.email_me_when_people_comment_on_my_lots
-            ):
+            if is_lot_creator and not self.request.user.userdata.email_me_when_people_comment_on_my_lots:
                 context["show_chat_subscriptions_checkbox"] = False
-            if lot.user != self.request.user and not self.request.user.userdata.email_me_about_new_chat_replies:
+            if not is_lot_creator and not self.request.user.userdata.email_me_about_new_chat_replies:
                 context["show_chat_subscriptions_checkbox"] = False
             if self.request.user.userdata.email_me_about_new_chat_replies and not existing_subscription:
                 context["autocheck_chat_subscriptions"] = "true"
@@ -8109,7 +8098,7 @@ class LotUpdate(LotValidation, UpdateView):
     form_class = CreateLotForm
 
     def dispatch(self, request, *args, **kwargs):
-        if not (request.user.is_superuser or self.get_object().user == self.request.user):
+        if not (request.user.is_superuser or self.get_object().is_owned_by(request.user)):
             messages.error(request, "Only the lot creator can edit a lot")
             return redirect(reverse("home"))
         if not self.get_object().can_be_edited:
@@ -8166,7 +8155,7 @@ class LotDelete(LoginRequiredMixin, DeleteView):
         if not self.get_object().can_be_deleted:
             messages.error(request, self.get_object().cannot_be_deleted_reason)
             return redirect(reverse("home"))
-        if not (request.user.is_superuser or self.get_object().user == self.request.user):
+        if not (request.user.is_superuser or self.get_object().is_owned_by(request.user)):
             messages.error(request, "Only the creator of a lot can delete it")
             return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
@@ -8195,7 +8184,7 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
 
     def dispatch(self, request, *args, **kwargs):
         auth = False
-        if self.get_object().lot_number.user == request.user:
+        if self.get_object().lot_number.is_owned_by(request.user):
             auth = True
         if not self.get_object().lot_number.can_be_edited:
             auth = False
@@ -10719,17 +10708,14 @@ class SingleLotLabelView(LotLabelView):
         self.filename = f"label_{self.lot.lot_number_display}"
         if self.lot.auctiontos_seller:
             self.auction = self.lot.auctiontos_seller.auction
-            auth = False
-            if self.lot.auctiontos_seller.user and self.lot.auctiontos_seller.user.pk == request.user.pk:
-                auth = True
-            if not auth and not self.is_auction_admin:
+            if not self.lot.is_owned_by(request.user) and not self.is_auction_admin:
                 messages.error(
                     request,
                     "You can't print labels for other people's lots unless you are an admin",
                 )
                 return redirect(reverse("home"))
         if not self.lot.auctiontos_seller:
-            if self.lot.user and self.lot.user is not request.user:
+            if self.lot.user and self.lot.user != request.user:
                 messages.error(request, "You can only print labels for your own lots")
                 return redirect(reverse("home"))
         # ?format=png (or ?fmt=png) returns a single rendered PNG via the shared label renderer

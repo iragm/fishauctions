@@ -296,8 +296,11 @@ def save_new_lot(lot, *, auction, tos, added_by):
     """
     lot.auctiontos_seller = tos
     lot.auction = auction
-    if tos.user:
-        lot.user = tos.user
+    # tos.lot_owner rather than tos.user: an unlinked TOS would otherwise leave lot.user null and
+    # lock the seller out of their own lot later. See AuctionTOS.lot_owner and Lot.is_owned_by.
+    owner = tos.lot_owner(added_by)
+    if owner:
+        lot.user = owner
     lot.added_by = added_by
     lot.save()
     return lot
