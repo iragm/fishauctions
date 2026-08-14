@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% load species_tags %}
 {% block extra_css %}
 <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
 {% endblock %}
@@ -35,6 +36,48 @@ function setAuction(setting) {
         setAuctionRequiredFields(false);
     }
 
+}
+
+{% comment %}
+  The scientific name picker and the category picker are two views of the same question, so they
+  are shown and hidden together.  The species field is always rendered (see
+  configure_species_field in forms.py) because the auction is picked in a dropdown on this very
+  form -- JavaScript can only show a field that is already in the page.
+{% endcomment %}
+var auctionUsesCategories = true;
+var auctionUsesScientificName = true;
+// species pk -> the category that species implies, as the suggestions endpoint reported it.
+var speciesCategories = {};
+{% comment %}Seeded for a lot that already has a species: editing one never calls the suggestions endpoint until the lot name changes, and without this the category field would be hidden with nothing shown in its place.{% endcomment %}
+{% if form.instance.species_id and form.instance.species.category %}speciesCategories["{{ form.instance.species_id }}"] = "{{ form.instance.species.category|escapejs }}";{% endif %}
+
+function setScientificName(enabled) {
+    auctionUsesScientificName = !!enabled;
+    $('#div_id_species').closest('.col-md-12').toggle(auctionUsesScientificName);
+    $('#fishbase-citation').toggle(auctionUsesScientificName);
+    if (!auctionUsesScientificName) {
+        // Whatever is in there belongs to an auction the user has navigated away from.  The
+        // server drops it too (clean_species_for_auction), but leaving a stale value visible in
+        // the DOM is how it ends up posted somewhere it doesn't belong.
+        $('#id_species').val('');
+    }
+    setCategoryVisibility();
+}
+
+{% comment %}
+  The category is derived from the species when there is one.  Species.category comes from the
+  family FishBase records, which is a better answer than the keyword guesser could give, so
+  asking the user as well is asking them to confirm something we already know.  The field is only
+  hidden, never removed: it still posts, it is still what lot search and BAP points read, and it
+  comes straight back for a sponge filter or a mixed bag, where no species can be identified.
+{% endcomment %}
+function setCategoryVisibility() {
+    var speciesChosen = auctionUsesScientificName && !!$('#id_species').val();
+    $('#div_id_species_category').closest('.col-md-12').toggle(auctionUsesCategories && !speciesChosen);
+    // Say where the lot ended up rather than just making the field disappear.  speciesCategories
+    // is filled in by the suggestions endpoint, which knows each species' category.
+    var derived = speciesChosen && auctionUsesCategories ? speciesCategories[$('#id_species').val()] : '';
+    $('#derived-category').text(derived ? 'Category: ' + derived : '');
 }
 
 function setAuctionRequiredFields(val) {
@@ -118,11 +161,8 @@ function setAuctionRequiredFields(val) {
                     } else {
                         $('#div_id_reference_link').closest('.col-md-3').hide();
                     }
-                    if (result.use_categories) {
-                        $('#div_id_species_category').closest('.col-md-12').show();
-                    } else {
-                        $('#div_id_species_category').closest('.col-md-12').hide();
-                    }
+                    auctionUsesCategories = !!result.use_categories;
+                    setScientificName(result.use_scientific_name);
                     if (result.reserve_price == 'disable') {
                         $('#div_id_reserve_price').closest('.col-md-3').hide();
                     } else {
@@ -147,7 +187,10 @@ function setAuctionRequiredFields(val) {
                     $('#id_custom_dropdown').prop('disabled', true);
                     $('#div_id_reference_link').closest('.col-md-3').show();
                     $('#div_id_summernote_description').closest('.col-md-12').show();
-                    $('#div_id_species_category').closest('.col-md-12').show();
+                    auctionUsesCategories = true;
+                    // A lot that isn't in an auction has no auction to read the setting off, so
+                    // there is no scientific name to pick and the category is all there is.
+                    setScientificName(false);
                     $('#div_id_i_bred_this_fish').closest('.col-md-3').show();
                     $('#id_buy_now_price').attr('required', false);
                     $('#div_id_reserve_price').closest('.col-md-3').show();
@@ -208,6 +251,63 @@ $(document).ready(function() {
         }
     });
 
+    {% comment %}
+      Scientific name picker. #id_species is rendered with only its current value in it (see
+      SpeciesSelect in forms.py); typing a lot name asks the server for up to five species and
+      fills the rest in. Everything in the dropdown came from the Species table, so the server
+      can reject anything else on save.
+    {% endcomment %}
+    $('#id_lot_name').on('blur', function() {
+        var select = document.getElementById('id_species');
+        // Nothing to fill in when the selected auction doesn't use scientific names -- on this
+        // form the field is still in the page, just hidden.
+        if (!select || select.tagName !== 'SELECT' || !auctionUsesScientificName) return;
+        var name = this.value.trim();
+        if (!name || select.dataset.lastQuery === name) return;
+        select.dataset.lastQuery = name;
+        $.ajax({
+            url: "{% url 'species_suggestions' %}",
+            type: 'POST',
+            // The category the form is showing, when it has one, breaks ties between species that
+            // match the name equally well.  It never rules a species out -- see suggest_species.
+            data: {'name': name, 'category': $('#id_species_category').val() || '', 'csrfmiddlewaretoken': '{{ csrf_token }}'},
+            success: function(response) {
+                if (select.dataset.lastQuery !== response.name) return;
+                var previous = select.value;
+                var previousLabel = previous ? select.options[select.selectedIndex].textContent : '';
+                var choices = response.choices || [];
+                select.innerHTML = '<option value="">No species</option>';
+                choices.forEach(function(choice) {
+                    var option = document.createElement('option');
+                    option.value = choice.id;
+                    option.textContent = choice.label;
+                    select.appendChild(option);
+                    speciesCategories[String(choice.id)] = choice.category || '';
+                });
+                var stillThere = choices.some(function(choice) { return String(choice.id) === previous; });
+                if (previous && stillThere) {
+                    select.value = previous;
+                } else if (previous && select.dataset.userChosen) {
+                    // Their pick isn't among the new suggestions. Put it back rather than
+                    // silently resetting a species someone chose by hand.
+                    var kept = document.createElement('option');
+                    kept.value = previous;
+                    kept.textContent = previousLabel;
+                    select.appendChild(kept);
+                    select.value = previous;
+                } else if (!select.dataset.userChosen && choices.length === 1) {
+                    select.value = choices[0].id;
+                }
+                setCategoryVisibility();
+            }
+        });
+    });
+    $('#id_species').on('change', function() {
+        this.dataset.userChosen = '1';
+        setCategoryVisibility();
+    });
+    setCategoryVisibility();
+
 });
 </script>
 {% if new %}
@@ -267,6 +367,12 @@ $(document).ready(function() {
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
             {% crispy form form.helper %}
+{% comment %}
+  Always rendered, then shown or hidden by setScientificName() along with the picker itself: this
+  form's auction is a dropdown, so whether there is a picker on the page isn't known until the
+  user has chosen one.
+{% endcomment %}
+{% fishbase_citation %}
 <div class="modal fade" id="joinAuction" tabindex="-1" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">

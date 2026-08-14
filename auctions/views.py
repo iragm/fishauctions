@@ -149,6 +149,7 @@ from .forms import (
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
     ClubBapCategoryOverrideForm,
+    ClubBapGenusOverrideForm,
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
@@ -183,6 +184,7 @@ from .forms import (
     QuickAddTOS,
     SpeakerCommentForm,
     SpeakerForm,
+    SpeciesAdminForm,
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
@@ -213,6 +215,7 @@ from .models import (
     ClubAPIKey,
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubDiscordRole,
     ClubEvent,
     ClubHistory,
@@ -235,6 +238,8 @@ from .models import (
     Speaker,
     SpeakerComment,
     SpeakerTag,
+    Species,
+    SpeciesSearchCache,
     SquareSeller,
     UserBan,
     UserData,
@@ -277,6 +282,8 @@ from .services import (
     user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
+from .species_matching import remember as remember_species
+from .species_matching import suggest_species
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -2734,9 +2741,9 @@ class MyWonLotCSV(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
-                is_deleted=True
-            )
+            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
+            .exclude(is_deleted=True)
+            .select_related("species")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -2744,12 +2751,13 @@ class MyWonLotCSV(LoginRequiredMixin, View):
             f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
         writer = csv.writer(response)
-        writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
+        writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
             writer.writerow(
                 [
                     lot.lot_number_display,
                     lot.lot_name,
+                    lot.scientific_name,
                     lot.auction,
                     f"{lot.currency_symbol}{lot.winning_price}",
                     "https://" + lot.full_lot_link,
@@ -2765,7 +2773,7 @@ class MyLotReportView(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
             .exclude(is_deleted=True)
-            .select_related("bap_award__club_member__club")
+            .select_related("bap_award__club_member__club", "species")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -2777,6 +2785,7 @@ class MyLotReportView(LoginRequiredMixin, View):
             [
                 "Lot number",
                 "Name",
+                "Scientific name",
                 "Auction",
                 "Status",
                 "Winning price",
@@ -2811,6 +2820,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                 [
                     lot.lot_number_display,
                     lot.lot_name,
+                    lot.scientific_name,
                     lot.auction,
                     status,
                     lot.winning_price,
@@ -3313,6 +3323,10 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             "Club Cut",
             "Seller cut",
         ]
+        # Only when the auction actually collected one, so a club that turned the field off
+        # doesn't get an empty column in every report.
+        if self.auction.use_scientific_name:
+            first_row_fields.insert(2, "Scientific name")
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
@@ -3320,7 +3334,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
-        lots = self.auction.lots_qs
+        lots = self.auction.lots_qs.select_related("species")
         lots = add_price_info(lots)
         if query:
             lots = LotAdminFilter.generic(None, lots, query)
@@ -3342,6 +3356,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 f"{lot.club_cut:.2f}" if lot.winning_price else "",
                 f"{lot.your_cut:.2f}" if lot.winning_price else "",
             ]
+            if self.auction.use_scientific_name:
+                row.insert(2, lot.scientific_name)
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
@@ -3403,6 +3419,53 @@ class FindImageIcon(APIView):
         if result:
             return HttpResponse("image available")
         return HttpResponse("")
+
+
+class SpeciesSuggestions(APIView):
+    """Given a lot name, return the handful of species it might be.
+
+    Backs the scientific-name picker on every lot form.  The list is always short and always
+    comes out of the Species table, so the client can render it as a ``<select>`` and the server
+    can reject anything that isn't in it -- see ``configure_species_field`` and
+    ``clean_species_for_auction`` in forms.py.
+    """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        name = (request.POST.get("name") or "").strip()
+        # The last-typed name wins: on the bulk-add page several rows can be in flight at once and
+        # the client matches responses back up by this.
+        if not name:
+            return JsonResponse({"name": name, "choices": [], "source": "none"})
+        # Optional, and only ever a tie-break inside suggest_species.  Not validated beyond "is it
+        # a number" on purpose: a category that doesn't exist simply matches nothing.
+        category = request.POST.get("category") or None
+        matches, source = suggest_species(
+            name,
+            user=request.user,
+            category=int(category) if category and category.isdigit() else None,
+        )
+        return JsonResponse(
+            {
+                "name": name,
+                "source": source,
+                "choices": [
+                    {
+                        "id": species.pk,
+                        "scientific_name": species.full_scientific_name,
+                        "common_name": species.common_name,
+                        # The category the lot will get if this species is picked.  The forms hide
+                        # their own category field once a species is chosen, and this is what they
+                        # show instead of just making it vanish.
+                        "category": str(species.category) if species.category else "",
+                        "label": species.label,
+                    }
+                    for species in matches
+                ],
+            }
+        )
 
 
 class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
@@ -6702,6 +6765,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["minimum_bid"] = self.auction.minimum_bid
 
         context["auto_add_images"] = self.auction.auto_add_images
+        context["use_scientific_name"] = self.auction.use_scientific_name
 
         # Lot limit settings
         context["max_lots_per_user"] = self.auction.max_lots_per_user
@@ -6866,6 +6930,28 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             # Species category (auto-set to Uncategorized)
             if not lot.species_category_id:
                 lot.species_category = Category.objects.filter(name="Uncategorized").first()
+
+            # Scientific name.  Only ever a pk from the suggestions endpoint; anything else is
+            # rejected rather than coerced, so the column can't fill up with free text.
+            if self.auction.use_scientific_name:
+                species_id = data.get("species")
+                if species_id in (None, "", "0"):
+                    lot.species = None
+                else:
+                    species = Species.objects.filter(pk=species_id).first()
+                    if not species:
+                        errors["species"] = "Pick a scientific name from the list"
+                    else:
+                        lot.species = species
+                        # Remember it only on the row's first save, where the name and the species
+                        # were entered together and the pairing is really what the person meant.
+                        # On a later edit they may well have rewritten the lot name and left the
+                        # old species sitting there, and the cache is global -- one stale row would
+                        # teach every club that "sponge filter" is a guppy.
+                        if is_new:
+                            remember_species(lot_name, species, source="user")
+            else:
+                lot.species = None
 
             # Custom checkbox
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
@@ -7633,16 +7719,7 @@ class ViewLot(DetailView):
             if viewer_has_bap and lot.sold:
                 club = lot.auction.club
                 context["bap_club"] = club
-                _bap_override = (
-                    ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-                    if lot.species_category
-                    else None
-                )
-                context["bap_default_points"] = (
-                    _bap_override.points
-                    if _bap_override is not None
-                    else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-                )
+                context["bap_default_points"] = lot.bap_points_for_club(club)
         is_lot_creator = bool(
             self.request.user.is_authenticated
             and (
@@ -9121,6 +9198,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "auto_add_images",
                 "message_users_when_lots_sell",
                 "label_print_fields",
+                "use_scientific_name",
                 "force_donation_threshold",
                 "use_quantity_field",
                 "custom_checkbox_name",
@@ -10663,6 +10741,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "auctiontos_winner",
             "auctiontos_winner__pickup_location",
             "species_category",
+            "species",
             "user",
         )
 
@@ -17369,6 +17448,7 @@ class AuctionFinder(APIView):
                 ),
                 "use_reference_link": self.auction.use_reference_link,
                 "use_description": self.auction.use_description,
+                "use_scientific_name": self.auction.use_scientific_name,
             }
         return JsonResponse(result)
 
@@ -21213,6 +21293,8 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             "category"
         )
         context["override_form"] = ClubBapCategoryOverrideForm()
+        context["bap_genus_overrides"] = ClubBapGenusOverride.objects.filter(club=self.club)
+        context["genus_override_form"] = ClubBapGenusOverrideForm()
         return context
 
     def form_valid(self, form):
@@ -21268,6 +21350,59 @@ class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View)
                 club=self.club,
                 user=request.user,
                 action=f"Removed BAP point override for {override.category.name}",
+                applies_to="BAP",
+            )
+            override.delete()
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubBapGenusOverrideSaveView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create or update a per-genus BAP point override for a club.
+
+    The genus twin of :class:`ClubBapCategoryOverrideSaveView`; a genus rule outranks a category
+    rule when a lot's species falls under both (see ``Lot.bap_points_for_club``).
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        form = ClubBapGenusOverrideForm(request.POST)
+        if form.is_valid():
+            genus = form.cleaned_data["genus"]
+            points = form.cleaned_data["points"]
+            ClubBapGenusOverride.objects.update_or_create(club=self.club, genus=genus, defaults={"points": points})
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Set BAP point override for the genus {genus}: {points} pts",
+                applies_to="BAP",
+            )
+        else:
+            for error in form.errors.get("genus", []):
+                messages.error(request, error)
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubBapGenusOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View):
+    """Delete a per-genus BAP point override."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        override = ClubBapGenusOverride.objects.filter(pk=pk, club=self.club).first()
+        if override:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Removed BAP point override for the genus {override.genus}",
                 applies_to="BAP",
             )
             override.delete()
@@ -21347,7 +21482,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return (
             qs.filter(Exists(matching_member))
-            .select_related("auctiontos_seller__user", "auction__club", "species_category")
+            .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
             .prefetch_related("bap_award")
             .order_by("-date_end")
         )
@@ -21442,16 +21577,7 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-            if lot.species_category
-            else None
-        )
-        points = (
-            override.points
-            if override is not None
-            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-        )
+        points = lot.bap_points_for_club(club)
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -24359,6 +24485,190 @@ class CommandPaletteReportView(View):
             data = {}
         recorded = palette_assist.mark_reported(request.user, (data or {}).get("usage_id"))
         return JsonResponse({"recorded": recorded})
+
+
+class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Species picker for the "strain of" field on the add-species form.
+
+    Nominal species only: a strain of a strain is not a thing, and offering one would build a
+    chain nothing else in the codebase knows how to walk.
+    """
+
+    def get_queryset(self):
+        queryset = Species.objects.filter(parent__isnull=True)
+        if self.q:
+            queryset = queryset.filter(Q(scientific_name__icontains=self.q) | Q(common_name__icontains=self.q))
+        # Same ordering as the suggestions: the fish somebody actually keeps, first.
+        return queryset.order_by("trade_rank", "scientific_name")
+
+    def get_result_label(self, result):
+        return format_html("{}", result.label)
+
+
+class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
+    """The lots that should have a scientific name and don't, as a work queue.
+
+    The sibling of the command palette's bounce list, and it exists for the same reason: the
+    interesting thing about a lookup is not the ones that worked, it is the repeated ones that
+    didn't.  A lot name showing up here forty times is either a species missing from the list or a
+    name the matcher can't connect to one, and both are fixed by the same button.
+
+    Grouped by lot name rather than listed per lot, because forty lots called "blue dream shrimp"
+    are one problem and one decision, not forty.
+
+    What it deliberately does **not** do is guess which of these are hardware.  There is no signal
+    that separates "sponge filter" from "sponge" reliably, and a filter that hid things would hide
+    the ones worth finding.  Instead every column is a piece of evidence -- how many sellers said
+    they bred it, what categories the lots landed in, what the matcher decided last time -- and
+    the reader does the judging.  The one exception is names made entirely of stopwords and
+    numbers, which cannot name anything.
+    """
+
+    template_name = "species_gaps.html"
+
+    #: Enough to work through in a sitting.  The tail is a long list of one-off lot names, and
+    #: anything appearing once is not yet a pattern worth adding a species for.
+    LIMIT = 100
+
+    def get_context_data(self, **kwargs):
+        from .species_matching import base_words, normalize
+
+        context = super().get_context_data(**kwargs)
+        # Only auctions that asked: a lot in an auction with the field switched off has no species
+        # because nobody was ever offered the choice, which is not a gap.
+        missing = Lot.objects.filter(
+            species__isnull=True, is_deleted=False, banned=False, auction__use_scientific_name=True
+        )
+        rows = (
+            missing.exclude(lot_name="")
+            .values("lot_name")
+            .annotate(
+                # Lot's primary key is lot_number, not id.
+                lots=Count("pk"),
+                bred=Count("pk", filter=Q(i_bred_this_fish=True)),
+                newest=Max("date_posted"),
+            )
+            .order_by("-lots", "-newest")[: self.LIMIT * 3]
+        )
+        # Two lot names that normalise the same are the same problem.  Merged here rather than in
+        # SQL because the normalisation is Python (see species_matching.normalize).
+        merged = {}
+        for row in rows:
+            if not base_words(row["lot_name"]):
+                continue
+            key = normalize(row["lot_name"])
+            if not key:
+                continue
+            entry = merged.setdefault(
+                key, {"lot_name": row["lot_name"], "lots": 0, "bred": 0, "newest": row["newest"], "key": key}
+            )
+            entry["lots"] += row["lots"]
+            entry["bred"] += row["bred"]
+            entry["newest"] = max(entry["newest"], row["newest"]) if row["newest"] else entry["newest"]
+
+        verdicts = {
+            cache_row.search_text: cache_row
+            for cache_row in SpeciesSearchCache.objects.filter(search_text__in=list(merged)).select_related("species")
+        }
+        for key, entry in merged.items():
+            verdict = verdicts.get(key)
+            if verdict is None:
+                entry["verdict"] = "never looked up"
+                entry["verdict_detail"] = ""
+            elif verdict.species_id:
+                # The name resolves fine; these lots predate the answer, or the seller said no.
+                entry["verdict"] = "matches a species"
+                entry["verdict_detail"] = verdict.species.label
+            elif verdict.source == "llm":
+                entry["verdict"] = "not a species"
+                entry["verdict_detail"] = "decided by the language model"
+            else:
+                entry["verdict"] = "not a species"
+                entry["verdict_detail"] = "chosen by a person"
+
+        context["gaps"] = sorted(merged.values(), key=lambda entry: (-entry["bred"], -entry["lots"]))[: self.LIMIT]
+        context["total_missing"] = missing.count()
+        context["total_with_species"] = Lot.objects.filter(
+            species__isnull=False, is_deleted=False, auction__use_scientific_name=True
+        ).count()
+        context["rejected"] = list(
+            SpeciesSearchCache.objects.filter(species__isnull=True).order_by("-hits", "-createdon")[:25]
+        )
+        context["species_total"] = Species.objects.count()
+        context["species_added_here"] = Species.objects.filter(source="admin").count()
+        return context
+
+
+class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
+    """Add a species, or a strain of one, from the site.
+
+    Reached from :class:`SpeciesGapsView` with ``?lot_name=`` prefilled, which is the whole
+    workflow: see a name that keeps coming up with no species, click it, fill in two boxes, and
+    every lot with that name gets the species and the matcher learns the name for next time.
+    """
+
+    model = Species
+    form_class = SpeciesAdminForm
+    template_name = "species_form.html"
+
+    def _lot_name(self):
+        return (self.request.GET.get("lot_name") or self.request.POST.get("lot_name") or "").strip()[:200]
+
+    def _matching_lots(self):
+        """The lots this name would be attached to.  Never touches a lot that already has one."""
+        name = self._lot_name()
+        if not name:
+            return Lot.objects.none()
+        return Lot.objects.filter(
+            lot_name__iexact=name, species__isnull=True, is_deleted=False, auction__use_scientific_name=True
+        )
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["lot_name"] = self._lot_name()
+        kwargs["lot_count"] = self._matching_lots().count()
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        name = self._lot_name()
+        if name:
+            # The lot name is the best guess at the common name -- it is what people call it.
+            initial["common_name"] = name[:255]
+        return initial
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        name = self._lot_name()
+        context["lot_name"] = name
+        context["title"] = f"Add a species for “{name}”" if name else "Add a species"
+        return context
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        species = self.object
+        name = self._lot_name()
+        attached = 0
+        if name and form.cleaned_data.get("attach_to_lots"):
+            from .species_matching import remember as remember_species
+
+            # save() rather than update(): it is what derives the lot's category from the species,
+            # and these are tens of rows, not thousands.
+            for lot in self._matching_lots()[:500]:
+                lot.species = species
+                lot.save()
+                attached += 1
+            # Teach the matcher, so the next person typing this name is offered it straight away.
+            remember_species(name, species, source="user")
+        messages.success(
+            self.request,
+            f"Added {species.label}."
+            + (f"  Set it on {attached} lot{'' if attached == 1 else 's'} called “{name}”." if attached else ""),
+        )
+        return response
+
+    def get_success_url(self):
+        return reverse("species_gaps")
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):

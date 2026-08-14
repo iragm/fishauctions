@@ -14,6 +14,7 @@ from .models import (
     AuctionTOS,
     BapAward,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
     DonationVendor,
@@ -1075,12 +1076,20 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        override = self._override_cache.get(record.species_category_id) if record.species_category_id else None
-        default_points = (
-            override.points
-            if override is not None
-            else ((self.club.points_per_lot or record.species_category.bap_points) if self.club else 0)
-        )
+        # Same precedence as Lot.bap_points_for_club, but off prefetched dicts: this runs once per
+        # row and the pending-BAP page shows hundreds.
+        genus = record.species.genus if record.species_id else ""
+        override = self._genus_override_cache.get(genus) if genus else None
+        if override is None and record.species_category_id:
+            override = self._override_cache.get(record.species_category_id)
+        if override is not None:
+            default_points = override.points
+        elif not self.club:
+            default_points = 0
+        else:
+            default_points = self.club.points_per_lot or (
+                record.species_category.bap_points if record.species_category_id else 5
+            )
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
         return mark_safe(
@@ -1100,8 +1109,10 @@ class ClubBapLotHTMxTable(tables.Table):
         super().__init__(*args, **kwargs)
         if self.club:
             self._override_cache = {o.category_id: o for o in ClubBapCategoryOverride.objects.filter(club=self.club)}
+            self._genus_override_cache = {o.genus: o for o in ClubBapGenusOverride.objects.filter(club=self.club)}
         else:
             self._override_cache = {}
+            self._genus_override_cache = {}
 
 
 class SpeakerHTMxTable(tables.Table):

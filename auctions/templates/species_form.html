@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% load species_tags %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h2 class="mb-1">{{ title }}</h2>
+{% comment %}
+  The species list is imported and not meant to be typed, so this page says out loud when it is the
+  right tool: something the hobby sells that FishBase has never described, and cultivars, which no
+  code of nomenclature has a rank for.
+{% endcomment %}
+<p class="text-muted">
+  For something the imported list doesn't have &mdash; an undescribed fish with an L-number, a plant the
+  trade renamed, this year's shrimp colour. Check
+  <a href="{% url 'species_gaps' %}">the list of lots with no scientific name</a> first; most gaps are
+  a name the matcher can't connect to a species that is already there.
+</p>
+{% if lot_name %}
+<div class="alert alert-info py-2">
+  Adding this for lots called &ldquo;<strong>{{ lot_name }}</strong>&rdquo;.
+</div>
+{% endif %}
+{% crispy form form.helper %}
+<p class="text-muted small mt-3">
+  To change or remove a species later, use
+  <a href="/admin/auctions/species/">the species admin</a>.
+</p>
+{% fishbase_citation %}
+{% endblock %}

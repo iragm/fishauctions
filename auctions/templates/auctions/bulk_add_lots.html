@@ -2,6 +2,7 @@
 {% load crispy_forms_tags %}
 {% block title %}Add lots for {{ tos.name }}{% endblock %}
 {% load static %}
+{% load species_tags %}
 
 {% block content %}
   {% include 'auction_ribbon.html' %}
@@ -20,6 +21,7 @@
     <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
     <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
+  {% if auction.use_scientific_name %}{% fishbase_citation %}{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -64,6 +66,56 @@ $(".submit-button").click(function(event){
         return true
     }
 });
+{% if auction.use_scientific_name %}
+{% comment %}
+  Same species picker as the auto-saving bulk page, minus the auto-save: this form posts all at
+  once, so filling the dropdown is all there is to do. Options only ever come from the server.
+{% endcomment %}
+$(document).on('change', 'select[name$="-species"]', function() {
+    this.dataset.userChosen = '1';
+});
+$(document).on('blur', 'input[name$="-lot_name"]', function() {
+    var row = this.closest('.lot-form');
+    if (!row) return;
+    var select = row.querySelector('select[name$="-species"]');
+    if (!select) return;
+    var name = this.value.trim();
+    if (!name || select.dataset.lastQuery === name) return;
+    select.dataset.lastQuery = name;
+    $.ajax({
+        url: "{% url 'species_suggestions' %}",
+        type: 'POST',
+        data: {'name': name, 'csrfmiddlewaretoken': '{{ csrf_token }}'},
+        success: function(response) {
+            if (select.dataset.lastQuery !== response.name) return;
+            var previous = select.value;
+            var previousLabel = previous ? select.options[select.selectedIndex].textContent : '';
+            var choices = response.choices || [];
+            select.innerHTML = '<option value="">No species</option>';
+            choices.forEach(function(choice) {
+                var option = document.createElement('option');
+                option.value = choice.id;
+                option.textContent = choice.label;
+                select.appendChild(option);
+            });
+            var stillThere = choices.some(function(choice) { return String(choice.id) === previous; });
+            if (previous && stillThere) {
+                select.value = previous;
+            } else if (previous && select.dataset.userChosen) {
+                // Their pick isn't among the new suggestions. Put it back rather than
+                // silently resetting a species someone chose by hand.
+                var kept = document.createElement('option');
+                kept.value = previous;
+                kept.textContent = previousLabel;
+                select.appendChild(kept);
+                select.value = previous;
+            } else if (!select.dataset.userChosen && choices.length === 1) {
+                select.value = choices[0].id;
+            }
+        }
+    });
+});
+{% endif %}
 {% if auction.auto_add_images %}
 $(document).ready(function() {
     $('.auto-image-check').on('blur', function() {

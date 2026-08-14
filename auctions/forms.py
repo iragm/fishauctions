@@ -44,6 +44,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubEvent,
     ClubMember,
     ClubMoney,
@@ -59,6 +60,8 @@ from .models import (
     Speaker,
     SpeakerComment,
     SpeakerTopic,
+    Species,
+    SpeciesCommonName,
     SquareSeller,
     UserBan,
     UserData,
@@ -94,6 +97,90 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
     for field_name in field_names:
         fields[field_name].widget.attrs["min"] = min_value
         fields[field_name].widget.attrs["step"] = step
+
+
+#: What the empty option on every species picker says.  "No species" rather than a blank line,
+#: because leaving it blank is a legitimate answer -- hardware, plants, mixed bags -- and should
+#: look like a choice the user made rather than one they forgot.
+NO_SPECIES_LABEL = "No species"
+
+
+class SpeciesSelect(forms.Select):
+    """A ``<select>`` that renders only the option already chosen, plus "No species".
+
+    The Species table has tens of thousands of rows and rendering them all into every lot form
+    would add megabytes to the page.  The browser gets the current value and nothing else; the
+    suggestions endpoint (``species_suggestions``) fills in a handful of options as the user types
+    the lot name.
+
+    This is a rendering trick only.  The field is still an ordinary ``ModelChoiceField`` over the
+    whole table, so validation is unchanged: a posted pk that isn't a real species is rejected,
+    and no amount of DOM editing gets free text into the column.
+    """
+
+    def optgroups(self, name, value, attrs=None):
+        chosen = [str(item) for item in value if item not in ("", None)]
+        choices = [("", NO_SPECIES_LABEL)]
+        if chosen:
+            species = Species.objects.filter(pk__in=[pk for pk in chosen if pk.isdigit()]).first()
+            if species:
+                choices.append((str(species.pk), species.label))
+        self.choices = choices
+        return super().optgroups(name, value, attrs)
+
+
+def configure_species_field(fields, auction, field_name="species", *, always_render=False):
+    """Set up the scientific-name picker on a lot form, or hide it.
+
+    Hidden rather than removed when the auction has the field turned off, so every lot form keeps
+    the same field list and the templates don't have to branch.  ``clean_species_for_auction``
+    is what actually stops a hidden field from being posted into.
+
+    ``always_render`` is for the one form where the auction is chosen *in the form itself*.  There
+    the picker has to exist in the DOM whatever the auction on page load says, because the user
+    can switch to an auction that does use scientific names and JavaScript can only show a field
+    that is already there -- the same reason ``custom_field_1`` and the custom dropdown are
+    rendered unconditionally and hidden with CSS.  Nothing about validation changes: the auction
+    the form ends up with still decides, in ``clean_species_for_auction``.
+    """
+    field = fields.get(field_name)
+    if field is None:
+        return
+    field.required = False
+    field.label = "Scientific name"
+    field.empty_label = NO_SPECIES_LABEL
+    if not always_render and (not auction or not auction.use_scientific_name):
+        field.widget = HiddenInput()
+        field.help_text = ""
+        return
+    field.widget = SpeciesSelect(attrs={"class": "form-select species-select", "data-species-select": "1"})
+    field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
+
+
+def clean_species_for_auction(cleaned_data, auction, field_name="species", *, derive_category=False):
+    """Drop a posted species when the auction doesn't use scientific names.
+
+    Belt and braces against a stale form or a hand-rolled POST: the field is hidden in that case,
+    so anything arriving in it is noise rather than intent.
+
+    ``derive_category`` says "this form hides its category field once a species is picked", which
+    is true of the two seller-facing forms and not of the admin's lot-edit modal.  Where the field
+    is hidden, whatever ``species_category`` arrives is a leftover from before the species was
+    chosen rather than a choice anybody made, and the species' own category -- from the family
+    FishBase records -- is the better answer.  Where an admin can still *see* the category field,
+    what they put in it is left alone.
+    """
+    if not auction or not auction.use_scientific_name:
+        cleaned_data[field_name] = None
+        return cleaned_data
+    species = cleaned_data.get(field_name)
+    if not derive_category or not species or "species_category" not in cleaned_data:
+        return cleaned_data
+    # A cultivar inherits its parent's category; nobody is going to map every strain by hand.
+    category = species.category or (species.parent.category if species.parent_id else None)
+    if category and category.name != "Uncategorized":
+        cleaned_data["species_category"] = category
+    return cleaned_data
 
 
 def add_bootstrap_classes(form):
@@ -292,6 +379,7 @@ class QuickAddTOS(forms.ModelForm):
 QUICK_ADD_LOT_FIELDS = (
     "lot_name",
     "summernote_description",
+    "species",
     "species_category",
     "i_bred_this_fish",
     "quantity",
@@ -313,6 +401,7 @@ class QuickAddLot(forms.ModelForm):
             # "custom_lot_number",
             "lot_name",
             # "summernote_description",
+            "species",
             "species_category",
             "i_bred_this_fish",
             "quantity",
@@ -355,6 +444,7 @@ class QuickAddLot(forms.ModelForm):
             self.fields["species_category"].widget = HiddenInput()
         self.fields["species_category"].label = "Category"
         self.fields["species_category"].help_text = ""
+        configure_species_field(self.fields, self.auction)
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
         else:
@@ -425,6 +515,7 @@ class QuickAddLot(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        clean_species_for_auction(cleaned_data, self.auction, derive_category=True)
         # custom_lot_number = cleaned_data.get("custom_lot_number")
         # if custom_lot_number:
         #     existing_lots = Lot.objects.exclude(is_deleted=True).filter(
@@ -999,6 +1090,10 @@ class EditLot(forms.ModelForm):
                     css_class="col-sm-5",
                 ),
                 Div(
+                    "species",
+                    css_class="col-sm-12",
+                ),
+                Div(
                     "custom_field_1",
                     css_class="col-sm-9",
                 ),
@@ -1085,6 +1180,8 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
+        configure_species_field(self.fields, self.auction)
+        self.fields["species"].initial = self.lot.species
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
         self.fields["buy_now_price"].initial = self.lot.buy_now_price
         self.fields["reserve_price"].initial = self.lot.reserve_price
@@ -1166,6 +1263,7 @@ class EditLot(forms.ModelForm):
             "lot_name",
             # "custom_lot_number",
             "auction",
+            "species",
             "species_category",
             # "description",
             "summernote_description",
@@ -1197,6 +1295,7 @@ class EditLot(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         auction = cleaned_data.get("auction")
+        clean_species_for_auction(cleaned_data, auction)
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error("auction", "How did you even manage to change this field?")
@@ -2954,6 +3053,7 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             "reserve_price",
             "buy_now",
             "use_categories",
+            "use_scientific_name",
             "use_quantity_field",
             "use_donation_field",
             "use_i_bred_this_fish_field",
@@ -2985,6 +3085,7 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 Div("reserve_price", css_class="col-md-4"),
                 Div("buy_now", css_class="col-md-4"),
                 Div("use_categories", css_class="col-md-4"),
+                Div("use_scientific_name", css_class="col-md-4"),
                 Div("use_quantity_field", css_class="col-md-4"),
                 Div("use_donation_field", css_class="col-md-4"),
                 Div("use_i_bred_this_fish_field", css_class="col-md-4"),
@@ -3067,6 +3168,7 @@ class CreateLotForm(forms.ModelForm):
             # "description",
             "quantity",
             "reserve_price",
+            "species",
             "species_category",
             "auction",
             "donation",
@@ -3190,6 +3292,11 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
+        # Always rendered here, and shown or hidden by the same JavaScript that handles the other
+        # per-auction fields -- this is the form where the auction is a dropdown, so what the
+        # picker should do isn't known until the user picks one.  A standalone lot has no auction
+        # at all, and clean_species_for_auction drops whatever was posted in that case.
+        configure_species_field(self.fields, selected_auction, always_render=True)
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
@@ -3276,6 +3383,14 @@ class CreateLotForm(forms.ModelForm):
                 ),
                 Div(
                     "lot_name",
+                    css_class="col-md-12",
+                ),
+                Div(
+                    "species",
+                    # Filled in by setCategoryVisibility() in lot_form.html: once a species is
+                    # picked the category field hides, and this says where the lot landed rather
+                    # than letting the category silently disappear.
+                    HTML("<div id='derived-category' class='form-text text-muted'></div>"),
                     css_class="col-md-12",
                 ),
                 Div(
@@ -3388,6 +3503,7 @@ class CreateLotForm(forms.ModelForm):
         # this doesn't really matter either - if the user screws with the client side validation, the lot simply won't be available
         auction = cleaned_data.get("auction")
         part_of_auction = cleaned_data.get("part_of_auction")
+        clean_species_for_auction(cleaned_data, auction if part_of_auction == "True" else None, derive_category=True)
         if part_of_auction == "True":
             if auction is None:
                 self.add_error("auction", "Select an auction")
@@ -4063,6 +4179,13 @@ class LabelPrintFieldsForm(forms.Form):
                 "value": "lot_name",
                 "description": "Lot name",
                 "tooltip": "<span class='text-warning'>Recommended</span>, otherwise people may put the label on the wrong lot",
+            },
+            {
+                "value": "scientific_name",
+                "description": "Scientific name",
+                "tooltip": "Scientific name is disabled in this auction, this will not do anything"
+                if not self.auction.use_scientific_name
+                else "Only printed on lots where the seller picked a species",
             },
             {"value": "category", "description": "Category", "tooltip": ""},
             {
@@ -4745,6 +4868,208 @@ class ClubBapCategoryOverrideForm(forms.ModelForm):
         widgets = {
             "points": forms.NumberInput(attrs={"class": "form-control form-control-sm", "style": "width:6rem"}),
         }
+
+
+class SpeciesAdminForm(forms.ModelForm):
+    """Add a species -- or a strain of one -- from the site, without opening the Django admin.
+
+    The species list is imported, not typed, and that is the point: 36,000 rows nobody has to
+    maintain.  But the imported list will always be missing things a club sells -- an undescribed
+    *Ancistrus* with an L-number, this year's shrimp colour, a plant the trade renamed -- and the
+    lot form deliberately refuses to accept a name that isn't on the list.  So there has to be a
+    way to *add to the list*, and it has to be quick enough to use while somebody is standing at
+    the check-in table.
+
+    Two things make it quick.  The scientific name is one box, split on the space rather than
+    asked for twice.  And a strain is the same form with a parent picked, which is what keeps
+    "Blue Dream" out of the genus column -- see :class:`~auctions.models.Species`.
+
+    Everything created here is ``source="admin"``, which is *not* the same as the ``manual`` rows
+    left over from the old Product table: those get folded into the imported list by
+    ``import_fishbase``, and a row somebody added on purpose last week must not be.
+    """
+
+    scientific_name_input = forms.CharField(
+        label="Scientific name",
+        max_length=250,
+        required=False,
+        help_text="Genus and species, e.g. <i>Ancistrus cirrhosus</i>. A genus on its own is fine.",
+    )
+    other_names = forms.CharField(
+        label="Other common names",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 2}),
+        help_text="One per line, or separated by commas. These are what people actually type into a lot name.",
+    )
+    lot_name = forms.CharField(widget=forms.HiddenInput(), required=False)
+    attach_to_lots = forms.BooleanField(
+        required=False,
+        initial=True,
+        label="Set this species on the lots with that name, and remember the name",
+    )
+
+    class Meta:
+        model = Species
+        fields = [
+            "common_name",
+            "variety",
+            "parent",
+            "category",
+            "freshwater",
+            "brackish",
+            "saltwater",
+            "breeder_points",
+        ]
+
+    def __init__(self, *args, lot_name="", lot_count=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lot_count = lot_count
+        self.fields["common_name"].label = "Common name"
+        self.fields["common_name"].help_text = "What the picker shows in brackets, e.g. Bristlenose pleco."
+        self.fields[
+            "variety"
+        ].help_text = "Only for a strain or cultivar, e.g. Blue Dream. Pick the species it is a strain of below."
+        self.fields["parent"].label = "Strain of"
+        self.fields["parent"].required = False
+        self.fields["parent"].widget = autocomplete.ModelSelect2(
+            url="species-autocomplete",
+            attrs={"data-placeholder": "Search the species list…", "style": "width: 100%"},
+        )
+        # Re-assigning the queryset is what rebinds widget.choices to it.  Without this the
+        # autocomplete widget is left holding the plain list Django built for the old widget, and
+        # re-rendering the form -- which only happens when there is a validation error to show --
+        # dies inside dal trying to filter it.
+        self.fields["parent"].queryset = Species.objects.filter(parent__isnull=True)
+        self.fields["parent"].help_text = (
+            "Leave blank for an ordinary species. A strain keeps its parent's genus and epithet, so "
+            "breeder points and BAP genus rules still see the plain species."
+        )
+        self.fields["category"].widget = autocomplete.ModelSelect2(
+            url="category-autocomplete", attrs={"data-placeholder": "Search categories…", "style": "width: 100%"}
+        )
+        self.fields["category"].queryset = Category.objects.all().order_by("name")
+        self.fields["category"].help_text = "Lots with this species are filed here automatically."
+        self.fields["freshwater"].initial = True
+        if lot_name:
+            self.fields["lot_name"].initial = lot_name
+            self.fields["attach_to_lots"].label = (
+                f"Also set this species on the {lot_count} lot{'' if lot_count == 1 else 's'} "
+                f"called \u201c{lot_name}\u201d, and remember the name for next time"
+            )
+        else:
+            self.fields["attach_to_lots"].widget = HiddenInput()
+        add_bootstrap_classes(self)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            Div(
+                Div("scientific_name_input", css_class="col-md-6"),
+                Div("common_name", css_class="col-md-6"),
+                Div("parent", css_class="col-md-6"),
+                Div("variety", css_class="col-md-6"),
+                Div("other_names", css_class="col-md-12"),
+                Div("category", css_class="col-md-6"),
+                Div("breeder_points", css_class="col-md-6"),
+                Div("freshwater", css_class="col-md-2"),
+                Div("brackish", css_class="col-md-2"),
+                Div("saltwater", css_class="col-md-2"),
+                Div("attach_to_lots", css_class="col-md-12 mt-2"),
+                "lot_name",
+                css_class="row",
+            ),
+            Submit("submit", "Add species", css_class="btn-success mt-2"),
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        typed = (cleaned_data.get("scientific_name_input") or "").strip()
+        parent = cleaned_data.get("parent")
+        variety = (cleaned_data.get("variety") or "").strip()
+        if variety and not parent:
+            self.add_error("parent", "A strain has to say which species it is a strain of.")
+        if parent and not variety:
+            self.add_error("variety", "Give the strain a name, e.g. Blue Dream.")
+        # A strain takes its parent's name; there is nothing to type and nothing to disagree about.
+        if parent:
+            cleaned_data["genus"] = parent.genus
+            cleaned_data["species"] = parent.species
+        elif typed:
+            parts = typed.split()
+            cleaned_data["genus"] = parts[0].capitalize()[:100]
+            cleaned_data["species"] = " ".join(parts[1:]).lower()[:150]
+        else:
+            self.add_error("scientific_name_input", "Enter a scientific name, or pick a species to add a strain to.")
+            return cleaned_data
+        clash = Species.objects.filter(
+            genus__iexact=cleaned_data["genus"], species__iexact=cleaned_data["species"], variety__iexact=variety
+        ).first()
+        if clash:
+            # Not an error to fix by editing the name -- the answer is to go and use the row that
+            # already exists, so say where it is.
+            self.add_error(
+                "scientific_name_input",
+                mark_safe(  # noqa: S308 - the only interpolation is a URL we build and an escaped name
+                    f"{escape(clash.label)} is already on the list. "
+                    f'<a href="/admin/auctions/species/{clash.pk}/change/">Edit it</a> instead.'
+                ),
+            )
+        return cleaned_data
+
+    def save(self, commit=True):
+        species = super().save(commit=False)
+        species.genus = self.cleaned_data["genus"]
+        species.species = self.cleaned_data["species"]
+        species.source = "admin"
+        # Somebody is adding this because a club is selling one, which is better evidence than
+        # FishBase's column -- see Species.in_aquarium_trade.
+        species.in_trade_override = True
+        if commit:
+            species.save()
+            names = re.split(r"[,\n]+", self.cleaned_data.get("other_names") or "")
+            wanted = [species.common_name] + [name.strip() for name in names]
+            seen = set()
+            for index, name in enumerate(wanted):
+                key = (name or "").strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                SpeciesCommonName.objects.create(
+                    species=species, name=name.strip()[:255], language="English", is_preferred=(index == 0)
+                )
+            Species.recompute_trade_ranks(genus=species.genus)
+        return species
+
+
+class ClubBapGenusOverrideForm(forms.ModelForm):
+    """Inline form for adding/updating a per-genus BAP point override for a club.
+
+    Free text rather than a picklist: there are thousands of genera, and a club admin writing a
+    BAP rule already knows the one they mean.  :meth:`clean_genus` is what keeps a typo from
+    becoming a rule that silently never fires.
+    """
+
+    class Meta:
+        model = ClubBapGenusOverride
+        fields = ["genus", "points"]
+        widgets = {
+            "genus": forms.TextInput(
+                attrs={"class": "form-control form-control-sm", "placeholder": "Tropheus", "list": "bap-genus-list"}
+            ),
+            "points": forms.NumberInput(attrs={"class": "form-control form-control-sm", "style": "width:6rem"}),
+        }
+
+    def clean_genus(self):
+        genus = (self.cleaned_data.get("genus") or "").strip().capitalize()
+        if not genus:
+            message = "Enter a genus"
+            raise forms.ValidationError(message)
+        if not Species.objects.filter(genus=genus).exists():
+            message = (
+                f"No species in the database belong to the genus {genus}.  Check the spelling — a rule "
+                "for a genus that doesn't exist would never award anything."
+            )
+            raise forms.ValidationError(message)
+        return genus
 
 
 class BapAwardForm(forms.ModelForm):

@@ -3045,23 +3045,278 @@ class Category(models.Model):
         ordering = ["name"]
 
 
-class Product(models.Model):
-    """A species or item in the auction
-    This is not really used much anymore,
-    it was intended to exist for every possible species of fish, but that's just too much for the scope of this project"""
+class Species(models.Model):
+    """One species that a lot can be tagged with.
 
-    common_name = models.CharField(max_length=255)
+    Started life as ``Product`` -- a stub that was never populated because filling it in by hand
+    was hopeless.  It is now loaded from FishBase (``manage.py import_fishbase``), so the table is
+    a real picklist and :attr:`Lot.species` finally means something.
+
+    Genus and the specific epithet are stored **separately** rather than parsed back out of
+    ``scientific_name`` on demand.  FishBase hands us both columns already split, so there is
+    nothing to parse and nothing to get wrong later on hybrids, ``sp.`` placeholders, or the
+    handful of names with a subgenus in parentheses.  ``scientific_name`` is the denormalised
+    "Genus species" string, rebuilt in :meth:`save`, and exists so searching and display are a
+    single column.  :class:`ClubBapGenusOverride` matches on :attr:`genus`.
+
+    A row with :attr:`variety` set is a **cultivar** -- "Blue Dream" cherry shrimp, a "Full Red"
+    guppy.  Those are not taxonomy: no code of nomenclature has a rank for a line somebody bred in
+    a basement, and two clubs will spell the same strain three ways.  So a variety row carries the
+    *parent's* genus and epithet, which is what makes it invisible to everything that reasons
+    about the science -- breeder points, :class:`ClubBapGenusOverride`, family and category all
+    keep working off the nominal species -- and adds the strain only where a human reads it, in
+    :attr:`label` and on the printed label.  :attr:`parent` points at the nominal species so the
+    two can never drift apart.
+    """
+
+    SOURCE_CHOICES = (
+        ("fishbase", "FishBase"),
+        # SeaLifeBase is FishBase's sister database.  It covers the invertebrates, but 100k marine
+        # species is mostly noise for a freshwater club, so it is no longer imported by default --
+        # see auctions/fishbase.py.  The choice stays because rows from it may still be in a
+        # database somewhere.
+        ("sealifebase", "SeaLifeBase"),
+        # The curated aquarium-trade list in auctions/data/aquarium_species.csv: plants, shrimp,
+        # snails and the handful of fish the two big databases get wrong or miss.
+        ("aquarium", "Aquarium trade list"),
+        # Added on the site by an admin, through SpeciesAdminForm.  Deliberately distinct from
+        # "manual": that means a row left over from the old Product table, which import_fishbase
+        # folds into the imported list, and a species somebody added on purpose must never be.
+        ("admin", "Added on the site"),
+        ("manual", "Added by hand"),
+    )
+
+    #: FishBase's ``Aquarium`` column, for the values that mean "this is an aquarium fish".  The
+    #: rest are ``never/rarely``, ``public aquariums`` (zoo displays) and ``show aquarium``.
+    AQUARIUM_TRADE_VALUES = ("commercial", "highly commercial", "potential")
+
+    #: How likely it is that anyone actually keeps this, in three steps.  Used to rank suggestions:
+    #: when a name is shared, the fish being sold at a club auction is overwhelmingly the one in
+    #: the hobby.
+    #:
+    #: The middle step exists because FishBase's own column is *incomplete* in a way that matters.
+    #: It marks 3,475 of its 36,132 fish as aquarium species, and *Chindongo saulosi* -- a mbuna in
+    #: every African cichlid club's auction, and the fish that started this whole search-quality
+    #: exercise -- is filed under "never/rarely".  Two of the seventy-seven *Ancistrus* are flagged.
+    #: So the genus gets a say: seven of the eleven *Chindongo* are flagged, which is a much better
+    #: statement about *Chindongo saulosi* than its own blank entry is.
+    TRADE_RANK_SPECIES = 0
+    TRADE_RANK_GENUS = 1
+    TRADE_RANK_NONE = 2
+
+    common_name = models.CharField(max_length=255, blank=True, db_index=True)
     common_name.help_text = "The name usually used to describe this species"
-    scientific_name = models.CharField(max_length=255, blank=True)
-    scientific_name.help_text = "Latin name used to describe this species"
+    scientific_name = models.CharField(max_length=255, blank=True, db_index=True)
+    scientific_name.help_text = "Genus and species together; filled in automatically, don't edit by hand"
+    genus = models.CharField(max_length=100, blank=True, db_index=True)
+    genus.help_text = "First half of the scientific name, e.g. Poecilia"
+    species = models.CharField(max_length=150, blank=True, db_index=True)
+    species.help_text = "Second half of the scientific name (the specific epithet), e.g. reticulata"
+    variety = models.CharField(max_length=100, blank=True, db_index=True)
+    variety.help_text = (
+        "Cultivar, strain or morph, e.g. Blue Dream.  Leave blank for a wild-type species.  "
+        "A row with this set must also have a parent."
+    )
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="varieties",
+        help_text="The nominal species this variety belongs to.  Only used on variety rows.",
+    )
     breeder_points = models.BooleanField(default=True)
-    category = models.ForeignKey(Category, null=True, on_delete=models.SET_NULL)
+    category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
+    speccode = models.PositiveIntegerField(null=True, blank=True)
+    speccode.help_text = (
+        "SpecCode from the source database, used to match rows on re-import.  Blank for hand-added species."
+    )
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manual")
+    # FishBase's habitat booleans.  Kept because they are the cheapest way to tell apart the many
+    # species sharing a common name -- there are freshwater and saltwater fish called "perch".
+    freshwater = models.BooleanField(default=False)
+    brackish = models.BooleanField(default=False)
+    saltwater = models.BooleanField(default=False)
+    # Taxonomy above the genus, from FishBase's families table.  Stored as names rather than the
+    # FamCode so nothing has to join back to a table we don't otherwise keep, and so a curated or
+    # hand-added row can fill them in without inventing a code.
+    family = models.CharField(max_length=100, blank=True, db_index=True)
+    family.help_text = "Taxonomic family, e.g. Cichlidae.  Used to derive the lot category."
+    order = models.CharField(max_length=100, blank=True, db_index=True)
+    order.help_text = "Taxonomic order, e.g. Cichliformes."
+    aquarium_use = models.CharField(max_length=30, blank=True, db_index=True)
+    aquarium_use.help_text = (
+        "FishBase's aquarium-trade rating.  Species in the trade are ranked above the rest when "
+        "suggesting a scientific name for a lot."
+    )
+    in_trade_override = models.BooleanField(null=True, blank=True)
+    in_trade_override.help_text = (
+        "Overrules FishBase on whether this species is in the hobby.  Leave unset unless you know "
+        "better than the source -- and you often will, because FishBase marks plenty of fish "
+        "people obviously keep as 'never/rarely'."
+    )
+    trade_rank = models.PositiveSmallIntegerField(default=TRADE_RANK_NONE, db_index=True)
+    trade_rank.help_text = (
+        "Denormalised: 0 = in the hobby, 1 = its genus is, 2 = nothing says anyone keeps it.  "
+        "Rebuilt by Species.recompute_trade_ranks(); don't edit by hand."
+    )
+
+    def save(self, *args, **kwargs):
+        self.genus = (self.genus or "").strip()
+        self.species = (self.species or "").strip()
+        self.variety = (self.variety or "").strip()
+        # Rows that predate the import -- hand-typed into the old Product table -- have a
+        # scientific name and no genus, because nothing ever split one for them.  Rebuilding the
+        # denormalised column from two empty strings would erase the only name they have, on any
+        # save at all, including an admin ticking a checkbox.  So the split runs the other way for
+        # those, which also makes them findable: every lookup in species_matching goes via genus.
+        if self.scientific_name and not self.genus and not self.species:
+            parts = self.scientific_name.split()
+            self.genus = parts[0][:100]
+            self.species = " ".join(parts[1:])[:150]
+        self.scientific_name = " ".join(part for part in (self.genus, self.species) if part)
+        # Keep the row's *own* tier honest without a full pass.  The genus tier can only be worked
+        # out by looking at every sibling, so recompute_trade_ranks() owns that one -- but a
+        # species that says outright it is in the hobby should not have to wait for an import to
+        # be ranked like it.  Demote only from 0: a 1 here is a genus statement, still true.
+        if self.in_aquarium_trade:
+            self.trade_rank = self.TRADE_RANK_SPECIES
+        elif self.trade_rank == self.TRADE_RANK_SPECIES:
+            self.trade_rank = self.TRADE_RANK_NONE
+        super().save(*args, **kwargs)
+
+    @property
+    def in_aquarium_trade(self):
+        """True when something says this species is actually kept in aquariums.
+
+        An admin's word first: :attr:`in_trade_override` exists because whoever is adding a species
+        by hand is doing it *because a club is selling one*, which is better evidence than a
+        database field.  Then the curated list, everything on which is there for the same reason.
+        Then FishBase.
+        """
+        if self.in_trade_override is not None:
+            return self.in_trade_override
+        return self.source == "aquarium" or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+
+    @classmethod
+    def recompute_trade_ranks(cls, genus=None, batch_size=2000):
+        """Rebuild the denormalised :attr:`trade_rank` column.  Returns rows changed.
+
+        Denormalised rather than worked out per query for one reason: every suggestion lookup
+        orders by it *before* taking a ``LIMIT``, and the alternatives are a correlated subquery
+        per row or an ``IN`` clause holding all 1,142 genera that have a species in the hobby.
+        An indexed integer column costs one pass at import time instead.
+
+        Pass *genus* to redo a single genus, which is what adding one species by hand affects.
+        """
+        traded = cls.objects.filter(in_trade_override=True) | cls.objects.filter(
+            in_trade_override__isnull=True, aquarium_use__in=cls.AQUARIUM_TRADE_VALUES
+        )
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
+        if genus:
+            traded = traded.filter(genus=genus)
+        traded_genera = set(traded.values_list("genus", flat=True).distinct())
+
+        queryset = cls.objects.all() if genus is None else cls.objects.filter(genus=genus)
+        changed = 0
+        batch = []
+        for species in queryset.iterator(chunk_size=batch_size):
+            if species.in_aquarium_trade:
+                rank = cls.TRADE_RANK_SPECIES
+            elif species.genus in traded_genera:
+                rank = cls.TRADE_RANK_GENUS
+            else:
+                rank = cls.TRADE_RANK_NONE
+            if species.trade_rank != rank:
+                species.trade_rank = rank
+                batch.append(species)
+            if len(batch) >= batch_size:
+                cls.objects.bulk_update(batch, ["trade_rank"])
+                changed += len(batch)
+                batch = []
+        if batch:
+            cls.objects.bulk_update(batch, ["trade_rank"])
+            changed += len(batch)
+        return changed
+
+    @property
+    def full_scientific_name(self):
+        """The scientific name, with the cultivar in quotes when there is one.
+
+        Horticulture's convention -- *Neocaridina davidi* 'Blue Dream' -- because it is the one
+        readers already know, and because the quotes say out loud that the last word is not Latin.
+        """
+        if self.variety and self.scientific_name:
+            return f"{self.scientific_name} '{self.variety}'"
+        return self.scientific_name or self.variety
+
+    @property
+    def label(self):
+        """What the user picks from: the scientific name, with the common name for context."""
+        name = self.full_scientific_name
+        if name and self.common_name:
+            return f"{name} ({self.common_name})"
+        return name or self.common_name
 
     def __str__(self):
-        return f"{self.common_name} ({self.scientific_name})"
+        return self.label
 
     class Meta:
-        verbose_name_plural = "Products and species"
+        verbose_name_plural = "Species"
+        ordering = ["scientific_name", "variety"]
+        # SpecCode is only unique *within* a source database: FishBase and SeaLifeBase both number
+        # their species from 1, so a bare unique on speccode would have SeaLifeBase's first import
+        # overwrite 36,000 fish.
+        unique_together = ("source", "speccode")
+
+
+class SpeciesCommonName(models.Model):
+    """A common name pointing at a :class:`Species`.
+
+    FishBase ships tens of thousands of these ("Guppy", "Millionfish", "Rainbow fish" are all
+    *Poecilia reticulata*), which is what makes matching a typed lot name to a species work at
+    all.  Known misspellings are dropped at import time -- surfacing those as suggestions would
+    teach people the wrong name.
+    """
+
+    species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="common_names")
+    name = models.CharField(max_length=255, db_index=True)
+    language = models.CharField(max_length=50, blank=True, default="English")
+    is_preferred = models.BooleanField(default=False)
+    is_preferred.help_text = "FishBase's primary name for this species in this language.  Ranked first."
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ["name"]
+        indexes = [models.Index(fields=["name", "is_preferred"])]
+
+
+class SpeciesSearchCache(models.Model):
+    """A remembered answer to "what species is a lot called *this*?".
+
+    Lot names repeat relentlessly across auctions, so without this every club would pay for the
+    same language-model call to work out that "blue dream shrimp" is *Neocaridina davidi* again.
+    A row with ``species`` set to null is a real answer too: this name is hardware, or plants, or
+    a mixed bag, and there is no point asking again.
+    """
+
+    SOURCE_CHOICES = (
+        ("llm", "Language model"),
+        ("user", "Chosen by a user"),
+    )
+
+    search_text = models.CharField(max_length=120, unique=True)
+    search_text.help_text = "Normalised lot name: lowercased, punctuation stripped."
+    species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="llm")
+    createdon = models.DateTimeField(auto_now_add=True)
+    hits = models.PositiveIntegerField(default=0)
+    hits.help_text = "How many times this cached answer has been served instead of asking again."
+
+    def __str__(self):
+        return f"{self.search_text} -> {self.species or 'no species'}"
 
 
 def _slugify_auction_title(value):
@@ -3338,6 +3593,8 @@ class Auction(models.Model):
     use_description.help_text = "Not shown on the bulk add lots form"
     use_donation_field = models.BooleanField(default=True, blank=True)
     use_i_bred_this_fish_field = models.BooleanField(default=True, blank=True, verbose_name="Use Breeder Points field")
+    use_scientific_name = models.BooleanField(default=True, blank=True, verbose_name="Use scientific name field")
+    use_scientific_name.help_text = "Suggest a species based on the lot name.  Users pick from a short list, or No species for hardware and other non-living lots."
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
     use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
     custom_dropdown_name = models.CharField(
@@ -3389,7 +3646,7 @@ class Auction(models.Model):
         max_length=1000,
         blank=True,
         null=True,
-        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
+        default="qr_code,lot_name,scientific_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
     use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
@@ -6777,7 +7034,12 @@ class Lot(models.Model):
     buy_now_price.help_text = (
         "This lot will be sold with no bidding for this price, if someone is willing to pay this much"
     )
-    species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
+    species = models.ForeignKey(
+        Species, null=True, blank=True, on_delete=models.SET_NULL, verbose_name="Scientific name"
+    )
+    species.help_text = (
+        "Start typing a lot name and pick from the list.  Leave as No species for hardware and other non-living lots."
+    )
     species_category = models.ForeignKey(
         Category,
         null=True,
@@ -7010,7 +7272,25 @@ class Lot(models.Model):
             fix_category = True
         if self.category_checked:
             fix_category = False
-        if fix_category:
+        # A species that knows its category overrules a guess, and keeps overruling it when the
+        # seller changes the species later -- the picker is on the same screen as the lot name, so
+        # "category_checked" from a previous save is about a name, not about this species.  A
+        # category a *person* chose is never touched: category_automatically_added is how we know.
+        #
+        # "Uncategorized" counts as nothing rather than as a choice.  It is where a lot lands when
+        # the guesser had no idea, and a lot sitting there while its species knows the answer is
+        # the exact case this is for -- including the one that reaches it, adding a species from
+        # the admin gaps page to lots that were categorised (as nothing) long ago.
+        uncategorised = not self.species_category or self.species_category.name == "Uncategorized"
+        from_species = self.category_from_species
+        if from_species and (fix_category or uncategorised or self.category_automatically_added):
+            self.category_checked = True
+            if self.auction and not self.auction.use_categories:
+                self.species_category = Category.objects.filter(name="Uncategorized").first()
+            else:
+                self.species_category = from_species
+                self.category_automatically_added = True
+        elif fix_category:
             self.category_checked = True
             if self.auction:
                 if not self.auction.use_categories:
@@ -7821,6 +8101,25 @@ class Lot(models.Model):
                 return "not_sold"
         return self.unsold_lot_no_bap_reason
 
+    def bap_points_for_club(self, club):
+        """How many points this lot is worth to *club*, before any custom checkbox bonus.
+
+        Most specific rule wins: a genus override beats a category override, which beats the
+        club's flat rate, which beats the category's own default.  The genus rule is what lets a
+        club say "*Tropheus* is worth 15" without splitting Cichlids into its own category.
+        """
+        if self.species and self.species.genus:
+            genus_override = ClubBapGenusOverride.objects.filter(club=club, genus=self.species.genus).first()
+            if genus_override is not None:
+                return genus_override.points
+        if self.species_category:
+            category_override = ClubBapCategoryOverride.objects.filter(
+                club=club, category=self.species_category
+            ).first()
+            if category_override is not None:
+                return category_override.points
+        return club.points_per_lot or (self.species_category.bap_points if self.species_category else 5)
+
     def auto_award_bap_points(self):
         """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
 
@@ -7845,12 +8144,7 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
-            if self.species_category
-            else None
-        )
-        points = override.points if override is not None else (club.points_per_lot or self.species_category.bap_points)
+        points = self.bap_points_for_club(club)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
@@ -8623,6 +8917,37 @@ class Lot(models.Model):
         return ""
 
     @property
+    def scientific_name(self):
+        """The lot's scientific name, or an empty string when it has no species (hardware, mixed lots).
+
+        Includes the cultivar when the seller picked a variety row -- *Neocaridina davidi* 'Blue
+        Dream' is what they are selling, and the bare species would read as a plain cherry shrimp.
+        """
+        return self.species.full_scientific_name if self.species else ""
+
+    @property
+    def scientific_name_label(self):
+        """Used for printed labels"""
+        if self.species and self.auction and self.auction.use_scientific_name:
+            return self.species.full_scientific_name
+        return ""
+
+    @property
+    def category_from_species(self):
+        """The category this lot's species implies, or None.
+
+        A variety inherits its parent's category: nobody is going to map every cultivar by hand,
+        and a Blue Dream shrimp belongs wherever a cherry shrimp belongs.  ``Uncategorized`` is
+        treated as "no answer" so it can never beat the name-based guess.
+        """
+        if not self.species_id:
+            return None
+        category = self.species.category or (self.species.parent.category if self.species.parent_id else None)
+        if category and category.name != "Uncategorized":
+            return category
+        return None
+
+    @property
     def donation_label(self):
         if self.donation and self.auction.use_donation_field:
             return "(D)"
@@ -8774,6 +9099,39 @@ class ClubBapCategoryOverride(models.Model):
 
     def __str__(self):
         return f"{self.club} — {self.category}: {self.points} pts"
+
+
+class ClubBapGenusOverride(models.Model):
+    """Per-club, per-genus BAP point overrides -- the finer-grained sibling of
+    :class:`ClubBapCategoryOverride`, for clubs that award "Cichlids" a flat rate but want
+    *Tropheus* worth triple.
+
+    A genus rather than a species so a club writes one rule instead of forty, and because that is
+    how breeder award programs are actually written up.  Deliberately a separate model instead of
+    a nullable ``genus`` column on the category override: MariaDB treats NULLs as distinct in a
+    unique constraint, so one table covering both would silently accept duplicate rules.
+
+    Matching is on :attr:`Species.genus`, the column FishBase gives us, not on the first word of
+    the scientific name.
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_genus_overrides")
+    genus = models.CharField(max_length=100)
+    genus.help_text = "The first half of a scientific name, e.g. Tropheus.  Applies to every species in it."
+    points = models.IntegerField(default=0)
+    created_on = models.DateField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # Stored capitalised the way FishBase writes it, so admin typing "tropheus" still matches.
+        self.genus = self.genus.strip().capitalize()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        unique_together = ("club", "genus")
+        ordering = ["genus"]
+
+    def __str__(self):
+        return f"{self.club} — {self.genus}: {self.points} pts"
 
 
 class Invoice(models.Model):
@@ -10834,14 +11192,16 @@ class UserData(models.Model):
 
     @property
     def species_sold(self):
-        """Total different species that this user has bred and sold in auctions"""
-        logger.warning(
-            "species_sold is is no longer used, there's no way for users to enter species information anymore"
-        )
-        allLots = (
-            self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
-        )
-        return allLots
+        """Total different species that this user has bred and sold in auctions.
+
+        This used to return nothing useful, because nothing ever set ``Lot.species``.  Lots now
+        carry a species again (see :class:`Species`), so the number is real -- but the
+        breederboard columns that consumed it (``rank_unique_species``,
+        ``number_unique_species``, and the commented-out block in
+        ``manage.py update_breederboard``) are still switched off, and turning a public
+        leaderboard back on is a decision rather than a side effect.
+        """
+        return self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
 
     @property
     def my_won_lots_qs(self):

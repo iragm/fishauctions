@@ -43,13 +43,15 @@ from .models import (
     ObservedPrinter,
     PageView,
     PickupLocation,
-    Product,
     PushNotificationSent,
     SearchHistory,
     Speaker,
     SpeakerComment,
     SpeakerTag,
     SpeakerTopic,
+    Species,
+    SpeciesCommonName,
+    SpeciesSearchCache,
     ThermalPrinterProfile,
     UserBan,
     UserData,
@@ -1153,17 +1155,44 @@ class CategoryAdmin(admin.ModelAdmin):
     search_fields = ("name",)
 
 
-class ProductAdmin(admin.ModelAdmin):
-    model = Product
-    menu_label = "Products"
+class SpeciesCommonNameInline(admin.TabularInline):
+    model = SpeciesCommonName
+    extra = 0
+
+
+class SpeciesAdmin(admin.ModelAdmin):
+    model = Species
+    menu_label = "Species"
     list_display = (
-        "category",
-        "common_name",
         "scientific_name",
+        "variety",
+        "common_name",
+        "genus",
+        "family",
+        "category",
+        "source",
         "breeder_points",
     )
-    list_filter = ("category",)
-    search_fields = ("common_name", "scientific_name", "category__name")
+    # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
+    list_filter = ("source", "category", "freshwater", "brackish", "saltwater")
+    search_fields = ("common_name", "scientific_name", "genus", "variety", "family", "category__name")
+    inlines = [SpeciesCommonNameInline]
+    # scientific_name is rebuilt from genus + species on every save, so editing it does nothing.
+    readonly_fields = ("scientific_name",)
+    # Tens of thousands of rows: a plain select for the parent of a cultivar would render every
+    # one of them into the page.
+    autocomplete_fields = ("parent",)
+
+
+class SpeciesSearchCacheAdmin(admin.ModelAdmin):
+    model = SpeciesSearchCache
+    menu_label = "Species name cache"
+    list_display = ("search_text", "species", "source", "hits", "createdon")
+    list_filter = ("source",)
+    search_fields = ("search_text", "species__scientific_name")
+    # Deleting a row here is how you make the site look a name up again -- handy when a bad
+    # answer got cached.
+    autocomplete_fields = ("species",)
 
 
 class BanAdmin(admin.ModelAdmin):
@@ -1253,7 +1282,8 @@ admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
 admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
-admin.site.register(Product, ProductAdmin)
+admin.site.register(Species, SpeciesAdmin)
+admin.site.register(SpeciesSearchCache, SpeciesSearchCacheAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(LotHistory, ChatAdmin)

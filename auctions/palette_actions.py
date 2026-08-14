@@ -4984,6 +4984,13 @@ NOT_A_SKILL: dict[str, str] = {
     "AuctionLabelConfig": _FORM_PAGE,
     "AuctionUpdate": _FORM_PAGE,
     "AuctionVolunteers": _FORM_PAGE,
+    "SpeciesCreateView": (
+        "Adding a species is a taxonomic decision, and the form is where the decisions are visible: "
+        "whether this is a species or a strain of one, which species it is a strain of, which of "
+        "its names people actually type. Half-filling that from one spoken line is how a wrong "
+        "name ends up on a printed label and in breeder points, which the whole species feature is "
+        "written to avoid. The palette navigates to the page instead."
+    ),
     "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,
     "ClubEditView": _FORM_PAGE,
@@ -5025,6 +5032,7 @@ NOT_A_SKILL: dict[str, str] = {
     "BapAwardDeleteView": _DESTRUCTIVE,
     "BidDelete": _DESTRUCTIVE,
     "ClubBapCategoryOverrideDeleteView": _DESTRUCTIVE,
+    "ClubBapGenusOverrideDeleteView": _DESTRUCTIVE,
     "ClubMemberDeleteView": _DESTRUCTIVE,
     "ClubMemberMergeView": _DESTRUCTIVE,
     "ClubMemberPermanentDeleteView": _DESTRUCTIVE,
@@ -5069,6 +5077,7 @@ NOT_A_SKILL: dict[str, str] = {
     # One row of a table you're already looking at
     "AuctionChatDeleteUndelete": _NEEDS_THE_ROW,
     "ClubBapCategoryOverrideSaveView": _NEEDS_THE_ROW,
+    "ClubBapGenusOverrideSaveView": _NEEDS_THE_ROW,
     "ClubBapLotCategoryView": _NEEDS_THE_ROW,
     "ClubMemberReactivateView": _NEEDS_THE_ROW,
     "ClubMembershipNumberView": _NEEDS_THE_ROW,
@@ -5114,12 +5123,14 @@ NOT_A_SKILL: dict[str, str] = {
     "NoLotAuctions": _MACHINE,
     "PageViewCreate": _MACHINE,
     "SetCoordinates": _MACHINE,
+    "SpeciesSuggestions": _MACHINE,
     "VoiceCommandLogView": _MACHINE,
     # Autocomplete and live validation feeds
     "AuctionAutocomplete": _MACHINE,
     "AuctionTOSAutocomplete": _MACHINE,
     "AuctionTOSValidation": _MACHINE,
     "CategoryAutocomplete": _MACHINE,
+    "SpeciesAutocomplete": _MACHINE,
     "ClubMemberAutocomplete": _MACHINE,
     "ClubMemberMergeAutocomplete": _MACHINE,
     "ClubMemberValidation": _MACHINE,

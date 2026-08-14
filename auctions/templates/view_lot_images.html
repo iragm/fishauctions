@@ -3,6 +3,7 @@
 {% load static %}
 {% load webpush_notifications %}
 {% load currency_filters %}
+{% load species_tags %}
 {% block extra_head %}
     {% comment %}
     webpush.js dereferences the subscribe button on load, so only load it when the button is
@@ -278,6 +279,8 @@ App-only; the deep link is handled natively. {% endcomment %}
                         </div>
                     {% endif %}
                     <h3>{{ lot.lot_name }}</h3>
+                    {% comment %}The scientific name the seller picked.  Italics because that is how a binomial is set, and a cultivar is shown as Genus species 'Strain' -- see Species.full_scientific_name.{% endcomment %}
+                    {% if lot.scientific_name %}<div class="text-muted"><i>{{ lot.scientific_name }}</i></div>{% endif %}
                     {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="{% url 'edit_lot' pk=lot.pk %}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
                     {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{% if show_bap_badge %}{% if bap_eligible_reason %}<span class="badge bg-secondary ms-1">Breeder points: {{ bap_eligible_reason_display }}</span>{% else %}<span class="badge bg-success ms-1">Breeder points eligible</span>{% endif %}{% endif %}{% if viewer_has_bap and lot.sold %}{% include "auctions/bap_lot_buttons.html" with default_points=bap_default_points %}{% endif %}{%endif%}
                     {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
@@ -1185,4 +1188,6 @@ function feedback(pk, leave_as, rating, text) {
   };
 </script>
 {% endif %}
+{% comment %}FishBase asks to be cited wherever its data is used, and a scientific name on a lot page is its data doing work for a reader. Only when there is one, so it doesn't sit under every sponge filter on the site.{% endcomment %}
+{% if lot.scientific_name %}{% fishbase_citation %}{% endif %}
 {% endblock %}

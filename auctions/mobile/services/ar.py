@@ -168,7 +168,7 @@ def build_lot_metadata(auction, pks, user, request):
     lots = {
         lot.pk: lot
         for lot in Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
-            "auction", "user", "winner", "auctiontos_winner"
+            "auction", "user", "winner", "auctiontos_winner", "species"
         )
     }
     watched = (
@@ -204,6 +204,10 @@ def build_lot_metadata(auction, pks, user, request):
                 "in_auction": True,
                 "lot_number": str(lot.lot_number_display),
                 "name": lot.lot_name,
+                # The seller's scientific name, blank when they didn't pick one.  The overlay draws
+                # it under the lot name -- it is the one piece of a lot that is worth reading in a
+                # room where you can't get close enough to read the label.
+                "scientific_name": lot.scientific_name,
                 "thumbnail_url": _thumbnail_url(lot, request),
                 "image_url": _image_url(lot, request),
                 "watched": pk in watched,
@@ -368,7 +372,7 @@ def positions_payload(auction, *, include_lot_details=False):
     unsold = list(
         Lot.objects.filter(
             auction=auction, is_deleted=False, banned=False, deactivated=False, winning_price__isnull=True
-        )
+        ).select_related("species")
     )
 
     positions = []
@@ -383,6 +387,7 @@ def positions_payload(auction, *, include_lot_details=False):
             if include_lot_details:
                 row["lot_number"] = str(lot.lot_number_display)
                 row["name"] = lot.lot_name
+                row["scientific_name"] = lot.scientific_name
             positions.append(row)
         if include_lot_details:
             unsold_list.append(
@@ -390,6 +395,7 @@ def positions_payload(auction, *, include_lot_details=False):
                     "pk": lot.pk,
                     "lot_number": str(lot.lot_number_display),
                     "name": lot.lot_name,
+                    "scientific_name": lot.scientific_name,
                     "has_position": has_pos,
                 }
             )

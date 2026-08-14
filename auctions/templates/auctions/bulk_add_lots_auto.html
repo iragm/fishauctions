@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
+{% load species_tags %}
 {% block title %}{% if is_admin %}Add lots for {{ tos.name }}{% else %}Add lots to {{ auction }}{% endif %}{% endblock %}
 
 {% block content %}
@@ -63,6 +64,18 @@
                       </div>
                       <div class="invalid-feedback"></div>
                     </div>
+
+                    {% if use_scientific_name %}
+                    <div class="col-12 col-md-6">
+                      <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">Scientific name</label>
+                      <select class="form-select form-select-sm lot-input species-select {% if not lot.can_be_edited %}text-light{% endif %}" name="species" data-field="species" {% if not lot.can_be_edited %}disabled{% endif %}>
+                        <option value="">No species</option>
+                        {% if lot.species %}<option value="{{ lot.species.pk }}" selected>{{ lot.species.label }}</option>{% endif %}
+                      </select>
+                      <div class="form-text small species-hint"></div>
+                      <div class="invalid-feedback"></div>
+                    </div>
+                    {% endif %}
 
                     {% if use_custom_field_1 %}
                     <div class="col-12 col-md-6">
@@ -192,6 +205,17 @@
                       <div class="invalid-feedback"></div>
                     </div>
 
+                    {% if use_scientific_name %}
+                    <div class="col-12 col-md-6">
+                      <label class="form-label small mb-1">Scientific name</label>
+                      <select class="form-select form-select-sm lot-input species-select" name="species" data-field="species">
+                        <option value="">No species</option>
+                      </select>
+                      <div class="form-text small species-hint"></div>
+                      <div class="invalid-feedback"></div>
+                    </div>
+                    {% endif %}
+
                     {% if use_custom_field_1 %}
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">{{ custom_field_1_name }} {% if custom_field_1_required %}<span class="text-danger">*</span>{% endif %}</label>
@@ -316,6 +340,7 @@
             </a>
           </div>
         </div>
+        {% if use_scientific_name %}{% fishbase_citation %}{% endif %}
       </div>
     </div>
   </div>
@@ -706,6 +731,13 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     // Clear validation errors
     newRow.querySelectorAll('.invalid-feedback').forEach(fb => fb.textContent = '');
 
+    // A cloned row carries the previous row's species suggestions; strip them back to "No species"
+    newRow.querySelectorAll('.species-select').forEach(select => {
+        select.innerHTML = '<option value="">No species</option>';
+        delete select.dataset.userChosen;
+    });
+    newRow.querySelectorAll('.species-hint').forEach(hint => hint.textContent = '');
+
     // Remove image icons
     newRow.querySelectorAll('.input-group-text').forEach(el => el.remove());
     newRow.querySelectorAll('.input-wrapper input').forEach(input => {
@@ -724,6 +756,94 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     // Scroll to the new row
     newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
+
+{% if use_scientific_name %}
+// Scientific name suggestions.  Typing a lot name fills the species dropdown next to it; the
+// options only ever come from the server, so there is nothing here that can invent a species.
+const SPECIES_URL = "{% url 'species_suggestions' %}";
+
+// Once someone picks from the dropdown themselves, later edits to the lot name refresh the
+// options but never silently move their choice.
+$(document).on('change', '.species-select', function() {
+    this.dataset.userChosen = '1';
+});
+
+function fillSpeciesOptions(select, hint, choices, source) {
+    const previous = select.value;
+    // Grab the label too: if the new suggestions don't include what they picked, the option is
+    // about to be destroyed and we need to be able to put it back.
+    const previousLabel = previous ? select.options[select.selectedIndex].textContent : '';
+    select.innerHTML = '<option value="">No species</option>';
+    choices.forEach(choice => {
+        const option = document.createElement('option');
+        option.value = choice.id;
+        option.textContent = choice.label;
+        select.appendChild(option);
+    });
+    const stillThere = choices.some(choice => String(choice.id) === previous);
+    if (previous && stillThere) {
+        select.value = previous;
+        return;
+    }
+    if (select.dataset.userChosen && previous) {
+        // Their pick no longer matches the lot name. Put it back and flag it: quietly resetting
+        // a species someone chose by hand is how a lot ends up mislabelled without anyone seeing.
+        const kept = document.createElement('option');
+        kept.value = previous;
+        kept.textContent = previousLabel;
+        select.appendChild(kept);
+        select.value = previous;
+        hint.textContent = 'Lot name changed — check the scientific name';
+        return;
+    }
+    if (choices.length === 1) {
+        // Unambiguous: fill it in for them. A match the species list made itself is exact and
+        // needs no comment; one the language model worked out from the lot name is a good guess
+        // and is labelled as one, because it ends up on a label and in breeder points.
+        select.value = choices[0].id;
+        hint.textContent = source === 'llm' ? 'Best guess from the lot name — check it' : '';
+    } else if (choices.length > 1) {
+        select.value = '';
+        hint.textContent = 'Several species match — pick one';
+    } else {
+        select.value = '';
+        hint.textContent = '';
+    }
+}
+
+$(document).on('blur', '[data-field="lot_name"]', function() {
+    const row = this.closest('.lot-row');
+    if (!row) return;
+    const select = row.querySelector('.species-select');
+    if (!select || select.disabled) return;
+    const hint = row.querySelector('.species-hint');
+    const name = this.value.trim();
+    if (!name) {
+        fillSpeciesOptions(select, hint, [], 'none');
+        return;
+    }
+    if (select.dataset.lastQuery === name) return;
+    select.dataset.lastQuery = name;
+    hint.textContent = 'Looking up species...';
+    $.ajax({
+        url: SPECIES_URL,
+        type: 'POST',
+        data: {'name': name, 'csrfmiddlewaretoken': '{{ csrf_token }}'},
+        success: function(response) {
+            // A slow reply for an old lot name must not stomp on what is in the box now.
+            if (select.dataset.lastQuery !== response.name) return;
+            hint.textContent = '';
+            fillSpeciesOptions(select, hint, response.choices || [], response.source);
+            // Saving here rather than waiting for a change event: an auto-filled species that
+            // nobody touches still needs to reach the database.
+            saveLot(row);
+        },
+        error: function() {
+            hint.textContent = '';
+        }
+    });
+});
+{% endif %}
 
 {% if auto_add_images %}
 // Image checking system

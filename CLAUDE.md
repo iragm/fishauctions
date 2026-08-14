@@ -44,6 +44,55 @@ docker exec -it django python3 manage.py shell
 
 Migration permission error? Use `docker exec -u root -it django ...`
 
+## Species list
+
+`Lot.species` is picked from `Species`, which comes from two places:
+
+* a **pinned** FishBase snapshot (`FISHBASE_VERSION` in `auctions/fishbase.py`) — ~36k fish, with
+  family/order and FishBase's aquarium-trade rating
+* `auctions/data/aquarium_species.csv`, a curated list of plants, freshwater invertebrates, live
+  foods and **cultivars** — everything FishBase has never heard of. Edit the CSV, re-run the
+  import. Its header states the rule for adding a row.
+
+SeaLifeBase is **deliberately not imported** (102k mostly-marine species, and no cherry shrimp);
+the code is kept and `--databases fb,slb` still works. See the comment in `auctions/fishbase.py`.
+
+```bash
+docker exec django python3 manage.py import_fishbase --check-version   # is the pin stale?
+docker exec django python3 manage.py import_fishbase                    # ~36k species, ~1 min
+docker exec django python3 manage.py import_fishbase --only-curated     # just the CSV, no download
+docker exec django python3 manage.py import_fishbase --only-categories  # re-map family -> Category
+docker exec django python3 manage.py import_fishbase --only-legacy --dry-run  # pre-import leftovers
+docker exec django python3 manage.py import_fishbase --purge slb        # drop an unused source
+```
+
+A **cultivar** ("Blue Dream", "Halfmoon") is a `Species` row with `variety` set and `parent`
+pointing at the nominal species, carrying the parent's genus and epithet — so breeder points,
+genus BAP rules and the category all still see the plain species. Show `full_scientific_name`,
+never `scientific_name`, wherever a human reads it.
+
+Adding a species is an **admin workflow, not a database edit**: `/admin-dashboard/species-gaps/`
+lists the lot names that keep showing up with no species (the sibling of the command palette's
+bounce list), and each row links to `/species/new/` with the name prefilled — fill in two boxes
+and every lot with that name gets the species, plus the matcher learns the name. Rows added there
+are `source="admin"`, which `import_fishbase --only-legacy` deliberately never touches.
+
+`Species.trade_rank` (0 = in the hobby, 1 = its genus is, 2 = neither) is what suggestions are
+ordered by. FishBase's own `Aquarium` column is not enough on its own — it files *Chindongo
+saulosi* under "never/rarely" — so the genus gets a say and `in_trade_override` lets a person
+overrule it. `Species.save()` maintains the species tier; the genus tier needs
+`Species.recompute_trade_ranks()`, which the importer runs.
+
+`Species.category` is derived from family/order by `auctions/species_categories.py`, which maps
+onto whatever categories a site's admins have actually created (it never creates one). A lot with
+a species takes that category, and the lot forms hide their category picker while a species is
+chosen.
+
+Matching a typed lot name to a species lives in `auctions/species_matching.py` (exact, then
+token/phrase search, then the LLM, with every answer cached in `SpeciesSearchCache`). Its rules are
+deliberately strict — a wrong species ends up on a printed label and in breeder points, so "no
+match" is a better answer than a plausible one. See `auctions/test_species.py`.
+
 ## Dependencies
 
 Never edit `requirements.txt` directly. Edit `requirements.in` or `requirements-test.in`, then:
@@ -65,7 +114,7 @@ entrypoint.sh        # Auto-runs migrate, collectstatic on start; uvicorn (dev) 
 ruff.toml            # Linting/format config
 ```
 
-**Key models:** User/UserData, Auction, Lot, Bid, Invoice, AuctionTOS, PickupLocation, Category, ChatMessage, PageView
+**Key models:** User/UserData, Auction, Lot, Bid, Invoice, AuctionTOS, PickupLocation, Category, Species, ChatMessage, PageView
 
 **URLs:** `auctions/urls.py` and `fishauctions/urls.py`
 

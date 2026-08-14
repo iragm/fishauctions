@@ -72,6 +72,11 @@ urlpatterns = [
         views.CategoryAutocomplete.as_view(),
         name="category-autocomplete",
     ),
+    path(
+        "api/species-autocomplete/",
+        views.SpeciesAutocomplete.as_view(),
+        name="species-autocomplete",
+    ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
     path("api/payinvoice/<int:pk>/<str:status>", views.InvoicePaid.as_view()),
@@ -164,6 +169,12 @@ urlpatterns = [
         views.CommandPaletteAnalyticsView.as_view(),
         name="command_palette_analytics",
     ),
+    path(
+        "admin-dashboard/species-gaps/",
+        views.SpeciesGapsView.as_view(),
+        name="species_gaps",
+    ),
+    path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(
@@ -725,6 +736,11 @@ urlpatterns = [
         views.FindImageIcon.as_view(),
         name="auto_image_available",
     ),
+    path(
+        "api/species/suggest/",
+        views.SpeciesSuggestions.as_view(),
+        name="species_suggestions",
+    ),
     # path('api/auctionstats/distance-traveled', views.AdminStatsDistanceTraveled.as_view(), name='distance_traveled'),
     # path('api/auctionstats/prices-with-images', views.AdminStatsImages.as_view(), name='prices_with_images'),
     path(
@@ -873,6 +889,16 @@ urlpatterns = [
         "clubs/<slug:slug>/bap-settings/category-overrides/<int:pk>/delete/",
         views.ClubBapCategoryOverrideDeleteView.as_view(),
         name="club_bap_category_override_delete",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-settings/genus-overrides/save/",
+        views.ClubBapGenusOverrideSaveView.as_view(),
+        name="club_bap_genus_override_save",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-settings/genus-overrides/<int:pk>/delete/",
+        views.ClubBapGenusOverrideDeleteView.as_view(),
+        name="club_bap_genus_override_delete",
     ),
     path("clubs/<slug:slug>/bap-admin/", views.ClubBapView.as_view(), name="club_bap"),
     path("clubs/<slug:slug>/bap-admin/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),

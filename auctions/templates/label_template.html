@@ -77,6 +77,9 @@
                 {% if 'lot_name' in label.auction.label_print_fields %}
                     {{ label.lot_name }}<br>
                 {% endif %}
+                {% if 'scientific_name' in label.auction.label_print_fields and label.scientific_name_label %}
+                    <span style="font-size: {{ description_font_size }}pt;"><i>{{ label.scientific_name_label }}</i></span><br>
+                {% endif %}
                 {% if 'custom_field_1' in label.auction.label_print_fields and label.custom_field_1 %}
                     <span style="font-size: {{ description_font_size }}pt;">
                         {{ label.custom_field_1 }}<br>

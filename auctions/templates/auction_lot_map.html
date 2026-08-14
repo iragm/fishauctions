@@ -141,7 +141,8 @@
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
-         <div class="small text-muted mb-2">${escapeHtml(p.name)}</div>
+         <div class="small text-muted">${escapeHtml(p.name)}</div>
+         ${p.scientific_name ? `<div class="small text-muted fst-italic mb-2">${escapeHtml(p.scientific_name)}</div>` : '<div class="mb-2"></div>'}
          <div class="d-flex flex-wrap gap-1">
            <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
            ${arButton}

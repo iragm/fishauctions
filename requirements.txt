@@ -347,6 +347,8 @@ protobuf==7.35.1
     #   proto-plus
 py-vapid==1.9.4
     # via pywebpush
+pyarrow==25.0.1
+    # via -r requirements.in
 pyasn1==0.6.4
     # via
     #   -r requirements.in

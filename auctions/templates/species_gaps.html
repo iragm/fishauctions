@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% load species_tags %}
+{% block title %}Lots with no scientific name{% endblock %}
+{% block content %}
+<h2 class="mb-3">Lots with no scientific name</h2>
+<p class="text-muted">
+  {{ total_missing }} lot{{ total_missing|pluralize }} in auctions that use scientific names have none set;
+  {{ total_with_species }} do. The species list holds {{ species_total }} entries,
+  {{ species_added_here }} of them added here.
+</p>
+{% comment %}
+  Deliberately not filtered down to "the ones that are definitely animals". Nothing separates
+  "sponge filter" from "sponge" reliably, and a filter that hid rows would hide the ones worth
+  finding. The columns are the evidence; the reader does the judging.
+{% endcomment %}
+<p class="text-muted small">
+  Grouped by lot name and sorted by how many sellers said they bred it &mdash; the strongest sign that a
+  name is a living thing rather than a box of hardware. Hardware and mixed bags belong here too and
+  should simply be left alone.
+</p>
+
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>Lot name</th>
+        <th class="text-end">Lots</th>
+        <th class="text-end">Bred by seller</th>
+        <th>Last time the matcher looked</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for gap in gaps %}
+      <tr>
+        <td>{{ gap.lot_name }}</td>
+        <td class="text-end">{{ gap.lots }}</td>
+        <td class="text-end">{% if gap.bred %}<span class="badge bg-success">{{ gap.bred }}</span>{% else %}&mdash;{% endif %}</td>
+        <td class="small text-muted">
+          {{ gap.verdict }}{% if gap.verdict_detail %} &middot; {{ gap.verdict_detail }}{% endif %}
+        </td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-outline-primary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add species</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="text-muted">Nothing to do &mdash; every lot that was offered a scientific name has one.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if rejected %}
+<h4 class="mt-4">Names the matcher decided were not a species</h4>
+<p class="text-muted small">
+  {% comment %}The direct analogue of the command palette's bounce list: a remembered "no" that keeps being served is either right (it is a sponge filter) or a species missing from the list.{% endcomment %}
+  Each of these is remembered and served without asking again, so a wrong one stays wrong until somebody
+  fixes it. Adding the species clears the answer for every club at once.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Name</th><th class="text-end">Times served</th><th>Decided by</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in rejected %}
+      <tr>
+        <td>{{ row.search_text }}</td>
+        <td class="text-end">{{ row.hits }}</td>
+        <td class="small text-muted">{{ row.get_source_display }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-outline-secondary" href="{% url 'species_create' %}?lot_name={{ row.search_text|urlencode }}">Add species</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted small">
+  To make one of these look the name up again instead, delete its row in
+  <a href="/admin/auctions/speciessearchcache/">the species name cache</a>.
+</p>
+{% endif %}
+
+<a class="btn btn-success mt-2" href="{% url 'species_create' %}">Add a species</a>
+{% fishbase_citation %}
+{% endblock %}
