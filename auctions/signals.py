@@ -673,9 +673,15 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
     canonical) via AuctionTOS.merge_duplicate; otherwise the orphan row is linked directly.
     Shared by the login signal (user_logged_in_callback) and the relink_auctiontos_users
     management command so both repair paths behave identically.
-    """
-    from auctions.models import AuctionTOS
 
+    Lots sold through a TOS while it was unlinked were saved with user=None; linking the TOS
+    doesn't fix those on its own, so they're claimed here too. Without that they stay invisible
+    to everything keyed on Lot.user (the CSV report, breederboard, chat notifications) even
+    though Lot.is_owned_by now lets the seller manage them.
+    """
+    from auctions.models import AuctionTOS, Lot
+
+    linked_tos_pks = []
     auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
     for auctiontos in auctiontoss:
         existing = AuctionTOS.objects.filter(user=user, auction=auctiontos.auction).first()
@@ -687,9 +693,13 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
             else:
                 canonical, duplicate = existing, auctiontos
             canonical.merge_duplicate(duplicate, reason=reason)
+            linked_tos_pks.append(canonical.pk)
         else:
             auctiontos.user = user
             auctiontos.save()
+            linked_tos_pks.append(auctiontos.pk)
+    if linked_tos_pks:
+        Lot.objects.filter(auctiontos_seller__pk__in=linked_tos_pks, user__isnull=True).update(user=user)
 
 
 @receiver(user_logged_in)
