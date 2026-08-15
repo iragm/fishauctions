@@ -38,6 +38,10 @@
     <div>
       <label class="form-label mb-1 small">Genus</label>
       {{ genus_override_form.genus }}
+      {% comment %}The list the genus box's list="bap-genus-list" points at: the genera this club's own lots use.{% endcomment %}
+      <datalist id="bap-genus-list">
+        {% for genus in bap_genus_choices %}<option value="{{ genus }}"></option>{% endfor %}
+      </datalist>
     </div>
     <div>
       <label class="form-label mb-1 small">Points</label>

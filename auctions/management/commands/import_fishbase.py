@@ -47,7 +47,7 @@ from django.db import transaction
 
 from auctions import aquarium_species
 from auctions.fishbase import DATABASES, DEFAULT_DATABASES, FISHBASE_VERSION, available_versions, parquet_url
-from auctions.models import Lot, Species, SpeciesCommonName
+from auctions.models import Lot, Species, SpeciesCommonName, normalize_species_name
 from auctions.species_categories import assign_categories
 
 logger = logging.getLogger(__name__)
@@ -498,8 +498,9 @@ class Command(BaseCommand):
         for index in range(0, len(to_create), BATCH_SIZE):
             batch = to_create[index : index + BATCH_SIZE]
             for species in batch:
-                # bulk_create skips save(), so build the denormalised column here.
+                # bulk_create skips save(), so build the denormalised columns here.
                 species.scientific_name = " ".join(part for part in (species.genus, species.species) if part)
+                species.common_name_normalized = normalize_species_name(species.common_name)
             Species.objects.bulk_create(batch, batch_size=BATCH_SIZE)
 
         by_code = {
@@ -513,7 +514,14 @@ class Command(BaseCommand):
                 continue
             for name, language, is_preferred in names:
                 common_objects.append(
-                    SpeciesCommonName(species=species, name=name, language=language, is_preferred=is_preferred)
+                    SpeciesCommonName(
+                        species=species,
+                        name=name,
+                        # bulk_create skips save(); this column is what every lookup matches on.
+                        name_normalized=normalize_species_name(name),
+                        language=language,
+                        is_preferred=is_preferred,
+                    )
                 )
         SpeciesCommonName.objects.bulk_create(common_objects, batch_size=BATCH_SIZE)
         return created, updated

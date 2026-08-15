@@ -18,6 +18,7 @@ from auctions import llm
 from auctions.llm import LLMError, LLMProvider, LLMResult
 from auctions.models import (
     Auction,
+    AuctionTOS,
     BapAward,
     Category,
     Club,
@@ -106,6 +107,12 @@ class SpeciesMatchingTests(StandardTestCase):
 
     def test_normalize_strips_punctuation_and_case(self):
         self.assertEqual(normalize("  Betta   Splendens (pair)! "), "betta splendens pair")
+
+    def test_normalize_deletes_an_apostrophe_but_splits_on_a_hyphen(self):
+        """The one punctuation mark people leave out has to normalise to the same string either way."""
+        self.assertEqual(normalize("Adolf's catfish"), "adolfs catfish")
+        self.assertEqual(normalize("adolfs catfish"), "adolfs catfish")
+        self.assertEqual(normalize("Black-banded leporinus"), "black banded leporinus")
 
     def test_singularize_handles_the_common_endings(self):
         self.assertEqual(singularize("tetras"), "tetra")
@@ -1002,15 +1009,31 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertEqual(cleaned["species_category"], cichlids)
 
     def test_an_admin_editing_a_lot_keeps_the_category_they_chose(self):
-        """The admin modal still shows the category field, so it is theirs to set."""
+        """The admin modal still shows the category field, so it is theirs to set.
+
+        Saved rather than only cleaned: cleaning it was never the half that was broken.  A lot with
+        a species re-derives its category on every save while ``category_automatically_added`` is
+        set, so a version of this test that stopped at ``cleaned_data`` passed for a year while the
+        admin's choice was reverted the moment the lot hit the database.
+        """
         from auctions.forms import clean_species_for_auction
 
         cichlids = Category.objects.create(name="Cichlids")
         chosen = Category.objects.create(name="Livebearers")
         Species.objects.filter(pk=self.guppy.pk).update(category=cichlids)
         self.guppy.refresh_from_db()
-        cleaned = clean_species_for_auction({"species": self.guppy, "species_category": chosen}, self.online_auction)
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.species = self.guppy
+        lot.species_category = cichlids
+        lot.category_automatically_added = True
+        cleaned = clean_species_for_auction(
+            {"species": self.guppy, "species_category": chosen}, self.online_auction, instance=lot
+        )
         self.assertEqual(cleaned["species_category"], chosen)
+        lot.species_category = cleaned["species_category"]
+        lot.save()
+        lot.refresh_from_db()
+        self.assertEqual(lot.species_category, chosen)
 
     def test_the_suggestions_endpoint_reports_the_category(self):
         cichlids = Category.objects.create(name="Cichlids")
@@ -1346,3 +1369,559 @@ class SpeciesAutocompleteTests(StandardTestCase):
         )
         response = self.client.get(self.url, {"q": "Neocaridina"})
         self.assertNotIn("Blue Dream", response.content.decode())
+
+
+class CategoryChosenByAPersonSticksTests(StandardTestCase):
+    """A category somebody picked by hand survives the next save.
+
+    ``Lot._do_save`` re-derives the category from the species whenever
+    ``category_automatically_added`` is set, and that flag is the only record of who put the lot
+    where it is.  Every path that lets a person choose a category has to clear it, or the choice is
+    silently undone -- the modal closes, the page says 200, and the category is back.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cichlids = Category.objects.create(name="Cichlids", bap_points=5)
+        self.plants = Category.objects.create(name="Aquatic plants", bap_points=5)
+        self.angel = make_species("Pterophyllum", "scalare", "Freshwater angelfish")
+        Species.objects.filter(pk=self.angel.pk).update(category=self.cichlids)
+        self.angel.refresh_from_db()
+        self.club = Club.objects.create(name="Category club", enable_breeder_award_program=True)
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.bap_user = User.objects.create_user(username="bap_admin", password="testpassword")
+        ClubMember.objects.create(club=self.club, user=self.bap_user, name="Bap", permission_manage_bap=True)
+        self.lot.species = self.angel
+        self.lot.species_category = self.cichlids
+        self.lot.category_automatically_added = True
+        self.lot.save()
+
+    def test_the_bap_admin_modal_choice_is_not_reverted(self):
+        """The reported bug: POST "Aquatic plants", get a 200, and the lot is back in Cichlids."""
+        self.client.login(username="bap_admin", password="testpassword")
+        response = self.client.post(
+            reverse("club_bap_lot_category", kwargs={"pk": self.lot.pk}),
+            {"species_category": self.plants.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species_category, self.plants)
+        self.assertFalse(self.lot.category_automatically_added)
+        # ...and it is still there after anything else touches the lot.
+        self.lot.save()
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species_category, self.plants)
+
+    def test_changing_the_category_on_any_form_survives_the_save(self):
+        """What every form with a visible category picker calls; the admin lot-edit modal is one."""
+        from auctions.forms import note_category_chosen_by_person
+
+        lot = Lot.objects.get(pk=self.lot.pk)
+        note_category_chosen_by_person(lot, {"species_category": self.plants})
+        lot.species_category = self.plants
+        lot.save()
+        lot.refresh_from_db()
+        self.assertEqual(lot.species_category, self.plants)
+
+    def test_re_saving_without_touching_the_category_is_not_a_decision(self):
+        """Otherwise the first unrelated edit would freeze a machine-set category forever."""
+        from auctions.forms import note_category_chosen_by_person
+
+        lot = Lot.objects.get(pk=self.lot.pk)
+        note_category_chosen_by_person(lot, {"species_category": self.cichlids})
+        self.assertTrue(lot.category_automatically_added)
+
+    def test_a_machine_set_category_still_follows_the_species(self):
+        """The behaviour this is not allowed to break: nobody chose Livebearers, so it moves."""
+        livebearers = Category.objects.create(name="Livebearers")
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.species_category = livebearers
+        lot.category_automatically_added = True
+        lot.save()
+        self.assertEqual(lot.species_category, self.cichlids)
+
+
+class TurningTheFieldOffKeepsTheSpeciesTests(StandardTestCase):
+    """``use_scientific_name`` hides the field.  It does not delete the column.
+
+    A club that switches the setting off to see what it does -- or off and back on -- used to lose
+    the species from every lot anybody touched in between, permanently, with the labels and the CSV
+    staying blank afterwards.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.online_auction.lot_submission_start_date = timezone.now() - datetime.timedelta(days=1)
+        self.online_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+
+    def test_an_ajax_save_of_another_field_does_not_wipe_it(self):
+        self.client.login(username="my_lot", password="testpassword")
+        url = reverse("save_lot_ajax", kwargs={"slug": self.online_auction.slug})
+        created = self.client.post(
+            url,
+            data={"lot_name": "Fancy guppy pair", "quantity": 1, "reserve_price": 2, "species": self.guppy.pk},
+            content_type="application/json",
+        ).json()
+        self.online_auction.use_scientific_name = False
+        self.online_auction.save()
+        response = self.client.post(
+            url,
+            data={"lot_id": created["lot_id"], "lot_name": "Fancy guppy pair", "quantity": 2, "reserve_price": 2},
+            content_type="application/json",
+        )
+        self.assertTrue(response.json()["success"], response.json())
+        lot = Lot.objects.get(lot_number=created["lot_id"])
+        self.assertEqual(lot.species, self.guppy)
+
+    def test_cleaning_a_form_keeps_what_is_stored(self):
+        from auctions.forms import clean_species_for_auction
+
+        self.online_auction.use_scientific_name = False
+        self.online_auction.save()
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.species = self.guppy
+        lot.save()
+        cleaned = clean_species_for_auction({"species": None}, self.online_auction, instance=lot)
+        self.assertEqual(cleaned["species"], self.guppy)
+
+    def test_a_posted_species_still_cannot_get_in(self):
+        """Keeping the stored value is not the same as accepting a hand-rolled POST."""
+        from auctions.forms import clean_species_for_auction
+
+        betta = make_species("Betta", "splendens", "Siamese fighting fish")
+        self.online_auction.use_scientific_name = False
+        self.online_auction.save()
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.species = self.guppy
+        lot.save()
+        cleaned = clean_species_for_auction({"species": betta}, self.online_auction, instance=lot)
+        self.assertEqual(cleaned["species"], self.guppy)
+
+    def test_the_name_is_hidden_while_the_setting_is_off_and_comes_back_after(self):
+        """One display rule, everywhere -- the lot page and the label used to disagree."""
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.species = self.guppy
+        lot.save()
+        self.assertEqual(lot.scientific_name, "Poecilia reticulata")
+        self.online_auction.use_scientific_name = False
+        self.online_auction.save()
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.scientific_name, "")
+        self.assertEqual(lot.scientific_name_label, "")
+        self.online_auction.use_scientific_name = True
+        self.online_auction.save()
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.scientific_name, "Poecilia reticulata")
+
+
+class BapCategoryNamesResolveTests(StandardTestCase):
+    """The three category names the BAP rules match on by name have to be reachable.
+
+    ``bap_placeholder``, the CAP-disabled ineligibility rule and the quantity-minimum exemption all
+    compare ``species_category.name`` against these exact strings, so a species that resolves to
+    anything else -- or to nothing -- silently drops out of the Culture and HAP tracks.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from auctions.species_categories import CategoryResolver
+
+        self.plants = Category.objects.create(name="Aquatic plants")
+        self.inverts = Category.objects.create(name="Snails and other inverts")
+        self.cultures = Category.objects.create(name="Live food cultures")
+        self.resolver = CategoryResolver()
+
+    def test_plants(self):
+        self.assertEqual(self.resolver.resolve("plants"), self.plants)
+
+    def test_invertebrates(self):
+        self.assertEqual(self.resolver.resolve("invertebrates"), self.inverts)
+
+    def test_live_food(self):
+        self.assertEqual(self.resolver.resolve("live food"), self.cultures)
+
+    def test_a_curated_shrimp_lands_in_the_invert_category(self):
+        """End to end, because this is the half of the curated CSV that had no category at all."""
+        from auctions.species_categories import assign_categories
+
+        shrimp = Species.objects.create(genus="Neocaridina", species="davidi", source="aquarium")
+        assign_categories()
+        shrimp.refresh_from_db()
+        self.assertEqual(shrimp.category, self.inverts)
+
+
+class SpeciesBreederPointsFlagTests(StandardTestCase):
+    """``Species.breeder_points`` is on the add-species form, so unticking it has to mean something."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Breeder club",
+            enable_breeder_award_program=True,
+            auto_add_points=True,
+            min_quantity=1,
+            only_sold_lots=False,
+            only_active_members_can_participate=False,
+            points_per_lot=5,
+        )
+        self.category = Category.objects.create(name="Cichlids", bap_points=5)
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        ClubMember.objects.create(club=self.club, user=self.user, name="seller")
+        self.species = make_species("Tropheus", "duboisi", "White spotted cichlid")
+        self.lot.species = self.species
+        self.lot.species_category = self.category
+        self.lot.i_bred_this_fish = True
+        self.lot.user = self.user
+        self.lot.date_end = timezone.now()
+        self.lot.save()
+
+    def test_a_species_that_earns_points_is_eligible(self):
+        self.assertIsNone(self.lot.unsold_lot_no_bap_reason)
+
+    def test_unticking_it_makes_the_lot_ineligible(self):
+        Species.objects.filter(pk=self.species.pk).update(breeder_points=False)
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "species_not_eligible")
+
+    def test_no_award_is_generated(self):
+        """The probe that found this: a species with breeder_points=False still made 5 points."""
+        Species.objects.filter(pk=self.species.pk).update(breeder_points=False)
+        lot = Lot.objects.get(pk=self.lot.pk)
+        lot.auto_award_bap_points()
+        self.assertFalse(BapAward.objects.filter(lot=lot).exists())
+        self.assertEqual(lot.bap_auto_reason, "species_not_eligible")
+
+    def test_a_strain_answers_for_its_parent(self):
+        """The reason not to award points is a fact about the animal, not about the colour form."""
+        Species.objects.filter(pk=self.species.pk).update(breeder_points=False)
+        Species.objects.create(
+            genus="Tropheus", species="duboisi", variety="Maswa", parent=self.species, source="admin"
+        )
+        strain = Species.objects.get(variety="Maswa")
+        self.assertFalse(strain.earns_breeder_points)
+
+
+class NormalizedCommonNameTests(StandardTestCase):
+    """A fifth of FishBase's common names carry punctuation the query has already had stripped."""
+
+    def test_a_name_with_an_apostrophe_is_reachable(self):
+        species = make_species("Corydoras", "adolfoi", "Adolf's catfish")
+        self.assertEqual(list(exact_matches("adolfs catfish")), [species])
+        self.assertEqual(list(exact_matches("Adolf's catfish")), [species])
+
+    def test_the_species_own_common_name_is_normalized_too(self):
+        """exact_matches queries Species.common_name directly, not only the common-name table."""
+        species = Species.objects.create(genus="Corydoras", species="agassizii", common_name="Agassiz's corydoras")
+        self.assertEqual(species.common_name_normalized, "agassizs corydoras")
+        self.assertEqual(list(exact_matches("Agassiz's corydoras")), [species])
+
+    def test_a_hyphenated_name_is_reachable_as_a_phrase(self):
+        species = make_species("Leporinus", "fasciatus", "Black-banded leporinus")
+        found, source = suggest_species("3 black-banded leporinus", use_llm=False)
+        self.assertEqual(list(found), [species])
+        self.assertEqual(source, "search")
+
+    def test_the_column_is_rebuilt_on_save(self):
+        common = SpeciesCommonName.objects.create(
+            species=make_species("Poecilia", "reticulata"), name="Ram's horn snail"
+        )
+        self.assertEqual(common.name_normalized, "rams horn snail")
+        common.name = "Ramshorn snail"
+        common.save()
+        self.assertEqual(common.name_normalized, "ramshorn snail")
+
+
+class PointsPerLotZeroTests(StandardTestCase):
+    """0 points per lot means nought, not "fall through to the category default"."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Points club", enable_breeder_award_program=True)
+        self.category = Category.objects.create(name="Cichlids", bap_points=7)
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.lot.species_category = self.category
+        self.lot.save()
+
+    def test_blank_falls_through_to_the_category(self):
+        self.club.points_per_lot = None
+        self.club.save()
+        self.assertEqual(self.lot.bap_points_for_club(self.club), 7)
+
+    def test_zero_means_zero(self):
+        self.club.points_per_lot = 0
+        self.club.save()
+        self.assertEqual(self.lot.bap_points_for_club(self.club), 0)
+
+    def test_a_flat_rate_still_beats_the_category(self):
+        self.club.points_per_lot = 3
+        self.club.save()
+        self.assertEqual(self.lot.bap_points_for_club(self.club), 3)
+
+
+class BackfillLotSpeciesCommandTests(StandardTestCase):
+    """The one pass that clears the historical backlog the gaps page is otherwise full of."""
+
+    def setUp(self):
+        super().setUp()
+        self.tropheus = make_species("Tropheus", "duboisi", "White spotted cichlid")
+        self.cichlids = Category.objects.create(name="Cichlids")
+        Species.objects.filter(pk=self.tropheus.pk).update(category=self.cichlids)
+        self.tropheus.refresh_from_db()
+        self.lot.lot_name = "Tropheus duboisi maswa"
+        self.lot.species = None
+        self.lot.save()
+
+    def _run(self, *args):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("backfill_lot_species", *args, stdout=out)
+        return out.getvalue()
+
+    def test_it_sets_the_species_the_matcher_is_sure_about(self):
+        self._run()
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+
+    def test_a_dry_run_writes_nothing(self):
+        output = self._run("--dry-run")
+        self.assertIn("Tropheus duboisi", output)
+        self.lot.refresh_from_db()
+        self.assertIsNone(self.lot.species)
+
+    def test_it_leaves_a_name_it_cannot_place_alone(self):
+        self.lot.lot_name = "Sponge filter"
+        self.lot.save()
+        self._run()
+        self.lot.refresh_from_db()
+        self.assertIsNone(self.lot.species)
+
+    def test_it_never_overwrites_a_species_somebody_picked(self):
+        guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.lot.species = guppy
+        self.lot.save()
+        self._run()
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, guppy)
+
+    def test_the_category_is_left_alone_by_default(self):
+        """Deriving it can move a lot between the BAP, HAP and Culture tracks; awards would disagree."""
+        livebearers = Category.objects.create(name="Livebearers")
+        Lot.objects.filter(pk=self.lot.pk).update(species_category=livebearers, category_automatically_added=True)
+        self._run()
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+        self.assertEqual(self.lot.species_category, livebearers)
+
+    def test_set_category_only_moves_uncategorized_lots(self):
+        uncategorized, _ = Category.objects.get_or_create(name="Uncategorized")
+        Lot.objects.filter(pk=self.lot.pk).update(species_category=uncategorized)
+        self._run("--set-category")
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species_category, self.cichlids)
+
+    def test_set_category_skips_a_lot_that_already_has_an_award(self):
+        uncategorized, _ = Category.objects.get_or_create(name="Uncategorized")
+        Lot.objects.filter(pk=self.lot.pk).update(species_category=uncategorized)
+        club = Club.objects.create(name="Award club", enable_breeder_award_program=True)
+        member = ClubMember.objects.create(club=club, user=self.user, name="seller")
+        BapAward.objects.create(club_member=member, lot=self.lot, date=timezone.now().date(), points=5)
+        self._run("--set-category")
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+        self.assertEqual(self.lot.species_category, uncategorized)
+
+    def test_the_auction_filter_leaves_other_auctions_alone(self):
+        self._run("--auction", self.in_person_auction.slug)
+        self.lot.refresh_from_db()
+        self.assertIsNone(self.lot.species)
+
+
+class SpeciesGapsAttachByNormalizedNameTests(StandardTestCase):
+    """The gaps page links with a normalised name; the attach has to match on one."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("species_create")
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.client.login(username="species_admin", password="testpassword")
+        self.lot.lot_name = "Ram's Horn Snails"
+        self.lot.species = None
+        self.lot.save()
+
+    def test_it_attaches_to_the_lots_the_normalised_name_came_from(self):
+        # Exactly what the "not a species" table links with: the search cache never stored the
+        # original spelling, so the normalised key is the only name that page has.
+        self.assertEqual(normalize(self.lot.lot_name), "rams horn snails")
+        response = self.client.post(
+            self.url,
+            {
+                "scientific_name_input": "Planorbella duryi",
+                "common_name": "Ramshorn snail",
+                "other_names": "",
+                "variety": "",
+                "parent": "",
+                "category": "",
+                "freshwater": "on",
+                "breeder_points": "on",
+                "lot_name": normalize(self.lot.lot_name),
+                "attach_to_lots": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302, getattr(response, "context", None))
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species.scientific_name, "Planorbella duryi")
+
+
+class SpeciesSmallerFixesTests(StandardTestCase):
+    """The rest of the review's smaller items, each one line of behaviour."""
+
+    def setUp(self):
+        super().setUp()
+        self.tropheus = make_species("Tropheus", "duboisi", "White spotted cichlid")
+
+    def test_lot_search_finds_a_lot_by_its_scientific_name(self):
+        """Nothing in the lot's own name says Tropheus; the species the seller picked does."""
+        from auctions.filters import LotFilter
+
+        self.lot.lot_name = "Six young fish"
+        self.lot.species = self.tropheus
+        self.lot.save()
+        searched = LotFilter(user=self.user).text_filter(Lot.objects.filter(pk=self.lot.pk), "q", "Tropheus")
+        self.assertIn(self.lot, searched)
+        common = LotFilter(user=self.user).text_filter(Lot.objects.filter(pk=self.lot.pk), "q", "White spotted")
+        self.assertIn(self.lot, common)
+
+    def test_the_genus_box_has_the_datalist_it_points_at(self):
+        club = Club.objects.create(name="Datalist club", enable_breeder_award_program=True)
+        bap_user = User.objects.create_user(username="datalist_admin", password="testpassword")
+        ClubMember.objects.create(club=club, user=bap_user, name="Bap", permission_manage_bap=True)
+        self.online_auction.club = club
+        self.online_auction.save()
+        self.lot.species = self.tropheus
+        self.lot.save()
+        self.client.login(username="datalist_admin", password="testpassword")
+        body = self.client.get(reverse("club_bap_settings", kwargs={"slug": club.slug})).content.decode()
+        self.assertIn('id="bap-genus-list"', body)
+        self.assertIn('value="Tropheus"', body)
+
+    def test_the_bulk_add_page_clears_a_cloned_row_species(self):
+        """A cloned row's suggestions belong to the previous lot name, not this one."""
+        from django.template.loader import get_template
+
+        source = get_template("auctions/bulk_add_lots.html").template.source
+        self.assertIn("newElement.find('select[name$=\"-species\"]')", source)
+        self.assertIn("delete this.dataset.userChosen", source)
+
+
+class CopyingLotsToANewAuctionTests(StandardTestCase):
+    """Relisting is where a scientific name is most worth keeping.
+
+    The same fish, from the same breeder, a season later.  ``CLONE_LOT_FIELDS`` carried the
+    category but not the species, so every copied lot arrived blank and the seller had to pick it
+    again -- which is exactly the moment they don't, because the form already looks filled in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.next_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Next season",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=5),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.old_lot = Lot.objects.get(pk=self.lot.pk)
+        self.old_lot.user = self.user
+        self.old_lot.lot_name = "Fancy guppy trio"
+        self.old_lot.species = self.guppy
+        self.old_lot.save()
+
+    def test_clone_lot_values_carries_the_species(self):
+        from auctions.services import clone_lot_values
+
+        self.assertEqual(clone_lot_values(self.old_lot)["species"], self.guppy)
+
+    def test_the_copy_form_starts_with_the_species_filled_in(self):
+        from auctions.forms import CreateLotForm
+
+        form = CreateLotForm(user=self.user, cloned_from=self.old_lot.pk, auction=self.next_auction)
+        self.assertEqual(form.fields["species"].initial, self.guppy)
+        # ...and it renders, rather than being an initial nothing can see.
+        self.assertIn("Poecilia reticulata", str(form["species"]))
+
+    def test_the_new_auction_still_decides(self):
+        """Copying is not a way round an auction that has the field switched off."""
+        from auctions.forms import clean_species_for_auction
+
+        self.next_auction.use_scientific_name = False
+        self.next_auction.save()
+        cleaned = clean_species_for_auction(
+            {"species": self.guppy, "species_category": None},
+            self.next_auction,
+            derive_category=True,
+            instance=Lot(),
+        )
+        self.assertIsNone(cleaned["species"])
+
+    def test_the_palette_relist_carries_it_as_a_pk(self):
+        """That path builds form *data*, not initial, so an object would fail to validate."""
+        from auctions.forms import quick_add_lot_form_class
+        from auctions.services import clone_lot_values
+
+        data = clone_lot_values(self.old_lot)
+        data["species_category"] = self.old_lot.species_category_id
+        data["species"] = self.old_lot.species_id
+        data["reserve_price"] = 2
+        tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.next_auction, pickup_location=self.location, bidder_number="601"
+        )
+        form = quick_add_lot_form_class()(data=data, auction=self.next_auction, is_admin=False, tos=tos)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["species"], self.guppy)
+
+
+class ScientificNameStaysOnForFutureAuctionsTests(StandardTestCase):
+    """Nothing in this branch may leave a club's next auction with the field switched off."""
+
+    def test_a_brand_new_auction_has_it_on(self):
+        fresh = Auction.objects.create(title="Brand new", created_by=self.user, date_start=timezone.now())
+        self.assertTrue(fresh.use_scientific_name)
+
+    def test_a_clone_of_an_auction_that_has_it_keeps_it(self):
+        """The setting is in fields_to_clone, so whatever the source says propagates forward."""
+        self.assertTrue(self.online_auction.use_scientific_name)
+        self.client.login(username="my_lot", password="testpassword")
+        self.client.post(
+            f"{reverse('create_auction')}?clone={self.online_auction.slug}",
+            {
+                "title": "Next season",
+                "cloned_from": self.online_auction.slug,
+                "date_start": (timezone.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                "date_end": (timezone.now() + datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        clone = Auction.objects.filter(title="Next season").first()
+        self.assertIsNotNone(clone)
+        self.assertTrue(clone.use_scientific_name)
+        self.assertIn("scientific_name", clone.label_print_fields)
+
+    def test_no_migration_turned_it_off_for_an_auction_taking_lots(self):
+        """0388 deliberately leaves the setting alone; see its docstring for why."""
+        self.online_auction.lot_submission_start_date = timezone.now() - datetime.timedelta(days=1)
+        self.online_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=5)
+        self.online_auction.save()
+        self.online_auction.refresh_from_db()
+        self.assertTrue(self.online_auction.use_scientific_name)

@@ -58,8 +58,14 @@ CATEGORY_CANDIDATES = {
     "goldfish": ("Goldfish & Koi", "Goldfish and Koi", "Goldfish", "Koi", "Pond Fish"),
     "gobies": ("Gobies", "Goby", "Gobies and Sleepers"),
     "marine": ("Marine", "Marine Fish", "Saltwater", "Reef"),
-    "plants": ("Plants", "Aquatic Plants", "Live Plants", "Aquarium Plants", "Plant"),
+    # The first name in each of the three lists below is the one this site ships with, and the one
+    # Lot.bap_placeholder and Lot.unsold_lot_no_bap_reason match on by name: a plant lot has to land
+    # in "Aquatic plants" for HAP to be offered, and a shrimp or a daphnia culture has to land in
+    # "Snails and other inverts" or "Live food cultures" for the Culture track, the CAP-disabled
+    # ineligibility rule and the quantity-minimum exemption to see it.  Keep them first.
+    "plants": ("Aquatic plants", "Plants", "Live Plants", "Aquarium Plants", "Plant"),
     "invertebrates": (
+        "Snails and other inverts",
         "Invertebrates",
         "Inverts",
         "Shrimp & Snails",
@@ -68,7 +74,15 @@ CATEGORY_CANDIDATES = {
         "Snails",
         "Invertebrate",
     ),
-    "live food": ("Live Food", "Live Foods", "Live Cultures", "Cultures", "Foods", "Food"),
+    "live food": (
+        "Live food cultures",
+        "Live Food",
+        "Live Foods",
+        "Live Cultures",
+        "Cultures",
+        "Foods",
+        "Food",
+    ),
     "other fish": ("Other Fish", "Miscellaneous Fish", "Misc Fish", "Oddballs"),
 }
 

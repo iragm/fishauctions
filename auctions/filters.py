@@ -410,6 +410,8 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(auctiontos_winner__bidder_number=value)
                 | Q(auctiontos_seller__user__username=value)
                 | Q(lot_name__icontains=value)
+                | Q(species__scientific_name__icontains=value)
+                | Q(species__common_name__icontains=value)
                 | Q(custom_lot_number=value)
                 | Q(custom_field_1__icontains=value)
                 | Q(custom_dropdown__icontains=value)
@@ -985,6 +987,12 @@ class LotFilter(django_filters.FilterSet):
                 qList |= (
                     Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)
+                    # The scientific name the seller picked, so "Tropheus" finds the lots tagged
+                    # with one whatever their sellers happened to call them.  icontains on
+                    # scientific_name covers a bare genus, since that is its first word.
+                    | Q(species__scientific_name__icontains=fragment)
+                    | Q(species__common_name__icontains=fragment)
+                    | Q(species__variety__icontains=fragment)
                     | Q(user__username=fragment)
                     | Q(custom_lot_number=fragment)
                     | Q(custom_field_1__icontains=fragment)

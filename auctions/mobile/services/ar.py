@@ -370,9 +370,10 @@ def positions_payload(auction, *, include_lot_details=False):
     # Unsold + not-removed, filtered in SQL (winning_price__isnull mirrors the app's total_unsold_lots
     # convention and avoids an N+1 from the Lot.sold property's winner/auctiontos_winner FK lookups).
     unsold = list(
+        # auction as well as species: lot.scientific_name reads the auction's use_scientific_name.
         Lot.objects.filter(
             auction=auction, is_deleted=False, banned=False, deactivated=False, winning_price__isnull=True
-        ).select_related("species")
+        ).select_related("species", "auction")
     )
 
     positions = []

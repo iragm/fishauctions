@@ -51,6 +51,17 @@ function cloneMore(selector, type) {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
         $(this).attr('for', newFor);
     });
+    {% comment %}
+      A new row keeps the last row's values on purpose, but not its species: those options were
+      suggested for a different lot name, and data-user-chosen clones as '1', so the "don't
+      silently reset a species someone picked" branch below would hold the wrong species on the
+      new row whenever the new name's suggestions don't happen to include it.
+    {% endcomment %}
+    newElement.find('select[name$="-species"]').each(function() {
+        this.innerHTML = '<option value="">No species</option>';
+        delete this.dataset.userChosen;
+        delete this.dataset.lastQuery;
+    });
     total++;
     $('#id_' + type + '-TOTAL_FORMS').val(total);
     $(selector).after(newElement);

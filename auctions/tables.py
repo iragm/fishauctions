@@ -1086,10 +1086,11 @@ class ClubBapLotHTMxTable(tables.Table):
             default_points = override.points
         elif not self.club:
             default_points = 0
+        elif self.club.points_per_lot is not None:
+            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
+            default_points = self.club.points_per_lot
         else:
-            default_points = self.club.points_per_lot or (
-                record.species_category.bap_points if record.species_category_id else 5
-            )
+            default_points = record.species_category.bap_points if record.species_category_id else 5
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
         return mark_safe(

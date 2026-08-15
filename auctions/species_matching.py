@@ -36,7 +36,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .llm import LLMError, get_provider
-from .models import LLMUsage, Species, SpeciesCommonName, SpeciesSearchCache
+from .models import LLMUsage, Species, SpeciesCommonName, SpeciesSearchCache, normalize_species_name
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +102,13 @@ REASONING_EFFORT = "low"
 
 
 def normalize(text):
-    """Lowercase, strip punctuation, collapse whitespace.  The cache key and the match key."""
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())).strip()[:120]
+    """Lowercase, strip punctuation, collapse whitespace.  The cache key and the match key.
+
+    Defined in models.py so that the *stored* normalised name columns are built by the identical
+    function -- see :func:`auctions.models.normalize_species_name`.  Re-exported here because this
+    is where it is read as part of the matching rules.
+    """
+    return normalize_species_name(text)
 
 
 def singularize(word):
@@ -150,8 +155,10 @@ def keywords(text):
 
 #: Longest common name worth looking for as a phrase.  FishBase's English names run to four words
 #: ("Southern platyfish", "Green swordtail", "Black-banded leporinus"...); beyond that a lot name
-#: is describing the fish, not naming it.
-MAX_PHRASE_WORDS = 4
+#: is describing the fish, not naming it.  Five rather than four because both sides of the lookup
+#: are normalised, and normalising splits a name on its hyphens: "Black-banded leporinus" is two
+#: words to a reader and three to the matcher.
+MAX_PHRASE_WORDS = 5
 
 
 def _phrases(normalized):
@@ -220,10 +227,13 @@ def exact_matches(text):
     # FBname -- the one English name FishBase designates for a species -- before the synonym list.
     # Several poeciliids carry "Guppy" as *a* common name; only Poecilia reticulata is *the* guppy,
     # and the per-name PreferredName flag is set on barely 3% of rows, so it can't do this job.
-    for species in Species.objects.filter(common_name__in=candidates)[:MAX_SUGGESTIONS]:
+    # Both of these match the *normalised* column, not the name as written.  The candidates have
+    # had their punctuation stripped by normalize(), and a fifth of FishBase's common names have
+    # punctuation of their own -- so "Ram's horn snail" is only reachable through this column.
+    for species in Species.objects.filter(common_name_normalized__in=candidates)[:MAX_SUGGESTIONS]:
         found.setdefault(species.pk, species)
     common_names = (
-        SpeciesCommonName.objects.filter(name__in=candidates)
+        SpeciesCommonName.objects.filter(name_normalized__in=candidates)
         .select_related("species")
         .order_by("-is_preferred")[: MAX_SUGGESTIONS * 3]
     )
@@ -342,7 +352,7 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None):
     # which is a different fish.
     phrases = _phrases(normalized)
     if phrases:
-        for common in SpeciesCommonName.objects.filter(name__in=phrases).select_related("species"):
+        for common in SpeciesCommonName.objects.filter(name_normalized__in=phrases).select_related("species"):
             score = STRONG_SCORE + len(common.name.split()) + (1 if common.is_preferred else 0)
             previous = scored.get(common.species_id)
             if previous is None or previous[0] < score:
@@ -409,14 +419,18 @@ def _shortlist(words, normalized):
             candidates.setdefault(species.pk, species)
 
     phrases = _phrases(normalized) | set(words)
-    add(_trade_first(SpeciesCommonName.objects.filter(name__in=phrases), "species__").select_related("species"))
+    add(
+        _trade_first(SpeciesCommonName.objects.filter(name_normalized__in=phrases), "species__").select_related(
+            "species"
+        )
+    )
 
     genera = {word.capitalize() for word in words} | {species.genus for species in candidates.values()}
     add(_trade_first(Species.objects.filter(genus__in=genera)))
 
     name_q = Q()
     for word in words:
-        name_q |= Q(name__icontains=word)
+        name_q |= Q(name_normalized__icontains=word)
     add(_trade_first(SpeciesCommonName.objects.filter(name_q), "species__").select_related("species"))
     return list(candidates.values())
 

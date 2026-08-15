@@ -966,8 +966,13 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
     )
     points_per_lot = models.IntegerField(
-        default=0,
-        help_text="Default BAP points. Override these with per-category points below",
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "Default BAP points for every lot. Override these with per-category points below. "
+            "Leave blank to use the per-category points instead; set it to 0 to award nothing by default."
+        ),
     )
     separate_hap = models.BooleanField(
         default=False,
@@ -3045,6 +3050,29 @@ class Category(models.Model):
         ordering = ["name"]
 
 
+def normalize_species_name(text):
+    """Lowercase, strip punctuation, collapse whitespace.  The key both sides of a name lookup use.
+
+    Lives here rather than in ``species_matching`` -- which is where it is used and where it is
+    re-exported as ``normalize`` -- because the *stored* columns have to be built with exactly the
+    same function that builds the query, and models.py cannot import from a module that imports it.
+
+    Without a stored, normalised copy of every name, a query that has had its punctuation stripped
+    can never match a name that still has its own: 9,527 of FishBase's 49,917 English names carry
+    an apostrophe or a hyphen, so "Ram's horn snail", "Adolf's catfish" and "Agassiz's corydoras"
+    all answered "no such species" and fell through to a paid model call.  Hence
+    :attr:`SpeciesCommonName.name_normalized` and :attr:`Species.common_name_normalized`.
+
+    An apostrophe is *deleted* where every other punctuation mark becomes a space, because that is
+    the one people leave out: "adolfs catfish" and "Adolf's catfish" have to arrive at the same
+    string, and turning the apostrophe into a space would give "adolf s catfish" for one of them
+    and not the other.  A hyphen really does separate two words -- nobody types
+    "blackbanded leporinus" -- so it stays a space.
+    """
+    text = re.sub(r"['‘’ʼ`]+", "", (text or "").lower())
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text)).strip()[:120]
+
+
 class Species(models.Model):
     """One species that a lot can be tagged with.
 
@@ -3106,6 +3134,11 @@ class Species(models.Model):
 
     common_name = models.CharField(max_length=255, blank=True, db_index=True)
     common_name.help_text = "The name usually used to describe this species"
+    common_name_normalized = models.CharField(max_length=120, blank=True, db_index=True)
+    common_name_normalized.help_text = (
+        "common_name with the punctuation stripped, so a typed lot name can match it.  Rebuilt on "
+        "save; don't edit by hand."
+    )
     scientific_name = models.CharField(max_length=255, blank=True, db_index=True)
     scientific_name.help_text = "Genus and species together; filled in automatically, don't edit by hand"
     genus = models.CharField(max_length=100, blank=True, db_index=True)
@@ -3125,7 +3158,12 @@ class Species(models.Model):
         related_name="varieties",
         help_text="The nominal species this variety belongs to.  Only used on variety rows.",
     )
-    breeder_points = models.BooleanField(default=True)
+    breeder_points = models.BooleanField(default=True, verbose_name="Eligible for breeder points")
+    breeder_points.help_text = (
+        "Untick to make a lot with this species ineligible for breeder points, whatever its "
+        "category.  For the things a club won't award points for breeding -- wild-caught only "
+        "species, or anything that isn't really bred."
+    )
     category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
     speccode = models.PositiveIntegerField(null=True, blank=True)
     speccode.help_text = (
@@ -3175,6 +3213,7 @@ class Species(models.Model):
             self.genus = parts[0][:100]
             self.species = " ".join(parts[1:])[:150]
         self.scientific_name = " ".join(part for part in (self.genus, self.species) if part)
+        self.common_name_normalized = normalize_species_name(self.common_name)
         # Keep the row's *own* tier honest without a full pass.  The genus tier can only be worked
         # out by looking at every sibling, so recompute_trade_ranks() owns that one -- but a
         # species that says outright it is in the hobby should not have to wait for an import to
@@ -3240,6 +3279,20 @@ class Species(models.Model):
         return changed
 
     @property
+    def earns_breeder_points(self):
+        """False when a lot of this species is ineligible for breeder points.
+
+        A cultivar answers for its parent as well as itself: the reason a club won't award points
+        for breeding something is a fact about the animal, not about the strain, so unticking the
+        box on *Neocaridina davidi* has to cover its thirteen colour forms too.
+        """
+        if not self.breeder_points:
+            return False
+        if self.parent_id and not self.parent.breeder_points:
+            return False
+        return True
+
+    @property
     def full_scientific_name(self):
         """The scientific name, with the cultivar in quotes when there is one.
 
@@ -3281,16 +3334,31 @@ class SpeciesCommonName(models.Model):
 
     species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="common_names")
     name = models.CharField(max_length=255, db_index=True)
+    name.help_text = "As the source spells it, punctuation and all.  This is what a person reads."
+    name_normalized = models.CharField(max_length=120, blank=True, db_index=True)
+    name_normalized.help_text = (
+        "What lookups match on: name with the punctuation stripped, by normalize_species_name.  "
+        "Rebuilt on save; the importers fill it in on the bulk paths, which skip save()."
+    )
     language = models.CharField(max_length=50, blank=True, default="English")
     is_preferred = models.BooleanField(default=False)
     is_preferred.help_text = "FishBase's primary name for this species in this language.  Ranked first."
+
+    def save(self, *args, **kwargs):
+        self.name_normalized = normalize_species_name(self.name)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
 
     class Meta:
         ordering = ["name"]
-        indexes = [models.Index(fields=["name", "is_preferred"])]
+        # The second one is the one every lookup uses; the first is left alone because the admin
+        # still searches and orders on the name as written.
+        indexes = [
+            models.Index(fields=["name", "is_preferred"]),
+            models.Index(fields=["name_normalized", "is_preferred"]),
+        ]
 
 
 class SpeciesSearchCache(models.Model):
@@ -7202,6 +7270,7 @@ class Lot(models.Model):
         ("not_eligible", "Not eligible"),
         ("not_long_enough", "Not long enough since last submission"),
         ("category_not_eligible", "Category not eligible (BAP points = 0)"),
+        ("species_not_eligible", "Species not eligible for breeder points"),
         ("not_club_member", "Not a club member"),
         ("not_bred", "Didn't breed this fish"),
         ("not_active_member", "Not an active club member"),
@@ -8031,6 +8100,8 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
+        if self.species and not self.species.earns_breeder_points:
+            return "species_not_eligible"
         if club.only_donation_lots and not self.donation:
             return "not_donation"
         if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
@@ -8118,7 +8189,11 @@ class Lot(models.Model):
             ).first()
             if category_override is not None:
                 return category_override.points
-        return club.points_per_lot or (self.species_category.bap_points if self.species_category else 5)
+        # `is not None`, not `or`: a club that deliberately sets 0 points per lot means zero, and
+        # falling through to the category default there would quietly award points it said not to.
+        if club.points_per_lot is not None:
+            return club.points_per_lot
+        return self.species_category.bap_points if self.species_category else 5
 
     def auto_award_bap_points(self):
         """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
@@ -8918,19 +8993,30 @@ class Lot(models.Model):
 
     @property
     def scientific_name(self):
-        """The lot's scientific name, or an empty string when it has no species (hardware, mixed lots).
+        """The lot's scientific name, or an empty string when there is nothing to show.
+
+        Nothing to show means either that the lot has no species -- hardware, mixed lots -- or that
+        its auction has the scientific-name field switched off.  One rule, everywhere: the setting
+        is how a club says it doesn't want scientific names, and it now governs the lot page, the
+        AR overlay, the lot map, the CSV export and the printed label alike, instead of only the
+        two of those that happened to check it.  A lot outside an auction has no setting to obey.
+
+        The species itself is *kept* when the setting is off -- see ``clean_species_for_auction``.
+        This is a display rule, so switching the setting back on brings the names back.
 
         Includes the cultivar when the seller picked a variety row -- *Neocaridina davidi* 'Blue
         Dream' is what they are selling, and the bare species would read as a plain cherry shrimp.
         """
-        return self.species.full_scientific_name if self.species else ""
+        if not self.species:
+            return ""
+        if self.auction and not self.auction.use_scientific_name:
+            return ""
+        return self.species.full_scientific_name
 
     @property
     def scientific_name_label(self):
-        """Used for printed labels"""
-        if self.species and self.auction and self.auction.use_scientific_name:
-            return self.species.full_scientific_name
-        return ""
+        """Used for printed labels.  The same rule as everywhere else -- see ``scientific_name``."""
+        return self.scientific_name
 
     @property
     def category_from_species(self):

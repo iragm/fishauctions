@@ -31,7 +31,7 @@ from pathlib import Path
 
 from django.db import transaction
 
-from .models import Species, SpeciesCommonName
+from .models import Species, SpeciesCommonName, normalize_species_name
 from .species_categories import CategoryResolver
 
 logger = logging.getLogger(__name__)
@@ -231,7 +231,14 @@ def load(path=DATA_FILE, *, dry_run=False):
         SpeciesCommonName.objects.filter(species=species).exclude(name__in=wanted.values()).delete()
         have = set(SpeciesCommonName.objects.filter(species=species).values_list("name", flat=True))
         new = [
-            SpeciesCommonName(species=species, name=name[:255], language="English", is_preferred=(index == 0))
+            SpeciesCommonName(
+                species=species,
+                name=name[:255],
+                # bulk_create skips save(); this column is what every lookup matches on.
+                name_normalized=normalize_species_name(name),
+                language="English",
+                is_preferred=(index == 0),
+            )
             for index, name in enumerate(wanted.values())
             if name not in have
         ]

@@ -66,6 +66,18 @@ docker exec django python3 manage.py import_fishbase --only-legacy --dry-run  # 
 docker exec django python3 manage.py import_fishbase --purge slb        # drop an unused source
 ```
 
+Historical lots — everything sold before the list existed — are filled in by
+`backfill_lot_species`, which runs the same matcher the add-lot form does with the LLM turned off
+and assigns only where it gives exactly one answer. It writes with `update()` so it can never
+re-derive a lot's category and move it between the BAP, HAP and Culture tracks; `--set-category`
+opts into that for Uncategorized lots with no `BapAward`. Start with `--dry-run`.
+
+```bash
+docker exec django python3 manage.py backfill_lot_species --dry-run     # print, write nothing
+docker exec django python3 manage.py backfill_lot_species --auction my-auction --limit 200
+docker exec django python3 manage.py backfill_lot_species --set-category
+```
+
 A **cultivar** ("Blue Dream", "Halfmoon") is a `Species` row with `variety` set and `parent`
 pointing at the nominal species, carrying the parent's genus and epithet — so breeder points,
 genus BAP rules and the category all still see the plain species. Show `full_scientific_name`,

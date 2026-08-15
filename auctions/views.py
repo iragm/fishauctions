@@ -2743,7 +2743,9 @@ class MyWonLotCSV(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
             .exclude(is_deleted=True)
-            .select_related("species")
+            # auction as well as species: lot.scientific_name reads the auction's setting, and a
+            # query per row is not worth paying for a column.
+            .select_related("species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -2773,7 +2775,8 @@ class MyLotReportView(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
             .exclude(is_deleted=True)
-            .select_related("bap_award__club_member__club", "species")
+            # auction too: lot.scientific_name reads the auction's setting (see the property).
+            .select_related("bap_award__club_member__club", "species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -3334,7 +3337,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
-        lots = self.auction.lots_qs.select_related("species")
+        lots = self.auction.lots_qs.select_related("species", "auction")
         lots = add_price_info(lots)
         if query:
             lots = LotAdminFilter.generic(None, lots, query)
@@ -6950,8 +6953,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                         # teach every club that "sponge filter" is a guppy.
                         if is_new:
                             remember_species(lot_name, species, source="user")
-            else:
-                lot.species = None
+            # No else: with the field switched off there is nothing on the page to post, so an
+            # ajax save of any other field would otherwise wipe a species that is already stored.
+            # Turning the setting off hides the field; it does not throw the column away.
 
             # Custom checkbox
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
@@ -10325,7 +10329,9 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             self.request.user, club, "permission_manage_bap"
         )
         if context["viewer_has_bap"] and club:
-            context["bap_default_points"] = club.points_per_lot
+            # Blank rather than None when the club has no flat rate: the value goes straight into a
+            # text box, and the per-lot category rate isn't worth a query per row on an invoice.
+            context["bap_default_points"] = "" if club.points_per_lot is None else club.points_per_lot
         return context
 
     def get_success_url(self):
@@ -21295,6 +21301,16 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context["override_form"] = ClubBapCategoryOverrideForm()
         context["bap_genus_overrides"] = ClubBapGenusOverride.objects.filter(club=self.club)
         context["genus_override_form"] = ClubBapGenusOverrideForm()
+        # What the free-text genus box offers as suggestions.  Deliberately the genera this club's
+        # own lots use rather than all 4,000 in the database: a rule is only worth writing for a
+        # genus the club actually sells, and clean_genus still accepts anything real that is typed.
+        context["bap_genus_choices"] = list(
+            Lot.objects.filter(auction__club=self.club, species__isnull=False, is_deleted=False)
+            .exclude(species__genus="")
+            .order_by("species__genus")
+            .values_list("species__genus", flat=True)
+            .distinct()
+        )
         return context
 
     def form_valid(self, form):
@@ -21526,7 +21542,9 @@ class ClubBapLotCategoryView(APIView):
         )
         if form.is_valid():
             updated_lot = form.save(commit=False)
-            update_fields = ["species_category"]
+            # category_automatically_added comes along because the form clears it: it is what stops
+            # Lot._do_save from re-deriving the category from the species and undoing this edit.
+            update_fields = ["species_category", "category_automatically_added"]
             if not BapAward.objects.filter(lot=updated_lot).exists() and not updated_lot.manually_approved:
                 updated_lot.bap_points_awarded = 0
                 updated_lot.bap_auto_reason = updated_lot.sold_lot_no_bap_reason or ""
@@ -23977,11 +23995,13 @@ class LotBapPointsView(LoginRequiredMixin, View):
             if lot.species_category
             else None
         )
-        default_points = (
-            override.points
-            if override is not None
-            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-        )
+        if override is not None:
+            default_points = override.points
+        elif club.points_per_lot is not None:
+            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
+            default_points = club.points_per_lot
+        else:
+            default_points = lot.species_category.bap_points if lot.species_category else 5
         if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
             default_points += club.points_for_custom_checkbox
         return render(
@@ -24615,13 +24635,40 @@ class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
         return (self.request.GET.get("lot_name") or self.request.POST.get("lot_name") or "").strip()[:200]
 
     def _matching_lots(self):
-        """The lots this name would be attached to.  Never touches a lot that already has one."""
+        """The lots this name would be attached to.  Never touches a lot that already has one.
+
+        Matched on the *normalised* name as well as literally, because half the links into this
+        page carry a normalised name in the first place: the gaps page groups by it, and the "not a
+        species" table has nothing else to link with -- the search cache only ever stored the
+        normalised form.  On ``iexact`` alone every name whose original had an apostrophe or a
+        capital came through here as "0 lots" and the button quietly did nothing.
+
+        The ``icontains`` is only there to keep this off a full scan; the decision is the
+        normalised comparison in Python, which is the same function the cache key and the matcher
+        use.  It casts a deliberately wide net -- the longest few words *and* their singulars --
+        because the narrowing runs on a name that has already lost its apostrophes: looking for
+        "agassizs" would miss the very lot called "Agassiz's corydoras" this is here to find.
+        """
+        from .species_matching import base_words, normalize, singularize
+
         name = self._lot_name()
         if not name:
             return Lot.objects.none()
-        return Lot.objects.filter(
-            lot_name__iexact=name, species__isnull=True, is_deleted=False, auction__use_scientific_name=True
-        )
+        base = Lot.objects.filter(species__isnull=True, is_deleted=False, auction__use_scientific_name=True)
+        normalized = normalize(name)
+        words = sorted(base_words(name), key=len, reverse=True)[:3]
+        if not normalized or not words:
+            return base.filter(lot_name__iexact=name)
+        narrowing = Q()
+        for word in words:
+            for form in {word, singularize(word)}:
+                narrowing |= Q(lot_name__icontains=form)
+        also = [
+            pk
+            for pk, lot_name in base.filter(narrowing).values_list("pk", "lot_name")
+            if normalize(lot_name) == normalized
+        ]
+        return base.filter(Q(lot_name__iexact=name) | Q(pk__in=also))
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

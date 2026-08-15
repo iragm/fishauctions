@@ -487,7 +487,9 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     previous, name_was_exact = find_lot_to_copy(tos.user, lot_name, exclude_auction=auction)
     if previous:
         data = clone_lot_values(previous)
+        # This dict is form *data*, not initial, so the two foreign keys have to be pks.
         data["species_category"] = previous.species_category_id
+        data["species"] = previous.species_id
         if not name_was_exact:
             # A partial match reuses the old lot's contents but not its name: "add shrimp" must not
             # come out as a lot called "Blue Dream Shrimp — F1 juveniles".

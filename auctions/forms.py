@@ -157,11 +157,34 @@ def configure_species_field(fields, auction, field_name="species", *, always_ren
     field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
 
 
-def clean_species_for_auction(cleaned_data, auction, field_name="species", *, derive_category=False):
-    """Drop a posted species when the auction doesn't use scientific names.
+def note_category_chosen_by_person(instance, cleaned_data, field_name="species_category"):
+    """Clear ``category_automatically_added`` when the submitted category isn't the stored one.
+
+    That flag is the only record of *who* put a lot in its category, and ``Lot._do_save``
+    re-derives the category from the species on every save while it is set.  So a person picking a
+    category on a lot that has a species has to turn it off, or their choice is silently reverted
+    by the next save -- which is what happened before this existed.
+
+    Only a *change* counts.  Re-saving a form without touching the dropdown is not a decision
+    about the category, and treating it as one would freeze a machine-set category the first time
+    anybody edited anything else on the lot.
+    """
+    if instance is None or field_name not in cleaned_data:
+        return
+    chosen = cleaned_data.get(field_name)
+    if getattr(chosen, "pk", None) != getattr(instance, f"{field_name}_id", None):
+        instance.category_automatically_added = False
+
+
+def clean_species_for_auction(cleaned_data, auction, field_name="species", *, derive_category=False, instance=None):
+    """Ignore a posted species when the auction doesn't use scientific names.
 
     Belt and braces against a stale form or a hand-rolled POST: the field is hidden in that case,
-    so anything arriving in it is noise rather than intent.
+    so anything arriving in it is noise rather than intent.  What is already *stored* is kept --
+    turning the setting off hides the field, it does not throw the column away.  Wiping it would
+    mean a club that switched the setting off to see what it did, or off and back on, lost the
+    species from every lot anybody touched in between, and their labels and CSV exports stayed
+    blank afterwards.
 
     ``derive_category`` says "this form hides its category field once a species is picked", which
     is true of the two seller-facing forms and not of the admin's lot-edit modal.  Where the field
@@ -169,17 +192,27 @@ def clean_species_for_auction(cleaned_data, auction, field_name="species", *, de
     chosen rather than a choice anybody made, and the species' own category -- from the family
     FishBase records -- is the better answer.  Where an admin can still *see* the category field,
     what they put in it is left alone.
+
+    ``instance`` is the lot being edited, when the caller has one.  It is what makes both of those
+    possible: the stored species to fall back on, and the lot to record a human's category choice
+    on (see :func:`note_category_chosen_by_person`).
     """
     if not auction or not auction.use_scientific_name:
-        cleaned_data[field_name] = None
+        cleaned_data[field_name] = getattr(instance, field_name, None)
+        note_category_chosen_by_person(instance, cleaned_data)
         return cleaned_data
     species = cleaned_data.get(field_name)
-    if not derive_category or not species or "species_category" not in cleaned_data:
+    # The one case where the category on this form is not a person's answer: the form hides the
+    # picker once a species is chosen, so nobody saw the value that arrived in it.
+    if derive_category and species and "species_category" in cleaned_data:
+        # A cultivar inherits its parent's category; nobody is going to map every strain by hand.
+        category = species.category or (species.parent.category if species.parent_id else None)
+        if category and category.name != "Uncategorized":
+            cleaned_data["species_category"] = category
+            if instance is not None:
+                instance.category_automatically_added = True
         return cleaned_data
-    # A cultivar inherits its parent's category; nobody is going to map every strain by hand.
-    category = species.category or (species.parent.category if species.parent_id else None)
-    if category and category.name != "Uncategorized":
-        cleaned_data["species_category"] = category
+    note_category_chosen_by_person(instance, cleaned_data)
     return cleaned_data
 
 
@@ -515,7 +548,7 @@ class QuickAddLot(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        clean_species_for_auction(cleaned_data, self.auction, derive_category=True)
+        clean_species_for_auction(cleaned_data, self.auction, derive_category=True, instance=self.instance)
         # custom_lot_number = cleaned_data.get("custom_lot_number")
         # if custom_lot_number:
         #     existing_lots = Lot.objects.exclude(is_deleted=True).filter(
@@ -1295,7 +1328,7 @@ class EditLot(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         auction = cleaned_data.get("auction")
-        clean_species_for_auction(cleaned_data, auction)
+        clean_species_for_auction(cleaned_data, auction, instance=self.instance)
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error("auction", "How did you even manage to change this field?")
@@ -3503,7 +3536,12 @@ class CreateLotForm(forms.ModelForm):
         # this doesn't really matter either - if the user screws with the client side validation, the lot simply won't be available
         auction = cleaned_data.get("auction")
         part_of_auction = cleaned_data.get("part_of_auction")
-        clean_species_for_auction(cleaned_data, auction if part_of_auction == "True" else None, derive_category=True)
+        clean_species_for_auction(
+            cleaned_data,
+            auction if part_of_auction == "True" else None,
+            derive_category=True,
+            instance=self.instance,
+        )
         if part_of_auction == "True":
             if auction is None:
                 self.add_error("auction", "Select an auction")
@@ -4431,9 +4469,21 @@ class ClubEditForm(forms.ModelForm):
 
 
 class LotCategoryForm(forms.ModelForm):
+    """The BAP admin's "set category" modal.  One field, and one side effect.
+
+    The side effect is :func:`note_category_chosen_by_person`: this form exists so a person can
+    overrule where a lot landed, and without clearing ``category_automatically_added`` the next
+    save would re-derive the category from the lot's species and put it straight back.
+    """
+
     class Meta:
         model = Lot
         fields = ["species_category"]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        note_category_chosen_by_person(self.instance, cleaned_data)
+        return cleaned_data
 
     def __init__(self, *args, **kwargs):
         post_url = kwargs.pop("post_url", None)
