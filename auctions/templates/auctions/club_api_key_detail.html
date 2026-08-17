@@ -41,6 +41,7 @@
     <tr><th>Update club members</th><td>{% if api_key.can_update_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>BAP points and lots<div class="fw-normal small text-muted">Add points to members, and read the lots from this club's auctions</div></th><td>{% if api_key.can_add_bap_points %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>Renew memberships</th><td>{% if api_key.can_renew_memberships %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Look up species<div class="fw-normal small text-muted">Match a typed name to a species on this site's list</div></th><td>{% if api_key.can_look_up_species %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
   </tbody>
 </table>
 
@@ -180,6 +181,128 @@
   "wallet_link": "https://{{ site_domain }}/clubs/{{ club.slug }}/member/&lt;uuid&gt;/",
   ...
 }</code></pre>
+  </div>
+  {% endif %}
+  {% if api_key.can_look_up_species %}
+  <div class="mb-2">
+    <strong>Look up a species:</strong> <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/?q=yellow+lab</code><br>
+    <span class="ms-3 text-muted">
+      Turns text somebody typed into species from this site's list, using the same matcher the add lot
+      form uses &mdash; so your website and this site agree about what a lot is. Nothing is invented: every
+      answer is a species already on the list. Read-only, and no club data is involved.
+    </span>
+  </div>
+  <div class="ms-3 mb-2">
+    <div class="mb-1">
+      <strong>No match is a normal answer.</strong> Most lot names aren't a species &mdash; "sponge filter",
+      "assorted plants", "10 gallon tank" &mdash; and those come back <code>200</code> with an empty
+      <code>results</code> list, not an error. Only a missing or blank <code>q</code> is a <code>400</code>.
+    </div>
+    <div class="mb-1">
+      <strong>How much to trust it.</strong> <code>results</code> is a shortlist, not a decision.
+      <code>unambiguous</code> is true only when the matcher found exactly one species &mdash; the same signal
+      this site acts on, since the lot form fills the field in for you only on one answer.
+      <code>source</code> says how it was found, most trustworthy first: <code>exact</code> (what was typed
+      <em>is</em> a scientific or common name), <code>cache</code> (an answer remembered from an earlier
+      lookup), <code>search</code> (word and phrase matching), <code>llm</code> (a language model picked from
+      a shortlist), or <code>none</code>.
+    </div>
+    <div class="mb-1">
+      <strong>Params.</strong> <code>q</code> is the text to match (required).
+      <code>?limit=N</code> caps how many candidates come back, 1 to {{ species_lookup_max_limit }}, default
+      {{ species_lookup_default_limit }} &mdash; <code>total_matches</code> still reports everything the
+      matcher found, so you can tell "one answer" from "one shown". <code>?category=N</code> passes a
+      category id you already have; it only ever breaks a tie between candidates that already matched.
+    </div>
+    <div class="mb-1">
+      <strong>The language model is off unless you ask for it.</strong> Add <code>?llm=true</code> to let a
+      lookup that the database couldn't answer fall through to a language model, which picks from a shortlist
+      built here and is allowed to answer "not a species".{% if not species_lookup_llm_available %} No model is
+      configured on this site right now, so <code>llm=true</code> currently does nothing.{% endif %} It costs
+      money per call, so it is capped at {{ species_lookup_llm_calls_per_day }} lookups a day for this key;
+      past that the lookup quietly falls back to the database steps. Every answer, including "not a species",
+      is remembered, so asking twice is free. The <code>llm</code> field in the response says which way the
+      request went.
+    </div>
+    <div class="mb-1">Example request:</div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/?q=yellow+lab" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET"</code></pre>
+    <div class="mb-1">Example response:</div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "query": "yellow lab",
+  "source": "exact",
+  "unambiguous": true,
+  "total_matches": 1,
+  "count": 1,
+  "limit": {{ species_lookup_default_limit }},
+  "llm": false,
+  "results": [
+    {
+      "id": 4821,
+      "scientific_name": "Labidochromis caeruleus",
+      "full_scientific_name": "Labidochromis caeruleus",
+      "common_name": "Yellow lab",
+      "label": "Labidochromis caeruleus (Yellow lab)",
+      "genus": "Labidochromis",
+      "species_epithet": "caeruleus",
+      "variety": "",
+      "parent": null,
+      "family": "Cichlidae",
+      "order": "Cichliformes",
+      "category": {"id": 7, "name": "Cichlids"},
+      "trade_rank": 0,
+      "source": "fishbase"
+    }
+  ]
+}</code></pre>
+    <div class="mb-1">
+      A cultivar &mdash; a strain somebody bred, like a "Blue Dream" shrimp &mdash; is its own row carrying its
+      parent's scientific name, so <code>scientific_name</code> is the plain species and only
+      <code>full_scientific_name</code> names the strain. Show <code>full_scientific_name</code> wherever a
+      person reads it:
+    </div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "query": "blue dream shrimp",
+  "source": "exact",
+  "unambiguous": true,
+  "total_matches": 1,
+  "count": 1,
+  "limit": {{ species_lookup_default_limit }},
+  "llm": false,
+  "results": [
+    {
+      "id": 39104,
+      "scientific_name": "Neocaridina davidi",
+      "full_scientific_name": "Neocaridina davidi 'Blue Dream'",
+      "common_name": "Blue dream shrimp",
+      "label": "Neocaridina davidi 'Blue Dream' (Blue dream shrimp)",
+      "genus": "Neocaridina",
+      "species_epithet": "davidi",
+      "variety": "Blue Dream",
+      "parent": {"id": 39098, "scientific_name": "Neocaridina davidi"},
+      "family": "Atyidae",
+      "order": "Decapoda",
+      "category": {"id": 12, "name": "Shrimp"},
+      "trade_rank": 0,
+      "source": "aquarium"
+    }
+  ]
+}</code></pre>
+    <div class="mt-2 mb-1"><strong>Fields</strong></div>
+    <ul class="mb-1">
+      <li><code>id</code> &mdash; this site's permanent id for the species.</li>
+      <li><code>scientific_name</code> &mdash; "Genus species". A cultivar carries its parent's name here.</li>
+      <li><code>full_scientific_name</code> &mdash; the name to display: the scientific name, plus the strain in quotes when there is one.</li>
+      <li><code>common_name</code> &mdash; the name usually used for it, when the source database designates one.</li>
+      <li><code>label</code> &mdash; what a person picks from on the lot form: full scientific name plus common name.</li>
+      <li><code>genus</code>, <code>species_epithet</code> &mdash; the two halves of the scientific name, already split.</li>
+      <li><code>variety</code> &mdash; the cultivar or strain, blank for an ordinary species.</li>
+      <li><code>parent</code> &mdash; on a cultivar, the nominal species it is a strain of; <code>null</code> otherwise.</li>
+      <li><code>family</code>, <code>order</code> &mdash; taxonomy above the genus, where the source has it.</li>
+      <li><code>category</code> &mdash; the category a lot of this species gets on this site, or <code>null</code> where none is mapped.</li>
+      <li><code>trade_rank</code> &mdash; 0 = kept in the hobby, 1 = its genus is, 2 = nothing says anyone keeps it. What candidates are ordered by.</li>
+      <li><code>source</code> &mdash; where the row came from: <code>fishbase</code>, <code>aquarium</code> (the curated aquarium trade list), <code>admin</code>, or <code>manual</code>.</li>
+    </ul>
   </div>
   {% endif %}
 </div>

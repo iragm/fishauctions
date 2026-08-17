@@ -2,7 +2,7 @@ from datetime import timezone as date_tz
 
 from rest_framework import serializers
 
-from .models import BapAward, ClubMember, Lot
+from .models import BapAward, ClubMember, Lot, Species
 
 CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
     {
@@ -276,6 +276,58 @@ class ClubBapLotSerializer(serializers.ModelSerializer):
             "bap_points_awarded",
             "manually_approved",
             "bap_award",
+        ]
+
+
+class SpeciesMatchSerializer(serializers.ModelSerializer):
+    """One species, as the species lookup API returns it.
+
+    Read-only, and deliberately fat: a caller matching free text to a species is usually filing it
+    into their own taxonomy, so everything this site knows about the row travels with it and they
+    never need a second call.  ``full_scientific_name`` is the one to display -- it is the only
+    field that carries a cultivar ("Neocaridina davidi 'Blue Dream'"), where ``scientific_name`` is
+    the parent species and looks identical for all thirteen colour strains.
+    """
+
+    #: Cultivar rows carry their parent's genus and epithet, so a caller that only wants real
+    #: taxonomy can follow this instead of guessing from the variety field.
+    parent = serializers.SerializerMethodField()
+    full_scientific_name = serializers.ReadOnlyField()
+    #: "Genus species 'Strain' (Common name)" -- what a person picks from on the lot form.
+    label = serializers.ReadOnlyField()
+    category = serializers.SerializerMethodField()
+    # Named "species" on the model, which is confusing inside a species record, so it goes out
+    # under the name the rest of the world uses for it.
+    species_epithet = serializers.CharField(source="species", read_only=True)
+
+    def get_parent(self, obj):
+        if not obj.parent_id:
+            return None
+        return {"id": obj.parent_id, "scientific_name": obj.parent.scientific_name}
+
+    def get_category(self, obj):
+        """The category a lot of this species gets on this site, or null where none is mapped."""
+        if not obj.category_id:
+            return None
+        return {"id": obj.category_id, "name": obj.category.name}
+
+    class Meta:
+        model = Species
+        fields = [
+            "id",
+            "scientific_name",
+            "full_scientific_name",
+            "common_name",
+            "label",
+            "genus",
+            "species_epithet",
+            "variety",
+            "parent",
+            "family",
+            "order",
+            "category",
+            "trade_rank",
+            "source",
         ]
 
 

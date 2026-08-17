@@ -15,6 +15,7 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import randint, sample, uniform
 from time import time
+from types import SimpleNamespace
 from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
@@ -192,6 +193,7 @@ from .forms import (
     validate_image_url,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .llm import assist_enabled
 from .mobile.services.web_session import mark_session_opened_by_app, session_opened_by_app
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
@@ -265,6 +267,7 @@ from .serializers import (
     ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
+    SpeciesMatchSerializer,
 )
 from .services import (
     LOT_ADD_BLOCK_BULK_DISABLED,
@@ -282,8 +285,9 @@ from .services import (
     user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
+from .species_matching import MAX_GENUS_MATCHES, MAX_SUGGESTIONS, suggest_species
+from .species_matching import check_rate_limit as check_species_llm_rate_limit
 from .species_matching import remember as remember_species
-from .species_matching import suggest_species
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -21923,6 +21927,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                     "can_update_club_members": False,
                     "can_add_bap_points": False,
                     "can_renew_memberships": False,
+                    "can_look_up_species": False,
                 },
             },
         )
@@ -21941,6 +21946,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             "can_update_club_members": checkbox_value("can_update_club_members"),
             "can_add_bap_points": checkbox_value("can_add_bap_points"),
             "can_renew_memberships": checkbox_value("can_renew_memberships"),
+            "can_look_up_species": checkbox_value("can_look_up_species"),
         }
         if not name:
             return render(
@@ -21960,6 +21966,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             can_update_club_members=form_values["can_update_club_members"],
             can_add_bap_points=form_values["can_add_bap_points"],
             can_renew_memberships=form_values["can_renew_memberships"],
+            can_look_up_species=form_values["can_look_up_species"],
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -22014,6 +22021,12 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
         ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
         ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
+        # Species lookup: the documented numbers come from the matcher itself, so the page can't
+        # drift away from what the endpoint actually does.
+        ctx["species_lookup_default_limit"] = MAX_SUGGESTIONS
+        ctx["species_lookup_max_limit"] = MAX_GENUS_MATCHES
+        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY
+        ctx["species_lookup_llm_available"] = assist_enabled()
         return ctx
 
 
@@ -23341,6 +23354,122 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
                 "start": start.astimezone(date_tz.utc),
                 "end": end.astimezone(date_tz.utc),
                 "count": len(serializer.data),
+                "results": serializer.data,
+            }
+        )
+
+
+#: Daily ceiling on species lookups from one API key that are allowed to reach the language model.
+#: Deliberately small.  A key is a script, not a person: it will retry, it will loop over a
+#: spreadsheet at 3am, and every call past the cache costs real money.  The database steps are not
+#: counted against this -- only a request that asked for the model and got past the cache can spend
+#: it -- and running out is not an error, it just turns the model back off for the rest of the day.
+SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY = 25
+
+#: The truthy spellings ``?llm=`` accepts.  Anything else, including absent, means off.
+_TRUTHY_QUERY_VALUES = {"1", "true", "yes", "on"}
+
+
+class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
+    """Turn free text into a species from this site's list.
+
+    ``GET /api/v1/clubs/<slug>/species-lookup/?q=yellow%20lab``
+
+    The same matcher the add-lot form runs -- :func:`auctions.species_matching.suggest_species`,
+    called exactly as ``SpeciesSuggestions`` calls it -- so a club's own website, membership system
+    or breeder-award program files a name the way this site would file it, and the two agree about
+    what a lot is.  Nothing here can invent a name: every answer is a row in the species table.
+
+    Be as conservative reading the answer as the matcher is producing it.  ``results`` is a
+    shortlist, not a decision.  ``unambiguous`` is true only when the matcher came back with
+    exactly one species, which is the same signal the site itself trusts: the lot form fills the
+    field in for the user only on one answer, and ``backfill_lot_species`` writes to old lots only
+    on one answer.  ``source`` says how it was found, most trustworthy first -- ``exact`` (the text
+    *is* a scientific or common name), ``cache`` (a remembered answer), ``search`` (token/phrase
+    matching), ``llm`` (a language model picked from a shortlist we built), ``none``.
+
+    **No match is a normal answer**, not an error: 200 with an empty ``results``.  Most lots are
+    not a species -- "sponge filter", "assorted plants", "10 gallon tank" -- and a matcher that
+    always finds something would be putting wrong species on labels and wrong points in a breeder
+    award program.  A missing or blank ``q`` is the one 400.
+
+    Params:
+        ``q``       the text to match.  Required.
+        ``limit``   how many candidates to return, 1 to ``MAX_GENUS_MATCHES``.  Default
+                    ``MAX_SUGGESTIONS``.  Only ever truncates; ``total_matches`` reports what the
+                    matcher found, so a caller can tell "one answer" from "one shown".
+        ``category``  a category id, as the lot form passes the category the form is showing.  Only
+                    ever breaks a tie between candidates that already matched -- it can't filter.
+        ``llm``     opt in to the language-model step for this request.  **Off by default**, see
+                    below.
+
+    The language model is the one step here that costs money per call, so it is off unless the
+    caller asks for it *and* the site has a model configured at all
+    (:func:`auctions.llm.assist_enabled`).  When asked for, it is bounded three ways: the request
+    has to get past the exact, cache and search steps to reach it at all; a request that could
+    reach it spends one of this key's ``SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY``; and every
+    answer, including "this is not a species", is written to ``SpeciesSearchCache``, so the same
+    text is free forever after for every club.  Running out of budget silently drops back to the
+    database steps -- the response's ``llm`` field says which way it went.
+    """
+
+    serializer_class = SpeciesMatchSerializer
+
+    def _llm_allowed(self, request):
+        """Whether this request may reach the model.  Spends a unit of the budget when it may."""
+        if (request.query_params.get("llm") or "").strip().lower() not in _TRUTHY_QUERY_VALUES:
+            return False
+        if not assist_enabled():
+            return False
+        if not self.is_api_key_request():
+            # A signed-in club admin already has a per-user daily budget inside the matcher, the
+            # same one the lot form is bounded by.  Don't charge them twice.
+            return True
+        # check_rate_limit keys its counter on ``.pk``; an API key is not a user but needs a budget
+        # of its own, so it stands in as one.  Without this, every key on the site would share the
+        # single anonymous bucket and one busy integration would switch the model off for everyone.
+        holder = SimpleNamespace(pk=f"clubapikey{request.api_key.pk}")
+        return check_species_llm_rate_limit(holder, limit=SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY)
+
+    def get(self, request, slug):
+        self.require_club_permission(
+            "permission_view",
+            "can_look_up_species",
+            "You do not have permission to look up species for this club.",
+        )
+        query = (request.query_params.get("q") or "").strip()
+        if not query:
+            return Response({"error": "q is required: the text to match, e.g. ?q=yellow lab."}, status=400)
+        raw_limit = (request.query_params.get("limit") or "").strip()
+        limit = MAX_SUGGESTIONS
+        if raw_limit:
+            if not raw_limit.isdigit() or int(raw_limit) < 1:
+                return Response({"error": "limit must be a whole number of 1 or more."}, status=400)
+            # Clamped rather than rejected: the matcher will never return more than this anyway, so
+            # a caller asking for 500 gets everything there is, not an error about a number that
+            # made no difference.
+            limit = min(int(raw_limit), MAX_GENUS_MATCHES)
+        category = (request.query_params.get("category") or "").strip()
+        use_llm = self._llm_allowed(request)
+        matches, source = suggest_species(
+            query,
+            # An API key authenticates a script, not a person: request.user is anonymous, and
+            # LLMUsage rows and the matcher's own per-user budget both want a real user or none.
+            user=None if self.is_api_key_request() else request.user,
+            use_llm=use_llm,
+            category=int(category) if category.isdigit() else None,
+        )
+        serializer = self.serializer_class(matches[:limit], many=True)
+        return Response(
+            {
+                "query": query,
+                "source": source,
+                # Exactly one answer is the only case the site itself acts on unprompted.
+                "unambiguous": len(matches) == 1,
+                "total_matches": len(matches),
+                "count": len(serializer.data),
+                "limit": limit,
+                "llm": use_llm,
                 "results": serializer.data,
             }
         )

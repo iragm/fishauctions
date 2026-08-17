@@ -2987,6 +2987,14 @@ class ClubAPIKey(models.Model):
         default=False,
         help_text="Renew a membership from an external system, creating the member if they're new.",
     )
+    can_look_up_species = models.BooleanField(
+        default=False,
+        help_text=(
+            "Turn a typed name ('yellow lab') into a species from this site's list, using the same "
+            "matcher the add-lot form uses.  Read-only, and the species list is not club data, but "
+            "it is off unless a club asks for it like every other permission here."
+        ),
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)

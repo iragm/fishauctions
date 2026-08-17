@@ -1061,6 +1061,11 @@ urlpatterns = [
         views.ClubBapLotListAPIView.as_view(),
         name="api_club_bap_lots",
     ),
+    path(
+        "api/v1/clubs/<slug:slug>/species-lookup/",
+        views.ClubSpeciesLookupAPIView.as_view(),
+        name="api_club_species_lookup",
+    ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     path(
         "api/v1/email-routing/donation/",
