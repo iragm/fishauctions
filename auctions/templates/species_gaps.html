@@ -50,6 +50,40 @@
   </table>
 </div>
 
+{% if pending %}
+<h4 class="mt-4">Species waiting for approval</h4>
+<p class="text-muted small">
+  {% comment %}The whole of the approval workflow.  An auction admin needed a species that wasn't in the picker and added it; until it is approved it is suggested to them and to nobody else.{% endcomment %}
+  Added by an auction admin, and currently suggested only to the person who added it. Approving
+  puts it in everyone's picker and teaches the matcher the lot names it is already on.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Species</th><th>Category</th><th>Added by</th><th>Club</th><th class="text-end">Lots</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for species in pending %}
+      <tr>
+        <td><i>{{ species.full_scientific_name }}</i>{% if species.common_name %} <span class="text-muted small">({{ species.common_name }})</span>{% endif %}</td>
+        <td class="small text-muted">{{ species.category|default:"&mdash;" }}</td>
+        <td class="small text-muted">{{ species.added_by|default:"&mdash;" }}</td>
+        <td class="small text-muted">{{ species.club|default:"&mdash;" }}</td>
+        <td class="text-end">{{ species.lots }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-outline-secondary" href="/admin/auctions/species/{{ species.pk }}/change/">Check it</a>
+          <form method="post" action="{% url 'species_approve' species.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-success">Approve</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if rejected %}
 <h4 class="mt-4">Names the matcher decided were not a species</h4>
 <p class="text-muted small">
@@ -102,7 +136,7 @@
         <td>{{ row.search_text }}</td>
         <td><i>{{ row.species.full_scientific_name }}</i>{% if row.species.common_name %} <span class="text-muted small">({{ row.species.common_name }})</span>{% endif %}</td>
         <td class="text-end">{{ row.hits }}</td>
-        <td class="small text-muted">{{ row.get_source_display }}</td>
+        <td class="small text-muted">{{ row.get_source_display }}{% if row.created_by %} &middot; {{ row.created_by }}{% endif %}</td>
         <td class="text-end">
           <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
             {% csrf_token %}

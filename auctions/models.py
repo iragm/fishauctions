@@ -3213,6 +3213,21 @@ class Species(models.Model):
         "Denormalised: 0 = in the hobby, 1 = its genus is, 2 = nothing says anyone keeps it.  "
         "Rebuilt by Species.recompute_trade_ranks(); don't edit by hand."
     )
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_added")
+    added_by.help_text = "Who added this on the site.  Blank for everything the importers loaded."
+    club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="species_added")
+    club.help_text = (
+        "The club this was added for, when there was an obvious one.  While the species is "
+        "unapproved this is the second way it can be seen: the person who added it always can, "
+        "and so can anyone else at the same club.  Often blank -- plenty of auctions have no club "
+        "attached at all -- which is why it can never be the *only* way in."
+    )
+    approved = models.BooleanField(default=True, db_index=True)
+    approved.help_text = (
+        "Untick to keep this species out of everyone's suggestions except the person who added "
+        "it.  That is how an auction admin gets a missing species onto their own lots at the "
+        "check-in table without adding it to the whole site; ticking it here is the approval."
+    )
 
     def save(self, *args, **kwargs):
         self.genus = (self.genus or "").strip()
@@ -3269,7 +3284,10 @@ class Species(models.Model):
         traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
         if genus:
             traded = traded.filter(genus=genus)
-        traded_genera = set(traded.values_list("genus", flat=True).distinct())
+        # order_by() clears Meta.ordering, which would otherwise put scientific_name and variety
+        # into the SELECT DISTINCT and make this one row per species rather than one per genus:
+        # 139,000 rows sorted on disk to build a set of 1,100 strings.
+        traded_genera = set(traded.order_by().values_list("genus", flat=True).distinct())
 
         queryset = cls.objects.all() if genus is None else cls.objects.filter(genus=genus)
         changed = 0
@@ -3345,7 +3363,21 @@ class SpeciesCommonName(models.Model):
     *Poecilia reticulata*), which is what makes matching a typed lot name to a species work at
     all.  Known misspellings are dropped at import time -- surfacing those as suggestions would
     teach people the wrong name.
+
+    This is the table the hobby's own vocabulary lives in, and :attr:`source` is what lets it.
+    FishBase is an ichthyology database: it is authoritative about which species exist and has no
+    reason to know that *Labidochromis caeruleus* is a "yellow lab" or that a "cw11" is a
+    *Corydoras*.  Those names have to be ours.  Before this column existed there was nowhere to
+    put one that survived -- ``import_fishbase`` deletes the names for every species it touches
+    and rebuilds them from the snapshot, so a hand-added name lasted until the next pin bump --
+    and the curated CSV could only attach names to its *own* rows, so teaching a FishBase species
+    a name meant creating a second copy of it.  Now every writer stamps what it wrote, deletes
+    only its own, and a name added by hand or by the CSV outlives any number of re-imports.
     """
+
+    #: Same vocabulary as :attr:`Species.source`, and for the same reason: every importer has to
+    #: be able to clear out exactly what it wrote last time and nothing else.
+    SOURCE_CHOICES = Species.SOURCE_CHOICES
 
     species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="common_names")
     name = models.CharField(max_length=255, db_index=True)
@@ -3358,6 +3390,11 @@ class SpeciesCommonName(models.Model):
     language = models.CharField(max_length=50, blank=True, default="English")
     is_preferred = models.BooleanField(default=False)
     is_preferred.help_text = "FishBase's primary name for this species in this language.  Ranked first."
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manual", db_index=True)
+    source.help_text = (
+        "Which list wrote this name.  An importer only ever deletes its own, so a name added here "
+        "or in aquarium_species.csv survives the next re-import of FishBase."
+    )
 
     def save(self, *args, **kwargs):
         self.name_normalized = normalize_species_name(self.name)
@@ -3394,6 +3431,13 @@ class SpeciesSearchCache(models.Model):
     search_text.help_text = "Normalised lot name: lowercased, punctuation stripped."
     species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE)
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="llm")
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_taught"
+    )
+    created_by.help_text = (
+        "Who taught the site this answer, when a person did.  Blank for the language model.  "
+        "Every row here is served to every club, so a wrong one needs to be traceable."
+    )
     createdon = models.DateTimeField(auto_now_add=True)
     hits = models.PositiveIntegerField(default=0)
     hits.help_text = "How many times this cached answer has been served instead of asking again."
@@ -11435,6 +11479,65 @@ class UserData(models.Model):
     @property
     def auctions_admined(self):
         return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
+
+    @property
+    def auctions_i_admin(self):
+        """Every auction this user may make changes to, as a queryset.
+
+        The set form of :meth:`Auction.permission_check`, which answers the same question one
+        auction at a time and so can't be used to *scope* anything.  The three routes are the same
+        three: they created it, they are an admin on its TOS list, or they hold a club permission
+        over the club running it.
+
+        Superusers are not special-cased here.  This is "which auctions are yours", and a view
+        that means "everybody's" should say so rather than getting it by accident.
+        """
+        user = self.user
+        if not user.is_authenticated:
+            return Auction.objects.none()
+        club_ids = (
+            ClubMember.objects.filter(user=user, is_deleted=False)
+            .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+            .values_list("club_id", flat=True)
+        )
+        return Auction.objects.filter(
+            Q(created_by=user) | Q(auctiontos__is_admin=True, auctiontos__user=user) | Q(club_id__in=club_ids),
+            is_deleted=False,
+        ).distinct()
+
+    @property
+    def only_club(self):
+        """The club this user obviously belongs to, or None.  Never a guess.
+
+        "Which club is this person from" has no reliable answer on this site: somebody can belong
+        to three clubs or to none, and an auction need not have a club at all.  So this answers
+        only when the answer is not in doubt -- the site is running as a single club, or the user
+        belongs to exactly one -- and every caller has to cope with None.
+
+        Used to fill in :attr:`Species.club` when somebody adds a species, so the rest of their
+        club can see it before it is approved.  Getting None back is a normal outcome, not a
+        failure: the species is still visible to the person who added it.
+        """
+        from .site_setup import get_single_club
+
+        single = get_single_club()
+        if single:
+            return single
+        clubs = list(Club.objects.filter(members__user=self.user, members__is_deleted=False).distinct()[:2])
+        return clubs[0] if len(clubs) == 1 else None
+
+    @property
+    def runs_an_auction(self):
+        """True when this user is an admin of *any* auction.
+
+        The standing test for "may add a species to the list".  Adding one is a check-in-table
+        job: somebody is standing there with a bag of fish that isn't in the picker, and until
+        this existed only a site superuser could add it -- which at a real auction means it does
+        not get added, the lot goes out with no scientific name, and the gap is still there next
+        year.  What an auction admin adds is theirs alone until somebody approves it; see
+        :attr:`Species.approved`.
+        """
+        return self.user.is_superuser or self.auctions_i_admin.exists()
 
     @property
     def is_experienced(self):

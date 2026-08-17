@@ -71,6 +71,7 @@ from .models import (
 )
 from .services import clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
+from .species_matching import visible_species
 from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
@@ -126,7 +127,22 @@ if (!window.speciesSearchWired) {
         var rows = (data && data.results) || [];
         list.innerHTML = '';
         if (!rows.length) {
-          list.innerHTML = '<div class="list-group-item text-muted small">No species found</div>';
+          // The end of the road, so offer the way off it where there is one.  Without this an
+          // auction admin looking at a fish the list has never heard of has nothing to click:
+          // the gaps page is superusers only, so /species/new/ is unreachable from here.
+          var empty = document.createElement('div');
+          empty.className = 'list-group-item text-muted small';
+          empty.textContent = 'No species found. ';
+          if (box.dataset.speciesAdd) {
+            var add = document.createElement('a');
+            add.href = '/species/new/?lot_name=' + encodeURIComponent(query)
+                     + '&next=' + encodeURIComponent(window.location.pathname);
+            add.target = '_blank';
+            add.rel = 'noopener';
+            add.textContent = 'Add it to the list';
+            empty.appendChild(add);
+          }
+          list.appendChild(empty);
           return;
         }
         rows.slice(0, 20).forEach(function (row) {
@@ -187,9 +203,10 @@ class SpeciesSelect(forms.Select):
     them already, and there the fix is to correct one lot afterwards on a form that has it.
     """
 
-    def __init__(self, attrs=None, choices=(), *, searchable=False):
+    def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False):
         super().__init__(attrs, choices)
         self.searchable = searchable
+        self.can_add = can_add
 
     def optgroups(self, name, value, attrs=None):
         chosen = [str(item) for item in value if item not in ("", None)]
@@ -206,9 +223,10 @@ class SpeciesSelect(forms.Select):
         if not self.searchable:
             return html
         select_id = (attrs or {}).get("id") or f"id_{name}"
+        add = ' data-species-add="1"' if self.can_add else ""
         return mark_safe(  # noqa: S308 - the only interpolation is an id Django built
             html
-            + f'<div class="species-search mt-1" data-species-search="{escape(select_id)}">'
+            + f'<div class="species-search mt-1" data-species-search="{escape(select_id)}"{add}>'
             + '<input type="search" class="form-control form-control-sm"'
             + ' placeholder="Not in the list?  Search every species…" autocomplete="off">'
             + '<div class="list-group mt-1" data-species-search-results></div>'
@@ -217,7 +235,9 @@ class SpeciesSelect(forms.Select):
         )
 
 
-def configure_species_field(fields, auction, field_name="species", *, always_render=False, searchable=False):
+def configure_species_field(
+    fields, auction, field_name="species", *, always_render=False, searchable=False, can_add=False
+):
     """Set up the scientific-name picker on a lot form, or hide it.
 
     Hidden rather than removed when the auction has the field turned off, so every lot form keeps
@@ -230,6 +250,10 @@ def configure_species_field(fields, auction, field_name="species", *, always_ren
     that is already there -- the same reason ``custom_field_1`` and the custom dropdown are
     rendered unconditionally and hidden with CSS.  Nothing about validation changes: the auction
     the form ends up with still decides, in ``clean_species_for_auction``.
+
+    ``can_add`` offers "add it to the list" when the search finds nothing, and is for forms whose
+    every user is an auction admin by construction -- there is no per-user check here, so the
+    caller is asserting it.  ``SpeciesCreateView`` enforces the same thing again on the way in.
     """
     field = fields.get(field_name)
     if field is None:
@@ -242,7 +266,9 @@ def configure_species_field(fields, auction, field_name="species", *, always_ren
         field.help_text = ""
         return
     field.widget = SpeciesSelect(
-        attrs={"class": "form-select species-select", "data-species-select": "1"}, searchable=searchable
+        attrs={"class": "form-select species-select", "data-species-select": "1"},
+        searchable=searchable,
+        can_add=can_add,
     )
     field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
     if searchable:
@@ -1305,7 +1331,9 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
-        configure_species_field(self.fields, self.auction, searchable=True)
+        # can_add without a user check: LotAdmin, the only view that renders this form, is
+        # auction admins only, which is exactly the standing SpeciesCreateView asks for.
+        configure_species_field(self.fields, self.auction, searchable=True, can_add=True)
         self.fields["species"].initial = self.lot.species
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
         self.fields["buy_now_price"].initial = self.lot.buy_now_price
@@ -5063,9 +5091,10 @@ class SpeciesAdminForm(forms.ModelForm):
             "breeder_points",
         ]
 
-    def __init__(self, *args, lot_name="", lot_count=0, **kwargs):
+    def __init__(self, *args, lot_name="", lot_count=0, added_by=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.lot_count = lot_count
+        self.added_by = added_by
         self.fields["common_name"].label = "Common name"
         self.fields["common_name"].help_text = "What the picker shows in brackets, e.g. Bristlenose pleco."
         self.fields[
@@ -5081,7 +5110,7 @@ class SpeciesAdminForm(forms.ModelForm):
         # autocomplete widget is left holding the plain list Django built for the old widget, and
         # re-rendering the form -- which only happens when there is a validation error to show --
         # dies inside dal trying to filter it.
-        self.fields["parent"].queryset = Species.objects.filter(parent__isnull=True)
+        self.fields["parent"].queryset = visible_species(added_by).filter(parent__isnull=True)
         self.fields["parent"].help_text = (
             "Leave blank for an ordinary species. A strain keeps its parent's genus and epithet, so "
             "breeder points and BAP genus rules still see the plain species."
@@ -5142,19 +5171,27 @@ class SpeciesAdminForm(forms.ModelForm):
         else:
             self.add_error("scientific_name_input", "Enter a scientific name, or pick a species to add a strain to.")
             return cleaned_data
-        clash = Species.objects.filter(
-            genus__iexact=cleaned_data["genus"], species__iexact=cleaned_data["species"], variety__iexact=variety
-        ).first()
+        # Scoped to what this person can see, for both halves of the reason visible_species()
+        # exists: pointing them at a row they cannot open is no help, and telling them a species
+        # already exists when what exists is somebody else's unapproved one leaks it.
+        clash = (
+            visible_species(self.added_by)
+            .filter(
+                genus__iexact=cleaned_data["genus"], species__iexact=cleaned_data["species"], variety__iexact=variety
+            )
+            .first()
+        )
         if clash:
             # Not an error to fix by editing the name -- the answer is to go and use the row that
             # already exists, so say where it is.
-            self.add_error(
-                "scientific_name_input",
-                mark_safe(  # noqa: S308 - the only interpolation is a URL we build and an escaped name
+            if self.added_by and self.added_by.is_superuser:
+                message = mark_safe(  # noqa: S308 - the only interpolation is a URL we build and an escaped name
                     f"{escape(clash.label)} is already on the list. "
                     f'<a href="/admin/auctions/species/{clash.pk}/change/">Edit it</a> instead.'
-                ),
-            )
+                )
+            else:
+                message = f"{clash.label} is already on the list — search for it on the lot form instead."
+            self.add_error("scientific_name_input", message)
         return cleaned_data
 
     def save(self, commit=True):
@@ -5165,6 +5202,15 @@ class SpeciesAdminForm(forms.ModelForm):
         # Somebody is adding this because a club is selling one, which is better evidence than
         # FishBase's column -- see Species.in_aquarium_trade.
         species.in_trade_override = True
+        species.added_by = self.added_by
+        # Filled in when there is an obvious club and left blank otherwise, which is most of the
+        # reason the visibility rule is "user *or* club": a species with no club is still visible
+        # to whoever added it.  See UserData.only_club and species_matching.visible_species.
+        species.club = self.added_by.userdata.only_club if self.added_by else None
+        # A superuser is adding to everybody's list and knows it.  An auction admin is solving a
+        # problem in front of them, which is a different and much narrower claim -- so their row
+        # is theirs until somebody approves it.  See Species.approved and visible_species().
+        species.approved = bool(self.added_by and self.added_by.is_superuser)
         if commit:
             species.save()
             names = re.split(r"[,\n]+", self.cleaned_data.get("other_names") or "")
@@ -5176,7 +5222,11 @@ class SpeciesAdminForm(forms.ModelForm):
                     continue
                 seen.add(key)
                 SpeciesCommonName.objects.create(
-                    species=species, name=name.strip()[:255], language="English", is_preferred=(index == 0)
+                    species=species,
+                    name=name.strip()[:255],
+                    language="English",
+                    is_preferred=(index == 0),
+                    source="admin",
                 )
             Species.recompute_trade_ranks(genus=species.genus)
         return species

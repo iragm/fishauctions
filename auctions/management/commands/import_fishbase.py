@@ -214,7 +214,8 @@ class Command(BaseCommand):
         self.stdout.write(f"Loading the curated aquarium list ({aquarium_species.DATA_FILE.name})")
         result = aquarium_species.load(dry_run=dry_run)
         self.stdout.write(
-            f"  {result.created} added, {result.updated} updated, {result.common_names} common names added"
+            f"  {result.created} added, {result.updated} updated, {result.adopted} taught names only, "
+            f"{result.common_names} common names added"
         )
         for skipped in result.skipped:
             self.stdout.write(self.style.WARNING(f"  skipped {skipped}"))
@@ -506,7 +507,15 @@ class Command(BaseCommand):
         by_code = {
             species.speccode: species for species in Species.objects.filter(source=source, speccode__in=species_rows)
         }
-        SpeciesCommonName.objects.filter(species__source=source, species__speccode__in=list(common_rows)).delete()
+        # Replace this snapshot's names, and *only* this snapshot's names.  The extra
+        # ``source=source`` is the whole reason SpeciesCommonName has a source column: without it
+        # this line was the reason no hobby name could ever be added to a FishBase species and
+        # survive.  FishBase has no idea that Labidochromis caeruleus is a "yellow lab" -- it files
+        # it under "Blue streak hap" -- so those names have to be ours, and before this they lasted
+        # exactly until somebody bumped FISHBASE_VERSION and re-ran the import.
+        SpeciesCommonName.objects.filter(
+            source=source, species__source=source, species__speccode__in=list(common_rows)
+        ).delete()
         common_objects = []
         for code, names in common_rows.items():
             species = by_code.get(code)
@@ -521,6 +530,7 @@ class Command(BaseCommand):
                         name_normalized=normalize_species_name(name),
                         language=language,
                         is_preferred=is_preferred,
+                        source=source,
                     )
                 )
         SpeciesCommonName.objects.bulk_create(common_objects, batch_size=BATCH_SIZE)

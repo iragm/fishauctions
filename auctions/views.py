@@ -286,7 +286,7 @@ from .services import (
     user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
-from .species_matching import MAX_GENUS_MATCHES, MAX_SUGGESTIONS, suggest_species
+from .species_matching import MAX_GENUS_MATCHES, MAX_SUGGESTIONS, suggest_species, visible_species
 from .species_matching import check_rate_limit as check_species_llm_rate_limit
 from .species_matching import remember as remember_species
 from .tables import (
@@ -1253,6 +1253,25 @@ class AdminOnlyViewMixin:
 
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser):
+            messages.error(request, self.permission_denied_message)
+            return redirect(self.redirect_url)
+        return super().dispatch(request, *args, **kwargs)
+
+
+class AuctionAdminAnywhereViewMixin:
+    """Include to let anyone who runs an auction see this page, plus superusers.
+
+    A deliberately weaker gate than :class:`AdminOnlyViewMixin`, for the one thing that has to be
+    doable while somebody is standing at a check-in table: adding a species the list is missing.
+    The standing comes from :attr:`UserData.runs_an_auction`; what it buys is a species only its
+    author can see until it is approved, not a write to everybody's picker.
+    """
+
+    permission_denied_message = "Only auction admins can view this page"
+    redirect_url = "/"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_authenticated and request.user.userdata.runs_an_auction):
             messages.error(request, self.permission_denied_message)
             return redirect(self.redirect_url)
         return super().dispatch(request, *args, **kwargs)
@@ -6946,7 +6965,13 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                 if species_id in (None, "", "0"):
                     lot.species = None
                 else:
-                    species = Species.objects.filter(pk=species_id).first()
+                    species = visible_species(request.user, self.auction.club).filter(pk=species_id).first()
+                    # Whatever is already on the lot stays allowed even when it isn't this
+                    # person's to pick: an unapproved species another admin added is still the
+                    # right answer for that lot, and every save posts the field back, so
+                    # rejecting it here would make the row unsaveable rather than just unpickable.
+                    if not species and str(lot.species_id) == str(species_id):
+                        species = lot.species
                     if not species:
                         errors["species"] = "Pick a scientific name from the list"
                     else:
@@ -6957,7 +6982,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                         # old species sitting there, and the cache is global -- one stale row would
                         # teach every club that "sponge filter" is a guppy.
                         if is_new:
-                            remember_species(lot_name, species, source="user")
+                            remember_species(lot_name, species, source="user", user=request.user)
             # No else: with the field switched off there is nothing on the page to post, so an
             # ajax save of any other field would otherwise wipe a species that is already stored.
             # Turning the setting off hides the field; it does not throw the column away.
@@ -8494,6 +8519,21 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             obj.custom_checkbox = form.cleaned_data["custom_checkbox"]
             obj.custom_field_1 = form.cleaned_data["custom_field_1"]
             obj.custom_dropdown = form.cleaned_data["custom_dropdown"]
+            # This view assigns field by field rather than calling form.save(), and the scientific
+            # name was simply not on the list -- so the picker rendered, validated, and had its
+            # answer thrown away on every save since it was added.  It is the *admin's* lot form:
+            # the one place a wrong species is meant to get fixed.
+            #
+            # Guarded on the auction's own setting rather than trusting cleaned_data, because
+            # EditLot is built without an ``instance``: clean_species_for_auction falls back to
+            # "whatever is stored on the lot" when the field is switched off, and what it actually
+            # reads is a blank Lot() -- so assigning that would wipe the column on every auction
+            # that has scientific names turned off.  Turning the setting off hides the field; it
+            # does not throw the data away.
+            species = form.cleaned_data.get("species") if self.auction.use_scientific_name else None
+            species_changed = bool(self.auction.use_scientific_name) and obj.species_id != getattr(species, "pk", None)
+            if self.auction.use_scientific_name:
+                obj.species = species
             # need to make sure the winner matches the auctiontos_winner
             if obj.pk and obj.winner:
                 if not obj.auctiontos_winner:
@@ -8502,6 +8542,15 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                     obj.winner = obj.auctiontos_winner.user
                 # winner not set if auctiontos_winner is set for the first time...don't see a real downside here, winner is generally not set as part of an auction anyway
             obj.save()
+            # Teach the site the pairing -- but only from here, and only on a real change.  This
+            # form has the "search every species" box on it, so the choice is not bounded by the
+            # five suggestions the matcher produced; it can be any of 36,000 rows, and the cache
+            # is read by every club ahead of the token search.  What makes it safe to write anyway
+            # is who is doing it: this view is auction admins only, they are correcting a lot on
+            # purpose, and the answer is listed and revertible on the species gaps page.  The
+            # seller-facing forms deliberately do not do this.
+            if species_changed and species and obj.lot_name:
+                remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
@@ -23389,6 +23438,12 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
     *is* a scientific or common name), ``cache`` (a remembered answer), ``search`` (token/phrase
     matching), ``llm`` (a language model picked from a shortlist we built), ``none``.
 
+    A species somebody added on the site and nobody has approved yet is never returned here, even
+    to a club admin's own key: an API key authenticates a script, and
+    :func:`~auctions.species_matching.visible_species` treats that as "no user", which sees the
+    shared list only.  Feeding an unapproved guess into somebody else's breeder-award program is
+    exactly the thing the approval step exists to prevent.
+
     **No match is a normal answer**, not an error: 200 with an empty ``results``.  Most lots are
     not a species -- "sponge filter", "assorted plants", "10 gallon tank" -- and a matcher that
     always finds something would be putting wrong species on labels and wrong points in a breeder
@@ -23457,6 +23512,9 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             # An API key authenticates a script, not a person: request.user is anonymous, and
             # LLMUsage rows and the matcher's own per-user budget both want a real user or none.
             user=None if self.is_api_key_request() else request.user,
+            # The club whose key or admin is asking, so a species one of its admins added but
+            # nobody has approved is visible to its own software.
+            club=self.get_club(),
             use_llm=use_llm,
             category=int(category) if category.isdigit() else None,
         )
@@ -24666,7 +24724,9 @@ class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     """
 
     def get_queryset(self):
-        queryset = Species.objects.all()
+        # Same visibility rule the suggestions follow: an unapproved species is offered to the
+        # person who added it and to nobody else.  Searching by hand must not be the way round it.
+        queryset = visible_species(self.request.user)
         if self.request.GET.get("varieties") != "1":
             queryset = queryset.filter(parent__isnull=True)
         if self.q:
@@ -24780,8 +24840,17 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
         # was nowhere on the site it could be seen, let alone undone.
         context["mappings"] = list(
             SpeciesSearchCache.objects.filter(species__isnull=False)
-            .select_related("species")
+            .select_related("species", "created_by")
             .order_by("-hits", "-createdon")[:50]
+        )
+        # Species an auction admin added to solve a problem in front of them.  Each one is
+        # currently offered to that person and to nobody else, and approving it is the whole of
+        # the admin's job here -- see Species.approved and species_matching.visible_species.
+        context["pending"] = list(
+            Species.objects.filter(approved=False)
+            .select_related("added_by", "category", "parent", "club")
+            .annotate(lots=Count("lot"))
+            .order_by("-id")[:50]
         )
         context["species_total"] = Species.objects.count()
         context["species_added_here"] = Species.objects.filter(source="admin").count()
@@ -24808,12 +24877,52 @@ class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
         return redirect("species_gaps")
 
 
-class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
+class SpeciesApproveView(AdminOnlyViewMixin, View):
+    """Promote one species from "the person who added it" to "everybody".
+
+    The entire approval workflow.  An auction admin adding a species at a check-in table gets a
+    row only they can see (:attr:`Species.approved`); this is the button that makes it part of the
+    shared list, and it is a superuser's call because that list is a shared asset.
+
+    Approving is also what lets the name be *remembered*: :func:`species_matching.remember`
+    refuses to write an unapproved species into a cache every club reads, so the mapping from the
+    lot name is written here instead, at the moment the species becomes everyone's.
+    """
+
+    def post(self, request, pk):
+        species = get_object_or_404(Species, pk=pk)
+        if not species.approved:
+            species.approved = True
+            species.save()
+            # The genus tier is a statement about siblings, and this row was invisible to the last
+            # pass that worked one out.
+            Species.recompute_trade_ranks(genus=species.genus)
+            for lot_name in (
+                Lot.objects.filter(species=species)
+                .exclude(lot_name="")
+                .order_by()
+                .values_list("lot_name", flat=True)
+                .distinct()
+            )[:20]:
+                remember_species(lot_name, species, source="user", user=species.added_by)
+        messages.success(request, f"{species.label} is now suggested for everyone.")
+        return redirect("species_gaps")
+
+
+class SpeciesCreateView(AuctionAdminAnywhereViewMixin, CreateView):
     """Add a species, or a strain of one, from the site.
 
     Reached from :class:`SpeciesGapsView` with ``?lot_name=`` prefilled, which is the whole
     workflow: see a name that keeps coming up with no species, click it, fill in two boxes, and
     every lot with that name gets the species and the matcher learns the name for next time.
+
+    Open to anyone who runs an auction, not just site superusers.  The reason is the check-in
+    table: somebody is standing there with a bag of fish the picker has never heard of, and a
+    workflow that ends in "email the site owner" ends in the lot going out with no scientific
+    name.  What an auction admin adds is not everybody's, though -- it is ``approved=False``, so
+    :func:`~auctions.species_matching.visible_species` offers it to them and to nobody else until
+    a superuser ticks the box.  The imported list is a shared asset and one club's guess at a name
+    has no business in another club's picker.
     """
 
     model = Species
@@ -24844,6 +24953,11 @@ class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
         if not name:
             return Lot.objects.none()
         base = Lot.objects.filter(species__isnull=True, is_deleted=False, auction__use_scientific_name=True)
+        # Only lots this person is actually responsible for.  This page used to be superusers
+        # only, where "every lot on the site called this" was the right answer; it is open to
+        # auction admins now, and the button would otherwise reach into other clubs' auctions.
+        if not self.request.user.is_superuser:
+            base = base.filter(auction__in=self.request.user.userdata.auctions_i_admin)
         normalized = normalize(name)
         words = sorted(base_words(name), key=len, reverse=True)[:3]
         if not normalized or not words:
@@ -24863,6 +24977,8 @@ class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs["lot_name"] = self._lot_name()
         kwargs["lot_count"] = self._matching_lots().count()
+        # The form stamps added_by and decides approved from this.
+        kwargs["added_by"] = self.request.user
         return kwargs
 
     def get_initial(self):
@@ -24895,16 +25011,34 @@ class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
                 lot.save()
                 attached += 1
             # Teach the matcher, so the next person typing this name is offered it straight away.
-            remember_species(name, species, source="user")
+            # A no-op while the species is unapproved -- remember() refuses to put one in a table
+            # every club reads -- so the name is learned when the species is.
+            remember_species(name, species, source="user", user=self.request.user)
         messages.success(
             self.request,
             f"Added {species.label}."
             + (f"  Set it on {attached} lot{'' if attached == 1 else 's'} called “{name}”." if attached else ""),
         )
+        if not species.approved:
+            messages.info(
+                self.request,
+                f"{species.label} is yours for now: it will be suggested on your lots and nobody "
+                "else's until a site admin approves it for everyone.",
+            )
         return response
 
     def get_success_url(self):
-        return reverse("species_gaps")
+        # The gaps page is superusers only, and it is where a superuser came from.  Anyone else
+        # arrived from a lot form and wants to be put back on it, so honour ?next= -- checked
+        # against the host, because it is a query parameter and the redirect is the whole payload.
+        if self.request.user.is_superuser:
+            return reverse("species_gaps")
+        following = self.request.GET.get("next") or self.request.POST.get("next") or ""
+        if following and url_has_allowed_host_and_scheme(
+            following, allowed_hosts={self.request.get_host()}, require_https=self.request.is_secure()
+        ):
+            return following
+        return reverse("selling")
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):

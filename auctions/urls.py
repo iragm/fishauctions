@@ -180,6 +180,11 @@ urlpatterns = [
         views.SpeciesSearchCacheForgetView.as_view(),
         name="species_cache_forget",
     ),
+    path(
+        "admin-dashboard/species-gaps/approve/<int:pk>/",
+        views.SpeciesApproveView.as_view(),
+        name="species_approve",
+    ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(

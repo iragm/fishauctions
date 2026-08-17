@@ -4993,6 +4993,18 @@ NOT_A_SKILL: dict[str, str] = {
         "name ends up on a printed label and in breeder points, which the whole species feature is "
         "written to avoid. The palette navigates to the page instead."
     ),
+    "SpeciesSearchCacheForgetView": (
+        "One button on the species gaps page, and the decision is the row next to it: this "
+        "remembered answer is wrong, throw it away. Naming the row out loud means saying a "
+        "normalised lot name exactly, which nobody can do without reading it off the page they "
+        "are already on. The palette navigates there instead."
+    ),
+    "SpeciesApproveView": (
+        "Approving a species for the whole site is a judgement about somebody else's taxonomy, and "
+        "the evidence is the row: what the auction admin typed, which category it landed in, how "
+        "many lots are waiting on it. That is a page to read, not a sentence to say -- and getting "
+        "it wrong puts a wrong name in every club's picker at once."
+    ),
     "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,
     "ClubEditView": _FORM_PAGE,

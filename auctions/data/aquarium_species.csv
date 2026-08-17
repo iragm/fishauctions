@@ -5,6 +5,12 @@
 # FishBase does list.  A variety row names its parent in scientific_name and puts the strain in
 # variety; the loader links the two, and the parent has to already exist.
 #
+# There is a second kind of row, at the bottom of the file: a NAMES-ONLY row, for a species
+# FishBase already has under a name nobody in the hobby uses.  FishBase files Labidochromis
+# caeruleus under "Blue streak hap", so "yellow lab" matched nothing at all.  Write the scientific
+# name and the common names, leave family/order/kind/habitat blank, and the loader attaches the
+# names to the existing species without creating a second copy of it or touching its taxonomy.
+#
 # Rules for adding a row:
 #   * scientific_name is the currently accepted binomial.  A genus on its own is allowed when the
 #     trade genuinely sells at that rank (Bucephalandra, Tylomelania) -- leave the epithet off.
@@ -12,6 +18,8 @@
 #     abbreviations (rcs, mts, bbs): that is what actually gets typed.
 #   * Don't add a row to make a search work if the identification is contested.  A wrong species
 #     is printed on a label and counted for breeder points; no match is the better answer.
+#     "Bristlenose" is the example to keep in mind: everyone sells one, nobody agrees which
+#     Ancistrus it is, and so it is deliberately not in this file.
 #
 scientific_name,variety,common_names,family,order,kind,habitat
 #
@@ -264,3 +272,41 @@ Danio rerio,Leopard,leopard danio|leopard danios,,,fish,fresh
 Symphysodon aequifasciatus,Blue Diamond,blue diamond discus,,,fish,fresh
 Symphysodon aequifasciatus,Pigeon Blood,pigeon blood discus,,,fish,fresh
 Symphysodon aequifasciatus,Red Turquoise,red turquoise discus,,,fish,fresh
+#
+# ------------------------------------ names only: what the hobby calls fish FishBase already has ---
+# Rows below add common names to a species another list owns.  Leave family/order/kind/habitat
+# blank -- the owning list is the authority on those and the loader ignores them here.  This is
+# where the trade's own vocabulary lives: FishBase is an ichthyology database and has no reason to
+# know "yellow lab", and before this file could reach its rows there was no way to teach it one.
+Labidochromis caeruleus,,yellow lab|electric yellow|electric yellow lab|yellow labidochromis,,,,
+Carinotetraodon travancoricus,,pea puffer|dwarf puffer|indian dwarf puffer|pygmy puffer,,,,
+Poecilia wingei,,endler|endlers livebearer|endler livebearer,,,,
+Mikrogeophagus altispinosus,,bolivian ram|bolivian butterfly|bolivian butterfly ram,,,,
+Mikrogeophagus ramirezi,,german blue ram|gbr|blue ram|german ram,,,,
+Pterophyllum scalare,,angel|silver angel|silver angelfish|freshwater angel,,,,
+Betta splendens,,betta|betta fish|siamese fighter,,,,
+Corydoras panda,,panda cory|panda cory catfish,,,,
+Corydoras pygmaeus,,pygmy cory|pygmy cory catfish,,,,
+Corydoras habrosus,,salt and pepper cory|habrosus cory,,,,
+Pelvicachromis pulcher,,krib,,,,
+Chindongo saulosi,,saulosi|red top saulosi,,,,
+Chindongo demasoni,,demasoni|dems,,,,
+Maylandia estherae,,red zebra cichlid|esther grants zebra,,,,
+Tropheus duboisi,,duboisi|white spotted cichlid,,,,
+Trichogaster lalius,,flame gourami,,,,
+Danio margaritatus,,cpd|celestial pearl danio|galaxy danio,,,,
+Boraras brigittae,,chili rasbora|mosquito rasbora,,,,
+Paracheirodon innesi,,neon,,,,
+Melanotaenia boesemani,,boesemani|boesemani rainbow,,,,
+Tanichthys albonubes,,wcmm,,,,
+Sewellia lineolata,,reticulated hillstream loach|sewellia,,,,
+# Deliberately absent, same reason as bristlenose: "oto" is Otocinclus vittatus or O. macrospilus
+# depending on who imported the box, and nobody can tell them apart in a bag.
+#
+# L-numbers are an identification, not a nickname: the fish is undescribed and the code is what
+# the whole trade agrees to call it.  Only put one here when the species behind it is settled --
+# L046 and L134 are, L144 and L200 are two fish each and stay out.  The same goes for the CW
+# numbers on Corydoras: the mechanism works ("cw11" now survives the tokeniser), so add the row
+# when somebody who knows which Corydoras it is fills it in.
+Hypancistrus zebra,,l046|l46|imperial pleco,,,,
+Peckoltia compta,,l134|leopard frog pleco,,,,

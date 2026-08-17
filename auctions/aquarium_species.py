@@ -79,6 +79,18 @@ class Row:
     def is_variety(self):
         return bool(self.variety)
 
+    @property
+    def is_names_only(self):
+        """True when this row is here to add names to a species some other list owns.
+
+        Declared by leaving every taxonomy column blank, which is also the only honest way to
+        write such a row: the owning list is the authority on all four and they would be ignored.
+        Reading it back is what lets :func:`load` refuse to *invent* a species for a row that
+        clearly meant to find one -- a typo in the scientific name would otherwise create a bare
+        row with no family, no category and nobody the wiser.
+        """
+        return not (self.kind or self.family or self.order or self.habitats)
+
 
 @dataclass
 class Result:
@@ -87,6 +99,8 @@ class Result:
     created: int = 0
     updated: int = 0
     common_names: int = 0
+    #: Rows that only taught names to a species some other list owns -- see :func:`load`.
+    adopted: int = 0
     skipped: list[str] = field(default_factory=list)
 
 
@@ -128,6 +142,26 @@ def kind_hints(path=DATA_FILE):
         for row in read_rows(path)
         if row.kind in KIND_CATEGORY_HINTS
     }
+
+
+def _find_elsewhere(row):
+    """A species some *other* list already owns, matching this row exactly.  Or None.
+
+    What makes a names-only row possible.  FishBase has the fish; what it does not have is what
+    people call them, and it never will -- it is an ichthyology database, and "yellow lab",
+    "pea puffer" and "cw11" are hobby vocabulary.  So the CSV needs to be able to say "this
+    FishBase species also answers to these names" without going anywhere near its taxonomy.
+
+    Ordered by source so the answer is stable when two lists somehow hold the same name: the
+    alphabetical order happens to put ``admin`` (somebody added it here, on purpose, recently)
+    ahead of ``fishbase``, which is the right precedence for a row a person is maintaining.
+    """
+    return (
+        Species.objects.filter(scientific_name__iexact=row.scientific_name, variety__iexact=row.variety)
+        .exclude(source=SOURCE)
+        .order_by("source")
+        .first()
+    )
 
 
 def _find_parent(row, by_name):
@@ -187,6 +221,15 @@ def load(path=DATA_FILE, *, dry_run=False):
     hand, whereas silently repointing lots at a different name is not something a data file should
     be able to do.
 
+    **Names-only rows.**  A row naming a species some other list already owns -- almost always a
+    FishBase fish -- does not create a second copy of it and does not touch a single one of its
+    taxonomy columns.  All it does is attach the ``common_names``.  That is how the hobby's own
+    vocabulary gets into the database: FishBase files *Labidochromis caeruleus* under "Blue streak
+    hap", so "yellow lab" found nothing, and the only way this file could previously answer that
+    was to add a duplicate *Labidochromis caeruleus* with ``source="aquarium"`` sitting alongside
+    the real one.  Leave ``family``, ``order``, ``kind`` and ``habitat`` blank on such a row; they
+    would be ignored, because the owning list is the authority on all four.
+
     Species come before varieties in one pass over a file that already lists them that way, and
     :func:`_find_parent` falls back to a database lookup, so ordering inside the file only matters
     for readability.
@@ -202,34 +245,51 @@ def load(path=DATA_FILE, *, dry_run=False):
         key[0]: species for key, species in existing.items() if not key[1]
     }  # nominal species only, for parent lookups
 
+    named = set()
     for row in rows:
         key = (row.scientific_name.lower(), row.variety.lower())
         species = existing.get(key)
+        # Only a row this list owns is a row this list may rewrite.
+        adopted = species is None and _find_elsewhere(row)
         parent = None
-        if row.is_variety:
-            parent = _find_parent(row, by_name)
-            if parent is None:
-                result.skipped.append(f"{row.scientific_name} '{row.variety}' (parent not in the species list)")
-                continue
-        if species is None:
-            species = Species(source=SOURCE)
-            result.created += 1
+        if adopted:
+            species = adopted
+            result.adopted += 1
+        elif species is None and row.is_names_only:
+            # It said it was only adding names to something that already exists, and nothing does.
+            # Almost always a typo in the scientific name; inventing a species with no family and
+            # no category to hang the names off would hide it.
+            result.skipped.append(f"{row.scientific_name} (names-only row, but no such species)")
+            continue
         else:
-            result.updated += 1
-        changed = _apply(species, row, resolver, parent)
-        if species.parent_id != (parent.pk if parent else None):
-            species.parent = parent
-            changed = True
-        if changed or species.pk is None:
-            species.save()
+            if row.is_variety:
+                parent = _find_parent(row, by_name)
+                if parent is None:
+                    result.skipped.append(f"{row.scientific_name} '{row.variety}' (parent not in the species list)")
+                    continue
+            if species is None:
+                species = Species(source=SOURCE)
+                result.created += 1
+            else:
+                result.updated += 1
+            changed = _apply(species, row, resolver, parent)
+            if species.parent_id != (parent.pk if parent else None):
+                species.parent = parent
+                changed = True
+            if changed or species.pk is None:
+                species.save()
         existing[key] = species
         if not row.is_variety:
             by_name[key[0]] = species
 
-        # Replace rather than merge, so a name dropped from the CSV disappears from the site.
+        # Replace rather than merge, so a name dropped from the CSV disappears from the site --
+        # but only ever *our* names.  On an adopted species the rest of this table is FishBase's
+        # 49,000 English names, and deleting those to make room for two hobby ones would throw
+        # away most of what makes the matcher work.
         wanted = {name.lower(): name for name in row.common_names}
-        SpeciesCommonName.objects.filter(species=species).exclude(name__in=wanted.values()).delete()
-        have = set(SpeciesCommonName.objects.filter(species=species).values_list("name", flat=True))
+        ours = SpeciesCommonName.objects.filter(species=species, source=SOURCE)
+        ours.exclude(name__in=wanted.values()).delete()
+        have = set(ours.values_list("name", flat=True))
         new = [
             SpeciesCommonName(
                 species=species,
@@ -237,13 +297,25 @@ def load(path=DATA_FILE, *, dry_run=False):
                 # bulk_create skips save(); this column is what every lookup matches on.
                 name_normalized=normalize_species_name(name),
                 language="English",
-                is_preferred=(index == 0),
+                # An adopted species already has a preferred name, from the list that owns it.
+                # Claiming to be the preferred one as well would put two rows at the top of every
+                # tie-break that reads the flag.
+                is_preferred=(index == 0 and not adopted),
+                source=SOURCE,
             )
             for index, name in enumerate(wanted.values())
             if name not in have
         ]
         SpeciesCommonName.objects.bulk_create(new)
         result.common_names += len(new)
+        named.add(species.pk)
+
+    # Deleting a row from the file has to take its names with it, and the per-species delete above
+    # only reaches species the file still mentions.  Without this sweep a names-only row removed
+    # from the CSV -- which is how a bad identification gets retracted -- would leave its names
+    # attached to somebody else's species with nothing pointing at them.  Scoped to our own names,
+    # so it can never touch FishBase's.
+    SpeciesCommonName.objects.filter(source=SOURCE).exclude(species_id__in=named).delete()
 
     if dry_run:
         transaction.set_rollback(True)

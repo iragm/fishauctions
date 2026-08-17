@@ -1047,6 +1047,11 @@ EXCLUDED: dict[str, str] = {
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
+    # Two buttons on the species gaps page, and an API endpoint for a club's own software.  All
+    # three are POST/GET-with-a-key rather than pages; the palette sends people to species_gaps.
+    "species_cache_forget": _API,
+    "species_approve": _API,
+    "api_club_species_lookup": _API,
     "auction_no_show_dialog": _API,
     "lot_refund": _API,
     "bulk_set_lots_won": _API,

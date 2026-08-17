@@ -1158,6 +1158,10 @@ class CategoryAdmin(admin.ModelAdmin):
 class SpeciesCommonNameInline(admin.TabularInline):
     model = SpeciesCommonName
     extra = 0
+    # Rebuilt from `name` on every save, so editing it does nothing but confuse.
+    exclude = ("name_normalized",)
+    # `source` is deliberately editable and defaults to "manual", which is what makes a name added
+    # here outlive the next import: import_fishbase only ever deletes rows it wrote itself.
 
 
 class SpeciesAdmin(admin.ModelAdmin):
@@ -1171,10 +1175,31 @@ class SpeciesAdmin(admin.ModelAdmin):
         "family",
         "category",
         "source",
+        "approved",
+        "added_by",
+        "club",
         "breeder_points",
     )
     # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
-    list_filter = ("source", "category", "freshwater", "brackish", "saltwater")
+    # "approved" first: an unapproved species is suggested to one person and nobody else, so the
+    # queue of them is the one thing on this page anybody has to act on.
+    list_filter = ("approved", "source", "club", "category", "freshwater", "brackish", "saltwater")
+    actions = ["approve_species"]
+
+    @admin.action(description="Approve for every auction")
+    def approve_species(self, request, queryset):
+        """Promote species from "only the person who added them" to the shared list.
+
+        The other half of ``SpeciesApproveView``, which is the same decision one row at a time
+        from the species gaps page.  Bulk here because the queue after a busy weekend is a dozen
+        rows from one check-in table, and they are approved or not as a batch.
+        """
+        changed = queryset.filter(approved=False).update(approved=True)
+        for genus in set(queryset.values_list("genus", flat=True)):
+            if genus:
+                Species.recompute_trade_ranks(genus=genus)
+        self.message_user(request, f"Approved {changed} species.")
+
     search_fields = ("common_name", "scientific_name", "genus", "variety", "family", "category__name")
     inlines = [SpeciesCommonNameInline]
     # scientific_name is rebuilt from genus + species on every save, so editing it does nothing.
@@ -1187,7 +1212,7 @@ class SpeciesAdmin(admin.ModelAdmin):
 class SpeciesSearchCacheAdmin(admin.ModelAdmin):
     model = SpeciesSearchCache
     menu_label = "Species name cache"
-    list_display = ("search_text", "species", "source", "hits", "createdon")
+    list_display = ("search_text", "species", "source", "created_by", "hits", "createdon")
     list_filter = ("source",)
     search_fields = ("search_text", "species__scientific_name")
     # Deleting a row here is how you make the site look a name up again -- handy when a bad

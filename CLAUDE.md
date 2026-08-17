@@ -54,6 +54,15 @@ Migration permission error? Use `docker exec -u root -it django ...`
   foods and **cultivars** — everything FishBase has never heard of. Edit the CSV, re-run the
   import. Its header states the rule for adding a row.
 
+FishBase is the **taxonomy** and the CSV is the **vocabulary**. FishBase is an ichthyology
+database: it is authoritative about which species exist and has no reason to know that
+*Labidochromis caeruleus* is a "yellow lab" (it files it under "Blue streak hap"). So the bottom
+of the CSV holds **names-only rows** — scientific name and common names, everything else blank —
+which attach names to a species another list owns without cloning it or touching its taxonomy.
+`SpeciesCommonName.source` is what makes that safe in both directions: every importer deletes only
+the names it wrote, so a hobby name survives the next `FISHBASE_VERSION` bump, and FishBase's
+49,000 names survive the CSV.
+
 SeaLifeBase is **deliberately not imported** (102k mostly-marine species, and no cherry shrimp);
 the code is kept and `--databases fb,slb` still works. See the comment in `auctions/fishbase.py`.
 
@@ -89,6 +98,29 @@ bounce list), and each row links to `/species/new/` with the name prefilled — 
 and every lot with that name gets the species, plus the matcher learns the name. Rows added there
 are `source="admin"`, which `import_fishbase --only-legacy` deliberately never touches.
 
+`/species/new/` is open to **anyone who runs an auction** (`UserData.runs_an_auction`), because
+adding a species is a check-in-table job and a workflow that ends in "email the site owner" ends
+in no scientific name. What a non-superuser adds is `approved=False`, and
+`species_matching.visible_species(user, club)` shows it to **the author or the club** — the author
+always, anyone at `Species.club`, and any caller working in that club's context (the club API, a
+lot in one of its auctions). `remember()` refuses to put it in the global name cache, and
+`/species/new/` only attaches it to lots in auctions that person administers. Approving it — the
+button on the gaps page, or the bulk action in the Django admin — is what makes it everyone's and
+teaches the matcher the lot names it is already on.
+
+`Species.club` is filled in only when there is an obvious one (`UserData.only_club`: single-club
+mode, or the user belongs to exactly one) and is often blank, which is why it can never be the
+*only* route — plenty of auctions have no club at all. Pass `club=` to `visible_species` /
+`suggest_species` wherever a view already has one; where it doesn't, leave it out. **Never pass
+`club=None` expecting it to match** — it is guarded precisely because it would read as "every
+species with no club", which is every unapproved species on the site.
+
+The name cache is written by three places, and only three: the bulk add-lot page on a row's first
+save (bounded — the seller can only pick from the ≤5 suggestions the matcher produced), the
+auction admin's lot editor (unbounded, because that form has the search-every-species box, but the
+person is an auction admin correcting a lot on purpose), and the language model.
+`SpeciesSearchCache.created_by` records who, because every row is served to every club.
+
 `Species.trade_rank` (0 = in the hobby, 1 = its genus is, 2 = neither) is what suggestions are
 ordered by. FishBase's own `Aquarium` column is not enough on its own — it files *Chindongo
 saulosi* under "never/rarely" — so the genus gets a say and `in_trade_override` lets a person
@@ -104,6 +136,13 @@ Matching a typed lot name to a species lives in `auctions/species_matching.py` (
 token/phrase search, then the LLM, with every answer cached in `SpeciesSearchCache`). Its rules are
 deliberately strict — a wrong species ends up on a printed label and in breeder points, so "no
 match" is a better answer than a plausible one. See `auctions/test_species.py`.
+
+Where a bound is needed there, it is **read off the data rather than kept as a list of words**. A
+single word of a lot name ("male guppy", "L046 pleco") answers only when it names ≤5 species, the
+hobby keeps what it names — or the name is ours rather than FishBase's — and it is not a component
+of more than 40 other names. That last one is what separates a fish from a kind of fish: "guppy"
+is used inside 16 other names and answers, "barb" 218 and "catfish" 480 and they do not. A
+whitelist would need maintaining and would always be behind the hobby.
 
 ## Dependencies
 
