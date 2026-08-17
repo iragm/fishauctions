@@ -1164,6 +1164,31 @@ class SpeciesCommonNameInline(admin.TabularInline):
     # here outlive the next import: import_fishbase only ever deletes rows it wrote itself.
 
 
+class SpeciesCommonNameAdmin(admin.ModelAdmin):
+    """The queue for names a club added to a species everybody already has.
+
+    Approving a *species* brings its own names with it (see ``SpeciesAdmin.approve_species``), but
+    a name attached to a shared species -- "yellow lab" on FishBase's *Labidochromis caeruleus* --
+    has no species approval to ride along on, and this page is where that decision is made.
+    """
+
+    model = SpeciesCommonName
+    menu_label = "Species common names"
+    list_display = ("name", "species", "source", "approved", "is_preferred", "added_by", "club")
+    # "approved" first: an unapproved name is offered to one club and nobody else, so the queue of
+    # them is the one thing here anybody has to act on.
+    list_filter = ("approved", "source", "club", "is_preferred")
+    search_fields = ("name", "species__scientific_name", "species__common_name")
+    autocomplete_fields = ("species",)
+    exclude = ("name_normalized",)
+    actions = ["approve_names"]
+
+    @admin.action(description="Approve for every club")
+    def approve_names(self, request, queryset):
+        changed = queryset.filter(approved=False).update(approved=True)
+        self.message_user(request, f"Approved {changed} names.")
+
+
 class SpeciesAdmin(admin.ModelAdmin):
     model = Species
     menu_label = "Species"
@@ -1195,6 +1220,9 @@ class SpeciesAdmin(admin.ModelAdmin):
         rows from one check-in table, and they are approved or not as a batch.
         """
         changed = queryset.filter(approved=False).update(approved=True)
+        # The names came in with the species and are scoped the same way; approving one without
+        # the other leaves a shared species nobody can find by the word they type for it.
+        SpeciesCommonName.objects.filter(species__in=queryset, approved=False).update(approved=True)
         for genus in set(queryset.values_list("genus", flat=True)):
             if genus:
                 Species.recompute_trade_ranks(genus=genus)
@@ -1308,6 +1336,7 @@ admin.site.register(User, UserAdmin)
 admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
 admin.site.register(Species, SpeciesAdmin)
+admin.site.register(SpeciesCommonName, SpeciesCommonNameAdmin)
 admin.site.register(SpeciesSearchCache, SpeciesSearchCacheAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)

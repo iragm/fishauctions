@@ -1722,6 +1722,26 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertEqual(row.species, self.shared)
         self.assertEqual(row.created_by, self.admin_user, "a wrong global answer has to be traceable")
 
+    def test_a_species_added_on_the_site_carries_its_names_scope(self):
+        """A name is only as visible as the species it came in with, and no more."""
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(reverse("species_create"), self._species_form_data())
+        species = Species.objects.get(scientific_name="Corydoras habrosus")
+        for name in species.common_names.all():
+            self.assertFalse(name.approved)
+            self.assertEqual(name.added_by, self.admin_user)
+
+    def test_approving_a_species_approves_the_names_it_came_with(self):
+        """Otherwise the species is everybody's while the word people type for it is not."""
+        SpeciesCommonName.objects.filter(species=self.mine).update(approved=False, added_by=self.admin_user)
+        name = SpeciesCommonName.objects.get(species=self.mine)
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.client.login(username="species_admin", password="testpassword")
+        self.client.post(reverse("species_approve", kwargs={"pk": self.mine.pk}))
+        name.refresh_from_db()
+        self.assertTrue(name.approved)
+        self.assertEqual(list(exact_matches("rare pleco", user=self.user)), [self.mine])
+
     def test_approving_it_makes_it_everybodys_and_teaches_the_name(self):
         self.lot.lot_name = "Rare pleco"
         self.lot.species = self.mine
@@ -2623,9 +2643,9 @@ class UnconfiguredProvider(FakeProvider):
 class ClubSpeciesLookupAPITests(StandardTestCase):
     """The club API endpoint: /api/v1/clubs/<slug>/species-lookup/
 
-    It is the lot form's matcher behind an API key, so these tests are mostly about the two things
-    that are new -- who is allowed to ask, and what the answer looks like on the wire -- plus the
-    one rule that keeps it cheap: the language model is off unless the caller asks for it.
+    It is the lot form's matcher behind an API key, so these tests are mostly about the things
+    that are new -- who is allowed to ask, what the answer looks like on the wire, and the budget
+    that keeps the language model from costing a club more than it is worth.
     """
 
     def setUp(self):
@@ -2654,6 +2674,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         )
         self.other_raw_key = other_raw_key
         self.url = reverse("api_club_species_lookup", kwargs={"slug": self.club.slug})
+        self.other_url = reverse("api_club_species_lookup", kwargs={"slug": self.other_club.slug})
         self.cichlids = Category.objects.create(name="Cichlids")
         self.yellow_lab = make_species(
             "Labidochromis", "caeruleus", "Yellow lab", ["Electric yellow"], aquarium_use="commercial"
@@ -2698,8 +2719,8 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         response = self.client.get(self.url, {"q": "yellow lab"}, HTTP_X_API_KEY="ck_deadbeef.nope")
         self.assertEqual(response.status_code, 401)
 
-    def test_get_only(self):
-        response = self.client.post(self.url, {"q": "yellow lab"}, HTTP_X_API_KEY=self.raw_key)
+    def test_nothing_but_get_and_post_is_answered(self):
+        response = self.client.delete(self.url, HTTP_X_API_KEY=self.raw_key)
         self.assertEqual(response.status_code, 405)
 
     def test_a_missing_or_blank_q_is_the_one_error(self):
@@ -2738,6 +2759,8 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(result["trade_rank"], Species.TRADE_RANK_SPECIES)
         self.assertEqual(result["source"], "fishbase")
         self.assertEqual(result["label"], "Labidochromis caeruleus (Yellow lab)")
+        self.assertTrue(result["approved"])
+        self.assertEqual(sorted(name["name"] for name in result["common_names"]), ["Electric yellow", "Yellow lab"])
 
     def test_a_cultivar_comes_back_under_its_full_name(self):
         """scientific_name is the parent species for all thirteen colour strains; the full name isn't."""
@@ -2766,46 +2789,81 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertGreater(data["total_matches"], 1)
         self.assertFalse(data["unambiguous"])
 
-    def test_limit_truncates_without_hiding_how_many_there_were(self):
-        make_species("Labidochromis", "gigas")
-        make_species("Labidochromis", "vellicans")
-        data = self.get(q="Labidochromis", limit=1).json()
-        self.assertEqual(data["limit"], 1)
-        self.assertEqual(data["count"], 1)
-        self.assertEqual(len(data["results"]), 1)
-        self.assertGreaterEqual(data["total_matches"], 3)
+    def test_a_handful_comes_back_and_total_matches_says_how_many_there_were(self):
+        """No limit to pass: five is a picklist, and total_matches is what says "don't trust this".
 
-    def test_a_silly_limit_is_capped_rather_than_refused(self):
-        self.assertEqual(self.get(q="Yellow lab", limit=500).json()["limit"], MAX_GENUS_MATCHES)
-        self.assertEqual(self.get(q="Yellow lab").json()["limit"], MAX_SUGGESTIONS)
+        A bare genus is the case where the matcher itself returns more than five -- the whole genus
+        is the answer to "Labidochromis" -- so it is the one that proves the truncation is only in
+        what is shown.
+        """
+        for index in range(MAX_GENUS_MATCHES - 1):
+            make_species("Labidochromis", f"testspecies{index}")
+        data = self.get(q="Labidochromis").json()
+        self.assertEqual(data["count"], MAX_SUGGESTIONS)
+        self.assertEqual(len(data["results"]), MAX_SUGGESTIONS)
+        self.assertEqual(data["total_matches"], MAX_GENUS_MATCHES)
 
-    def test_a_limit_that_is_not_a_number_is_refused(self):
-        for bad in ("0", "-3", "lots"):
-            response = self.get(q="Yellow lab", limit=bad)
-            self.assertEqual(response.status_code, 400, bad)
-            self.assertIn("limit", response.json()["error"])
+    # -- the category hint ---------------------------------------------------
 
-    def test_the_model_is_off_unless_it_is_asked_for(self):
-        """The one step that costs money can't be reached by a caller who didn't ask."""
+    def _two_angelfish(self):
+        """The pair only a category can separate: same name, one marine, one not."""
+        marine = Category.objects.create(name="Saltwater fish")
+        freshwater = make_species("Pterophyllum", "scalare", "Angelfish", aquarium_use="commercial")
+        emperor = make_species("Pomacanthus", "imperator", "Angelfish", aquarium_use="commercial")
+        Species.objects.filter(pk=freshwater.pk).update(category=self.cichlids, freshwater=True)
+        Species.objects.filter(pk=emperor.pk).update(category=marine, freshwater=False, saltwater=True)
+        return marine, freshwater, emperor
+
+    def test_a_category_name_matches_case_insensitively(self):
+        marine, _freshwater, emperor = self._two_angelfish()
+        data = self.get(q="angelfish", category="saltwater FISH").json()
+        self.assertEqual(data["results"][0]["id"], emperor.pk)
+        self.assertEqual(data["results"][0]["category"]["id"], marine.pk)
+
+    def test_a_category_id_matches_on_the_id(self):
+        marine, _freshwater, emperor = self._two_angelfish()
+        data = self.get(q="angelfish", category_id=marine.pk).json()
+        self.assertEqual(data["results"][0]["id"], emperor.pk)
+
+    def test_a_category_only_reorders_and_never_filters(self):
+        """A category is itself a guess from the lot's name; one guess must not veto the list."""
+        marine, freshwater, _emperor = self._two_angelfish()
+        data = self.get(q="angelfish", category_id=marine.pk).json()
+        self.assertIn(freshwater.pk, [result["id"] for result in data["results"]])
+
+    def test_a_category_nobody_has_is_an_error_rather_than_a_shrug(self):
+        for params in ({"category": "chiclids"}, {"category_id": "999999"}, {"category_id": "cichlids"}):
+            response = self.get(q="Yellow lab", **params)
+            self.assertEqual(response.status_code, 400, params)
+            self.assertIn("categor", response.json()["error"])
+
+    def test_passing_both_kinds_of_category_is_an_error(self):
+        response = self.get(q="Yellow lab", category="Cichlids", category_id=self.cichlids.pk)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not both", response.json()["error"])
+
+    # -- the language model and its budget -----------------------------------
+
+    def test_the_model_runs_without_being_asked_for(self):
+        """The point of asking a matcher rather than querying the species table yourself."""
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
         try:
             data = self.get(q="Bolivian ram").json()
-            self.assertFalse(data["llm"])
-            self.assertEqual(provider.call_count, 0)
-            self.assertEqual(data["results"], [])
-        finally:
-            llm.set_provider_override(None)
-
-    def test_asking_for_the_model_reaches_it(self):
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
-        llm.set_provider_override(provider)
-        try:
-            data = self.get(q="Bolivian ram", llm="true").json()
             self.assertTrue(data["llm"])
             self.assertEqual(data["source"], "llm")
             self.assertEqual(data["results"][0]["id"], self.altispinosus.pk)
             self.assertEqual(provider.call_count, 1)
+        finally:
+            llm.set_provider_override(None)
+
+    def test_a_database_answer_never_reaches_the_model(self):
+        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        llm.set_provider_override(provider)
+        try:
+            data = self.get(q="Yellow lab").json()
+            self.assertFalse(data["llm"])
+            self.assertEqual(provider.call_count, 0)
         finally:
             llm.set_provider_override(None)
 
@@ -2814,37 +2872,134 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
         try:
-            self.get(q="Bolivian ram", llm="true")
-            data = self.get(q="BOLIVIAN RAM!", llm="true").json()
+            self.get(q="Bolivian ram")
+            data = self.get(q="BOLIVIAN RAM!").json()
             self.assertEqual(data["source"], "cache")
             self.assertEqual(provider.call_count, 1)
         finally:
             llm.set_provider_override(None)
 
-    def test_a_key_that_has_spent_its_daily_budget_falls_back_to_the_database(self):
-        """Out of budget is not an error: the database steps still answer, the model just doesn't."""
+    def test_every_response_says_what_is_left_of_the_budget(self):
+        """On every response, not just the expensive ones: a number you first read while being
+        refused is a number you read too late."""
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
-        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY
-        views.SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY = 0
         try:
-            data = self.get(q="Bolivian ram", llm="true").json()
-            self.assertFalse(data["llm"])
-            self.assertEqual(provider.call_count, 0)
-            self.assertEqual(self.get(q="Yellow lab", llm="true").json()["results"][0]["id"], self.yellow_lab.pk)
+            limit = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+            free = self.get(q="Yellow lab")
+            self.assertEqual(free["X-Species-LLM-Limit"], str(limit))
+            self.assertEqual(free["X-Species-LLM-Remaining"], str(limit))
+            self.assertTrue(free["X-Species-LLM-Reset"])
+            spent = self.get(q="Bolivian ram")
+            self.assertEqual(spent["X-Species-LLM-Remaining"], str(limit - 1))
+            # Including on the errors: reading the header should not require getting the call right.
+            self.assertEqual(self.get(q="").status_code, 400)
+            self.assertEqual(self.get(q="")["X-Species-LLM-Remaining"], str(limit - 1))
         finally:
-            views.SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY = original
             llm.set_provider_override(None)
 
-    def test_asking_for_the_model_does_nothing_when_the_site_has_none(self):
-        """A deployment with no model configured answers from the database and says llm: false."""
+    def test_out_of_budget_with_nothing_to_show_is_a_rate_limit_error(self):
+        """Answering "no species" would be writing down something the site never worked out."""
+        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        llm.set_provider_override(provider)
+        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        try:
+            response = self.get(q="Bolivian ram")
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(provider.call_count, 0)
+            self.assertEqual(response["X-Species-LLM-Remaining"], "0")
+            self.assertTrue(int(response["Retry-After"]) > 0)
+        finally:
+            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            llm.set_provider_override(None)
+
+    def test_out_of_budget_still_answers_everything_the_database_knows(self):
+        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        try:
+            response = self.get(q="Yellow lab")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["results"][0]["id"], self.yellow_lab.pk)
+        finally:
+            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+
+    def test_out_of_budget_never_teaches_the_site_that_a_name_is_not_a_species(self):
+        """The cache is shared by every club, so a name nobody looked at must not land in it.
+
+        Before the budget was checked separately from the answer, running out wrote "not a species"
+        for the name -- and that row would then outrank the model for every club, forever.
+        """
+        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        llm.set_provider_override(provider)
+        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        try:
+            self.get(q="Bolivian ram")
+        finally:
+            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="bolivian ram").exists())
+        try:
+            self.assertEqual(self.get(q="Bolivian ram").json()["results"][0]["id"], self.altispinosus.pk)
+        finally:
+            llm.set_provider_override(None)
+
+    def test_the_budget_is_one_clubs_and_not_the_sites(self):
+        """A club that has spent its allowance must not be able to switch the model off for anyone else."""
+        provider = FakeProvider([{"id": self.altispinosus.pk}, {"id": self.altispinosus.pk}])
+        llm.set_provider_override(provider)
+        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1
+        try:
+            self.assertEqual(self.get(q="Bolivian ram").status_code, 200)
+            self.assertEqual(self.get(q="something else entirely").status_code, 429)
+            other = self.client.get(
+                self.other_url, {"q": "another name nobody has looked up"}, HTTP_X_API_KEY=self.other_raw_key
+            )
+            self.assertEqual(other.status_code, 200)
+            self.assertEqual(provider.call_count, 2)
+        finally:
+            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            llm.set_provider_override(None)
+
+    def test_a_site_with_no_model_answers_from_the_database_and_remembers_nothing(self):
         llm.set_provider_override(UnconfiguredProvider())
         try:
-            data = self.get(q="Bolivian ram", llm="true").json()
+            data = self.get(q="Bolivian ram").json()
             self.assertFalse(data["llm"])
             self.assertEqual(data["results"], [])
         finally:
             llm.set_provider_override(None)
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="bolivian ram").exists())
+
+    # -- what a club may see -------------------------------------------------
+
+    def test_a_club_sees_the_species_it_added_itself(self):
+        """Added at a check-in table or POSTed by its own software; nobody has approved it yet."""
+        mine = Species.objects.create(
+            genus="Ancistrus",
+            species="sp. l183",
+            common_name="Starlight bristlenose",
+            source="admin",
+            approved=False,
+            club=self.club,
+        )
+        SpeciesCommonName.objects.create(species=mine, name="Starlight bristlenose", source="admin")
+        data = self.get(q="Starlight bristlenose").json()
+        self.assertEqual(data["results"][0]["id"], mine.pk)
+        self.assertFalse(data["results"][0]["approved"])
+
+    def test_it_does_not_see_another_clubs_unapproved_species(self):
+        theirs = Species.objects.create(
+            genus="Ancistrus",
+            species="sp. l184",
+            common_name="Somebody elses guess",
+            source="admin",
+            approved=False,
+            club=self.other_club,
+        )
+        SpeciesCommonName.objects.create(species=theirs, name="Somebody elses guess", source="admin")
+        self.assertEqual(self.get(q="Somebody elses guess").json()["results"], [])
 
     def test_using_the_key_stamps_it(self):
         self.assertIsNone(self.api_key.last_used_at)
@@ -2866,11 +3021,575 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         )
         self.assertTrue(ClubAPIKey.objects.get(club=self.club, name="Website").can_look_up_species)
 
-    def test_the_key_page_documents_the_endpoint_once_it_is_granted(self):
-        """Those docs are the only place a club admin finds out this exists."""
+    def test_the_key_page_documents_every_species_endpoint_once_it_is_granted(self):
+        """One permission, and those docs are the only place a club admin finds out this exists."""
         self._log_in_as_a_club_admin()
         url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": self.api_key.pk})
-        self.assertContains(self.client.get(url), f"/api/v1/clubs/{self.club.slug}/species-lookup/")
+        page = self.client.get(url)
+        self.assertContains(page, f"/api/v1/clubs/{self.club.slug}/species-lookup/")
+        self.assertContains(page, "X-Species-LLM-Remaining")
+        self.assertContains(page, "common-names/")
         self.api_key.can_look_up_species = False
         self.api_key.save(update_fields=["can_look_up_species"])
         self.assertNotContains(self.client.get(url), "species-lookup")
+
+    def test_field_mappings_are_only_offered_to_a_key_that_writes_members(self):
+        """They rename incoming club member fields; a settings box that does nothing is worse than none."""
+        self._log_in_as_a_club_admin()
+        url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": self.api_key.pk})
+        # can_add_club_members is on by default, so a species-only key has to say so.
+        self.api_key.can_add_club_members = False
+        self.api_key.save(update_fields=["can_add_club_members"])
+        self.assertNotContains(self.client.get(url), "Field mappings")
+        self.api_key.can_add_club_members = True
+        self.api_key.save(update_fields=["can_add_club_members"])
+        self.assertContains(self.client.get(url), "Field mappings")
+
+
+@isolated_cache("species-create-api")
+class ClubSpeciesCreateAPITests(StandardTestCase):
+    """POST /api/v1/clubs/<slug>/species-lookup/ -- adding a species the list has never heard of.
+
+    The club API's half of ``/species/new/``: create only, this club's until somebody approves it,
+    and never a second copy of a species that is already here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        llm.set_provider_override(None)
+        self.club = Club.objects.create(name="Cichlid Keepers Club")
+        self.other_club = Club.objects.create(name="Some Other Club")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Club website",
+            prefix=prefix,
+            key_hash=key_hash,
+            can_look_up_species=True,
+        )
+        self.raw_key = raw_key
+        self.url = reverse("api_club_species_lookup", kwargs={"slug": self.club.slug})
+        self.plecos = Category.objects.create(name="Plecos")
+        self.shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
+
+    def post(self, payload, key=None):
+        return self.client.post(self.url, payload, content_type="application/json", HTTP_X_API_KEY=key or self.raw_key)
+
+    def test_it_adds_a_species_and_hands_back_the_whole_record(self):
+        response = self.post(
+            {
+                "scientific_name": "Ancistrus sp. L183",
+                "common_name": "Starlight bristlenose",
+                "other_names": ["L183", "White seam bristlenose"],
+                "category": "plecos",
+            }
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        data = response.json()
+        species = Species.objects.get(pk=data["id"])
+        self.assertEqual(species.genus, "Ancistrus")
+        self.assertEqual(species.species, "sp. l183")
+        self.assertEqual(species.common_name, "Starlight bristlenose")
+        self.assertEqual(species.category, self.plecos)
+        self.assertEqual(data["category"], {"id": self.plecos.pk, "name": "Plecos"})
+        self.assertEqual(
+            sorted(name["name"] for name in data["common_names"]),
+            ["L183", "Starlight bristlenose", "White seam bristlenose"],
+        )
+
+    def test_what_a_key_adds_is_this_clubs_and_not_approved(self):
+        """A key is a script, not a superuser: 36,000 imported rows are a shared asset."""
+        data = self.post({"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight bristlenose"}).json()
+        species = Species.objects.get(pk=data["id"])
+        self.assertFalse(species.approved)
+        self.assertFalse(data["approved"])
+        self.assertEqual(species.club, self.club)
+        self.assertIsNone(species.added_by)
+        # "admin" rather than "manual": import_fishbase folds manual rows into the imported list,
+        # and a species somebody added on purpose last week must not be.
+        self.assertEqual(species.source, "admin")
+        self.assertTrue(species.in_trade_override)
+
+    def test_the_club_can_then_look_up_what_it_added_and_nobody_else_can(self):
+        """The whole point of adding one: the next lot called this gets a scientific name."""
+        self.post(
+            {
+                "scientific_name": "Ancistrus sp. L183",
+                "common_name": "Starlight bristlenose",
+                "other_names": "L183",
+            }
+        )
+        mine = self.client.get(self.url, {"q": "l183"}, HTTP_X_API_KEY=self.raw_key).json()
+        self.assertEqual(mine["source"], "exact")
+        self.assertTrue(mine["unambiguous"])
+        self.assertEqual(mine["results"][0]["common_name"], "Starlight bristlenose")
+        other_raw_key, other_prefix, other_key_hash = ClubAPIKey.generate()
+        ClubAPIKey.objects.create(
+            club=self.other_club,
+            name="Someone else's website",
+            prefix=other_prefix,
+            key_hash=other_key_hash,
+            can_look_up_species=True,
+        )
+        theirs = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.other_club.slug}),
+            {"q": "l183"},
+            HTTP_X_API_KEY=other_raw_key,
+        )
+        self.assertEqual(theirs.json()["results"], [])
+
+    def test_other_names_may_be_one_comma_separated_string(self):
+        """A script has a list; somebody pasting off a bag label has a line with commas in it."""
+        data = self.post(
+            {"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight", "other_names": "L183, LDA08"}
+        ).json()
+        self.assertEqual(sorted(name["name"] for name in data["common_names"]), ["L183", "LDA08", "Starlight"])
+
+    def test_a_strain_carries_its_parents_name(self):
+        """What keeps "Blue Dream" out of the genus column -- see the Species model."""
+        response = self.post({"variety": "Blue Dream", "parent": self.shrimp.pk, "common_name": "Blue dream shrimp"})
+        self.assertEqual(response.status_code, 201, response.content)
+        species = Species.objects.get(pk=response.json()["id"])
+        self.assertEqual(species.genus, "Neocaridina")
+        self.assertEqual(species.species, "davidi")
+        self.assertEqual(species.variety, "Blue Dream")
+        self.assertEqual(species.parent, self.shrimp)
+        self.assertEqual(response.json()["full_scientific_name"], "Neocaridina davidi 'Blue Dream'")
+
+    def test_a_strain_and_its_parent_go_together(self):
+        variety_only = self.post({"variety": "Blue Dream", "common_name": "Blue dream shrimp"})
+        self.assertEqual(variety_only.status_code, 400)
+        self.assertIn("parent", variety_only.json())
+        parent_only = self.post({"parent": self.shrimp.pk, "common_name": "Some shrimp"})
+        self.assertEqual(parent_only.status_code, 400)
+        self.assertIn("variety", parent_only.json())
+
+    def test_a_strain_of_a_strain_is_refused(self):
+        blue_dream = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=self.shrimp, source="aquarium"
+        )
+        response = self.post({"variety": "Blue Dream Deep", "parent": blue_dream.pk})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("parent", response.json())
+
+    def test_a_parent_this_club_cannot_see_is_refused(self):
+        theirs = Species.objects.create(
+            genus="Ancistrus", species="sp. l184", source="admin", approved=False, club=self.other_club
+        )
+        response = self.post({"variety": "Gold", "parent": theirs.pk})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("parent", response.json())
+
+    def test_a_scientific_name_is_required_unless_it_is_a_strain(self):
+        response = self.post({"common_name": "Some fish somebody sold"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("scientific_name", response.json())
+
+    def test_a_species_that_is_already_here_comes_back_instead_of_being_copied(self):
+        """Two rows for one fish is how a breeder's points end up split in half."""
+        response = self.post({"scientific_name": "Neocaridina davidi", "common_name": "Red cherry"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["species"]["id"], self.shrimp.pk)
+        self.assertEqual(Species.objects.filter(genus="Neocaridina", species="davidi").count(), 1)
+
+    def test_the_clash_check_ignores_case_the_way_the_form_does(self):
+        self.assertEqual(self.post({"scientific_name": "neocaridina DAVIDI"}).status_code, 409)
+
+    def test_a_common_name_that_belongs_to_another_species_is_refused(self):
+        """Adding "cherry shrimp" to a second species is the loss of a name, not the gain of one."""
+        response = self.post({"scientific_name": "Ancistrus sp. L183", "common_name": "Cherry shrimp"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("common_name", response.json())
+        self.assertFalse(Species.objects.filter(genus="Ancistrus").exists())
+
+    def test_an_other_name_that_belongs_to_another_species_is_refused(self):
+        response = self.post(
+            {"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight", "other_names": ["Cherry shrimp"]}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("other_names", response.json())
+
+    def test_the_names_it_writes_are_scoped_like_the_species(self):
+        data = self.post(
+            {"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight", "other_names": ["L183"]}
+        ).json()
+        names = SpeciesCommonName.objects.filter(species_id=data["id"])
+        self.assertEqual(names.count(), 2)
+        for name in names:
+            self.assertFalse(name.approved)
+            self.assertEqual(name.club, self.club)
+
+    def test_a_category_nobody_has_is_refused_before_anything_is_written(self):
+        response = self.post({"scientific_name": "Ancistrus sp. L183", "category": "Plecoz"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Species.objects.filter(genus="Ancistrus").exists())
+
+    def test_a_category_id_works_too(self):
+        data = self.post({"scientific_name": "Ancistrus sp. L183", "category_id": self.plecos.pk}).json()
+        self.assertEqual(data["category"]["id"], self.plecos.pk)
+
+    def test_the_species_permission_is_required(self):
+        self.api_key.can_look_up_species = False
+        self.api_key.save(update_fields=["can_look_up_species"])
+        self.assertEqual(self.post({"scientific_name": "Ancistrus sp. L183"}).status_code, 403)
+        self.assertFalse(Species.objects.filter(genus="Ancistrus").exists())
+
+    def test_a_key_is_required(self):
+        response = self.client.post(
+            self.url, {"scientific_name": "Ancistrus sp. L183"}, content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_a_body_that_is_not_an_object_is_a_400_rather_than_a_500(self):
+        for body in ("[1, 2, 3]", '"Ancistrus"'):
+            response = self.client.post(self.url, body, content_type="application/json", HTTP_X_API_KEY=self.raw_key)
+            self.assertEqual(response.status_code, 400, body)
+
+    def test_a_signed_in_club_admin_is_credited_for_what_they_add(self):
+        ClubMember.objects.create(club=self.club, user=self.user, permission_add_edit=True)
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            self.url,
+            {"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        species = Species.objects.get(pk=response.json()["id"])
+        self.assertEqual(species.added_by, self.user)
+        self.assertEqual(species.club, self.club)
+        self.assertFalse(species.approved)
+
+    def test_a_club_member_with_no_standing_may_not_add_one(self):
+        ClubMember.objects.create(club=self.club, user=self.user)
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            self.url, {"scientific_name": "Ancistrus sp. L183"}, content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 403)
+
+
+@isolated_cache("species-common-name-api")
+class ClubSpeciesCommonNameAPITests(StandardTestCase):
+    """POST /api/v1/clubs/<slug>/species-lookup/<id>/common-names/
+
+    The hobby's own vocabulary: FishBase files *Labidochromis caeruleus* under "Blue streak hap",
+    and the only reason "yellow lab" finds it is a name somebody added here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        llm.set_provider_override(None)
+        self.club = Club.objects.create(name="Cichlid Keepers Club")
+        self.other_club = Club.objects.create(name="Some Other Club")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="Club website",
+            prefix=prefix,
+            key_hash=key_hash,
+            can_look_up_species=True,
+        )
+        self.raw_key = raw_key
+        self.lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
+        self.url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": self.lab.pk})
+
+    def post(self, payload, url=None):
+        return self.client.post(url or self.url, payload, content_type="application/json", HTTP_X_API_KEY=self.raw_key)
+
+    def test_it_attaches_the_name_and_the_matcher_finds_the_species_by_it(self):
+        response = self.post({"name": "Yellow lab"})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertTrue(response.json()["created"])
+        self.assertEqual(response.json()["species"]["id"], self.lab.pk)
+        lookup = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.club.slug}),
+            {"q": "yellow lab"},
+            HTTP_X_API_KEY=self.raw_key,
+        ).json()
+        self.assertEqual(lookup["source"], "exact")
+        self.assertEqual(lookup["results"][0]["id"], self.lab.pk)
+
+    def test_the_name_is_stamped_so_a_re_import_cannot_delete_it(self):
+        """Every importer deletes only the names it wrote; this one belongs to us."""
+        self.post({"name": "Yellow lab"})
+        name = SpeciesCommonName.objects.get(species=self.lab, name="Yellow lab")
+        self.assertEqual(name.source, "admin")
+        self.assertEqual(name.name_normalized, "yellow lab")
+
+    def test_it_never_edits_what_is_already_there(self):
+        """Create only: the source's own preferred name and the species' common_name are untouched."""
+        self.post({"name": "Yellow lab"})
+        self.lab.refresh_from_db()
+        self.assertEqual(self.lab.common_name, "Blue streak hap")
+        self.assertFalse(SpeciesCommonName.objects.get(species=self.lab, name="Yellow lab").is_preferred)
+        self.assertTrue(SpeciesCommonName.objects.get(species=self.lab, name="Blue streak hap").is_preferred)
+
+    def test_sending_a_name_it_already_has_is_not_an_error(self):
+        """So a club can re-run its import without thinking about it."""
+        first = self.post({"name": "Yellow lab"})
+        second = self.post({"name": "yellow  lab!"})
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["created"])
+        self.assertEqual(second.json()["id"], first.json()["id"])
+        self.assertEqual(SpeciesCommonName.objects.filter(species=self.lab, source="admin").count(), 1)
+
+    def test_a_name_with_nothing_in_it_is_refused(self):
+        for name in ("", "   ", "!!!"):
+            response = self.post({"name": name})
+            self.assertEqual(response.status_code, 400, name)
+
+    def test_another_clubs_unapproved_species_is_not_there_to_name(self):
+        theirs = Species.objects.create(
+            genus="Ancistrus", species="sp. l184", source="admin", approved=False, club=self.other_club
+        )
+        url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": theirs.pk})
+        self.assertEqual(self.post({"name": "Something"}, url=url).status_code, 404)
+
+    def test_the_club_may_name_a_species_it_added_itself(self):
+        mine = Species.objects.create(
+            genus="Ancistrus", species="sp. l183", source="admin", approved=False, club=self.club
+        )
+        url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": mine.pk})
+        self.assertEqual(self.post({"name": "Starlight bristlenose"}, url=url).status_code, 201)
+
+    def test_the_species_permission_is_required(self):
+        self.api_key.can_look_up_species = False
+        self.api_key.save(update_fields=["can_look_up_species"])
+        self.assertEqual(self.post({"name": "Yellow lab"}).status_code, 403)
+        self.assertFalse(SpeciesCommonName.objects.filter(name="Yellow lab").exists())
+
+    # -- naming the species by name rather than by id ------------------------
+
+    def _name_url(self, identifier):
+        return reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": identifier})
+
+    def test_a_scientific_name_works_in_place_of_an_id(self):
+        """A caller that just matched free text has a name, not an id."""
+        response = self.post({"name": "Yellow lab"}, url=self._name_url("labidochromis CAERULEUS"))
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["species"]["id"], self.lab.pk)
+
+    def test_a_strain_is_named_by_its_full_name(self):
+        """A strain shares its parent's scientific_name, so only the full name tells them apart."""
+        shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
+        blue_dream = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=shrimp, source="aquarium"
+        )
+        response = self.post({"name": "Blue dreams"}, url=self._name_url("Neocaridina davidi 'Blue Dream'"))
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["species"]["id"], blue_dream.pk)
+        # The bare scientific name is the plain species, not one of its strains.
+        plain = self.post({"name": "Cherries"}, url=self._name_url("Neocaridina davidi"))
+        self.assertEqual(plain.json()["species"]["id"], shrimp.pk)
+
+    def test_a_name_that_matches_nothing_is_a_404(self):
+        self.assertEqual(self.post({"name": "Whatever"}, url=self._name_url("Betta splendens")).status_code, 404)
+
+    # -- a name may not be taken off another species -------------------------
+
+    def test_a_name_that_already_names_another_species_is_refused(self):
+        """One name on two species turns an unambiguous lookup into a picklist."""
+        guppy = make_species("Poecilia", "reticulata", "Guppy")
+        response = self.post({"name": "guppy"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["species"]["id"], guppy.pk)
+        self.assertFalse(SpeciesCommonName.objects.filter(species=self.lab, name="guppy").exists())
+
+    def test_a_name_another_club_added_privately_does_not_block_this_one(self):
+        """Their name is not visible here, so it cannot stop us using the word."""
+        theirs = make_species("Betta", "splendens", "Siamese fighting fish")
+        SpeciesCommonName.objects.create(
+            species=theirs, name="House fish", source="admin", approved=False, club=self.other_club
+        )
+        self.assertEqual(self.post({"name": "House fish"}).status_code, 201)
+
+    # -- what this club adds is this club's ----------------------------------
+
+    def test_the_name_is_this_clubs_until_it_is_approved(self):
+        self.post({"name": "Yellow lab"})
+        name = SpeciesCommonName.objects.get(species=self.lab, name="Yellow lab")
+        self.assertFalse(name.approved)
+        self.assertEqual(name.club, self.club)
+        self.assertIsNone(name.added_by)
+
+    def test_another_club_is_not_answered_with_it(self):
+        """The whole point of scoping: one club's word for a fish is not the site's word for it."""
+        self.post({"name": "Yellow lab"})
+        other_raw_key, other_prefix, other_key_hash = ClubAPIKey.generate()
+        ClubAPIKey.objects.create(
+            club=self.other_club,
+            name="Someone else's website",
+            prefix=other_prefix,
+            key_hash=other_key_hash,
+            can_look_up_species=True,
+        )
+        theirs = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.other_club.slug}),
+            {"q": "yellow lab"},
+            HTTP_X_API_KEY=other_raw_key,
+        ).json()
+        self.assertEqual(theirs["results"], [])
+        mine = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.club.slug}),
+            {"q": "yellow lab"},
+            HTTP_X_API_KEY=self.raw_key,
+        ).json()
+        self.assertEqual(mine["results"][0]["id"], self.lab.pk)
+
+    def test_approving_it_is_what_makes_it_everybodys(self):
+        """The Django admin's action on the name, the other half of approving a species."""
+        self.post({"name": "Yellow lab"})
+        self.assertEqual(exact_matches("yellow lab", club=self.other_club), [])
+        SpeciesCommonName.objects.filter(species=self.lab, name="Yellow lab").update(approved=True)
+        self.assertEqual(exact_matches("yellow lab", club=self.other_club), [self.lab])
+
+
+@isolated_cache("species-session-auth")
+class ClubSpeciesAPISessionAuthTests(StandardTestCase):
+    """The club API without a key: a signed-in person, on their own club permissions.
+
+    The key and the session are two credentials for the same endpoints, and they are checked
+    against different things -- a key against its own flags, a person against their
+    :class:`ClubMember` row for *this* club.  What must not differ is who gets in, so this is the
+    session half of the same table the key tests cover: read needs ``permission_view``, write needs
+    ``permission_add_edit``, and belonging to some other club is worth nothing here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        llm.set_provider_override(None)
+        self.club = Club.objects.create(name="Cichlid Keepers Club")
+        self.other_club = Club.objects.create(name="Some Other Club")
+        self.lab = make_species("Labidochromis", "caeruleus", "Yellow lab")
+        self.url = reverse("api_club_species_lookup", kwargs={"slug": self.club.slug})
+
+    def get(self):
+        return self.client.get(self.url, {"q": "yellow lab"})
+
+    def post(self):
+        return self.client.post(self.url, {"scientific_name": "Ancistrus sp. L183"}, content_type="application/json")
+
+    def _sign_in(self, **permissions):
+        if permissions.pop("member", True):
+            ClubMember.objects.create(club=self.club, user=self.user, **permissions)
+        self.client.login(username="my_lot", password="testpassword")
+
+    def test_signed_out_is_refused(self):
+        self.assertEqual(self.get().status_code, 401)
+
+    def test_signed_in_with_no_club_at_all_is_refused(self):
+        self._sign_in(member=False)
+        self.assertEqual(self.get().status_code, 403)
+
+    def test_a_club_member_with_no_permissions_is_refused(self):
+        """Being on the member list is not standing to read the club's API."""
+        self._sign_in()
+        self.assertEqual(self.get().status_code, 403)
+
+    def test_belonging_to_another_club_is_worth_nothing_here(self):
+        ClubMember.objects.create(club=self.other_club, user=self.user, permission_admin=True)
+        self.client.login(username="my_lot", password="testpassword")
+        self.assertEqual(self.get().status_code, 403)
+
+    def test_permission_view_reads_but_does_not_write(self):
+        """The same split the key has: looking a species up is not adding one."""
+        self._sign_in(permission_view=True)
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"][0]["id"], self.lab.pk)
+        self.assertEqual(self.post().status_code, 403)
+        self.assertFalse(Species.objects.filter(genus="Ancistrus").exists())
+
+    def test_permission_add_edit_writes(self):
+        self._sign_in(permission_add_edit=True)
+        response = self.post()
+        self.assertEqual(response.status_code, 201, response.content)
+        species = Species.objects.get(pk=response.json()["id"])
+        # Credited to the person, and still this club's until somebody approves it.
+        self.assertEqual(species.added_by, self.user)
+        self.assertEqual(species.club, self.club)
+        self.assertFalse(species.approved)
+
+    def test_permission_admin_is_the_wildcard_it_is_everywhere_else(self):
+        self._sign_in(permission_admin=True)
+        self.assertEqual(self.get().status_code, 200)
+        self.assertEqual(self.post().status_code, 201)
+
+    def test_a_site_superuser_is_let_through_as_everywhere_else_on_the_site(self):
+        """Deliberate, and the same rule check_club_permission applies to every club page."""
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.client.login(username="species_admin", password="testpassword")
+        self.assertEqual(self.get().status_code, 200)
+
+    def test_naming_a_species_needs_the_same_standing_as_adding_one(self):
+        self._sign_in(permission_view=True)
+        url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": self.lab.pk})
+        self.assertEqual(
+            self.client.post(url, {"name": "Electric yellow"}, content_type="application/json").status_code, 403
+        )
+        ClubMember.objects.filter(club=self.club, user=self.user).update(permission_add_edit=True)
+        response = self.client.post(url, {"name": "Electric yellow"}, content_type="application/json")
+        self.assertEqual(response.status_code, 201, response.content)
+        name = SpeciesCommonName.objects.get(name="Electric yellow")
+        self.assertEqual(name.added_by, self.user)
+        self.assertEqual(name.club, self.club)
+        self.assertFalse(name.approved, "a club admin is not a site admin")
+
+    def test_a_superuser_naming_a_species_names_it_for_everybody(self):
+        """Same rule the add-a-species form follows: a superuser is adding to the shared list."""
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.client.login(username="species_admin", password="testpassword")
+        url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": self.lab.pk})
+        self.client.post(url, {"name": "Electric yellow"}, content_type="application/json")
+        self.assertTrue(SpeciesCommonName.objects.get(name="Electric yellow").approved)
+
+
+class BrowsableAPITests(StandardTestCase):
+    """DRF's browsable API renders any endpoint a browser opens as an HTML page.
+
+    That page is built out of the view's own docstring, and carries a form for every writable
+    field -- so opening an API URL in a tab published this project's internal notes and class
+    names to anyone who found the URL.  Nobody here needs it in production: the site's own UI is
+    Django templates and an API client sends ``Accept: application/json``.
+    """
+
+    def test_json_only_unless_this_is_a_debug_box(self):
+        from django.conf import settings
+
+        from fishauctions import settings as settings_module
+
+        browsable = "rest_framework.renderers.BrowsableAPIRenderer"
+        renderers = settings.REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"]
+        # settings.DEBUG is forced off while tests run, so the *file's* value is what says whether
+        # this is a developer's machine.
+        if settings_module.DEBUG:
+            self.assertIn(browsable, renderers)
+        else:
+            self.assertEqual(renderers, ["rest_framework.renderers.JSONRenderer"])
+
+    def test_the_views_are_built_with_that_set(self):
+        """APIView reads the setting once, at import, so this is what the endpoints really use."""
+        from rest_framework.renderers import BrowsableAPIRenderer
+
+        from fishauctions import settings as settings_module
+
+        if settings_module.DEBUG:
+            self.skipTest("a dev box keeps the browsable API on purpose")
+        self.assertNotIn(BrowsableAPIRenderer, views.ClubSpeciesLookupAPIView.renderer_classes)
+        self.assertNotIn(BrowsableAPIRenderer, views.ClubMemberListCreateAPIView.renderer_classes)
+
+    def test_a_browser_still_gets_an_answer_rather_than_a_406(self):
+        """A browser's Accept header ends in */*, so JSON-only negotiation still succeeds."""
+        from rest_framework.renderers import BrowsableAPIRenderer
+
+        if BrowsableAPIRenderer in views.ClubSpeciesLookupAPIView.renderer_classes:
+            self.skipTest("a dev box keeps the browsable API on purpose, and it answers in HTML")
+        club = Club.objects.create(name="Cichlid Keepers Club")
+        response = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": club.slug}),
+            {"q": "guppy"},
+            HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        # 401: no key, which is the point -- it is answered, and answered as JSON.
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response["Content-Type"], "application/json")

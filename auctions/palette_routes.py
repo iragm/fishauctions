@@ -1052,6 +1052,7 @@ EXCLUDED: dict[str, str] = {
     "species_cache_forget": _API,
     "species_approve": _API,
     "api_club_species_lookup": _API,
+    "api_club_species_common_names": _API,
     "auction_no_show_dialog": _API,
     "lot_refund": _API,
     "bulk_set_lots_won": _API,

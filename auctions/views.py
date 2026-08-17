@@ -15,7 +15,6 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import randint, sample, uniform
 from time import time
-from types import SimpleNamespace
 from urllib.parse import quote, quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
@@ -55,6 +54,7 @@ from django.db.models import (
     Sum,
     Value,
     When,
+    prefetch_related_objects,
 )
 from django.db.models.base import Model as Model
 from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay, TruncMonth
@@ -241,6 +241,7 @@ from .models import (
     SpeakerComment,
     SpeakerTag,
     Species,
+    SpeciesCommonName,
     SpeciesSearchCache,
     SquareSeller,
     UserBan,
@@ -268,6 +269,8 @@ from .serializers import (
     ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
+    SpeciesCommonNameCreateSerializer,
+    SpeciesCreateSerializer,
     SpeciesMatchSerializer,
 )
 from .services import (
@@ -286,8 +289,15 @@ from .services import (
     user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
-from .species_matching import MAX_GENUS_MATCHES, MAX_SUGGESTIONS, suggest_species, visible_species
-from .species_matching import check_rate_limit as check_species_llm_rate_limit
+from .species_matching import (
+    MAX_SUGGESTIONS,
+    LLMBudget,
+    species_already_named,
+    species_carrying_common_name,
+    suggest_species,
+    visible_common_names,
+    visible_species,
+)
 from .species_matching import remember as remember_species
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -22073,10 +22083,26 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
         # Species lookup: the documented numbers come from the matcher itself, so the page can't
         # drift away from what the endpoint actually does.
-        ctx["species_lookup_default_limit"] = MAX_SUGGESTIONS
-        ctx["species_lookup_max_limit"] = MAX_GENUS_MATCHES
-        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY
+        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
+        # only reads lots or looks up species -- and a settings box that does nothing is worse
+        # than no box.
+        ctx["key_writes_club_members"] = any(
+            (
+                api_key.can_add_club_members,
+                api_key.can_read_club_member_list,
+                api_key.can_update_club_members,
+                api_key.can_renew_memberships,
+            )
+        )
+        ctx["species_lookup_max_results"] = MAX_SUGGESTIONS
+        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
         ctx["species_lookup_llm_available"] = assist_enabled()
+        # What is left of it right now, so the page a club admin reads and the header their
+        # software reads are the same number.
+        ctx["species_lookup_llm_remaining"] = LLMBudget.for_club(
+            self.club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        ).remaining
+        ctx["example_category"] = Category.objects.order_by("name").first()
         return ctx
 
 
@@ -23409,26 +23435,76 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
         )
 
 
-#: Daily ceiling on species lookups from one API key that are allowed to reach the language model.
-#: Deliberately small.  A key is a script, not a person: it will retry, it will loop over a
-#: spreadsheet at 3am, and every call past the cache costs real money.  The database steps are not
-#: counted against this -- only a request that asked for the model and got past the cache can spend
-#: it -- and running out is not an error, it just turns the model back off for the rest of the day.
-SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY = 25
+#: Daily ceiling on species lookups from one club that are allowed to reach the language model.
+#:
+#: A club rather than a key: a club that issues three keys still gets one bill, and one busy
+#: integration must not be able to switch the model off for the club's other software.
+#:
+#: Large on purpose, because almost nothing spends it.  A lookup only reaches the model after the
+#: exact, cache and search steps have all failed, and every model answer -- including "this is not
+#: a species" -- is written to a cache every club reads, so a name costs one call ever, site-wide.
+#: A thousand a day is therefore a thousand *names nobody on this site has ever looked up*, which
+#: is not a number a club reaches twice.
+SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1000
 
-#: The truthy spellings ``?llm=`` accepts.  Anything else, including absent, means off.
-_TRUTHY_QUERY_VALUES = {"1", "true", "yes", "on"}
+
+def _species_llm_budget_headers(budget):
+    """What is left of this club's daily model allowance, for a species-lookup response.
+
+    Headers rather than a field in the body, so a caller can back off without parsing the answer,
+    and on every response rather than only the ones that spent something: an integration that
+    first reads the number when it is already being refused has read it too late.
+    """
+    return {
+        "X-Species-LLM-Limit": str(budget.limit),
+        "X-Species-LLM-Remaining": str(budget.remaining),
+        "X-Species-LLM-Reset": budget.resets_at.isoformat(),
+    }
+
+
+def _resolve_category(name, raw_id):
+    """``category=cichlids`` (by name, any case) or ``category_id=10``.  Returns ``(category, error)``.
+
+    Both may be None, which is what "the caller didn't mention a category" looks like.
+
+    Two parameters rather than one that works out which was meant: "2024" is a perfectly good name
+    for a category, and anything deciding by looking at the characters will one day decide wrong.
+    A category we cannot find is an error rather than a shrug -- it only ever re-orders candidates,
+    so ignoring a typo in it would go unnoticed for months.
+    """
+    # Both are str()ed rather than trusted: a query parameter is always a string, but a JSON body
+    # can perfectly well send {"category": 12}, and that must be a 400 about a category rather
+    # than a 500 about .strip().
+    name = str(name if name is not None else "").strip()
+    raw_id = str(raw_id if raw_id is not None else "").strip()
+    if name and raw_id:
+        return None, "Pass category or category_id, not both."
+    if raw_id:
+        if not raw_id.isdigit():
+            return None, "category_id must be a whole number: the id of a category on this site."
+        category = Category.objects.filter(pk=int(raw_id)).first()
+        return (category, None) if category else (None, f"No category with id {raw_id} on this site.")
+    if name:
+        category = Category.objects.filter(name__iexact=name).first()
+        return (category, None) if category else (None, f"No category called '{name}' on this site.")
+    return None, None
 
 
 class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
-    """Turn free text into a species from this site's list.
+    """Turn free text into a species from this site's list, and add the ones it is missing.
 
-    ``GET /api/v1/clubs/<slug>/species-lookup/?q=yellow%20lab``
+    ``GET  /api/v1/clubs/<slug>/species-lookup/?q=yellow%20lab``
+    ``POST /api/v1/clubs/<slug>/species-lookup/`` -- add a species
+
+    One permission, ``can_look_up_species``, covers both, and the write is safe to hand out with
+    the read because of what it cannot do: it only ever creates, and what it creates is this
+    club's until a site admin approves it.
 
     The same matcher the add-lot form runs -- :func:`auctions.species_matching.suggest_species`,
     called exactly as ``SpeciesSuggestions`` calls it -- so a club's own website, membership system
     or breeder-award program files a name the way this site would file it, and the two agree about
-    what a lot is.  Nothing here can invent a name: every answer is a row in the species table.
+    what a lot is.  Nothing the matcher returns is invented: every answer is a row in the species
+    table, and the way to add a row is the POST rather than a cleverer matcher.
 
     Be as conservative reading the answer as the matcher is producing it.  ``results`` is a
     shortlist, not a decision.  ``unambiguous`` is true only when the matcher came back with
@@ -23438,75 +23514,64 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
     *is* a scientific or common name), ``cache`` (a remembered answer), ``search`` (token/phrase
     matching), ``llm`` (a language model picked from a shortlist we built), ``none``.
 
-    A species somebody added on the site and nobody has approved yet is never returned here, even
-    to a club admin's own key: an API key authenticates a script, and
-    :func:`~auctions.species_matching.visible_species` treats that as "no user", which sees the
-    shared list only.  Feeding an unapproved guess into somebody else's breeder-award program is
-    exactly the thing the approval step exists to prevent.
+    **What this club can see** is everything on the shared list plus its own unapproved rows --
+    the ones its admins added at a check-in table and the ones its keys POSTed here, which stay
+    the club's until a site admin approves them for everybody.  That is
+    :func:`~auctions.species_matching.visible_species` with this club passed in, and ``approved``
+    on each result says which kind a row is.  A *signed-in* admin browsing the same URL is also a
+    person, so they additionally see anything they added themselves or that belongs to another
+    club of theirs -- the site-wide rule, and the one thing that can make a browser's answer
+    slightly wider than the key's.
 
     **No match is a normal answer**, not an error: 200 with an empty ``results``.  Most lots are
     not a species -- "sponge filter", "assorted plants", "10 gallon tank" -- and a matcher that
     always finds something would be putting wrong species on labels and wrong points in a breeder
-    award program.  A missing or blank ``q`` is the one 400.
+    award program.
 
     Params:
-        ``q``       the text to match.  Required.
-        ``limit``   how many candidates to return, 1 to ``MAX_GENUS_MATCHES``.  Default
-                    ``MAX_SUGGESTIONS``.  Only ever truncates; ``total_matches`` reports what the
-                    matcher found, so a caller can tell "one answer" from "one shown".
-        ``category``  a category id, as the lot form passes the category the form is showing.  Only
-                    ever breaks a tie between candidates that already matched -- it can't filter.
-        ``llm``     opt in to the language-model step for this request.  **Off by default**, see
-                    below.
+        ``q``            the text to match.  Required; blank is the one 400.
+        ``category``     a category *name*, matched case-insensitively.
+        ``category_id``  a category id, as the lot form has one to hand.  Either form only breaks
+                         a tie between candidates that already matched -- neither can filter --
+                         and a name or id this site doesn't have is a 400 rather than a shrug.
 
-    The language model is the one step here that costs money per call, so it is off unless the
-    caller asks for it *and* the site has a model configured at all
-    (:func:`auctions.llm.assist_enabled`).  When asked for, it is bounded three ways: the request
-    has to get past the exact, cache and search steps to reach it at all; a request that could
-    reach it spends one of this key's ``SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY``; and every
-    answer, including "this is not a species", is written to ``SpeciesSearchCache``, so the same
-    text is free forever after for every club.  Running out of budget silently drops back to the
-    database steps -- the response's ``llm`` field says which way it went.
+    At most :data:`~auctions.species_matching.MAX_SUGGESTIONS` candidates come back; a bare genus
+    can match more than that and ``total_matches`` says so, which is the number to look at before
+    trusting a picklist.
+
+    The language model runs on every lookup the database could not answer, which is the whole
+    point of asking a matcher rather than querying the species table yourself.  It is bounded by
+    what it costs rather than by asking permission per request: the request has to get past the
+    exact, cache and search steps to reach it, and the club spends one of
+    :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` when it does.  Every answer, "this is not a
+    species" included, goes to ``SpeciesSearchCache``, so a name costs one call ever for the whole
+    site.  ``X-Species-LLM-Remaining`` on every response is the number to back off on; a lookup
+    that needed the model with nothing left is the one 429, because answering it "no species"
+    would be a lie that then gets cached.
     """
 
     serializer_class = SpeciesMatchSerializer
 
-    def _llm_allowed(self, request):
-        """Whether this request may reach the model.  Spends a unit of the budget when it may."""
-        if (request.query_params.get("llm") or "").strip().lower() not in _TRUTHY_QUERY_VALUES:
-            return False
-        if not assist_enabled():
-            return False
-        if not self.is_api_key_request():
-            # A signed-in club admin already has a per-user daily budget inside the matcher, the
-            # same one the lot form is bounded by.  Don't charge them twice.
-            return True
-        # check_rate_limit keys its counter on ``.pk``; an API key is not a user but needs a budget
-        # of its own, so it stands in as one.  Without this, every key on the site would share the
-        # single anonymous bucket and one busy integration would switch the model off for everyone.
-        holder = SimpleNamespace(pk=f"clubapikey{request.api_key.pk}")
-        return check_species_llm_rate_limit(holder, limit=SPECIES_LOOKUP_LLM_CALLS_PER_KEY_PER_DAY)
-
     def get(self, request, slug):
-        self.require_club_permission(
+        club = self.require_club_permission(
             "permission_view",
             "can_look_up_species",
             "You do not have permission to look up species for this club.",
         )
+        # Built before anything can fail, so the allowance is on the 400s too: a caller reading
+        # the header on every response should not have to make a *valid* request to see it.
+        budget = LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY)
+        headers = _species_llm_budget_headers(budget)
         query = (request.query_params.get("q") or "").strip()
         if not query:
-            return Response({"error": "q is required: the text to match, e.g. ?q=yellow lab."}, status=400)
-        raw_limit = (request.query_params.get("limit") or "").strip()
-        limit = MAX_SUGGESTIONS
-        if raw_limit:
-            if not raw_limit.isdigit() or int(raw_limit) < 1:
-                return Response({"error": "limit must be a whole number of 1 or more."}, status=400)
-            # Clamped rather than rejected: the matcher will never return more than this anyway, so
-            # a caller asking for 500 gets everything there is, not an error about a number that
-            # made no difference.
-            limit = min(int(raw_limit), MAX_GENUS_MATCHES)
-        category = (request.query_params.get("category") or "").strip()
-        use_llm = self._llm_allowed(request)
+            return Response(
+                {"error": "q is required: the text to match, e.g. ?q=yellow lab."}, status=400, headers=headers
+            )
+        category, error = _resolve_category(
+            request.query_params.get("category"), request.query_params.get("category_id")
+        )
+        if error:
+            return Response({"error": error}, status=400, headers=headers)
         matches, source = suggest_species(
             query,
             # An API key authenticates a script, not a person: request.user is anonymous, and
@@ -23514,11 +23579,34 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             user=None if self.is_api_key_request() else request.user,
             # The club whose key or admin is asking, so a species one of its admins added but
             # nobody has approved is visible to its own software.
-            club=self.get_club(),
-            use_llm=use_llm,
-            category=int(category) if category.isdigit() else None,
+            club=club,
+            use_llm=True,
+            category=category,
+            budget=budget,
         )
-        serializer = self.serializer_class(matches[:limit], many=True)
+        # Rebuilt: the lookup may just have spent one of these.
+        headers = _species_llm_budget_headers(budget)
+        if not matches and budget.blocked:
+            # Out of budget *and* nothing to show.  Not 200-with-no-results: this lookup was never
+            # actually answered, and a caller that wrote down "no species" would be writing down
+            # something the site never said.  Lookups the database can answer keep working.
+            retry_after = max(1, int((budget.resets_at - timezone.now()).total_seconds()))
+            return Response(
+                {
+                    "error": (
+                        f"This club has used its {budget.limit} language-model species lookups for today, "
+                        "and the database could not answer this one.  Lookups the database can answer are "
+                        "unaffected; this one is worth retrying after the allowance resets."
+                    ),
+                    "query": query,
+                },
+                status=429,
+                headers={**headers, "Retry-After": str(retry_after)},
+            )
+        shown = matches[:MAX_SUGGESTIONS]
+        # One query for every result's common names instead of one each.
+        prefetch_related_objects(shown, "common_names")
+        serializer = self.serializer_class(shown, many=True)
         return Response(
             {
                 "query": query,
@@ -23527,10 +23615,168 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
                 "unambiguous": len(matches) == 1,
                 "total_matches": len(matches),
                 "count": len(serializer.data),
-                "limit": limit,
-                "llm": use_llm,
+                # Whether this request cost a model call, not whether the model found something:
+                # "not a species" is an answer the model was paid for too.
+                "llm": bool(budget.spent),
                 "results": serializer.data,
-            }
+            },
+            headers=headers,
+        )
+
+    def post(self, request, slug):
+        """Add a species that isn't on the list yet.  Create only -- see :class:`SpeciesCreateSerializer`.
+
+        The club API's half of ``/species/new/``, which is the same job for a person: somebody is
+        selling a fish this site has never heard of, and "email the site owner" ends in a lot with
+        no scientific name on its label.  What a key adds is ``approved=False`` and stamped with
+        this club, so it is offered to this club and to nobody else until a site admin approves it.
+
+        A name that is already on the list is a 409 carrying the row that already has it, because
+        the answer to "add *Poecilia reticulata*" is always "use the one that exists", never a
+        second copy of it -- two rows for one fish is how breeder points end up split in half.
+        """
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_look_up_species",
+            "You do not have permission to add species for this club.",
+        )
+        # A body that isn't an object at all -- a bare list, a string -- has no fields to read, so
+        # it goes to the serializer as nothing and comes back as "scientific_name is required"
+        # rather than as a 500 about .get().
+        data = request.data if hasattr(request.data, "get") else {}
+        category, error = _resolve_category(data.get("category"), data.get("category_id"))
+        if error:
+            return Response({"error": error}, status=400)
+        serializer = SpeciesCreateSerializer(data=data, club=club)
+        serializer.is_valid(raise_exception=True)
+        cleaned = serializer.validated_data
+        existing = species_already_named(cleaned["genus"], cleaned["epithet"], cleaned["variety"], club=club)
+        if existing:
+            return Response(
+                {
+                    "error": f"{existing.label} is already on this site's list.  Use it instead of adding it again.",
+                    "species": self.serializer_class(existing).data,
+                },
+                status=409,
+            )
+        species = serializer.save(
+            club=club,
+            # A key is a script; there is no person to credit.  The club is what the row is stamped
+            # with, and what a superuser sees when approving it.
+            added_by=None if self.is_api_key_request() else request.user,
+            category=category,
+        )
+        return Response(self.serializer_class(species).data, status=201)
+
+
+class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
+    """Add a common name to a species that is already on the list.
+
+    ``POST /api/v1/clubs/<slug>/species-lookup/<id or scientific name>/common-names/``
+
+    This is the table the hobby's own vocabulary lives in.  FishBase is an ichthyology database:
+    it is authoritative about which species exist and has no reason to know that *Labidochromis
+    caeruleus* is a "yellow lab", so that name has to be ours.  It is stamped ``source="admin"``,
+    which is what makes it survive the next FishBase re-import -- every importer deletes only the
+    names it wrote itself -- and scoped to this club until a site admin approves it, exactly like
+    a species.
+
+    Named by **id or by scientific name**, because a caller matching free text has a name and not
+    an id, and making them look the id up first would be two calls to do one thing.  A strain
+    needs its full name ("Neocaridina davidi 'Blue Dream'") or its id: the plain species and all
+    thirteen of its colour strains carry the same ``scientific_name``.
+
+    Create only.  It never edits or removes a name that is already there, never touches
+    ``Species.common_name``, and never claims another source's ``is_preferred``.  Sending a name
+    the species already has is not an error -- 200 with the row that exists, so a club can re-run
+    its import without thinking about it.  A name that already names a *different* species is a
+    409: one name on two species turns an unambiguous lookup into a picklist, so it is the loss of
+    a name rather than the gain of one.
+    """
+
+    serializer_class = SpeciesMatchSerializer
+
+    #: "Neocaridina davidi 'Blue Dream'" -- a strain as ``full_scientific_name`` writes it, which
+    #: is the string every response shows and therefore the one a caller has to hand.
+    _STRAIN_NAME = re.compile(r"""^(?P<species>.*?)\s*['"\u2018\u2019](?P<variety>.+?)['"\u2018\u2019]$""")
+
+    def _find_species(self, identifier, club):
+        """The species this URL names, or None.  Scoped exactly like the lookup."""
+        visible = visible_species(None, club)
+        identifier = (identifier or "").strip()
+        if identifier.isdigit():
+            return visible.filter(pk=int(identifier)).first()
+        strain = self._STRAIN_NAME.match(identifier)
+        if strain:
+            return visible.filter(
+                scientific_name__iexact=strain.group("species").strip(), variety__iexact=strain.group("variety")
+            ).first()
+        matches = list(visible.filter(scientific_name__iexact=identifier)[:25])
+        if len(matches) > 1:
+            # A strain carries its parent's name, so a bare "Neocaridina davidi" is the plain
+            # species and its strains all at once.  The plain species is what was meant.
+            matches = [species for species in matches if not species.variety]
+        return matches[0] if len(matches) == 1 else None
+
+    def post(self, request, slug, identifier):
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_look_up_species",
+            "You do not have permission to add species for this club.",
+        )
+        species = self._find_species(identifier, club)
+        if not species:
+            msg = (
+                "No species here with that id or scientific name.  A strain needs its full name, "
+                "e.g. Neocaridina davidi 'Blue Dream'."
+            )
+            raise Http404(msg)
+        serializer = SpeciesCommonNameCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        name = serializer.validated_data["name"]
+        taken = species_carrying_common_name(name, club=club, exclude=species)
+        if taken:
+            return Response(
+                {
+                    "error": f"\u201c{name}\u201d is already the name for {taken.label}.",
+                    "species": self.serializer_class(taken).data,
+                },
+                status=409,
+            )
+        # Matched on the normalised column, because that is what every lookup matches on:
+        # "Adolf's catfish" and "adolfs catfish" are the same name here.  Scoped to the names this
+        # club can see, so another club's private name for the same fish is not mistaken for ours.
+        existing = (
+            visible_common_names(None, club)
+            .filter(species=species, name_normalized=normalize_species_name(name))
+            .first()
+        )
+        created = existing is None
+        if created:
+            user = None if self.is_api_key_request() else request.user
+            existing = SpeciesCommonName.objects.create(
+                species=species,
+                name=name[:255],
+                language="English",
+                # Never preferred: that would demote the name the source designates, which is an
+                # edit to somebody else's row rather than a name of our own.
+                is_preferred=False,
+                source="admin",
+                # A superuser is adding to everybody's vocabulary and knows it.  Anyone else --
+                # and every key -- is adding this club's word for it.  Same rule as a species.
+                approved=bool(user and user.is_superuser),
+                added_by=user,
+                club=club,
+            )
+        return Response(
+            {
+                "created": created,
+                "id": existing.pk,
+                "name": existing.name,
+                "approved": existing.approved,
+                "species": self.serializer_class(species).data,
+            },
+            status=201 if created else 200,
         )
 
 
@@ -24894,6 +25140,10 @@ class SpeciesApproveView(AdminOnlyViewMixin, View):
         if not species.approved:
             species.approved = True
             species.save()
+            # The names arrived with it and are scoped the same way, so they become everybody's at
+            # the same moment.  Without this the species would be on the shared list while the
+            # words people actually type for it stayed private to one club.
+            species.common_names.filter(approved=False).update(approved=True)
             # The genus tier is a statement about siblings, and this row was invisible to the last
             # pass that worked one out.
             Species.recompute_trade_ranks(genus=species.genus)

@@ -1149,7 +1149,20 @@ REST_FRAMEWORK = {
         # per 10 min plus resumes → 30/hour is comfortable while capping abuse.
         "mobile_checkin": "30/hour",
     },
+    # JSON only. DRF's default set also carries the browsable API, which renders any endpoint a
+    # browser asks for as an HTML page built out of the view's own docstring — so opening an API
+    # URL in a tab published our internal notes, class and function names, and a form for every
+    # writable field. None of it is a page anybody here needs: this site's own UI is Django
+    # templates, and an API client sends Accept: application/json. Turned back on below in DEBUG,
+    # where poking at an endpoint in a browser is how you develop one.
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
 }
+
+if DEBUG:
+    REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ]
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": datetime.timedelta(minutes=60),

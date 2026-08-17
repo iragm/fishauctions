@@ -51,8 +51,8 @@
     <div class="form-check">
       <input type="hidden" name="can_look_up_species_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_look_up_species" name="can_look_up_species" {% if form_values.can_look_up_species %}checked{% endif %}>
-      <label class="form-check-label" for="id_can_look_up_species">Can look up species</label>
-      <div class="form-text">Turns a typed name ("yellow lab") into a species from this site's list, the same way the add lot form does. Read-only, and it can't see any club data.</div>
+      <label class="form-check-label" for="id_can_look_up_species">Can use species</label>
+      <div class="form-text">Turns a typed name ("yellow lab") into a species from this site's list, adds new species, and attaches common names to existing species. Newly added species are only visible to your club.</div>
     </div>
   </div>
 <button type="submit" class="btn btn-success"><i class="bi bi-plus-lg"></i> Create key</button>

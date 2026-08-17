@@ -71,7 +71,7 @@ from .models import (
 )
 from .services import clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
-from .species_matching import visible_species
+from .species_matching import species_already_named, split_scientific_name, visible_species
 from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
@@ -5165,22 +5165,11 @@ class SpeciesAdminForm(forms.ModelForm):
             cleaned_data["genus"] = parent.genus
             cleaned_data["species"] = parent.species
         elif typed:
-            parts = typed.split()
-            cleaned_data["genus"] = parts[0].capitalize()[:100]
-            cleaned_data["species"] = " ".join(parts[1:]).lower()[:150]
+            cleaned_data["genus"], cleaned_data["species"] = split_scientific_name(typed)
         else:
             self.add_error("scientific_name_input", "Enter a scientific name, or pick a species to add a strain to.")
             return cleaned_data
-        # Scoped to what this person can see, for both halves of the reason visible_species()
-        # exists: pointing them at a row they cannot open is no help, and telling them a species
-        # already exists when what exists is somebody else's unapproved one leaks it.
-        clash = (
-            visible_species(self.added_by)
-            .filter(
-                genus__iexact=cleaned_data["genus"], species__iexact=cleaned_data["species"], variety__iexact=variety
-            )
-            .first()
-        )
+        clash = species_already_named(cleaned_data["genus"], cleaned_data["species"], variety, user=self.added_by)
         if clash:
             # Not an error to fix by editing the name -- the answer is to go and use the row that
             # already exists, so say where it is.
@@ -5227,6 +5216,11 @@ class SpeciesAdminForm(forms.ModelForm):
                     language="English",
                     is_preferred=(index == 0),
                     source="admin",
+                    # Stamped like the species itself: these names arrived with it, and they
+                    # become everybody's at the same moment it does.  See SpeciesApproveView.
+                    approved=species.approved,
+                    added_by=species.added_by,
+                    club=species.club,
                 )
             Species.recompute_trade_ranks(genus=species.genus)
         return species

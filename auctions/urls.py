@@ -1076,6 +1076,13 @@ urlpatterns = [
         views.ClubSpeciesLookupAPIView.as_view(),
         name="api_club_species_lookup",
     ),
+    # <identifier> is a species id *or* a scientific name -- a caller that just matched free text
+    # has the name and not the id, and looking it up first would be two calls to do one thing.
+    path(
+        "api/v1/clubs/<slug:slug>/species-lookup/<str:identifier>/common-names/",
+        views.ClubSpeciesCommonNameAPIView.as_view(),
+        name="api_club_species_common_names",
+    ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
     path(
         "api/v1/email-routing/donation/",

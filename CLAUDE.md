@@ -121,6 +121,34 @@ auction admin's lot editor (unbounded, because that form has the search-every-sp
 person is an auction admin correcting a lot on purpose), and the language model.
 `SpeciesSearchCache.created_by` records who, because every row is served to every club.
 
+A club's own software reaches all of this through `/api/v1/clubs/<slug>/species-lookup/`, behind
+the single `can_look_up_species` key permission: `GET` matches typed text (≤5 results,
+`total_matches` for the rest, `?category=` by name or `?category_id=` by pk), `POST` on the same
+URL adds a species, and `POST .../<id or scientific name>/common-names/` names one that is already
+there. One permission covers the writes because of what they cannot do — they only ever create,
+and what they create is scoped to the club until a site admin approves it.
+
+**A common name is scoped exactly like a species**: `SpeciesCommonName.approved` / `added_by` /
+`club`, and `visible_common_names()` asks for *both* the species and the name to be visible. It
+has to be, because a name is read ahead of everything else the matcher does — "yellow lab" is
+answered out of that table — so an unscoped one would let a club teach every other club a name for
+the wrong fish. Everything the importers and the CSV write is `approved=True`, which is the
+default, so FishBase's 49,000 names need no migration. Approving a species approves the names that
+came in with it (`SpeciesApproveView` and the admin action, in step); a name added to a species
+that is *already* shared has no species approval to ride on, and its queue is the
+`SpeciesCommonName` page in the Django admin. A name that already names a different visible
+species is refused (`species_carrying_common_name`) — one name on two species is the loss of a
+name, not the gain of one.
+
+The language model runs on **every** club-API lookup the database could not answer — that is what
+the endpoint is for — bounded by `SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` (1000, per club, not
+per key) through `species_matching.LLMBudget`. A budget is spent *inside* `llm_match`, at the
+moment of the call, so the free steps cost nothing; `X-Species-LLM-Limit` / `-Remaining` /
+`-Reset` ride on every response, and a lookup that needed the model with nothing left is a 429
+rather than a fabricated "no species". `llm_match` returns `(species, answered)` and only
+`answered` reaches `remember()` — a name the model never actually saw (no provider, no budget,
+a failed call) must never be cached as "not a species" for the whole site.
+
 `Species.trade_rank` (0 = in the hobby, 1 = its genus is, 2 = neither) is what suggestions are
 ordered by. FishBase's own `Aquarium` column is not enough on its own — it files *Chindongo
 saulosi* under "never/rarely" — so the genus gets a say and `in_trade_override` lets a person

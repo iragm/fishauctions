@@ -27,6 +27,7 @@ submitted pk against the same table, so a hand-crafted POST can't smuggle in fre
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 
@@ -236,28 +237,85 @@ def _phrases(normalized):
     return phrases
 
 
-def _rate_limit_key(user):
-    return f"species_llm_{user.pk if user else 'anon'}_{timezone.localtime():%Y%m%d}"
+class LLMBudget:
+    """One named daily allowance of model calls, and what is left of it.
+
+    Spent at the moment a call is about to be made -- inside :func:`llm_match`, past the exact,
+    cache and search steps -- and never merely because a request arrived.  That distinction is the
+    whole point of the class: a caller doing ten thousand lookups a day that the database answers
+    for free has spent nothing, and must not be told it is out of budget.
+
+    The day is part of the cache key, so the allowance rolls over at local midnight without
+    anything having to expire it, and the day it names is the day an operator would name.
+
+    *name* says whose allowance it is.  A user has one (the lot forms), and so does a club (the
+    club API), because a key is a script rather than a person: without a bucket of its own every
+    key on the site would share the single anonymous one and one busy integration would switch the
+    model off for everybody.
+    """
+
+    def __init__(self, name, limit):
+        self.name = name
+        self.limit = limit
+        self.key = f"species_llm_{name}_{timezone.localtime():%Y%m%d}"
+        #: Set once a call has been refused, so a caller can tell "the model found nothing" from
+        #: "the model was never asked".  The club API turns the second into a 429.
+        self.blocked = False
+        #: How many calls this object allowed, which for a single request is "did this one cost
+        #: money".  The club API reports it as the response's ``llm`` field.
+        self.spent = 0
+
+    @classmethod
+    def for_user(cls, user, limit=None):
+        """The budget the lot forms spend.  ``user=None`` is the shared anonymous bucket.
+
+        The default is read here rather than bound as an argument default so that changing
+        :data:`MAX_LLM_CALLS_PER_USER_PER_DAY` actually changes the budget.
+        """
+        return cls(str(user.pk) if user else "anon", MAX_LLM_CALLS_PER_USER_PER_DAY if limit is None else limit)
+
+    @classmethod
+    def for_club(cls, club, limit):
+        return cls(f"club{club.pk}", limit)
+
+    def spend(self):
+        """Consume one unit.  True when the call may proceed.
+
+        ``cache.add`` then ``cache.incr``: one round trip, and no read-modify-write race between
+        two workers handling a bulk-add page's parallel lookups.
+        """
+        cache.add(self.key, 0, timeout=_RATE_LIMIT_WINDOW_SECONDS)
+        try:
+            used = cache.incr(self.key)
+        except ValueError:
+            cache.set(self.key, 1, timeout=_RATE_LIMIT_WINDOW_SECONDS)
+            used = 1
+        if used > self.limit:
+            self.blocked = True
+            return False
+        self.spent += 1
+        return True
+
+    @property
+    def used(self):
+        return cache.get(self.key) or 0
+
+    @property
+    def remaining(self):
+        # Clamped: the counter keeps climbing past the limit, because refusing a call is cheaper
+        # than reading the counter first, and a negative "remaining" would only confuse a caller.
+        return max(0, self.limit - self.used)
+
+    @property
+    def resets_at(self):
+        """Local midnight -- the moment the key's date changes and the allowance starts again."""
+        tomorrow = timezone.localtime() + datetime.timedelta(days=1)
+        return tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def check_rate_limit(user, limit=None):
-    """Consume one unit of *user*'s daily model budget.  True when the call may proceed.
-
-    ``cache.add`` then ``cache.incr``: one round trip, and no read-modify-write race between two
-    workers handling a bulk-add page's parallel lookups.
-
-    The default is read here rather than bound as an argument default so that changing
-    :data:`MAX_LLM_CALLS_PER_USER_PER_DAY` actually changes the budget.
-    """
-    limit = MAX_LLM_CALLS_PER_USER_PER_DAY if limit is None else limit
-    key = _rate_limit_key(user)
-    cache.add(key, 0, timeout=_RATE_LIMIT_WINDOW_SECONDS)
-    try:
-        used = cache.incr(key)
-    except ValueError:
-        cache.set(key, 1, timeout=_RATE_LIMIT_WINDOW_SECONDS)
-        used = 1
-    return used <= limit
+    """Consume one unit of *user*'s daily model budget.  True when the call may proceed."""
+    return LLMBudget.for_user(user, limit).spend()
 
 
 #: Words that wrap a name in a quantity rather than saying anything about the animal.  Stripped
@@ -358,8 +416,72 @@ def visible_species(user=None, club=None):
 
 
 def visible_common_names(user=None, club=None):
-    """:class:`SpeciesCommonName` rows whose species may be offered.  See :func:`visible_species`."""
-    return SpeciesCommonName.objects.filter(_visible(user, club, prefix="species__"))
+    """Common names this caller may be answered with.  See :func:`visible_species`.
+
+    Two conditions, not one: the *species* has to be visible and so does the *name*.  A name is
+    scoped the same way a species is -- by ``approved``, ``added_by`` and ``club`` -- because it is
+    read ahead of everything else the matcher does.  "Yellow lab" is answered out of this table, so
+    a club teaching the site a name for the wrong fish would otherwise be everybody's problem, on
+    a row with no approval step in front of it.
+
+    Everything the importers and the curated CSV wrote is ``approved=True``, which is what keeps
+    FishBase's 49,000 names visible to everybody without a migration having to say so.
+    """
+    return SpeciesCommonName.objects.filter(_visible(user, club, prefix="species__")).filter(_visible(user, club))
+
+
+def split_scientific_name(typed):
+    """``"Ancistrus Cirrhosus"`` -> ``("Ancistrus", "cirrhosus")``.  A genus on its own is fine.
+
+    Asked for as one string rather than two boxes -- nobody types a genus and an epithet into
+    separate fields at a check-in table -- and split here, once, so the form and the club API
+    cannot disagree about what "Ancistrus sp. L183" means.
+    """
+    parts = (typed or "").strip().split()
+    if not parts:
+        return "", ""
+    return parts[0].capitalize()[:100], " ".join(parts[1:]).lower()[:150]
+
+
+def species_already_named(genus, epithet, variety="", user=None, club=None):
+    """The species this name already belongs to, if the caller can see one.  None otherwise.
+
+    Scoped to what the caller may see, for both halves of the reason :func:`visible_species`
+    exists: pointing somebody at a row they cannot open is no help, and answering "that already
+    exists" when what exists is another club's unapproved row leaks it.
+    """
+    return (
+        visible_species(user, club)
+        .filter(genus__iexact=genus, species__iexact=epithet, variety__iexact=variety or "")
+        .first()
+    )
+
+
+def species_carrying_common_name(name, user=None, club=None, exclude=None):
+    """The species this common name already names, ignoring *exclude*.  None if it is free.
+
+    Two places a name can live -- :attr:`Species.common_name`, which is the one designated name,
+    and the :class:`SpeciesCommonName` rows -- so both are asked.
+
+    What it is for is refusing to make an existing name ambiguous.  A name is the strongest signal
+    the matcher has: :func:`exact_matches` answers on it before anything else runs, and one name
+    on two species turns a lookup that used to be ``unambiguous`` into a picklist for every club
+    that could see both.  Adding "guppy" to a second fish is not a new name, it is the loss of an
+    old one, so the answer is to say which species already has it.
+    """
+    normalized = normalize(name)
+    if not normalized:
+        return None
+    designated = visible_species(user, club).filter(common_name_normalized=normalized)
+    carried = visible_common_names(user, club).filter(name_normalized=normalized)
+    if exclude is not None:
+        designated = designated.exclude(pk=exclude.pk)
+        carried = carried.exclude(species=exclude)
+    found = designated.first()
+    if found:
+        return found
+    row = carried.select_related("species").first()
+    return row.species if row else None
 
 
 def exact_matches(text, user=None, club=None):
@@ -733,8 +855,14 @@ def _species_named(scientific_name, user=None, club=None):
     return visible_species(user, club).filter(scientific_name__iexact=name, variety="").first()
 
 
-def llm_match(text, user=None, club=None):
-    """Ask the model to pick one species out of a shortlist.  Returns a Species or None.
+def llm_match(text, user=None, club=None, budget=None):
+    """Ask the model to pick one species out of a shortlist.
+
+    Returns ``(species_or_None, answered)``.  *answered* is what separates "the model looked and
+    says this is not a species" from "the model never ran" -- no provider configured, nothing worth
+    asking about, no budget left, or the call failed.  Only the first of those is worth writing to
+    the shared cache, and the caller decides on this flag: remembering the others would teach every
+    club on the site "not a species" for a name nobody has actually looked at yet.
 
     The shortlist is built from the database by keyword, so this is mostly a ranking problem for
     the model rather than a recall problem, and an id that isn't in the shortlist is discarded
@@ -748,21 +876,25 @@ def llm_match(text, user=None, club=None):
     list is "lab", and whether that shortlists anything at all depends on an ``icontains`` happening
     to hit -- which is luck, not design.  The cost is bounded the same way every other call here is:
     one per name ever, because the answer, including "this is not a species", goes into the cache.
+
+    *budget* is whose daily allowance this call comes out of, defaulting to *user*'s.  The club API
+    passes the club's -- see :class:`LLMBudget`.
     """
     provider = get_provider()
     if not provider.is_configured():
-        return None
+        return None, False
     # Deliberately not the site-wide effort; see REASONING_EFFORT.  Left alone when the deployment
     # has switched it off entirely, which is how an operator says "don't send this parameter".
     if provider.reasoning_effort:
         provider.reasoning_effort = REASONING_EFFORT
     words = keywords(text)
     if not words:
-        return None
+        return None, False
     candidates = _shortlist(words, normalize(text), user=user, club=club)
-    if not check_rate_limit(user):
-        logger.info("Species lookup rate limit reached for %s", user)
-        return None
+    budget = budget or LLMBudget.for_user(user)
+    if not budget.spend():
+        logger.info("Species lookup rate limit reached for %s", budget.name)
+        return None, False
     listing = "\n".join(f"{species.pk}: {species.label}" for species in candidates)
     # Said out loud rather than left as an empty block, so the model reads it as "the list is
     # empty" rather than as a truncated prompt.
@@ -772,7 +904,7 @@ def llm_match(text, user=None, club=None):
     except LLMError:
         logger.info("Species lookup failed for %r", text, exc_info=True)
         _record_usage(user, None, text, "error", success=False)
-        return None
+        return None, False
     raw = result.data.get("id")
     try:
         chosen_pk = int(raw)
@@ -780,11 +912,11 @@ def llm_match(text, user=None, club=None):
         # No id.  It may have named a species instead, which is the shortlist admitting it missed.
         named = _species_named(result.data.get("scientific_name"), user=user, club=club)
         _record_usage(user, result, text, "species" if named else "no_species")
-        return named
+        return named, True
     # Never trust the id: it has to be one we offered.
     chosen = next((species for species in candidates if species.pk == chosen_pk), None)
     _record_usage(user, result, text, "species" if chosen else "no_species")
-    return chosen
+    return chosen, True
 
 
 def remember(text, species, source="llm", user=None):
@@ -809,12 +941,15 @@ def remember(text, species, source="llm", user=None):
     SpeciesSearchCache.objects.update_or_create(search_text=normalized, defaults=defaults)
 
 
-def suggest_species(text, user=None, use_llm=True, category=None, club=None):
+def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None):
     """The one call the views make: a handful of species for a typed lot name.
 
     Returns ``(species_list, source)`` where source is one of ``cache``, ``exact``, ``search``,
     ``llm`` or ``none`` -- the caller shows it for debugging and nothing else.  An empty list is
     a legitimate answer, and the UI turns it into "No species".
+
+    *budget* is whose daily model allowance a call would come out of; the caller keeps the object
+    and can ask it afterwards whether a call was refused.  See :class:`LLMBudget`.
 
     *category* is the category the lot form currently shows, when the caller has one.  It only
     ever re-orders candidates that already matched (see :func:`_rank`), never filters them: the
@@ -861,10 +996,13 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None):
         return found, "search"
 
     if use_llm:
-        chosen = llm_match(text, user=user, club=club)
-        # Remember the miss as well as the hit.  "Sponge filter" should cost one call ever, not
-        # one per club that sells one.
-        remember(text, chosen, source="llm")
+        chosen, answered = llm_match(text, user=user, club=club, budget=budget)
+        # Remember the miss as well as the hit, but only when the model actually answered.
+        # "Sponge filter" should cost one call ever, not one per club that sells one -- and a name
+        # nobody has looked at yet (no model configured, no budget left, the call failed) must not
+        # be written down as "not a species" for every club on the site, forever.
+        if answered:
+            remember(text, chosen, source="llm")
         if chosen:
             return [chosen], "llm"
 

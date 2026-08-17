@@ -2990,9 +2990,9 @@ class ClubAPIKey(models.Model):
     can_look_up_species = models.BooleanField(
         default=False,
         help_text=(
-            "Turn a typed name ('yellow lab') into a species from this site's list, using the same "
-            "matcher the add-lot form uses.  Read-only, and the species list is not club data, but "
-            "it is off unless a club asks for it like every other permission here."
+            'Turns a typed name ("yellow lab") into a species from this site\'s list, add new '
+            "species or attach common names to existing species.  Newly added species are only "
+            "visible to your club."
         ),
     )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -3395,6 +3395,21 @@ class SpeciesCommonName(models.Model):
         "Which list wrote this name.  An importer only ever deletes its own, so a name added here "
         "or in aquarium_species.csv survives the next re-import of FishBase."
     )
+    # Scoped exactly like Species, and for the same reason: a club naming a fish is a club's
+    # opinion until somebody says otherwise.  A name is read *ahead* of everything else the
+    # matcher does -- "yellow lab" is answered by this table -- so one club teaching the site a
+    # name for the wrong fish would be everybody's problem.  Default True because every row the
+    # importers and the curated CSV write is everybody's; what a person or a key adds is not.
+    approved = models.BooleanField(default=True, db_index=True)
+    approved.help_text = "Off means only the person or club that added it is offered it.  Everything imported is on."
+    added_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_added"
+    )
+    added_by.help_text = "Who added this on the site.  Blank for everything the importers loaded."
+    club = models.ForeignKey(
+        "Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_added"
+    )
+    club.help_text = "The club this was added for, when there was an obvious one.  See Species.club."
 
     def save(self, *args, **kwargs):
         self.name_normalized = normalize_species_name(self.name)
