@@ -2387,6 +2387,9 @@ class ClubMember(ContactRecord):
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
                 ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                # our own column needs an update() too: callers soft-delete with
+                # update_fields=["is_deleted"], so the save below would skip it entirely
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
                 self.possible_duplicate_id = None
             # Clear any other members that point to this member as a duplicate
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
@@ -2403,10 +2406,14 @@ class ClubMember(ContactRecord):
             if duplicate:
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
                 ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+                # keep this instance in sync with what update() just wrote, or the caller's next
+                # save() writes the stale value straight back over it
+                self.possible_duplicate = duplicate
             else:
                 if self.possible_duplicate_id:
                     ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
+                self.possible_duplicate = None
 
     def generate_bidder_number(self, save=True):
         """Assign a unique bidder_number scoped to this member's club.
@@ -6647,12 +6654,18 @@ class AuctionTOS(models.Model):
             # using update here avoids recursion because update does not call save()
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
             AuctionTOS.objects.filter(pk=duplicate_instance.pk).update(possible_duplicate=self.pk)
+            # keep this instance in sync with what update() just wrote, or the caller's next save()
+            # writes the stale value straight back over it
+            self.possible_duplicate = duplicate_instance
         else:
             # no duplicate found
-            if self.possible_duplicate:
+            # possible_duplicate_id, not possible_duplicate: a dangling id (the row it pointed at was
+            # deleted by a merge) raises DoesNotExist on attribute access instead of being cleared here.
+            if self.possible_duplicate_id:
                 # remove ourselves from the duplicate if it was previously set
-                AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
+                AuctionTOS.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+                self.possible_duplicate = None
 
         # If the same user already has another AuctionTOS in this auction, keep the older one
         # and merge the newer one (self) into it to prevent duplicates from race conditions or signal re-attaches.
@@ -6851,6 +6864,13 @@ class AuctionTOS(models.Model):
                 action=merge_action,
                 user=user,
             )
+        # possible_duplicate is a self-FK, and the row about to be deleted is usually the one self is
+        # flagged against - that flag is how an admin finds a merge in the first place. The delete
+        # below SET_NULLs the column in the database, but not on this in-memory copy of self, so
+        # clear it here: callers (the merge review form) save self afterwards, and writing the
+        # dangling id back is a foreign key error.
+        if self.possible_duplicate_id == duplicate.pk:
+            self.possible_duplicate = None
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 

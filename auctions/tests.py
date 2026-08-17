@@ -16160,6 +16160,25 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.online_tos.merge_duplicate(self.duplicate_tos)
         self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
 
+    def test_merge_duplicate_clears_possible_duplicate_link(self):
+        """The kept record must not be left pointing at the deleted duplicate, in the database or in memory.
+
+        possible_duplicate is a self-FK, so a stale value here becomes a dangling id: the database
+        gets it right via SET_NULL, but this instance keeps the old id and the caller's next save()
+        writes it back, which MariaDB rejects with a foreign key error.
+        """
+        duplicate_pk = self.duplicate_tos.pk
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=duplicate_pk)
+        AuctionTOS.objects.filter(pk=duplicate_pk).update(possible_duplicate=self.online_tos.pk)
+        self.online_tos.refresh_from_db()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        self.assertIsNone(self.online_tos.possible_duplicate_id)
+        self.online_tos.save()  # raises IntegrityError if the deleted id gets written back
+        self.online_tos.refresh_from_db()
+        # save() may re-flag this record against some other live record; it must never point at the
+        # row the merge just deleted.
+        self.assertNotEqual(self.online_tos.possible_duplicate_id, duplicate_pk)
+
     def test_merge_duplicate_creates_auction_history(self):
         """Merging should create an AuctionHistory entry attributed to system"""
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
@@ -16380,6 +16399,36 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         # The source's won lot moved to the kept target (not lost to a backwards auto-merge).
         won_lot.refresh_from_db()
         self.assertEqual(won_lot.auctiontos_winner, self.online_tos)
+
+    def test_merge_review_when_the_two_records_are_flagged_as_duplicates(self):
+        """Merging two records that point at each other via possible_duplicate must not 500.
+
+        Regression: this is the normal path in from the duplicate review list, so both rows have
+        possible_duplicate set to the other. Deleting the source SET_NULLs the kept row in the
+        database but not the in-memory instance the review form saves, so saving the reviewed
+        fields wrote the deleted id back and raised IntegrityError (1452).
+        """
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=self.source_tos.pk)
+        AuctionTOS.objects.filter(pk=self.source_tos.pk).update(possible_duplicate=self.online_tos.pk)
+        url = reverse("auctiontosdelete", kwargs={"pk": self.source_tos.pk}) + "?action=merge"
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "step": "review",
+                "target": str(self.online_tos.pk),
+                "name": "Merged Winner",
+                "email": "updated@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+                "pickup_location": self.location.pk,
+            },
+        )
+        self.assertRedirects(response, reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.name, "Merged Winner")
+        self.assertIsNone(self.online_tos.possible_duplicate_id)
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
 
 
 class LotImageManagementTests(StandardTestCase):
