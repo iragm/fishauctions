@@ -5164,6 +5164,8 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubMemberBapAwardAPIView": _EXTERNAL_API,
     "ClubMemberListCreateAPIView": _EXTERNAL_API,
     "ClubMemberRenewAPIView": _EXTERNAL_API,
+    "ClubSpeciesCommonNameAPIView": _EXTERNAL_API,
+    "ClubSpeciesLookupAPIView": _EXTERNAL_API,
     "PickupLocationsDelete": _DESTRUCTIVE,
     # Us
     "CommandPaletteAssistView": _PALETTE,
