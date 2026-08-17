@@ -149,6 +149,32 @@ class DonationRoutingTests(DonationTestMixin, TestCase):
         self.assertTrue(self.vendor.routing_key.isdigit())
         self.assertNotEqual(self.vendor.routing_key, other.routing_key)
 
+    @override_settings(**ROUTING_SETTINGS)
+    def test_the_resolve_endpoint_passes_the_donation_kind_through(self):
+        """The seam the Lambda actually reads.
+
+        ``resolve_routing_info`` marking an address as a donation is worth nothing if the view in
+        front of it drops the flag: the Lambda decides *both* whether to post the body back here
+        and whether an empty recipient means "forward to nobody" from this one field.  Without it
+        no vendor reply is ever recorded, and a club with no donation contact has its vendors'
+        replies forwarded to the site's fallback inbox instead.
+        """
+        url = reverse("inbound_email_routing")
+        address = f"{self.club.slug}-donations-{self.vendor.routing_key}"
+        response = self.client.get(url, {"address": address}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "donation")
+        self.assertEqual(payload["vendor_key"], self.vendor.routing_key)
+        self.assertEqual(payload["recipient"], "")
+
+    @override_settings(**ROUTING_SETTINGS)
+    def test_the_resolve_endpoint_leaves_kind_off_ordinary_aliases(self):
+        url = reverse("inbound_email_routing")
+        response = self.client.get(url, {"address": "info"}, HTTP_X_ROUTING_SECRET="test-secret")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("kind", response.json())
+
 
 @isolated_cache("donations")
 @override_settings(**ROUTING_SETTINGS)

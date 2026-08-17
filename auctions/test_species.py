@@ -40,6 +40,7 @@ from auctions.species_matching import (
     normalize,
     search_matches,
     singularize,
+    strip_quantity,
     suggest_species,
 )
 from auctions.test_support import isolated_cache
@@ -387,6 +388,21 @@ class SpeciesOnLotFormsTests(StandardTestCase):
 
         form = quick_add_lot_form_class()(auction=self.online_auction, is_admin=False, tos=self.online_tos)
         self.assertFalse(form.fields["species"].widget.is_hidden)
+
+    def test_the_bulk_form_has_no_search_box(self):
+        """Deliberately not on the bulk pages: there is already a great deal on a row there, and a
+        lot added in bulk is corrected afterwards on a form that does have it."""
+        from auctions.forms import quick_add_lot_form_class
+
+        form = quick_add_lot_form_class()(auction=self.online_auction, is_admin=False, tos=self.online_tos)
+        self.assertNotIn("data-species-search", str(form["species"]))
+
+    def test_the_admin_lot_form_has_a_search_box(self):
+        """An auction admin fixing a wrong species is the whole reason this exists."""
+        from auctions.forms import EditLot
+
+        form = EditLot(auction=self.online_auction, lot=self.lot, user=self.user)
+        self.assertIn("data-species-search", str(form["species"]))
 
     def test_the_widget_only_renders_the_chosen_option(self):
         """139k options in every lot form would be megabytes of HTML; the rest arrive over ajax."""
@@ -978,6 +994,9 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         body = response.content.decode()
         self.assertIn('id="id_species"', body)
         self.assertIn("FishBase", body)
+        # The escape hatch.  Everything in the picker comes from the lot name, so without a way to
+        # search the list by hand a name the matcher can't place has no reachable species at all.
+        self.assertIn("data-species-search", body)
 
     def test_the_auction_info_endpoint_says_whether_to_show_it(self):
         """What lets the dropdown re-hide the picker without a page reload."""
@@ -1219,6 +1238,49 @@ class SpeciesGapsViewTests(StandardTestCase):
         self.lot.save()
         self.client.login(username="species_admin", password="testpassword")
         self.assertNotIn("10 pair", self.client.get(self.url).content.decode())
+
+    def test_a_remembered_species_is_listed_too(self):
+        """The half of the cache that used to be invisible.
+
+        A remembered *wrong* species is worse than a remembered "no": it is served ahead of the
+        token search, to every club, and it ends up on a printed label and in a breeder award.
+        The page only ever listed the "not a species" rows, so there was nowhere on the site a
+        wrong one could be seen.
+        """
+        species = make_species("Caridina", "multidentata", "Amano shrimp")
+        SpeciesSearchCache.objects.create(search_text="blue dream shrimp", species=species, source="user")
+        self.client.login(username="species_admin", password="testpassword")
+        body = self.client.get(self.url).content.decode()
+        self.assertIn("Caridina multidentata", body)
+        self.assertIn("Look it up again", body)
+
+
+class SpeciesSearchCacheForgetTests(StandardTestCase):
+    """Undoing a remembered answer, which before this had to be done in the Django admin."""
+
+    def setUp(self):
+        super().setUp()
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.row = SpeciesSearchCache.objects.create(
+            search_text="angelfish", species=make_species("Holacanthus", "bermudensis"), source="user"
+        )
+        self.url = reverse("species_cache_forget", kwargs={"pk": self.row.pk})
+
+    def test_admins_only(self):
+        self.client.login(username="my_lot", password="testpassword")
+        self.assertEqual(self.client.post(self.url).status_code, 302)
+        self.assertTrue(SpeciesSearchCache.objects.filter(pk=self.row.pk).exists())
+
+    def test_forgetting_lets_the_matcher_answer_again(self):
+        self.client.login(username="species_admin", password="testpassword")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SpeciesSearchCache.objects.filter(pk=self.row.pk).exists())
+
+    def test_get_does_not_delete(self):
+        self.client.login(username="species_admin", password="testpassword")
+        self.client.get(self.url)
+        self.assertTrue(SpeciesSearchCache.objects.filter(pk=self.row.pk).exists())
 
 
 class SpeciesCreateViewTests(StandardTestCase):
@@ -1608,6 +1670,89 @@ class SpeciesBreederPointsFlagTests(StandardTestCase):
         self.assertFalse(strain.earns_breeder_points)
 
 
+@isolated_cache("species-quantity")
+class QuantityInLotNamesTests(StandardTestCase):
+    """ "6 guppies" is the commonest shape a lot name comes in, and it used to find nothing.
+
+    exact_matches asks whether the *whole* typed name is a species name, so a leading count killed
+    it; and the search step could not rescue it either, because its common-name rule needs a
+    two-word phrase and "guppy" is one word.  Between them the single most common phrasing on the
+    site had no answer at all while the same name without the count worked.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.cardinal = make_species("Paracheirodon", "axelrodi", "Cardinal tetra")
+
+    def test_a_leading_count_is_ignored(self):
+        found, source = suggest_species("6 guppies", use_llm=False)
+        self.assertEqual(list(found), [self.guppy])
+        self.assertEqual(source, "exact")
+
+    def test_a_count_and_a_plural_together(self):
+        found, _ = suggest_species("20 cardinal tetras", use_llm=False)
+        self.assertEqual(list(found), [self.cardinal])
+
+    def test_quantity_words_at_either_end(self):
+        for name in ("trio of guppies", "guppy pair", "lot of 3 guppies", "guppies x 6"):
+            with self.subTest(name=name):
+                found, _ = suggest_species(name, use_llm=False)
+                self.assertEqual(list(found), [self.guppy], name)
+
+    def test_it_never_reaches_into_the_middle_of_a_name(self):
+        """The cultivars are spelled out of ordinary adjectives; trimming inside would break them."""
+        self.assertEqual(strip_quantity("blue dream shrimp"), "blue dream shrimp")
+        self.assertEqual(strip_quantity("mickey mouse platy"), "mickey mouse platy")
+
+    def test_hardware_still_answers_nothing(self):
+        """The counts come off equipment names too; that must not turn one into a species."""
+        for name in ("10 gallon tank", "5 gallon bucket", "2 sponge filters", "bag of gravel"):
+            with self.subTest(name=name):
+                found, _ = suggest_species(name, use_llm=False)
+                self.assertEqual(list(found), [], name)
+
+    def test_a_name_that_is_only_a_count_is_not_a_species(self):
+        self.assertEqual(strip_quantity("6"), "")
+        found, source = suggest_species("6", use_llm=False)
+        self.assertEqual(list(found), [])
+        self.assertEqual(source, "none")
+
+
+@isolated_cache("species-habitat")
+class FreshwaterRankingTests(StandardTestCase):
+    """FishBase's habitat columns, used for the job the model comment says they were kept for.
+
+    trade_rank cannot separate a reef angelfish from a freshwater one -- both are flagged for the
+    aquarium trade -- so "Angelfish" answered with marine angelfish and never offered
+    *Pterophyllum scalare* at all.
+    """
+
+    def test_a_freshwater_species_outranks_a_marine_one_sharing_a_name(self):
+        marine = make_species("Holacanthus", "bermudensis", "Angelfish", aquarium_use="commercial")
+        marine.saltwater = True
+        marine.save()
+        fresh = make_species("Pterophyllum", "scalare", "Freshwater angelfish", ["Angelfish"])
+        fresh.freshwater = True
+        fresh.save()
+        found, _ = suggest_species("angelfish", use_llm=False)
+        self.assertEqual(list(found)[0], fresh, "the freshwater fish has to come first")
+        self.assertIn(marine, found, "the marine one is still offered, just not first")
+
+    def test_the_lots_category_still_wins_over_habitat(self):
+        """Habitat is only a tie-break, and it sits below the category the lot already looks like."""
+        marine_category = Category.objects.create(name="Marine")
+        marine = make_species("Holacanthus", "bermudensis", "Angelfish", aquarium_use="commercial")
+        marine.saltwater = True
+        marine.category = marine_category
+        marine.save()
+        fresh = make_species("Pterophyllum", "scalare", "Freshwater angelfish", ["Angelfish"])
+        fresh.freshwater = True
+        fresh.save()
+        found, _ = suggest_species("angelfish", use_llm=False, category=marine_category.pk)
+        self.assertEqual(list(found)[0], marine)
+
+
 class NormalizedCommonNameTests(StandardTestCase):
     """A fifth of FishBase's common names carry punctuation the query has already had stripped."""
 
@@ -1622,9 +1767,22 @@ class NormalizedCommonNameTests(StandardTestCase):
         self.assertEqual(species.common_name_normalized, "agassizs corydoras")
         self.assertEqual(list(exact_matches("Agassiz's corydoras")), [species])
 
-    def test_a_hyphenated_name_is_reachable_as_a_phrase(self):
+    def test_a_hyphenated_name_with_a_count_is_reached_exactly(self):
+        """ "3 black-banded leporinus" is the whole name plus a count, so it never reaches search.
+
+        strip_quantity() takes the count off before exact_matches asks its question, which is why
+        this answers by the most trustworthy route rather than by phrase matching.  The hyphen is
+        the other half: normalize() turns it into a space on both sides of the lookup.
+        """
         species = make_species("Leporinus", "fasciatus", "Black-banded leporinus")
         found, source = suggest_species("3 black-banded leporinus", use_llm=False)
+        self.assertEqual(list(found), [species])
+        self.assertEqual(source, "exact")
+
+    def test_a_hyphenated_name_is_reachable_as_a_phrase(self):
+        """The same name buried in a longer one, where only phrase matching can find it."""
+        species = make_species("Leporinus", "fasciatus", "Black-banded leporinus")
+        found, source = suggest_species("black-banded leporinus wild caught", use_llm=False)
         self.assertEqual(list(found), [species])
         self.assertEqual(source, "search")
 

@@ -70,13 +70,19 @@ function setScientificName(enabled) {
   asking the user as well is asking them to confirm something we already know.  The field is only
   hidden, never removed: it still posts, it is still what lot search and BAP points read, and it
   comes straight back for a sponge filter or a mixed bag, where no species can be identified.
+
+  Hidden only when the species actually *answers* the question.  Species.category is mapped from
+  the family onto whatever categories a site's admins happen to have created
+  (species_categories.py), so on a site whose category names it doesn't recognise every species
+  maps to nothing -- and hiding the picker there took the control away and gave nothing back,
+  landing every lot with a species in Uncategorized with no way to fix it.
 {% endcomment %}
 function setCategoryVisibility() {
     var speciesChosen = auctionUsesScientificName && !!$('#id_species').val();
-    $('#div_id_species_category').closest('.col-md-12').toggle(auctionUsesCategories && !speciesChosen);
     // Say where the lot ended up rather than just making the field disappear.  speciesCategories
     // is filled in by the suggestions endpoint, which knows each species' category.
     var derived = speciesChosen && auctionUsesCategories ? speciesCategories[$('#id_species').val()] : '';
+    $('#div_id_species_category').closest('.col-md-12').toggle(auctionUsesCategories && !derived);
     $('#derived-category').text(derived ? 'Category: ' + derived : '');
 }
 

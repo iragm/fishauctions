@@ -70,16 +70,50 @@
         <td class="small text-muted">{{ row.get_source_display }}</td>
         <td class="text-end">
           <a class="btn btn-sm btn-outline-secondary" href="{% url 'species_create' %}?lot_name={{ row.search_text|urlencode }}">Add species</a>
+          <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Look it up again</button>
+          </form>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+{% endif %}
+
+{% if mappings %}
+<h4 class="mt-4">Names the matcher has already decided</h4>
 <p class="text-muted small">
-  To make one of these look the name up again instead, delete its row in
-  <a href="/admin/auctions/speciessearchcache/">the species name cache</a>.
+  {% comment %}The half of the cache that used to be invisible.  A remembered wrong species is worse than a remembered "no": it is served ahead of the token search, to every club, and it ends up on a printed label and in a breeder award.{% endcomment %}
+  These answers are served straight back without looking anything up, for every club, and they are
+  written by the lot forms as well as by the language model &mdash; so a seller who picked the wrong
+  species once taught the whole site. Check the ones with a lot of hits; &ldquo;Look it up
+  again&rdquo; throws the answer away and lets the matcher work the name out from scratch.
 </p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Name</th><th>Answers with</th><th class="text-end">Times served</th><th>Decided by</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in mappings %}
+      <tr>
+        <td>{{ row.search_text }}</td>
+        <td><i>{{ row.species.full_scientific_name }}</i>{% if row.species.common_name %} <span class="text-muted small">({{ row.species.common_name }})</span>{% endif %}</td>
+        <td class="text-end">{{ row.hits }}</td>
+        <td class="small text-muted">{{ row.get_source_display }}</td>
+        <td class="text-end">
+          <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Look it up again</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
 
 <a class="btn btn-success mt-2" href="{% url 'species_create' %}">Add a species</a>

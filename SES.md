@@ -61,7 +61,7 @@ Lambda → *Configuration* → *Environment variables*:
 | `INBOUND_ROUTING_SECRET` | *(see below)* | Must match `INBOUND_ROUTING_SECRET` in Django `.env` |
 | `RELAY_SENDER` | `relay@yourdomain.com` | Address used as From when forwarding |
 | `RELAY_DISPLAY_NAME` | `Club Relay` | Display name in forwarded From field (optional) |
-| `FALLBACK_RECIPIENT` | `info@yourdomain.com` | Where to send mail if Django is unreachable |
+| `FALLBACK_RECIPIENT` | `info@yourdomain.com` | Where to send mail if Django is unreachable. Note this is normally an address on the same domain SES receives for, so the forward comes back in through the Lambda — the loop guard below is what stops that repeating |
 | `RELAY_CONFIGURATION_SET` | `fishauctions-prod` | SES configuration set for relay sends (optional — omit unless your account enforces one; if you see `ConfigurationSetDoesNotExist` errors, either set this or clear the account-level default in SES → Account dashboard) |
 
 **Generate the secret** — use a minimum 40-character random string:
@@ -117,6 +117,49 @@ _DROP = object()
 # Auto-reply header values that should cause a message to be dropped.
 # Forwarding auto-replies back to senders causes mail loops and annoys people.
 _AUTOREPLY_AUTO_SUBMITTED = {"auto-replied", "auto-generated", "auto-notified"}
+
+# Loop guard.  FALLBACK_RECIPIENT is normally an address on the same domain SES
+# receives for, so a forward to it comes straight back in through this Lambda.
+# When Django is unreachable every pass resolves to the fallback again and the
+# message ping-pongs until somebody notices the SES bill.  Every forward carries
+# a hop count; past this many, drop.
+_HOP_HEADER = "X-Club-Relay-Hops"
+_MAX_HOPS = 3
+
+# SES scans inbound mail before it ever reaches us and puts the result in the
+# notification.  Relaying a FAIL out of our own DKIM-signed domain is how a
+# domain's sending reputation dies, so these are dropped rather than forwarded.
+_VERDICTS_TO_DROP = ("spamVerdict", "virusVerdict")
+
+
+def failed_verdict(notification):
+    """Return the name of the SES scan this message failed, or None."""
+    receipt = notification.get("receipt") or {}
+    for name in _VERDICTS_TO_DROP:
+        if (receipt.get(name) or {}).get("status") == "FAIL":
+            return name
+    return None
+
+
+def is_valid_recipient(address):
+    """True if *address* is safe to put in a header and hand to SES.
+
+    Django is trusted, but it is still a remote service answering over the network, and
+    ``msg["To"] = value`` does no validation: a value with a newline in it would be written
+    straight into the message as a second header.  One cheap check closes that off.
+    """
+    address = (address or "").strip()
+    if not address or "@" not in address:
+        return False
+    return not any(char in address for char in "\r\n,;")
+
+
+def hop_count(msg):
+    """How many times this message has already been through the relay."""
+    try:
+        return int((msg.get(_HOP_HEADER) or "0").strip())
+    except ValueError:
+        return 0
 
 
 def is_autoreply(msg):
@@ -274,10 +317,23 @@ def prefix_subject(msg, display_name):
 
 
 def lambda_handler(event, context):
+    """Handle every record SNS delivered.  One is the normal case; batches are allowed."""
+    results = [handle_record(record) for record in event.get("Records") or []]
+    if len(results) == 1:
+        return results[0]
+    return {"status": "batch", "results": results}
+
+
+def handle_record(record):
     # SES delivers the full email (headers + body) via SNS for messages ≤ 150 KB.
     # Larger messages are truncated by SNS and won't have a usable body.
-    record = event["Records"][0]
     notification = json.loads(record["Sns"]["Message"])
+
+    # SES already scanned this.  Don't relay what it flagged.
+    verdict = failed_verdict(notification)
+    if verdict:
+        print(f"[ses-router] dropping message that failed {verdict}")
+        return {"status": "dropped", "reason": verdict}
 
     raw_content = notification.get("content")
     if not raw_content:
@@ -307,6 +363,15 @@ def lambda_handler(event, context):
         print(f"[ses-router] dropping autoreply from {msg.get('From', '?')!r}")
         return {"status": "dropped", "reason": "autoreply"}
 
+    # Our own forward, arriving back through the MX.  Either FALLBACK_RECIPIENT is an
+    # address this domain receives for (it usually is) or two aliases point at each
+    # other; both are loops, and both are silent until the bill arrives.
+    hops = hop_count(msg)
+    _, from_addr = email.utils.parseaddr(msg.get("From", ""))
+    if from_addr.strip().lower() == RELAY_SENDER.strip().lower() or hops >= _MAX_HOPS:
+        print(f"[ses-router] dropping relay loop from {from_addr!r} after {hops} hop(s)")
+        return {"status": "dropped", "reason": "relay loop"}
+
     # Determine which alias received the message.
     # Prefer the envelope destination from SES metadata — more reliable than
     # the To header, which may be absent (BCC) or contain a different address.
@@ -335,6 +400,10 @@ def lambda_handler(event, context):
     if forward_to is _DROP:
         print(f"[ses-router] dropping message to unrecognised alias: {to_addr!r}")
         return {"status": "dropped", "reason": "unknown alias"}
+    # An empty recipient is only ever a real answer for a donation address (below).
+    if forward_to and not is_valid_recipient(forward_to):
+        print(f"[ses-router] dropping unusable recipient {forward_to!r} for {to_addr!r}")
+        return {"status": "dropped", "reason": "invalid recipient"}
 
     # Donation vendor replies are recorded on the site as well as (optionally) forwarded. Post
     # before the headers below are rewritten, so Django sees the vendor's own From address.
@@ -356,6 +425,7 @@ def lambda_handler(event, context):
     del msg["To"]
     del msg["From"]
     del msg["Reply-To"]
+    del msg[_HOP_HEADER]
     while "DKIM-Signature" in msg:
         del msg["DKIM-Signature"]
     msg["To"] = forward_to
@@ -365,6 +435,8 @@ def lambda_handler(event, context):
     # This suppresses out-of-office autoreplies from the forwarding recipient.
     msg["Auto-Submitted"] = "auto-forwarded"
     msg["X-Auto-Response-Suppress"] = "All"
+    # Survives the round trip if this forward comes back in through the MX; see _MAX_HOPS.
+    msg[_HOP_HEADER] = str(hops + 1)
 
     send_kwargs = {
         "Source": RELAY_SENDER,
@@ -381,6 +453,9 @@ def lambda_handler(event, context):
         # Attempt fallback delivery if the primary recipient wasn't already the fallback.
         if forward_to != FALLBACK_RECIPIENT:
             try:
+                # del first: assigning to a header that is already set *appends* a second
+                # one, and the recipient would see the address they were forwarded for.
+                del msg["To"]
                 msg["To"] = FALLBACK_RECIPIENT
                 SES.send_raw_email(
                     Source=RELAY_SENDER,
@@ -489,7 +564,12 @@ Once `POST_OFFICE_EMAIL_BACKEND=django_ses.SESBackend` and `SITE_DOMAIN` are set
 3. Send to `yourclub-contact@yourdomain.com` — same check
 4. Send to an unknown alias — confirm it is silently dropped (no bounce, nothing in your inbox)
 5. With donation tracking on, reply to a donation request and confirm the reply appears in the vendor's panel under Donation Tracking
-5. Check Lambda *Monitor* → *Logs* in CloudWatch for any errors
+6. Stop Django (or point `DJANGO_API_URL` at a dead host) and send to an unknown club alias — confirm CloudWatch shows **one** delivery to `FALLBACK_RECIPIENT` followed by a `relay loop` drop, not a stream of them
+7. Check Lambda *Monitor* → *Logs* in CloudWatch for any errors
+
+> **Already running an older copy of the handler?** Re-paste it. The version above adds the
+> spam/virus verdict check and the `X-Club-Relay-Hops` loop guard; without them a Django outage
+> can put the relay into a self-sustaining mail loop.
 
 ---
 
@@ -514,6 +594,17 @@ SNS Topic ──► Lambda
                 ├─ 404: drop silently (unknown alias)
                 └─ error/timeout: forward to FALLBACK_RECIPIENT
 ```
+
+Dropped before any of that happens:
+
+- anything SES's own scan marked `spamVerdict: FAIL` or `virusVerdict: FAIL`. Relaying those
+  out of your DKIM-signed domain is how a sending reputation dies.
+- anything sent *from* `RELAY_SENDER`, or carrying `X-Club-Relay-Hops: 3` or more. Every forward
+  increments that header. `FALLBACK_RECIPIENT` is normally an address on the same domain SES
+  receives for, so while Django is down each forward to it arrives back at the Lambda, resolves
+  to the fallback again, and would otherwise ping-pong indefinitely at SES's per-message price.
+- a recipient Django returned that isn't a usable single address (no `@`, or containing a newline
+  or a comma). `msg["To"] = value` does no validation of its own.
 
 Recognised alias patterns:
 

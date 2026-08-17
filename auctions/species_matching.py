@@ -201,6 +201,52 @@ def check_rate_limit(user, limit=None):
     return used <= limit
 
 
+#: Words that wrap a name in a quantity rather than saying anything about the animal.  Stripped
+#: only from the *ends* of a lot name, never from the middle: "blue dream shrimp" is a cultivar's
+#: name and two thirds of it are in :data:`settings.IGNORE_WORDS`.
+_QUANTITY_WORDS = {
+    "x",
+    "of",
+    "pair",
+    "pairs",
+    "trio",
+    "trios",
+    "group",
+    "groups",
+    "lot",
+    "lots",
+    "bag",
+    "bags",
+    "pack",
+    "packs",
+    "qty",
+    "each",
+    "assorted",
+    "mixed",
+}
+
+
+def strip_quantity(normalized):
+    """``"6 guppies"`` -> ``"guppies"``.  The commonest shape a lot name comes in.
+
+    ``exact_matches`` asks whether the *whole* typed name is a species name, so a leading count
+    stopped it dead: "guppies" found the guppy and "6 guppies" found nothing at all, and the
+    search step could not save it either -- its common-name rule needs a two-word phrase, and
+    "guppy" is one word.  Between them that left the single most common phrasing on the site with
+    no answer.
+
+    Only the ends are trimmed, and only counts and quantity words.  Anything that touched the
+    middle of a name would break the cultivars, where the strain is spelled out of ordinary
+    adjectives: *Neocaridina davidi* 'Blue Dream' is reached by typing "blue dream shrimp".
+    """
+    words = normalized.split()
+    while words and (words[0].isdigit() or words[0] in _QUANTITY_WORDS):
+        words.pop(0)
+    while words and (words[-1].isdigit() or words[-1] in _QUANTITY_WORDS):
+        words.pop()
+    return " ".join(words)
+
+
 def exact_matches(text):
     """Species whose scientific name or one of whose common names *is* the typed text.
 
@@ -211,9 +257,16 @@ def exact_matches(text):
     normalized = normalize(text)
     if not normalized:
         return []
-    # "Guppies" and "Guppy" are the same request; the list only ever holds the singular.
-    words = normalized.split()
-    candidates = {normalized, " ".join(words[:-1] + [singularize(words[-1])])}
+    # "Guppies" and "Guppy" are the same request; the list only ever holds the singular.  The
+    # quantity-stripped form is asked for as well, so "6 guppies" and "guppies" agree -- see
+    # strip_quantity().  A set, so a name with no count in it costs nothing extra.
+    candidates = set()
+    for form in (normalized, strip_quantity(normalized)):
+        if not form:
+            continue
+        words = form.split()
+        candidates.add(form)
+        candidates.add(" ".join(words[:-1] + [singularize(words[-1])]))
     # Separate indexed lookups rather than one join with a CASE ordering: on 139k species and 75k
     # common names the join plan was the single slowest thing in a lookup, and running them in
     # order of how much each one means is also how the results get ranked.
@@ -232,10 +285,15 @@ def exact_matches(text):
     # punctuation of their own -- so "Ram's horn snail" is only reachable through this column.
     for species in Species.objects.filter(common_name_normalized__in=candidates)[:MAX_SUGGESTIONS]:
         found.setdefault(species.pk, species)
+    # Ordered before the slice, for the same reason every other LIMIT in this module is: a name
+    # like "Angelfish" is carried by thirty-odd species, and an unordered fifteen of them is how
+    # the freshwater one -- the only one a freshwater club is selling -- ends up not being offered
+    # at all.  Habitat before trade rank because a reef fish is flagged for the aquarium trade
+    # just as firmly as a freshwater one, so trade_rank alone cannot tell them apart.
     common_names = (
         SpeciesCommonName.objects.filter(name_normalized__in=candidates)
         .select_related("species")
-        .order_by("-is_preferred")[: MAX_SUGGESTIONS * 3]
+        .order_by("-is_preferred", "-species__freshwater", "species__trade_rank")[: MAX_SUGGESTIONS * 3]
     )
     for common in common_names:
         found.setdefault(common.species_id, common.species)
@@ -255,12 +313,19 @@ def _trade_first(queryset, prefix=""):
 def _rank(species_list, category=None):
     """Move the likeliest candidates to the front, without disturbing anything else.
 
-    Two preferences, in this order:
+    Three preferences, in this order:
 
     1. **The category the lot already looks like.**  Only ever a re-ordering -- a category is a
        guess made from the lot's *name*, so letting it exclude a species would be one guess
        silently overruling the species list.
-    2. **Whether anyone keeps this fish**, in the three steps of
+    2. **Whether it lives in fresh water.**  FishBase's habitat columns are on the model for
+       exactly this -- "there are freshwater and saltwater fish called perch" -- and until this
+       used them, "Angelfish" answered with five marine angelfish and never offered *Pterophyllum
+       scalare*, because a reef fish is flagged for the aquarium trade just as firmly as a
+       freshwater one and :attr:`Species.trade_rank` therefore cannot separate them.  It sits
+       *below* the category so a club that really is selling marine fish still gets its own answer
+       first, and it is only ever a tie-break: an exact match on "Emperor angelfish" is unaffected.
+    3. **Whether anyone keeps this fish**, in the three steps of
        :attr:`Species.trade_rank`.  FishBase carries 36,000 species and about 3,500 of them are
        flagged as aquarium fish; when a name is shared, the one being sold at a fish club is
        overwhelmingly the one in the hobby.
@@ -274,6 +339,7 @@ def _rank(species_list, category=None):
         species_list,
         key=lambda species: (
             not (category_pk and species.category_id == category_pk),
+            not species.freshwater,
             species.trade_rank,
         ),
     )

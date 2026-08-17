@@ -105,6 +105,68 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
 NO_SPECIES_LABEL = "No species"
 
 
+#: The manual search that sits under the picker.  One script for the whole page however many
+#: pickers are on it, so it is delegated and guarded by a flag rather than emitted per widget.
+#: Results come from ``species-autocomplete`` -- the same endpoint the "strain of" field uses --
+#: with ``varieties=1``, because a strain ("Blue Dream", "Halfmoon") is exactly the sort of thing
+#: somebody falls back to searching for.  Picking one appends it to the ``<select>`` and selects
+#: it, so the posted value is still a pk out of the Species table and validation is unchanged.
+SPECIES_SEARCH_SCRIPT = """
+<script>
+if (!window.speciesSearchWired) {
+  window.speciesSearchWired = true;
+  (function () {
+    var timer = null;
+    function results(box) { return box.querySelector('[data-species-search-results]'); }
+    function run(box) {
+      var query = box.querySelector('input').value.trim();
+      var list = results(box);
+      if (query.length < 3) { list.innerHTML = ''; return; }
+      $.getJSON('/api/species-autocomplete/', {q: query, varieties: '1'}, function (data) {
+        var rows = (data && data.results) || [];
+        list.innerHTML = '';
+        if (!rows.length) {
+          list.innerHTML = '<div class="list-group-item text-muted small">No species found</div>';
+          return;
+        }
+        rows.slice(0, 20).forEach(function (row) {
+          var item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'list-group-item list-group-item-action py-1 small';
+          item.textContent = row.text;
+          item.dataset.speciesId = row.id;
+          list.appendChild(item);
+        });
+      });
+    }
+    $(document).on('input', '[data-species-search] input', function () {
+      var box = this.closest('[data-species-search]');
+      clearTimeout(timer);
+      timer = setTimeout(function () { run(box); }, 250);
+    });
+    $(document).on('click', '[data-species-search-results] button', function () {
+      var box = this.closest('[data-species-search]');
+      var select = document.getElementById(box.dataset.speciesSearch);
+      if (!select) { return; }
+      if (!select.querySelector('option[value="' + this.dataset.speciesId + '"]')) {
+        var option = document.createElement('option');
+        option.value = this.dataset.speciesId;
+        option.textContent = this.textContent;
+        select.appendChild(option);
+      }
+      select.value = this.dataset.speciesId;
+      // Marks it as a person's choice, so a later lot-name edit can't quietly replace it.
+      select.dataset.userChosen = '1';
+      $(select).trigger('change');
+      results(box).innerHTML = '';
+      box.querySelector('input').value = '';
+    });
+  })();
+}
+</script>
+"""
+
+
 class SpeciesSelect(forms.Select):
     """A ``<select>`` that renders only the option already chosen, plus "No species".
 
@@ -116,7 +178,18 @@ class SpeciesSelect(forms.Select):
     This is a rendering trick only.  The field is still an ordinary ``ModelChoiceField`` over the
     whole table, so validation is unchanged: a posted pk that isn't a real species is rejected,
     and no amount of DOM editing gets free text into the column.
+
+    ``searchable`` adds a search box underneath, and is what stops the picker being a dead end.
+    Everything in the ``<select>`` comes from the lot *name*, so a name the matcher can't place --
+    FishBase files *Labidochromis caeruleus* under "Blue streak hap", so "Yellow lab" finds
+    nothing -- left the right species unreachable, for the seller and for the auction admin
+    editing the lot afterwards.  Deliberately off by default: the bulk-add forms have plenty on
+    them already, and there the fix is to correct one lot afterwards on a form that has it.
     """
+
+    def __init__(self, attrs=None, choices=(), *, searchable=False):
+        super().__init__(attrs, choices)
+        self.searchable = searchable
 
     def optgroups(self, name, value, attrs=None):
         chosen = [str(item) for item in value if item not in ("", None)]
@@ -128,8 +201,23 @@ class SpeciesSelect(forms.Select):
         self.choices = choices
         return super().optgroups(name, value, attrs)
 
+    def render(self, name, value, attrs=None, renderer=None):
+        html = super().render(name, value, attrs, renderer)
+        if not self.searchable:
+            return html
+        select_id = (attrs or {}).get("id") or f"id_{name}"
+        return mark_safe(  # noqa: S308 - the only interpolation is an id Django built
+            html
+            + f'<div class="species-search mt-1" data-species-search="{escape(select_id)}">'
+            + '<input type="search" class="form-control form-control-sm"'
+            + ' placeholder="Not in the list?  Search every species…" autocomplete="off">'
+            + '<div class="list-group mt-1" data-species-search-results></div>'
+            + "</div>"
+            + SPECIES_SEARCH_SCRIPT
+        )
 
-def configure_species_field(fields, auction, field_name="species", *, always_render=False):
+
+def configure_species_field(fields, auction, field_name="species", *, always_render=False, searchable=False):
     """Set up the scientific-name picker on a lot form, or hide it.
 
     Hidden rather than removed when the auction has the field turned off, so every lot form keeps
@@ -153,8 +241,12 @@ def configure_species_field(fields, auction, field_name="species", *, always_ren
         field.widget = HiddenInput()
         field.help_text = ""
         return
-    field.widget = SpeciesSelect(attrs={"class": "form-select species-select", "data-species-select": "1"})
+    field.widget = SpeciesSelect(
+        attrs={"class": "form-select species-select", "data-species-select": "1"}, searchable=searchable
+    )
     field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
+    if searchable:
+        field.help_text += "  Search below if what you're selling isn't offered."
 
 
 def note_category_chosen_by_person(instance, cleaned_data, field_name="species_category"):
@@ -1213,7 +1305,7 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
-        configure_species_field(self.fields, self.auction)
+        configure_species_field(self.fields, self.auction, searchable=True)
         self.fields["species"].initial = self.lot.species
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
         self.fields["buy_now_price"].initial = self.lot.buy_now_price
@@ -3329,7 +3421,7 @@ class CreateLotForm(forms.ModelForm):
         # per-auction fields -- this is the form where the auction is a dropdown, so what the
         # picker should do isn't known until the user picks one.  A standalone lot has no auction
         # at all, and clean_species_for_auction drops whatever was posted in that case.
-        configure_species_field(self.fields, selected_auction, always_render=True)
+        configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids

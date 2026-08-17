@@ -175,6 +175,11 @@ urlpatterns = [
         name="species_gaps",
     ),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
+    path(
+        "admin-dashboard/species-gaps/forget/<int:pk>/",
+        views.SpeciesSearchCacheForgetView.as_view(),
+        name="species_cache_forget",
+    ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(

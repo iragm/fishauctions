@@ -259,6 +259,7 @@ from .models import (
     median_value,
     nearby_auctions,
     normalize_email,
+    normalize_species_name,
 )
 from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from .serializers import (
@@ -23519,7 +23520,17 @@ class InboundEmailRoutingView(APIView):
         info = resolve_routing_info(local_part)
         if info is None:
             return Response({"error": "no recipient found for this address"}, status=404)
-        return Response({"recipient": info["recipient"], "display_name": info["display_name"]})
+        payload = {"recipient": info["recipient"], "display_name": info["display_name"]}
+        # A donation alias has to say so.  The Lambda reads "kind" for two decisions -- post the
+        # body back to /api/v1/email-routing/donation/ so it lands on the vendor's row, and treat
+        # an empty recipient as "forward to nobody" rather than as a missing answer.  Whitelisting
+        # only the two keys above silently turned both off: no vendor reply was ever recorded, and
+        # a club with no donation contact had its vendors' replies forwarded to the site fallback
+        # inbox, which is the one outcome SES.md says must not happen.
+        for key in ("kind", "vendor_key"):
+            if info.get(key):
+                payload[key] = info[key]
+        return Response(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -24637,18 +24648,38 @@ class CommandPaletteReportView(View):
 
 
 class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
-    """Species picker for the "strain of" field on the add-species form.
+    """Search the whole species list by hand.
 
-    Nominal species only: a strain of a strain is not a thing, and offering one would build a
-    chain nothing else in the codebase knows how to walk.
+    Two callers, and the difference between them is ``?varieties=1``:
+
+    * the "strain of" field on the add-species form, which wants **nominal species only** -- a
+      strain of a strain is not a thing, and offering one would build a chain nothing else in the
+      codebase knows how to walk.
+    * the "search all species" box on the lot forms, which wants the strains too: "Blue Dream" is
+      exactly the kind of thing somebody falls back to searching for.
+
+    That second caller is why this exists on a lot form at all.  The picker there is filled in
+    only by :class:`SpeciesSuggestions`, from the lot name -- so when the matcher came back with
+    nothing (FishBase files *Labidochromis caeruleus* under "Blue streak hap", so "Yellow lab"
+    finds nothing without the model) or came back with the wrong five, there was no way to reach
+    the right species at all, for the seller or for the auction admin editing the lot afterwards.
     """
 
     def get_queryset(self):
-        queryset = Species.objects.filter(parent__isnull=True)
+        queryset = Species.objects.all()
+        if self.request.GET.get("varieties") != "1":
+            queryset = queryset.filter(parent__isnull=True)
         if self.q:
-            queryset = queryset.filter(Q(scientific_name__icontains=self.q) | Q(common_name__icontains=self.q))
-        # Same ordering as the suggestions: the fish somebody actually keeps, first.
-        return queryset.order_by("trade_rank", "scientific_name")
+            queryset = queryset.filter(
+                Q(scientific_name__icontains=self.q)
+                | Q(common_name__icontains=self.q)
+                | Q(variety__icontains=self.q)
+                # The names people actually type; the same column every other lookup matches on.
+                | Q(common_names__name_normalized__icontains=normalize_species_name(self.q))
+            ).distinct()
+        # Same ordering as the suggestions: the fish somebody actually keeps, first, and a
+        # freshwater one ahead of the reef fish that shares its name.  See species_matching._rank.
+        return queryset.order_by("-freshwater", "trade_rank", "scientific_name")
 
     def get_result_label(self, result):
         return format_html("{}", result.label)
@@ -24743,9 +24774,38 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
         context["rejected"] = list(
             SpeciesSearchCache.objects.filter(species__isnull=True).order_by("-hits", "-createdon")[:25]
         )
+        # The other half of the same table, and the half that was invisible.  A remembered *wrong*
+        # species is strictly worse than a remembered "no": it outranks search_matches, it is
+        # shared by every club, and it ends up on a printed label and in a breeder award.  There
+        # was nowhere on the site it could be seen, let alone undone.
+        context["mappings"] = list(
+            SpeciesSearchCache.objects.filter(species__isnull=False)
+            .select_related("species")
+            .order_by("-hits", "-createdon")[:50]
+        )
         context["species_total"] = Species.objects.count()
         context["species_added_here"] = Species.objects.filter(source="admin").count()
         return context
+
+
+class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
+    """Delete one remembered answer, so the next lookup works the name out again.
+
+    The undo for :func:`auctions.species_matching.remember`.  That cache is written by the lot
+    forms on a seller's first save as well as by the language model, it is shared by every club,
+    and it is consulted *before* the token search -- so one wrong row quietly outranks the species
+    list itself for everybody, forever.  Until this existed the only way to remove one was the
+    Django admin, and the gaps page didn't list the wrong ones at all, so nobody knew to look.
+
+    Deleting is the whole fix: the name simply falls through to the matcher again next time.
+    """
+
+    def post(self, request, pk):
+        row = get_object_or_404(SpeciesSearchCache, pk=pk)
+        name = row.search_text
+        row.delete()
+        messages.success(request, f"Forgot the remembered answer for “{name}”.  It will be looked up again.")
+        return redirect("species_gaps")
 
 
 class SpeciesCreateView(AdminOnlyViewMixin, CreateView):
