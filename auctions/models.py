@@ -6557,6 +6557,24 @@ class AuctionTOS(models.Model):
         lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk, auction__isnull=False)
         return lots
 
+    def lot_owner(self, added_by=None):
+        """The account to store in `Lot.user` for a lot sold by this TOS.
+
+        Normally `self.user`, but that is null whenever this record was created for someone who
+        had no account at the time (an imported bidder list) or was orphaned by the email-change
+        guard above. Saving their lots with `user=None` is what leaves a seller unable to edit
+        their own lots later (see `Lot.is_owned_by`), so `added_by` -- the signed-in person doing
+        the adding -- fills the gap when they are demonstrably this seller. An admin adding lots
+        for somebody else has a different email and is never recorded as the owner.
+        """
+        if self.user:
+            return self.user
+        if not added_by or not added_by.is_authenticated or not self.email:
+            return None
+        if normalize_email(self.email) == normalize_email(added_by.email):
+            return added_by
+        return None
+
     @property
     def unbanned_lot_qs(self):
         return self.lots_qs.exclude(banned=True)
@@ -8221,6 +8239,34 @@ class Lot(models.Model):
         self.is_deleted = True
         self.save()
 
+    def is_owned_by(self, user):
+        """See if `user` is the seller of this lot, and so may edit, delete or add images to it.
+
+        `Lot.user` is the direct link, but it is null on plenty of lots their owner really did
+        create: a lot added through an auction takes its owner from `auctiontos_seller.user`, and
+        that field is null whenever the TOS wasn't attached to an account at the moment the lot
+        was saved -- an admin-imported bidder list, or a record orphaned by the email-change guard
+        in `AuctionTOS.save()` (see the `relink_auctiontos_users` command). Linking the TOS
+        afterwards doesn't backfill the lots, so the lot keeps `user=None` forever and its seller
+        gets told the lot isn't theirs, even though it's on their invoice and their selling
+        dashboard. The seller TOS has to be consulted too, matched the way `InvoiceView` decides
+        an invoice is yours: by account, or by email (verification is mandatory, so a matching
+        `User.email` is proof of the address).
+
+        `backfill_lot_users` repairs the stored `Lot.user` for existing rows; this is what keeps
+        the answer right regardless of whether that has been run.
+        """
+        if not user or not user.is_authenticated:
+            return False
+        if self.user_id and self.user_id == user.pk:
+            return True
+        tos = self.auctiontos_seller
+        if not tos:
+            return False
+        if tos.user_id and tos.user_id == user.pk:
+            return True
+        return bool(tos.email) and normalize_email(tos.email) == normalize_email(user.email)
+
     def image_permission_check(self, user):
         """See if `user` can add/edit images to this lot"""
         if self.use_images_from:
@@ -8235,11 +8281,8 @@ class Lot(models.Model):
         for dependent_lot in dependent_lots:
             if dependent_lot.auction and not dependent_lot.can_add_images:
                 return False
-        if self.user == user:
+        if self.is_owned_by(user):
             return True
-        if self.auctiontos_seller and self.auctiontos_seller.user:
-            if self.auctiontos_seller.user == user:
-                return True
         if user.is_superuser:
             return True
         if self.auction:

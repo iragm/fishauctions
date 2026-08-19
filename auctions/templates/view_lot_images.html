@@ -284,9 +284,9 @@ App-only; the deep link is handled natively. {% endcomment %}
                     {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i> <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
                     {% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>{% endif %}
                     {% if lot.scientific_name_line or lot.common_name_line %}<div class="collapse" id="fishbase-citation">{% fishbase_citation %}</div>{% endif %}
-                    {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="{% url 'edit_lot' pk=lot.pk %}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
+                    {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and is_lot_creator %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="{% url 'edit_lot' pk=lot.pk %}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
                     {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{% if show_bap_badge %}{% if bap_eligible_reason %}<span class="badge bg-secondary ms-1">Breeder points: {{ bap_eligible_reason_display }}</span>{% else %}<span class="badge bg-success ms-1">Breeder points eligible</span>{% endif %}{% endif %}{% if viewer_has_bap and lot.sold %}{% include "auctions/bap_lot_buttons.html" with default_points=bap_default_points %}{% endif %}{%endif%}
-                    {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
+                    {% if lot.pre_registered and is_lot_creator %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
                     {% if lot.image_count or lot.video_link %}
                     <div>
                         <div id="image_carousel" class="carousel slide">
@@ -354,11 +354,11 @@ App-only; the deep link is handled natively. {% endcomment %}
                             <br><img src="{{ lot.auto_image.display_url }}" class="img-fluid"><br>
                             <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
                             <br>
-                            {% if lot.user == request.user %}
+                            {% if is_lot_creator %}
                             <div>This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
                             {% endif %}
                         {% endif %}
-                        {% if lot.user == request.user and not lot.auto_image %}
+                        {% if is_lot_creator and not lot.auto_image %}
                         <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
                         {% endif %}
                     {% endif %}
@@ -547,12 +547,12 @@ App-only; the deep link is handled natively. {% endcomment %}
                         {% endif %}
                         {% endif %}
                     </table>
-                {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
+                {% if is_lot_creator %}
                     <a href="{% url 'new_lot' %}?copy={{lot.pk}}" class="btn btn-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>
                 {% endif %}
         {% if not lot.auction %}
             {% if request.user.is_authenticated %}
-                {% if lot.user == request.user or request.user.is_superuser %}
+                {% if is_lot_creator or request.user.is_superuser %}
                 <button class="btn btn-primary" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>
                 {% endif %}
             {% endif %}
@@ -576,7 +576,7 @@ App-only; the deep link is handled natively. {% endcomment %}
             </tr>
         </table>
         {% endif %}
-        {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
+        {% if is_lot_creator %}
             <a
             {% if lot.can_be_edited %}
             href="{% url 'edit_lot' pk=lot.pk %}"

@@ -80,6 +80,7 @@ from .models import (
     Watch,
     add_price_info,
 )
+from .services import save_new_lot
 from .test_support import isolated_cache
 
 # channels.testing's package __init__ eagerly imports ChannelsLiveServerTestCase, which
@@ -32743,3 +32744,138 @@ class ClubMemberToastEscapingTests(TestCase):
         self.assertContains(response, "no email address on file")
         self.assertNotIn("<img", body)
         self.assertEqual(body.count("</script>"), 2)
+
+
+class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
+    """A seller whose lot has user=None must still be able to manage that lot.
+
+    Lots added through an auction copy their owner from AuctionTOS.user, which is null whenever
+    the TOS wasn't attached to an account when the lot was saved (an admin-imported bidder list,
+    or a record orphaned by the email-change guard in AuctionTOS.save()). Those lots showed up on
+    the seller's invoice and selling dashboard but every edit was refused with "Only the lot
+    creator can edit a lot".
+    """
+
+    def setUp(self):
+        super().setUp()
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        self.seller = User.objects.create_user(
+            username="unlinked_seller", password="testpassword", email="seller@example.com"
+        )
+        self.open_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            title="Open for lot submission",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=the_future,
+            lot_submission_end_date=the_future,
+            winning_bid_percent_to_club=25,
+        )
+        self.open_location = PickupLocation.objects.create(
+            name="open location", auction=self.open_auction, pickup_time=the_future
+        )
+        # An admin-imported bidder: the email is the seller's, but nothing links it to their account
+        self.unlinked_tos = AuctionTOS.objects.create(
+            auction=self.open_auction,
+            pickup_location=self.open_location,
+            name="Unlinked Seller",
+            email="seller@example.com",
+            bidder_number="601",
+            manually_added=True,
+        )
+        AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(user=None)
+        self.unlinked_tos.refresh_from_db()
+        self.orphaned_lot = Lot.objects.create(
+            lot_name="Subulina octona",
+            auction=self.open_auction,
+            auctiontos_seller=self.unlinked_tos,
+            quantity=1,
+        )
+
+    def edit_url(self):
+        return reverse("edit_lot", kwargs={"pk": self.orphaned_lot.pk})
+
+    def test_is_owned_by_matches_on_tos_email(self):
+        assert self.orphaned_lot.user is None
+        assert self.orphaned_lot.is_owned_by(self.seller) is True
+        assert self.orphaned_lot.is_owned_by(self.user_who_does_not_join) is False
+
+    def test_is_owned_by_matches_on_tos_user(self):
+        AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(user=self.user_who_does_not_join, email="")
+        self.orphaned_lot.refresh_from_db()
+        assert self.orphaned_lot.is_owned_by(self.user_who_does_not_join) is True
+        assert self.orphaned_lot.is_owned_by(self.seller) is False
+
+    def test_is_owned_by_ignores_lots_with_no_seller(self):
+        lot = Lot.objects.create(lot_name="No seller", quantity=1)
+        assert lot.is_owned_by(self.seller) is False
+
+    def test_seller_can_open_the_edit_page(self):
+        # LotValidation redirects anyone without contact info, ownership aside
+        self.seller.first_name = "Un"
+        self.seller.last_name = "Linked"
+        self.seller.save()
+        self.seller.userdata.address = "123 test street"
+        self.seller.userdata.save()
+        self.client.login(username="unlinked_seller", password="testpassword")
+        response = self.client.get(self.edit_url())
+        assert response.status_code == 200
+
+    def test_other_users_still_cannot_edit(self):
+        self.client.login(username="no_joins", password="testpassword")
+        response = self.client.get(self.edit_url(), follow=True)
+        assert "Only the lot creator can edit a lot" in response.content.decode()
+
+    def test_seller_can_delete(self):
+        self.client.login(username="unlinked_seller", password="testpassword")
+        response = self.client.post(reverse("delete_lot", kwargs={"pk": self.orphaned_lot.pk}), follow=True)
+        assert response.status_code == 200
+        self.orphaned_lot.refresh_from_db()
+        assert self.orphaned_lot.is_deleted is True
+
+    def test_seller_can_manage_images(self):
+        assert self.orphaned_lot.image_permission_check(self.seller) is True
+        assert self.orphaned_lot.image_permission_check(self.user_who_does_not_join) is False
+
+    def test_new_lots_record_the_seller_even_when_the_tos_is_unlinked(self):
+        lot = save_new_lot(
+            Lot(lot_name="Added by the seller", quantity=1),
+            auction=self.open_auction,
+            tos=self.unlinked_tos,
+            added_by=self.seller,
+        )
+        assert lot.user == self.seller
+
+    def test_an_admin_adding_lots_for_someone_else_is_not_recorded_as_the_owner(self):
+        lot = save_new_lot(
+            Lot(lot_name="Added by an admin", quantity=1),
+            auction=self.open_auction,
+            tos=self.unlinked_tos,
+            added_by=self.admin_user,
+        )
+        assert lot.user is None
+        assert lot.added_by == self.admin_user
+
+    def test_backfill_command_repairs_stored_lot_user(self):
+        call_command("backfill_lot_users")
+        self.orphaned_lot.refresh_from_db()
+        assert self.orphaned_lot.user == self.seller
+
+    def test_backfill_command_dry_run_changes_nothing(self):
+        call_command("backfill_lot_users", "--dry-run")
+        self.orphaned_lot.refresh_from_db()
+        assert self.orphaned_lot.user is None
+
+    def test_backfill_command_uses_a_linked_tos_before_email(self):
+        AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(user=self.user_who_does_not_join)
+        call_command("backfill_lot_users")
+        self.orphaned_lot.refresh_from_db()
+        assert self.orphaned_lot.user == self.user_who_does_not_join
+
+    def test_logging_in_links_the_tos_and_claims_its_lots(self):
+        AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(manually_added=False)
+        self.client.login(username="unlinked_seller", password="testpassword")
+        self.unlinked_tos.refresh_from_db()
+        self.orphaned_lot.refresh_from_db()
+        assert self.unlinked_tos.user == self.seller
+        assert self.orphaned_lot.user == self.seller
