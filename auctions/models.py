@@ -4186,6 +4186,23 @@ class Auction(models.Model):
         return None
 
     @property
+    def offers_tap_to_pay(self):
+        """True when *this auction's* Square account can take an in-person card payment.
+
+        The one question the app cannot answer for itself. It used to decide when to show Apple's
+        mandated Tap to Pay awareness modal from a URL prefix plus "the backend once handed this user
+        live Square credentials", which is an approximation of "is the website showing its own Square
+        card to this user on this page?" -- and getting it wrong put the modal in front of an
+        organizer on an unrelated page. Read by auction_ribbon.html, which asks the app for the modal
+        when it is true; see PaymentService for the credentials themselves.
+
+        Connected *and* in-person capable: a seller connected before the Tap to Pay scope existed has
+        a merchant id and cannot take a card in the room, so offering the modal would be a dead end.
+        """
+        seller = self.effective_square_seller
+        return bool(seller and seller.square_merchant_id and seller.supports_tap_to_pay)
+
+    @property
     def square_information(self):
         """
         Return the merchant ID for Square payments.
@@ -11176,6 +11193,16 @@ class UserLabelPrefs(models.Model):
         "to a printer configured on your phone. Bluetooth prints directly to a "
         "thermal label printer. System printer and Bluetooth only work in the app."
     )
+    # Printing from a desktop to the phone's Bluetooth printer. Separate from print_method rather
+    # than a fourth choice in it, because it is about the *other* device: someone who prints from
+    # both their phone and their computer wants Bluetooth in the app and this on the web, and a
+    # single dropdown cannot say both. Only offered to an account with a phone that has reported a
+    # paired printer -- see MobileDevice.ever_print_ready and UserLabelPrefsView.
+    print_from_computer = models.BooleanField(default=False, verbose_name="Print from my computer to my phone")
+    print_from_computer.help_text = (
+        "When you print labels on a computer, send them to the printer paired with your phone "
+        "instead of making a PDF. <b>The app has to be open on your phone.</b>"
+    )
 
 
 def get_default_can_create_auctions():
@@ -13149,12 +13176,177 @@ class MobileDevice(models.Model):
     push_enabled = models.BooleanField(default=True)  # per-device kill switch
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
+    # Presence, for printing from a computer to this phone's Bluetooth printer. The phone cannot be
+    # summoned -- Android forbids starting an Activity from the background and iOS silent pushes are
+    # best-effort and dead once the app is force-quit -- so the honest contract is "the app has to be
+    # open", and these three fields are how the website measures that instead of firing a push into
+    # the void and timing out. Posted by the app at shell mount, on resume, and every 5 minutes while
+    # foregrounded (POST /api/mobile/devices/heartbeat/).
+    last_heartbeat = models.DateTimeField(null=True, blank=True, db_index=True)
+    # The app saying "this phone has a printer paired and a profile that resolves for it, right now".
+    # Deliberately not derived from UserLabelPrefs.print_method: a user can have Bluetooth selected on
+    # an account whose phone has nothing paired, and advertising that would promise a print that fails.
+    print_ready = models.BooleanField(default=False)
+    printer_name = models.CharField(max_length=100, blank=True, default="")
+    # Sticky: has this device EVER reported print_ready? ``print_ready`` is the current state and goes
+    # back to False the moment a printer is unpaired or the app is closed, so it cannot answer "is
+    # this feature worth offering to this account at all" -- which is what decides whether /printing/
+    # shows the checkbox. A switch with nothing behind it is worse than no switch.
+    ever_print_ready = models.BooleanField(default=False)
+
+    # One missed beat of slack on the app's 5-minute interval. Everything that asks "can we print to
+    # this phone" keys off this and nothing else.
+    HEARTBEAT_GRACE = datetime.timedelta(minutes=6)
 
     class Meta:
         ordering = ["-last_seen"]
 
     def __str__(self):
         return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"
+
+    @property
+    def is_reachable_for_printing(self):
+        """``print_ready`` and heartbeating: the phone can print something right now."""
+        if not self.print_ready or not self.last_heartbeat:
+            return False
+        return self.last_heartbeat >= timezone.now() - self.HEARTBEAT_GRACE
+
+    @classmethod
+    def reachable_printers_for(cls, user):
+        """The user's phones that could print a job this second, freshest heartbeat first."""
+        if not user or not user.is_authenticated:
+            return cls.objects.none()
+        return cls.objects.filter(
+            user=user,
+            print_ready=True,
+            last_heartbeat__gte=timezone.now() - cls.HEARTBEAT_GRACE,
+        ).order_by("-last_heartbeat")
+
+    @classmethod
+    def print_presence_for(cls, user):
+        """``(device, last_seen_datetime_or_None)`` for the "your phone was last seen…" line.
+
+        The device is the reachable one if there is one, otherwise the most recently heard-from phone
+        that has ever been print-ready — because the useful thing to tell someone whose phone is not
+        answering is how long ago it was, not that there is no device.
+        """
+        if not user or not user.is_authenticated:
+            return None, None
+        device = cls.reachable_printers_for(user).first()
+        if device is None:
+            device = (
+                cls.objects.filter(user=user, ever_print_ready=True)
+                .exclude(last_heartbeat=None)
+                .order_by("-last_heartbeat")
+                .first()
+            )
+        return device, (device.last_heartbeat if device else None)
+
+
+class RemotePrintJob(models.Model):
+    """One "print these labels on the phone paired to my printer" request, made from a computer.
+
+    The user is signed in on a desktop with the app open on their phone; they press print on the
+    website and the labels come out of the phone's Bluetooth printer. Everything about the shape of
+    this is decided by one constraint: **the phone cannot be summoned**. Android forbids starting an
+    Activity from the background, and this app's BLE connection lives in a UI-scoped provider on the
+    shell, so a headless isolate woken by a data message would have none of it; iOS silent pushes are
+    rate-limited, best-effort, and dropped entirely once the app is force-quit. So the app must
+    already be open, ``MobileDevice`` measures whether it is, and this row is what lets the *computer*
+    tell the user the truth about what happened rather than time out.
+
+    The row is the whole conversation: the website creates it and pushes it (R4), the phone posts
+    progress and a result against it (R6), and the waiting page polls it (R5). ``message`` is the
+    app's own failure text stored verbatim and shown verbatim -- the app already distinguishes "no
+    printer paired" from "couldn't connect" from "lost the link mid-print" from "label wider than the
+    printhead", and rewording those here would be two copies of the same vocabulary drifting apart.
+    """
+
+    STATUS_QUEUED = "queued"
+    STATUS_SENT = "sent"
+    STATUS_PRINTING = "printing"
+    STATUS_PRINTED = "printed"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_UNREACHABLE = "unreachable"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_SENT, "Sent to the phone"),
+        (STATUS_PRINTING, "Printing"),
+        (STATUS_PRINTED, "Printed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_UNREACHABLE, "Couldn't reach the phone"),
+    ]
+    # Statuses nothing further will happen to. Used by the retry/cancel paths and by the staleness
+    # rule, which must not reopen a job that already reported.
+    TERMINAL_STATUSES = {STATUS_PRINTED, STATUS_FAILED, STATUS_CANCELLED, STATUS_UNREACHABLE}
+    # How long a pushed job may go without a word before the page stops waiting. The app posts
+    # progress per label, so silence this long means the message never landed -- the phone was
+    # force-quit, or lost its network between the push and the first label.
+    SILENCE_BEFORE_UNREACHABLE = datetime.timedelta(seconds=20)
+
+    uuid = models.UUIDField(primary_key=True, default=uuid_module.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="remote_print_jobs")
+    # SET_NULL rather than CASCADE: a phone that unregisters after printing must not delete the
+    # record of what it printed.
+    device = models.ForeignKey(
+        MobileDevice, on_delete=models.SET_NULL, null=True, blank=True, related_name="print_jobs"
+    )
+    # Lot pks in print order -- the order they come out of the printer, which is the same order the
+    # PDF would have laid them out. A JSON list rather than an m2m because order is the point and a
+    # through-model with a position column would buy nothing else.
+    lots = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    printed_count = models.IntegerField(default=0)
+    total_count = models.IntegerField(default=0)
+    # The app's failure text, verbatim. Never written by the server.
+    message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.total_count} labels to {self.device or 'no device'} ({self.status})"
+
+    @property
+    def is_terminal(self):
+        return self.status in self.TERMINAL_STATUSES
+
+    @property
+    def has_gone_quiet(self):
+        """Pushed, never answered, and out of time — the page should stop waiting.
+
+        Only counts from ``sent``: a job still ``queued`` has not been pushed yet, and one that has
+        reported anything at all has proved the phone is listening.
+        """
+        if self.status != self.STATUS_SENT:
+            return False
+        return timezone.now() - self.updated_at > self.SILENCE_BEFORE_UNREACHABLE
+
+    def lots_qs(self):
+        """The lots this job is for, in the stored print order (a plain ``filter`` would not be)."""
+        by_pk = Lot.objects.in_bulk(self.lots)
+        return [by_pk[pk] for pk in self.lots if pk in by_pk]
+
+    def mark_labels_printed(self, count):
+        """Mark the first *count* lots printed — what the PDF path does by rendering.
+
+        Called from the app's result post so it does not have to post twice. The first *count* of
+        them because that is the order they printed in, so a batch that died halfway marks exactly
+        what came out.
+        """
+        if count <= 0:
+            return 0
+        lots = [lot for lot in self.lots_qs()[:count] if not lot.is_deleted]
+        for lot in lots:
+            lot.label_printed = True
+            lot.label_needs_reprinting = False
+        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting"])
+        return len(lots)
 
 
 class MobileOfflineOp(models.Model):

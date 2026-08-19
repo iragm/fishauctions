@@ -488,6 +488,17 @@ FIREBASE_ANDROID_CONFIG_FILE = os.environ.get("FIREBASE_ANDROID_CONFIG_FILE", ""
 FIREBASE_IOS_CONFIG_FILE = os.environ.get("FIREBASE_IOS_CONFIG_FILE", "").strip()
 FIREBASE_CLIENT_CONFIG = load_firebase_client_config(FIREBASE_ANDROID_CONFIG_FILE, FIREBASE_IOS_CONFIG_FILE)
 INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
+# App-association files, served from /.well-known/ by auctions.app_links so that a link to this site
+# — including the ones the site itself emails — opens in the mobile app on a phone that has it.
+# Both are per-deployment: production claims the release package, staging claims its own flavors, and
+# a local checkout claims nothing (blank ⇒ the file 404s rather than claiming no apps, which would
+# verify successfully and look identical to a working setup).
+#
+# ANDROID_APP_LINKS: comma-separated "package=SHA256_FINGERPRINT". Repeat a package to give it more
+# than one signing certificate. The fingerprint is the one Play *re-signs* with, not the upload key.
+# IOS_APP_LINKS: comma-separated "TEAMID.bundle.id".
+ANDROID_APP_LINKS = [entry for entry in os.environ.get("ANDROID_APP_LINKS", "").split(",") if entry.strip()]
+IOS_APP_LINKS = [entry for entry in os.environ.get("IOS_APP_LINKS", "").split(",") if entry.strip()]
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED

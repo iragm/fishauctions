@@ -237,6 +237,7 @@ from .models import (
     PageView,
     PayPalSeller,
     PickupLocation,
+    RemotePrintJob,
     SearchHistory,
     Speaker,
     SpeakerComment,
@@ -264,7 +265,7 @@ from .models import (
     normalize_email,
     normalize_species_name,
 )
-from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
+from .notifications import CATEGORY_LOT_SELLING, push_configured, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
@@ -10659,23 +10660,73 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return f"{label_name}.pdf"
 
     def get(self, request, *args, **kwargs):
-        """Hand a Bluetooth-printing app user the lot set instead of a PDF sheet.
+        """Three ways to print, in the order they get asked.
 
         Gated here rather than in the templates that build bulk label links, because every bulk
         entry point funnels through this view -- the users-table anchors, ``?printredirect=``, the
         command palette, print-after-bulk-add, a bookmarked URL -- and gating them one at a time
         leaves entry points behind (it also keeps label printing out of the mobile-app UA
         conditionals the templates are deliberately free of; see
-        MobileAppLabelPrintingVisibilityTests). Everyone else gets the PDF, unchanged.
+        MobileAppLabelPrintingVisibilityTests).
 
-        Deliberately before ``get_context_data``, which marks labels printed as a side effect of
-        rendering: nothing has printed yet, and the app posts labels/printed/ for the ones that
-        actually come out.
+        1. ``?pdf=1`` -- the escape hatch, and it is checked first so it can never loop back into a
+           branch. It is what the remote-print waiting page's "Print a PDF here" button links to,
+           and the app arm has to respect it too or that button would bounce a phone straight back
+           to the deep link it was trying to get out of.
+        2. The app printing over Bluetooth: a deep link to its own printer. First of the two real
+           arms, so somebody printing *from the phone* prints directly instead of routing a job
+           through FCM back to the phone they are holding.
+        3. A computer, with ``print_from_computer`` on and a phone that is actually reachable: a job
+           pushed to that phone plus a page that waits on it.
+
+        Everyone else gets the PDF, unchanged.
+
+        All of it deliberately before ``get_context_data``, which marks labels printed as a side
+        effect of rendering: in arms 2 and 3 nothing has printed yet, and what actually came out is
+        reported afterwards (``labels/printed/`` for the deep link, the job's result post for a job).
         """
+        if request.GET.get("pdf"):
+            return super().get(request, *args, **kwargs)
         deep_link_response = self.bluetooth_deep_link_response()
         if deep_link_response is not None:
             return deep_link_response
+        remote_print_response = self.remote_print_response()
+        if remote_print_response is not None:
+            return remote_print_response
         return super().get(request, *args, **kwargs)
+
+    def remote_print_response(self):
+        """The waiting page for a job pushed to the user's phone, or None to render the PDF.
+
+        Only from a *computer*: in the app, arm 2 above has already had its say, and a phone that
+        prints its own labels needs no job. ``can_print_from_computer`` is both halves of the
+        question -- the preference is on, and a phone is heartbeating with a printer paired -- because
+        a page that promises a print the phone cannot deliver is exactly what this feature is built to
+        avoid.
+        """
+        from auctions.mobile.services import remote_print
+
+        request = self.request
+        if getattr(request, "is_mobile_app", False) or not request.user.is_authenticated:
+            return None
+        if not remote_print.can_print_from_computer(request.user):
+            return None
+        # Same queryset and order as the PDF, which is the order they come out of the printer.
+        pks = list(self.get_queryset().values_list("pk", flat=True))
+        if not pks:
+            return None
+        job = remote_print.start(request.user, pks)
+        context = {
+            "job": job,
+            "label_count": job.total_count,
+            # A batch bigger than one push can carry; the rest is a second run, the same way the
+            # deep-link path splits one.
+            "truncated_count": len(pks) if len(pks) > job.total_count else 0,
+            "printer_name": job.device.printer_name if job.device else "",
+            "pdf_url": self.request.get_full_path() + ("&" if self.request.GET else "?") + "pdf=1",
+            "back_url": self.auction.get_absolute_url() if self.auction else reverse("selling"),
+        }
+        return render(self.request, "label_remote_print.html", context)
 
     def bluetooth_deep_link_response(self):
         """The ``fishauctions://print/?lots=…`` handoff page, or None to render the PDF."""
@@ -11012,6 +11063,65 @@ class SingleLotLabelView(LotLabelView):
             return HttpResponse(content, content_type=content_type)
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
+
+
+class RemotePrintJobMixin(LoginRequiredMixin):
+    """The job, scoped to the signed-in user.
+
+    Session auth, not the mobile JWT: this half of the conversation is the *computer*, watching a job
+    it started. 404 for somebody else's job -- the uuid is unguessable, and a 403 would only confirm
+    that one exists.
+    """
+
+    def get_job(self, request, job_uuid):
+        return get_object_or_404(RemotePrintJob, uuid=job_uuid, user=request.user)
+
+
+class RemotePrintJobStatusView(RemotePrintJobMixin, View):
+    """GET /printing/job/<uuid>/ — what the waiting page polls, once a second.
+
+    Deliberately a plain JSON web view rather than a DRF endpoint: it is read by a page in the
+    browser that started the job, on the session it already has.
+    """
+
+    def get(self, request, job_uuid):
+        from auctions.mobile.services.remote_print import job_state
+
+        return JsonResponse(job_state(self.get_job(request, job_uuid)))
+
+
+class RemotePrintJobRetryView(RemotePrintJobMixin, View):
+    """POST /printing/job/<uuid>/retry/ — "Try again": the same labels, a fresh job.
+
+    A new row rather than a reset of the old one, because the old one is a record of something that
+    really happened (and its phone may yet report on it). The lot list is copied from the job instead
+    of re-derived from the queryset: a lot sold or deleted in between would silently shorten the
+    batch, and the person is standing at the printer expecting the labels they asked for.
+    """
+
+    def post(self, request, job_uuid):
+        from auctions.mobile.services import remote_print
+
+        old_job = self.get_job(request, job_uuid)
+        job = remote_print.create_job(request.user, old_job.lots)
+        remote_print.dispatch(job)
+        return JsonResponse({"job": str(job.uuid), **remote_print.job_state(job)})
+
+
+class RemotePrintJobCancelView(RemotePrintJobMixin, View):
+    """POST /printing/job/<uuid>/cancel/ — the user gave up on this one.
+
+    Only the record is cancelled; a phone already feeding labels is not interrupted, because there is
+    no channel to interrupt it with and it has its own Stop button next to the printer. What this
+    does buy is that a late result post can no longer overwrite the answer the person chose.
+    """
+
+    def post(self, request, job_uuid):
+        job = self.get_job(request, job_uuid)
+        if not job.is_terminal:
+            job.status = RemotePrintJob.STATUS_CANCELLED
+            job.save(update_fields=["status", "updated_at"])
+        return JsonResponse({"status": job.status})
 
 
 class GetClubs(APIView):
@@ -13833,10 +13943,27 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         it in the app, or on web if the user has ever registered a device (so they can pre-configure)."""
         return bool(self.request.is_mobile_app) or MobileDevice.objects.filter(user=self.request.user).exists()
 
+    def _show_print_from_computer(self):
+        """Offer computer-to-phone printing only to an account with a phone that could do it.
+
+        ``ever_print_ready``, not ``print_ready``: the current flag goes False the moment the printer
+        is switched off, and "does this account have a phone with a label printer" is not a question
+        whose answer changes over breakfast. Whether it will work *right now* is the separate, honest
+        question, and the last-seen line beside the checkbox is where that gets answered.
+
+        ``push_configured`` because the job reaches the phone as an FCM data message and nothing else:
+        on a deployment with no Firebase credentials every job would go straight to "couldn't reach
+        your phone", which is true but blames the user's phone for the server's missing config.
+        """
+        if not push_configured():
+            return False
+        return MobileDevice.objects.filter(user=self.request.user, ever_print_ready=True).exists()
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["show_print_method"] = self._show_print_method()
         kwargs["is_mobile_app"] = bool(self.request.is_mobile_app)
+        kwargs["show_print_from_computer"] = self._show_print_from_computer()
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -13847,6 +13974,14 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         prefs = self.object
         context["label_prefs"] = prefs
         context["show_print_method"] = self._show_print_method()
+        context["show_print_from_computer"] = self._show_print_from_computer()
+        # The single fact that decides whether printing to the phone will work, and the only one the
+        # user can do anything about. Rendered next to the checkbox rather than left for them to
+        # discover by pressing print and waiting.
+        device, last_seen = MobileDevice.print_presence_for(self.request.user)
+        context["print_phone_device"] = device
+        context["print_phone_last_seen"] = last_seen
+        context["print_phone_reachable"] = bool(device and device.is_reachable_for_printing)
         # Print-method mismatch warnings talk about switching to Bluetooth / thermal printers, which
         # only work in the app. On the web only PDF is available, so the warnings aren't actionable —
         # suppress them there and keep them in the app.

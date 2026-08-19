@@ -70,8 +70,16 @@ UNMATCHED_MIN_TOKENS = 2
 def default_anchors():
     """Words that say *which field* the number that follows belongs to.
 
-    Order doesn't matter; the app matches any of them. Keep entries lowercase — the app lowercases
-    the utterance before comparing.
+    Order doesn't matter to the matcher; the app accepts any of them. Keep entries lowercase — the
+    app lowercases the utterance before comparing.
+
+    The **first** word of ``price`` is the one exception, and it has to stay ``dollars``. Both
+    recognizers format money out of the transcript before the app ever sees it: "twenty five dollars"
+    arrives as ``$25`` from iOS ``SFTranscription.formattedString`` and from Android's
+    ``RESULTS_RECOGNITION``, so the spoken anchor is absent from almost every real utterance and the
+    price slot never filled. The app now reads a currency symbol immediately in front of a number as
+    the price anchor, substituting the canonical (first) word of this list — which is what lets a
+    deployment rename the anchor without breaking, and what makes the first entry load-bearing.
     """
     return {
         "lot": ["lot", "lot number", "item"],

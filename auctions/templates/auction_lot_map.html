@@ -47,7 +47,9 @@
 (function(){
   const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
   // "Find this lot" jumps the app straight into lot scanning beaconing this lot, via the same custom
-  // scheme as the lot page's "Back to scanning" bar. A desktop browser has no handler for the scheme, but
+  // scheme as the lot page's "Back to scanning" bar. If this page ever grows a bar of its own, it goes
+  // in base.html's `body_top` block, like that one -- `undiv_content` renders after the content block,
+  // where a sticky bar has no scroll range left to stick over. A desktop browser has no handler for the scheme, but
   // per style_reference.md an unavailable action stays clickable and says why: outside the app the
   // button toasts "open this in the app" instead of vanishing (this page is used on desktop, where a
   // missing button just looks like the feature doesn't exist).

@@ -4976,6 +4976,12 @@ NOT_A_SKILL: dict[str, str] = {
         "worse than typing it into the box on the speaker's page, which the palette can reach."
     ),
     "SpeakerCommentDeleteView": _NEEDS_THE_ROW,
+    # The two buttons on the remote-print waiting page (LotLabelView renders it in place of the PDF
+    # when the labels are going to the phone's Bluetooth printer). Both act on the job that page is
+    # already watching and have no meaning apart from it: "try again" means *these* labels, and
+    # cancelling anything else would be cancelling a print somebody is standing next to.
+    "RemotePrintJobRetryView": _NEEDS_THE_ROW,
+    "RemotePrintJobCancelView": _NEEDS_THE_ROW,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
     "AdminUserFlow": _FORM_PAGE,

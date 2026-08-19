@@ -44,6 +44,7 @@ from .models import (
     PageView,
     PickupLocation,
     PushNotificationSent,
+    RemotePrintJob,
     SearchHistory,
     Speaker,
     SpeakerComment,
@@ -385,8 +386,19 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(MobileDevice)
 class MobileDeviceAdmin(admin.ModelAdmin):
-    list_display = ("user", "platform", "app_version", "device_name", "push_enabled", "has_token", "last_seen")
-    list_filter = ("platform", "app_version", "push_enabled")
+    list_display = (
+        "user",
+        "platform",
+        "app_version",
+        "device_name",
+        "push_enabled",
+        "has_token",
+        "print_ready",
+        "printer_name",
+        "last_heartbeat",
+        "last_seen",
+    )
+    list_filter = ("platform", "app_version", "push_enabled", "print_ready", "ever_print_ready")
     search_fields = (
         "user__username",
         "user__email",
@@ -395,13 +407,41 @@ class MobileDeviceAdmin(admin.ModelAdmin):
         "device_uuid",
         "device_name",
     )
-    readonly_fields = ("created_at", "last_seen", "fcm_token_updated_at")
+    readonly_fields = ("created_at", "last_seen", "fcm_token_updated_at", "last_heartbeat")
     raw_id_fields = ("user",)
     date_hierarchy = "last_seen"
 
     @admin.display(boolean=True, description="Has push token")
     def has_token(self, obj):
         return bool(obj.fcm_token)
+
+
+@admin.register(RemotePrintJob)
+class RemotePrintJobAdmin(admin.ModelAdmin):
+    """Labels sent from a computer to a phone's Bluetooth printer. Read-only — the website creates
+    these and the app reports on them, so the only reason to open one is to find out why somebody's
+    labels didn't come out. ``message`` is the app's own words, unedited."""
+
+    list_display = ("uuid", "user", "device", "status", "printed_count", "total_count", "created_at")
+    list_filter = ("status",)
+    search_fields = ("uuid", "user__username", "user__email", "message")
+    readonly_fields = (
+        "uuid",
+        "user",
+        "device",
+        "lots",
+        "status",
+        "printed_count",
+        "total_count",
+        "message",
+        "created_at",
+        "updated_at",
+    )
+    raw_id_fields = ("user", "device")
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MobileOfflineOp)

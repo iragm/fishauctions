@@ -667,3 +667,71 @@ class LatestAdminAuctionTests(StandardTestCase):
     def test_falls_back_to_the_newest_auction_they_administer(self):
         found = PaymentService._latest_admin_auction(self.user)
         self.assertIn(found, Auction.objects.filter(created_by=self.user))
+
+
+class TapToPayAwarenessOfferTests(StandardTestCase):
+    """TTP-6 — the auction ribbon, not a URL prefix, decides when to ask for Apple's awareness modal.
+
+    The app used to infer it from ``/auctions/`` plus "the backend once issued this user live Square
+    credentials", which is an approximation of the only question that matters — *is the website
+    showing its own Square card to this user on this page?* — and getting it wrong put the modal in
+    front of an organizer on an unrelated page. Only the server can answer that, so the page asks.
+    """
+
+    HANDLER = "callHandler('tapToPayOffer')"
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("auction_main", kwargs={"slug": self.in_person_auction.slug})
+        self.seller = SquareSeller.objects.create(
+            user=self.user,
+            square_merchant_id="MERCHANT1",
+            scopes="PAYMENTS_WRITE PAYMENTS_WRITE_IN_PERSON",
+        )
+        self.client.force_login(self.user)
+
+    def _html(self, user_agent=IOS_UA):
+        return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+
+    def test_admin_in_the_app_with_in_person_square_is_offered_the_modal(self):
+        self.assertIn(self.HANDLER, self._html())
+
+    def test_never_on_the_web(self):
+        """There is no handler in a browser, and no modal to show."""
+        self.assertNotIn(self.HANDLER, self._html("Mozilla/5.0"))
+
+    def test_not_offered_without_a_connected_square_account(self):
+        self.seller.delete()
+        self.assertNotIn(self.HANDLER, self._html())
+
+    def test_not_offered_to_a_legacy_connection_that_cannot_take_a_card_in_the_room(self):
+        # Connected before the in-person scope existed: a merchant id but no Tap to Pay, so the modal
+        # would open onto a dead end. Refreshing the token keeps the original scopes, so this is not
+        # a state that fixes itself.
+        self.seller.scopes = "PAYMENTS_WRITE"
+        self.seller.save()
+        self.assertNotIn(self.HANDLER, self._html())
+
+    def test_not_offered_to_someone_who_does_not_run_this_auction(self):
+        self.client.force_login(self.user_who_does_not_join)
+        self.assertNotIn(self.HANDLER, self._html())
+
+
+class OffersTapToPayPropertyTests(StandardTestCase):
+    """The property behind TTP-6, exercised directly: it is what the ribbon and nothing else reads."""
+
+    def test_no_seller_at_all(self):
+        self.assertFalse(self.in_person_auction.offers_tap_to_pay)
+
+    def test_seller_with_the_in_person_scope(self):
+        SquareSeller.objects.create(user=self.user, square_merchant_id="M1", scopes="PAYMENTS_WRITE_IN_PERSON")
+        self.assertTrue(Auction.objects.get(pk=self.in_person_auction.pk).offers_tap_to_pay)
+
+    def test_seller_connected_but_never_authorised_in_person(self):
+        SquareSeller.objects.create(user=self.user, square_merchant_id="M1", scopes="PAYMENTS_WRITE")
+        self.assertFalse(Auction.objects.get(pk=self.in_person_auction.pk).offers_tap_to_pay)
+
+    def test_oauth_started_but_never_finished(self):
+        """No merchant id means the OAuth handshake never completed; there is no account to charge to."""
+        SquareSeller.objects.create(user=self.user, square_merchant_id="", scopes="PAYMENTS_WRITE_IN_PERSON")
+        self.assertFalse(Auction.objects.get(pk=self.in_person_auction.pk).offers_tap_to_pay)

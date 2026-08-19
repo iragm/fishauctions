@@ -86,6 +86,18 @@
   </div>
   {% endif %}
 {% endif %}
+{% comment %}The opposite state to the "connect your Square account" banner above: Square *is* connected here and can take a card in the room, so this is a page where the website is about to show this admin its own Square card.  That is the only moment Apple's Tap to Pay awareness modal belongs, and it is a question only the server can answer -- the app used to guess it from a URL prefix plus a live credential, which put the modal in front of organizers on unrelated pages.  Called unconditionally: the handler resolves {offered: false} on Android, on a phone that can't do Tap to Pay, when the modal has already been shown on this device, and when Tap to Pay is already set up, so the page needs no capability checks of its own.{% endcomment %}
+{% if request.is_mobile_app and auction.offers_tap_to_pay %}
+<script>
+  (function () {
+    try {
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('tapToPayOffer');
+      }
+    } catch (e) { /* older app build with no handler: nothing to offer */ }
+  })();
+</script>
+{% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
       <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href='{% url "auction_main" slug=auction.slug %}'><i class="bi bi-house-fill"></i><span class='d-none d-md-inline'> Main</span></a>

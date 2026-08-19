@@ -1184,6 +1184,18 @@ EXCLUDED: dict[str, str] = {
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",
+    # App-association files. Fetched by Google's and Apple's infrastructure to decide whether a link
+    # to this site may open in the app; there is no page and no person on either end. The Apple one is
+    # listed even though `apple_` is in THIRD_PARTY_PREFIXES -- it is ours, not allauth's, and an
+    # explicit entry keeps it from being excused by an accident of naming.
+    "android_assetlinks": _INFRA,
+    "apple_app_site_association": _INFRA,
+    # Printing from a computer to the phone's Bluetooth printer. The waiting page LotLabelView
+    # renders owns all three: it polls the first once a second, and the other two are its "Try
+    # again" and "Cancel" buttons, which only mean anything against the job it is already watching.
+    "remote_print_job": _API,
+    "remote_print_job_retry": _API,
+    "remote_print_job_cancel": _API,
     # Duplicates of catalog entries
     "lot_by_pk_and_slug": _DUPLICATE,
     "lot_in_auction": _DUPLICATE,

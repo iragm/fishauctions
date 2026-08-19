@@ -4,9 +4,19 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import apple_notifications, donation_views, passkit_views, views
+from . import app_links, apple_notifications, donation_views, passkit_views, views
 
 urlpatterns = [
+    # App-association files. The paths and filenames are fixed by Google and Apple (Apple's really
+    # does have no .json extension), and neither platform follows a redirect to reach them, so they
+    # are matched exactly here rather than anywhere APPEND_SLASH could get involved. Public: the
+    # fetch comes from Google's and Apple's infrastructure, not from a signed-in user.
+    path(".well-known/assetlinks.json", app_links.assetlinks, name="android_assetlinks"),
+    path(
+        ".well-known/apple-app-site-association",
+        app_links.apple_app_site_association,
+        name="apple_app_site_association",
+    ),
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
     # /social/... (AllauthWebScreen), so the mobile social-login continuation is sent here instead.
     # Same views, second path — the /3rdparty/ URLs keep working for the web, and the names stay
@@ -604,6 +614,24 @@ urlpatterns = [
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
+    # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
+    # these once a second, and the three buttons on a failure use the other two. Session auth -- this
+    # is the computer's half of the conversation; the phone's half is under /api/mobile/printjobs/.
+    path(
+        "printing/job/<uuid:job_uuid>/",
+        views.RemotePrintJobStatusView.as_view(),
+        name="remote_print_job",
+    ),
+    path(
+        "printing/job/<uuid:job_uuid>/retry/",
+        views.RemotePrintJobRetryView.as_view(),
+        name="remote_print_job_retry",
+    ),
+    path(
+        "printing/job/<uuid:job_uuid>/cancel/",
+        views.RemotePrintJobCancelView.as_view(),
+        name="remote_print_job_cancel",
+    ),
     path("faq/", views.FAQ.as_view(), name="faq"),
     path(
         "auctions/<slug:slug>/locations/",

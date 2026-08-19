@@ -33,6 +33,10 @@ class CheckinBase(TestCase):
             is_online=False,
             date_start=now,
             date_end=now + datetime.timedelta(hours=6),
+            # Every auction the site creates starts unpromoted, and evaluate_ping deliberately says
+            # nothing about those (see PingIgnoresUnpromotedAuctionTests). The fixture is the
+            # promoted case because that is the one the rest of these tests are about.
+            promote_this_auction=True,
         )
         # In-person auctions get one auto-created default pickup location (signals.py); a real
         # single-location auction is exactly that one row. Re-save to materialise it, then pin coords.
@@ -617,3 +621,33 @@ class ClubManagedAdminBadgeTests(CheckinBase):
         tos = AuctionTOS.objects.get(auction=self.venue, clubmember=self.attendee)
         AuctionTOS.objects.filter(pk=tos.pk).update(is_admin=True)
         self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Bob Attendee"))
+
+
+class PingIgnoresUnpromotedAuctionTests(CheckinBase):
+    """An auction nobody asked to publicise must not be announced by the welcome ping.
+
+    ``promote_this_auction`` starts False on every auction (AuctionCreateView), so before the filter
+    landed a phone standing at the venue during the window got the auction's full title and a working
+    Join button for an auction its creator had never agreed to show anyone. The failure is silent and
+    only visible from a phone in the right place at the right time, which is why it is tested here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.venue.promote_this_auction = False
+        self.venue.save()
+
+    def test_no_join_offer_for_unpromoted_auction(self):
+        self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
+
+    def test_no_admin_nudge_for_unpromoted_auction(self):
+        # Not even the admin's own set_location_offer: it names an auction the app should not be
+        # mentioning at all, and the admin has the website for that.
+        self.venue.exact_location_set = False
+        self.venue.save()
+        self.assertEqual(self._ping(self.creator, *NEAR).json()["actions"], [])
+
+    def test_promoting_it_brings_the_offer_back(self):
+        self.venue.promote_this_auction = True
+        self.venue.save()
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))

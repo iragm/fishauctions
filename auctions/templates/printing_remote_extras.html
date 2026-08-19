@@ -1,0 +1,22 @@
+{% comment %}
+The line under the "print from my computer to my phone" checkbox on /printing/ (included from
+UserLabelPrefsForm's crispy layout, the same way printing_extras.html is).
+
+It says one thing: when the phone was last heard from. That is not decoration — the phone cannot be
+woken on demand, so "the app is open on it" is the entire contract, and this is the only place the
+user can check whether they are holding up their end. Somebody who believes the phone will be woken
+concludes the feature is broken the first time it isn't.
+{% endcomment %}
+{% if print_phone_reachable %}
+<p class="text-success small ms-4">
+  <i class="bi bi-check-circle-fill me-1"></i>Your phone was last seen {{ print_phone_last_seen|timesince }} ago{% if print_phone_device.printer_name %}, with <b>{{ print_phone_device.printer_name }}</b> connected{% endif %}.
+</p>
+{% elif print_phone_last_seen %}
+<p class="text-warning small ms-4">
+  <i class="bi bi-exclamation-triangle me-1"></i>Your phone hasn't been seen for {{ print_phone_last_seen|timesince }} — open the app on it before you print.
+</p>
+{% else %}
+<p class="text-muted small ms-4">
+  <i class="bi bi-phone me-1"></i>Open the app on your phone and connect a label printer, and this page will show when it was last seen.
+</p>
+{% endif %}

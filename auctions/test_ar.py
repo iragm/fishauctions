@@ -824,6 +824,22 @@ class LotPageBackToArBannerTests(ArApiBaseTestCase):
         html = self.client.get(self._url(self.lot_a), HTTP_USER_AGENT=self.APP_UA).content.decode()
         self.assertNotIn("Back to scanning", html)
 
+    def test_bar_is_drawn_before_the_page_content(self):
+        """AR-1 — it has to be first in the body, or `position: sticky` has nothing to stick over.
+
+        It used to live in ``undiv_content``, which base.html renders *after* ``content``, near the
+        end of the document: sticky only works over the scroll range left after an element's own
+        place in flow, so at the bottom of the page it drew once with all of the lot page's
+        background above it. That is the "bunch of empty black space over the Back to scanning
+        button" reported from the app.
+        """
+        self.client.force_login(self.user)
+        html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
+        body = html.split("<body", 1)[1]
+        # "mt-5 mb-5" is base.html's wrapper around {% block content %}; undiv_content is emitted
+        # after it closes, which is exactly where the bar used to land.
+        self.assertLess(body.index("Back to scanning"), body.index("mt-5 mb-5"))
+
 
 class ArObservationsEndpointTests(ArApiBaseTestCase):
     def _post(self, user, payload):

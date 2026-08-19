@@ -4056,7 +4056,7 @@ class UserLabelPrefsForm(forms.ModelForm):
         model = UserLabelPrefs
         exclude = ("user",)
 
-    def __init__(self, *args, show_print_method=True, is_mobile_app=False, **kwargs):
+    def __init__(self, *args, show_print_method=True, is_mobile_app=False, show_print_from_computer=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -4091,8 +4091,27 @@ class UserLabelPrefsForm(forms.ModelForm):
             ]
         else:
             del self.fields["print_method"]
+        # "Print from my computer to my phone" is only shown to an account with a phone that has ever
+        # reported a paired printer -- otherwise it is a switch with nothing behind it. Dropped from
+        # the form entirely when hidden, so a save from a browser that has never seen it leaves the
+        # stored value alone.
+        print_from_computer_layout = []
+        if show_print_from_computer:
+            print_from_computer_layout = [
+                Div(
+                    Div("print_from_computer", css_class="col-sm-12"),
+                    css_class="row",
+                ),
+                # The "your phone was last seen…" line. In a template because it is the one fact that
+                # decides whether the feature will work at all, and the copy for it wants to change
+                # without a form edit.
+                HTML('{% include "printing_remote_extras.html" %}'),
+            ]
+        else:
+            del self.fields["print_from_computer"]
         self.helper.layout = Layout(
             *print_method_layout,
+            *print_from_computer_layout,
             Div(
                 Div(
                     "preset",

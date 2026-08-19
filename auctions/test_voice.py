@@ -717,3 +717,25 @@ class VoiceSettingsPanelTests(StandardTestCase):
         """Settings describe this phone in this room, and syncing them to the account would fight
         an operator running two handsets."""
         self.assertNotIn("confident_at", self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"])
+
+
+class PriceAnchorCanonicalWordTests(TestCase):
+    """VOICE-8 — the first word of ``anchors["price"]`` is load-bearing.
+
+    Both recognizers format money out of the transcript before the app sees it: "twenty five dollars"
+    arrives as ``$25`` from iOS ``SFTranscription.formattedString`` and from Android's
+    ``RESULTS_RECOGNITION``, so the spoken anchor is absent from almost every real utterance and the
+    price slot never filled. The app now reads a currency symbol in front of a number as the price
+    anchor and substitutes the **canonical** (first) word of this list, which is what lets a
+    deployment rename the anchor without breaking.
+
+    Nothing about that is visible from the server, which is exactly why it is pinned here: a
+    well-meaning alphabetisation of this list is a silent regression in the app.
+    """
+
+    def test_dollars_is_the_canonical_price_anchor(self):
+        self.assertEqual(voice.default_anchors()["price"][0], "dollars")
+
+    def test_the_served_grammar_keeps_it_first(self):
+        grammar = VoiceGrammar.objects.create()
+        self.assertEqual(grammar.anchors["price"][0], "dollars")

@@ -264,6 +264,8 @@ window.onload = function() {
       <!-- End Google Tag Manager (noscript) -->
       {% endif %}
       <div class="bs-canvas-overlay bs-canvas-anim bg-dark position-fixed w-100 h-100"></div>
+      {% comment %}First thing in the document flow, which is what a `position: sticky` bar needs: sticky only works over the scroll range that is left *after* the element's own place in flow, so the same markup in `undiv_content` (rendered near the end of the body) draws once at the bottom of the page and sticks to nothing.  Used by pages the app opens on top of something of its own -- the lot page's "Back to scanning" bar -- and it is deliberately outside the container so a full-bleed bar stays full-bleed.{% endcomment %}
+      {% block body_top %}{% endblock %}
       {% if hide_navbar %}
         <script>
           $(document).ready(function(){
