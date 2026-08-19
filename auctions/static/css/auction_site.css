@@ -68,16 +68,47 @@ a.ad:hover {
     z-index: 1060;
   }
 
-/* --- select2 boxes are the same size as every other input ----------------
-   django-autocomplete-light renders select2's *default* theme, whose single-select box is 28px
-   tall with 8px of text padding.  Bootstrap's .form-control next to it is 38px with 12px, so the
-   picker sat short and its text started four pixels to the left of every other field on the form
-   -- and the caret, positioned against a 26px box, floated above the middle of a taller one.
+/* --- select2 pickers are the same box as every other input ---------------
+   Two things are wrong with a django-autocomplete-light picker as it ships, and they compound
+   into "the text in this box is offset".
+
+   dal starts select2 with `containerCssClass: ':all:'`, which copies every class off the
+   original <select> onto the box select2 draws -- and crispy's bootstrap5 field template, like
+   add_bootstrap_classes(), puts `form-select` on any Select widget.  Despite the option's name
+   the classes land on `.select2-selection`, the visible box, and not on the container: so that
+   box is a Bootstrap dropdown *and* a select2 selection at once, wearing both sets of padding
+   (Bootstrap's 0.75rem on the box, select2's 0.75rem on the text span inside it -- 25px of inset
+   where every other field on the form has 13) and both carets, drawn two pixels apart.  That is
+   the offset, and it is why deleting the select2 classes in devtools looks like the fix: what is
+   left is the Bootstrap box on its own.  The clear x jumps to the left of the text at the same
+   time, because select2 prepends it into the text span and only select2's stylesheet floats it
+   back to the right.
+
+   The second thing is the size: select2's *default* theme, which is the one dal renders, is a
+   28px box with 8px of text padding, where Bootstrap's .form-control beside it is 38px with 12px.
+
+   So Bootstrap's padding and caret come off wherever those copied classes land, and select2's own
+   box is dressed to match .form-control instead -- one definition, which the pickers that dal did
+   not build (three pages start select2 themselves) get as well.
+
    Nothing here changes the colours: Darkly's inputs really are white with dark text.
 
-   Prefixed with `body` on purpose.  Three pages load their own copy of select2's stylesheet in
-   {% block extra_js %}, which comes *after* this file, so a rule of equal specificity would lose
-   on exactly those pages.  One element selector is enough to win everywhere without !important. */
+   Prefixed with `body` on purpose.  Those three pages load their own copy of select2's stylesheet
+   in the extra_js block, and {{ form.media }} loads dal's and the admin's after this file as
+   well, so a rule of equal specificity would lose on exactly the pages this is for.  One element
+   selector is enough to win everywhere without !important. */
+body .select2-selection.form-select,
+body .select2-selection.form-select-sm,
+body .select2-selection.form-select-lg,
+body .select2-selection.form-control,
+body .select2-selection.form-control-sm,
+body .select2-selection.form-control-lg {
+    /* The text span inside carries the padding.  Bootstrap's would be a second helping of it. */
+    padding: 0;
+    /* Bootstrap's caret; select2 draws its own in an element of its own, on top of it. */
+    background-image: none;
+}
+
 body .select2-container--default .select2-selection--single {
     height: calc(1.5em + 0.75rem + calc(var(--bs-border-width) * 2));
     border: var(--bs-border-width) solid #222;
@@ -93,14 +124,18 @@ body .select2-container--default .select2-selection--single .select2-selection__
     padding-right: 2.25rem;
 }
 
+/* 0.625rem puts the middle of select2's 8px triangle where the middle of Bootstrap's 16px chevron
+   is, 20px in from the right edge, so a picker and a plain <select> line up down the form. */
 body .select2-container--default .select2-selection--single .select2-selection__arrow {
     height: calc(1.5em + 0.75rem);
-    right: 0.5rem;
+    right: 0.625rem;
 }
 
+/* Floated right inside the text span, so the padding above is what keeps it clear of the caret;
+   it needs no margin of its own. */
 body .select2-container--default .select2-selection--single .select2-selection__clear {
     line-height: calc(1.5em + 0.75rem);
-    margin-right: 0.5rem;
+    margin-right: 0;
     color: #6c757d;
 }
 
@@ -117,6 +152,13 @@ body .select2-container--default.select2-container--open .select2-selection--sin
 body .select2-container--default.select2-container--focus .select2-selection--multiple {
     border-color: #9badbf;
     box-shadow: 0 0 0 0.25rem rgba(55, 90, 127, 0.25);
+}
+
+/* crispy marks a field that failed validation by adding .is-invalid, which rides along on the copy
+   above -- but the border it paints is the one the rules here have just overwritten, so the red
+   has to be put back after them. */
+body .select2-selection.is-invalid {
+    border-color: var(--bs-form-invalid-border-color, #e74c3c);
 }
 
 /* dal ships `min-width: 20em`, which is wider than a narrow column on a phone: the box then

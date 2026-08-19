@@ -152,6 +152,25 @@ Two things that follow from it:
 Put the view-switching control (list/map, table/tiles) **below** the filters and
 directly above the results, not up beside the heading where it gets missed.
 
+## Autocomplete pickers (select2)
+
+Every select2 box on the site — django-autocomplete-light's and the three pages
+that start select2 themselves — is sized and painted by one block in
+`auction_site.css`, so a picker is the same 38px box as the `.form-control` above
+it. Two things to know before touching one:
+
+- **dal copies the field's classes onto `.select2-selection`**, the visible box,
+  because it starts select2 with `containerCssClass: ':all:'` (the option's name
+  is a select2 3.x leftover; it decorates the *selection* adapter). Crispy's
+  bootstrap5 field template puts `form-select` on any `Select` widget, so the box
+  arrives wearing Bootstrap's padding and caret on top of select2's — two sets of
+  padding, two carets, text 25px in where every other field's is 13px. The block
+  strips Bootstrap's padding and caret image back off; don't re-add either.
+- **Don't load a select2 skin on a page.** The Bootstrap 3 skin
+  (`select2-bootstrap.min.css`) sizes to a 5.3 theme, and any per-page stylesheet
+  loads after `auction_site.css`. The site rules are prefixed with `body` so they
+  still win, but the page ends up fighting itself for no gain.
+
 ## Unavailable actions stay clickable
 
 **Don't hide or disable a button when its action is currently unavailable.** Keep
