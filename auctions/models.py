@@ -3120,6 +3120,18 @@ class Species(models.Model):
     keep working off the nominal species -- and adds the strain only where a human reads it, in
     :attr:`label` and on the printed label.  :attr:`parent` points at the nominal species so the
     two can never drift apart.
+
+    A row with :attr:`is_hybrid` set is a **cross**, and it is the one thing on this table with no
+    scientific name at all: a tibee is a tiger crossed with a bee shrimp, a flowerhorn is nobody
+    is quite sure what, and neither has a binomial to carry.  Filing one under a parent would put
+    a wrong genus on a printed label and inside a genus BAP rule, so a hybrid keeps *only* the
+    name the trade uses -- in :attr:`variety`, with :attr:`genus`, :attr:`species` and
+    :attr:`parent` all empty -- and reads as ``Hybrid 'Tibee'`` wherever a name is shown.  What it
+    is not is invisible: it is a row like any other, so it earns breeder points, counts once in
+    :attr:`Club.days_between_same_species_lots`, and can be told apart from every other cross.
+    The flag is stored rather than worked out from "a variety with no parent" because
+    ``parent__isnull=True`` already means *nominal species* in four places, and one column is
+    cheaper than four filters that have to remember a second meaning.
     """
 
     SOURCE_CHOICES = (
@@ -3182,6 +3194,11 @@ class Species(models.Model):
         on_delete=models.CASCADE,
         related_name="varieties",
         help_text="The nominal species this variety belongs to.  Only used on variety rows.",
+    )
+    is_hybrid = models.BooleanField(default=False)
+    is_hybrid.help_text = (
+        "A cross with no accepted scientific name -- a tibee shrimp, a flowerhorn.  Put the name "
+        "the trade uses in variety; genus, species and parent are left empty."
     )
     breeder_points = models.BooleanField(default=True, verbose_name="Eligible for breeder points")
     breeder_points.help_text = (
@@ -3274,9 +3291,18 @@ class Species(models.Model):
 
         Never a *variety* against a plain species, and never across the imported lists -- see
         :attr:`IMPORTED_SOURCES`.
+
+        A hybrid has no scientific name to compare, so the strain name is the whole of its
+        identity and two rows carrying it are the same cross.  Without this branch every hybrid
+        added twice would sail past the check, because the first test below reads a column that is
+        empty on both of them.
         """
         others = Species.objects.exclude(pk=self.pk)
-        if self.scientific_name:
+        if self.is_hybrid:
+            match = others.filter(is_hybrid=True, variety__iexact=self.variety).first()
+            if match:
+                return match
+        elif self.scientific_name:
             match = others.filter(scientific_name__iexact=self.scientific_name, variety__iexact=self.variety).first()
             if match:
                 return match
@@ -3362,12 +3388,20 @@ class Species(models.Model):
         self.genus = (self.genus or "").strip()
         self.species = (self.species or "").strip()
         self.variety = (self.variety or "").strip()
+        # The invariant, enforced here rather than trusted to three writers: a hybrid is a name and
+        # nothing else.  A genus left on one would be picked up by ClubBapGenusOverride and by the
+        # scientific-token rule in species_matching, both of which would then be reasoning about a
+        # species this animal is only half of.
+        if self.is_hybrid:
+            self.genus = ""
+            self.species = ""
+            self.parent = None
         # Rows that predate the import -- hand-typed into the old Product table -- have a
         # scientific name and no genus, because nothing ever split one for them.  Rebuilding the
         # denormalised column from two empty strings would erase the only name they have, on any
         # save at all, including an admin ticking a checkbox.  So the split runs the other way for
         # those, which also makes them findable: every lookup in species_matching goes via genus.
-        if self.scientific_name and not self.genus and not self.species:
+        if self.scientific_name and not self.genus and not self.species and not self.is_hybrid:
             parts = self.scientific_name.split()
             self.genus = parts[0][:100]
             self.species = " ".join(parts[1:])[:150]
@@ -3421,7 +3455,11 @@ class Species(models.Model):
         # order_by() clears Meta.ordering, which would otherwise put scientific_name and variety
         # into the SELECT DISTINCT and make this one row per species rather than one per genus:
         # 139,000 rows sorted on disk to build a set of 1,100 strings.
+        # discard(""): a hybrid has no genus, and one of them in the hobby -- which is all of them,
+        # nobody breeds a cross by accident -- would otherwise put "" in this set and promote every
+        # other blank-genus row to the genus tier on the strength of it.
         traded_genera = set(traded.order_by().values_list("genus", flat=True).distinct())
+        traded_genera.discard("")
 
         queryset = cls.objects.all() if genus is None else cls.objects.filter(genus=genus)
         changed = 0
@@ -3429,7 +3467,7 @@ class Species(models.Model):
         for species in queryset.iterator(chunk_size=batch_size):
             if species.in_aquarium_trade:
                 rank = cls.TRADE_RANK_SPECIES
-            elif species.genus in traded_genera:
+            elif species.genus and species.genus in traded_genera:
                 rank = cls.TRADE_RANK_GENUS
             else:
                 rank = cls.TRADE_RANK_NONE
@@ -3465,7 +3503,14 @@ class Species(models.Model):
 
         Horticulture's convention -- *Neocaridina davidi* 'Blue Dream' -- because it is the one
         readers already know, and because the quotes say out loud that the last word is not Latin.
+
+        A hybrid has nothing to put in front of the quotes, so the word "Hybrid" goes there.  It is
+        the honest answer and it is the one a BAP judge needs: a class that excludes crosses can
+        only do that if the label says which lots are crosses, and this is the line the label, the
+        lot page, the AR overlay and the lot map all print.
         """
+        if self.is_hybrid and self.variety:
+            return f"Hybrid '{self.variety}'"
         if self.variety and self.scientific_name:
             return f"{self.scientific_name} '{self.variety}'"
         return self.scientific_name or self.variety
@@ -3622,24 +3667,32 @@ class SpeciesSearchCache(models.Model):
     )
     rejects = models.PositiveIntegerField(default=0)
     rejects.help_text = (
-        "Times somebody cleared this answer or picked a different species for a lot with this "
-        "name.  Enough of them retires the row; see is_discredited."
+        "Lots this answer was cleared from or changed on.  Counted once per lot, like accepts.  "
+        "Enough of them retires the row; see is_discredited."
     )
 
     #: How much disagreement a remembered answer survives.  One rejection in ten is the line, so a
-    #: row needs nine people to leave it alone for every one who takes it off a lot -- and a fresh
-    #: row nobody has agreed with yet is retired by the first person who disagrees, which is the
-    #: whole point: the first save is the one most likely to have been a misclick.
+    #: row needs nine people to leave it alone for every one who takes it off a lot.
     MAX_REJECT_RATIO = 0.1
+
+    #: ...but never on fewer than this many rejections, whatever the ratio says.  The ratio alone
+    #: retired a fresh row the first time anybody cleared it, on the theory that a first save is
+    #: the one most likely to be a misclick -- which is true, and is exactly as true of the clearing
+    #: as of the answer being cleared.  Somebody hitting the X once because *this* lot is a mixed
+    #: bag is not evidence about the name, and throwing the answer away on it means the next
+    #: hundred sellers of that name get nothing.  Three lots is disagreement; one is a Tuesday.
+    MIN_REJECTS_TO_RETIRE = 3
 
     @property
     def is_discredited(self):
         """True when the rejections have outgrown :attr:`MAX_REJECT_RATIO`.
 
         Integer arithmetic rather than a division: ``rejects / (accepts + rejects) > 0.1`` is
-        exactly ``9 * rejects > accepts``, and this is read on every lot save.
+        exactly ``9 * rejects > accepts``, and this is read on every lot save.  The floor is
+        checked first because it is the cheap half and the one that fires: on a row with no
+        accepts, the ratio is satisfied by every rejection there will ever be.
         """
-        return self.rejects > 0 and self.rejects * 9 > self.accepts
+        return self.rejects >= self.MIN_REJECTS_TO_RETIRE and self.rejects * 9 > self.accepts
 
     def retire(self):
         """Throw this answer away, and remember that it was thrown away.

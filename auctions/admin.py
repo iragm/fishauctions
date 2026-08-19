@@ -1218,6 +1218,10 @@ class SpeciesAdmin(admin.ModelAdmin):
         "approved",
         ("possible_duplicate", admin.EmptyFieldListFilter),
         "source",
+        # A cross has no scientific name to search for and no genus to sort by, so a filter is the
+        # only way to see the ones the site holds.  There are a handful; there are 36,000 of
+        # everything else.  See Species.is_hybrid.
+        "is_hybrid",
         "club",
         "category",
         "freshwater",

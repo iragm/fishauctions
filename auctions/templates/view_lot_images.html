@@ -248,8 +248,8 @@ App-only; the deep link is handled natively. {% endcomment %}
                                 </a>
                                 {% endif %}
                             {% endif %}
-                            {% comment %} App-only: open lot scanning aimed at this lot and walk the user to it. Visible to every user. {% endcomment %}
-                            {% if request.is_mobile_app and lot.auction %}
+                            {% comment %} App-only: open lot scanning aimed at this lot and walk the user to it. Visible to every user, and only for an in-person auction -- an online lot is in somebody's fish room, not in a room you can walk across. {% endcomment %}
+                            {% if request.is_mobile_app and lot.auction and not lot.auction.is_online %}
                                 <a class="btn btn-primary" href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}">
                                     <i class="bi bi-geo-alt"></i> Find this lot
                                 </a>

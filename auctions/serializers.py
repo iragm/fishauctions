@@ -336,6 +336,10 @@ class SpeciesMatchSerializer(serializers.ModelSerializer):
             "species_epithet",
             "variety",
             "parent",
+            # True where "variety" is a cross rather than a strain, and the only case where
+            # scientific_name, genus and species_epithet are all empty: a hybrid has no binomial
+            # to carry.  full_scientific_name reads "Hybrid 'Tibee'" for these.
+            "is_hybrid",
             "family",
             "order",
             "category",
@@ -384,6 +388,7 @@ class SpeciesCreateSerializer(serializers.Serializer):
     other_names = _NameListField(required=False)
     variety = serializers.CharField(required=False, allow_blank=True, max_length=100)
     parent = serializers.IntegerField(required=False, allow_null=True)
+    is_hybrid = serializers.BooleanField(required=False, default=False)
     freshwater = serializers.BooleanField(required=False, default=True)
     brackish = serializers.BooleanField(required=False, default=False)
     saltwater = serializers.BooleanField(required=False, default=False)
@@ -405,7 +410,7 @@ class SpeciesCreateSerializer(serializers.Serializer):
             msg = "No species with that id on this site's list."
             raise serializers.ValidationError(msg)
         if parent.parent_id or parent.variety:
-            msg = "A strain has to be a strain of a plain species, not of another strain."
+            msg = "A strain has to be a strain of a plain species, not of another strain or a hybrid."
             raise serializers.ValidationError(msg)
         return parent
 
@@ -414,13 +419,28 @@ class SpeciesCreateSerializer(serializers.Serializer):
 
         variety = (data.get("variety") or "").strip()
         parent = data.get("parent")
-        if variety and not parent:
-            msg = {"parent": "A strain has to say which species it is a strain of."}
+        is_hybrid = bool(data.get("is_hybrid"))
+        if is_hybrid:
+            # A cross is a name and nothing else -- no binomial, no parent species.  Sending
+            # either alongside is a contradiction, not extra detail, so it is refused rather than
+            # dropped on the floor.  See Species.is_hybrid.
+            if parent:
+                msg = {"parent": "A hybrid is not a strain of one species — that is what makes it a hybrid."}
+                raise serializers.ValidationError(msg)
+            if (data.get("scientific_name") or "").strip():
+                msg = {"scientific_name": "Leave this out for a hybrid: a cross has no scientific name."}
+                raise serializers.ValidationError(msg)
+            if not variety:
+                msg = {"variety": "Give the hybrid the name the trade uses for it, e.g. Tibee."}
+                raise serializers.ValidationError(msg)
+            genus, epithet = "", ""
+        elif variety and not parent:
+            msg = {"parent": "A strain has to say which species it is a strain of, unless is_hybrid is true."}
             raise serializers.ValidationError(msg)
-        if parent and not variety:
+        elif parent and not variety:
             msg = {"variety": "Give the strain a name, e.g. Blue Dream."}
             raise serializers.ValidationError(msg)
-        if parent:
+        elif parent:
             # A strain takes its parent's name; there is nothing to send and nothing to disagree
             # about.  This is what keeps "Blue Dream" out of the genus column.
             genus, epithet = parent.genus, parent.species
@@ -450,6 +470,7 @@ class SpeciesCreateSerializer(serializers.Serializer):
             species=validated_data["epithet"],
             variety=validated_data["variety"],
             parent=validated_data.get("parent"),
+            is_hybrid=validated_data.get("is_hybrid", False),
             common_name=(validated_data.get("common_name") or "").strip(),
             category=validated_data.get("category"),
             freshwater=validated_data.get("freshwater", True),

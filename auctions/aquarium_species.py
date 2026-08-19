@@ -20,6 +20,15 @@ reasoning about the science (breeder points, genus BAP overrides, the family-to-
 sees the nominal species, while everything a human reads shows *Neocaridina davidi* 'Blue Dream'.
 A cultivar of a fish names a FishBase parent, so those rows are skipped -- with a warning -- when
 FishBase hasn't been imported.
+
+**Hybrids.**  A row with a ``variety`` and *no* scientific name is a cross -- a tibee, a
+flowerhorn.  The blank first column is the whole declaration, and it is honest rather than a
+sentinel: a cross between two species has no binomial, which is exactly why the trade's name is
+all there is to write down.  It loads as :attr:`Species.is_hybrid`, and the model refuses to keep
+a genus, an epithet or a parent on such a row, so nothing that reasons about taxonomy can be
+handed one of the two parents by accident.  ``family`` and ``order`` are the exception and may be
+filled in when both parents are in the same one -- every tibee is an atyid and every flowerhorn is
+a cichlid, and it is what gives the row a category.
 """
 
 from __future__ import annotations
@@ -90,7 +99,12 @@ class Row:
 
     @property
     def is_variety(self):
-        return bool(self.variety)
+        return bool(self.variety) and bool(self.scientific_name)
+
+    @property
+    def is_hybrid(self):
+        """A cross: the trade's name, and no binomial to hang it on.  See the module docstring."""
+        return bool(self.variety) and not self.scientific_name
 
     @property
     def is_names_only(self):
@@ -102,7 +116,7 @@ class Row:
         clearly meant to find one -- a typo in the scientific name would otherwise create a bare
         row with no family, no category and nobody the wiser.
         """
-        return not (self.kind or self.family or self.order or self.habitats)
+        return bool(self.scientific_name) and not (self.kind or self.family or self.order or self.habitats)
 
 
 @dataclass
@@ -126,12 +140,15 @@ def read_rows(path=DATA_FILE):
         lines = [line for line in handle if line.strip() and not line.lstrip().startswith("#")]
     for raw in csv.DictReader(lines):
         name = (raw.get("scientific_name") or "").strip()
-        if not name:
+        variety = (raw.get("variety") or "").strip()
+        # A hybrid row is the one kind with no scientific name at all, so the variety has to be
+        # able to carry a row on its own; a line with neither is a stray comma.
+        if not name and not variety:
             continue
         rows.append(
             Row(
                 scientific_name=name,
-                variety=(raw.get("variety") or "").strip(),
+                variety=variety,
                 common_names=[part.strip() for part in (raw.get("common_names") or "").split("|") if part.strip()],
                 family=(raw.get("family") or "").strip(),
                 order=(raw.get("order") or "").strip(),
@@ -175,12 +192,14 @@ def _find_elsewhere(row):
     alphabetical order happens to put ``admin`` (somebody added it here, on purpose, recently)
     ahead of ``fishbase``, which is the right precedence for a row a person is maintaining.
     """
-    return (
-        Species.objects.filter(scientific_name__iexact=row.scientific_name, variety__iexact=row.variety)
-        .exclude(source=SOURCE)
-        .order_by("source")
-        .first()
-    )
+    # A hybrid has no scientific name to match on, so it is found the same way
+    # Species.find_possible_duplicate finds one: the trade's name, and the flag.  Without this a
+    # flowerhorn an auction admin had already added by hand would end up on the picker twice.
+    if row.is_hybrid:
+        others = Species.objects.filter(is_hybrid=True, variety__iexact=row.variety)
+    else:
+        others = Species.objects.filter(scientific_name__iexact=row.scientific_name, variety__iexact=row.variety)
+    return others.exclude(source=SOURCE).order_by("source").first()
 
 
 def _find_parent(row, by_name):
@@ -204,6 +223,9 @@ def _apply(species, row, resolver, parent):
     category = parent.category if parent else resolver.resolve(KIND_CATEGORY_HINTS.get(row.kind))
     values = {
         "category": category,
+        # Species.save() clears the genus, the epithet and the parent on a hybrid; this is here so
+        # a row that stops being a hybrid in the CSV stops being one in the database too.
+        "is_hybrid": row.is_hybrid,
         "genus": row.genus[:100],
         "species": row.epithet[:150],
         "variety": row.variety[:100],

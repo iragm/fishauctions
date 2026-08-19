@@ -162,8 +162,8 @@ function initMap() {
                         <div class="col-12 col-md-auto">
                             <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
                         </div>
-                        {% comment %} Lot scanning is app-only (native camera); deep-link into it. Visible to every user. {% endcomment %}
-                        {% if request.is_mobile_app %}
+                        {% comment %} Lot scanning is app-only (native camera); deep-link into it. Visible to every user, in-person auctions only -- there is no room to walk across at an online one, which is the same rule the command palette's Lot scanning row uses. {% endcomment %}
+                        {% if request.is_mobile_app and not auction.is_online %}
                         <div class="col-12 col-md-auto">
                             <a href="fishauctions://ar/{{ auction.slug }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-camera"></i> Scan lots</a>
                         </div>

@@ -208,6 +208,7 @@
         <li><code>full_scientific_name</code> &mdash; the name to show a person. On a strain it includes the strain ("Neocaridina davidi 'Blue Dream'"); <code>scientific_name</code> is the plain species and is the same for every strain of it.</li>
         <li><code>label</code> &mdash; what a picker shows a person: the full scientific name, strain included. The common name is <code>common_name</code>; it is deliberately not repeated here.</li>
         <li><code>variety</code> / <code>parent</code> &mdash; the strain, and the species it's a strain of. Both empty on an ordinary species.</li>
+        <li><code>is_hybrid</code> &mdash; a cross with no accepted scientific name, e.g. a tibee shrimp. The only case where <code>scientific_name</code>, <code>genus</code> and <code>species_epithet</code> are all empty; <code>variety</code> holds the name the trade uses and <code>full_scientific_name</code> reads "Hybrid 'Tibee'". Post one with <code>{"is_hybrid": true, "variety": "Tibee"}</code> and no scientific name.</li>
         <li><code>category</code> &mdash; the category a lot of this species gets here, or <code>null</code>.</li>
         <li><code>trade_rank</code> &mdash; 0 = kept in the hobby, 1 = its genus is, 2 = neither. Results are ordered by it.</li>
         <li><code>approved</code> &mdash; <code>false</code> means it is yours: visible to this club only, until a site admin approves it.</li>

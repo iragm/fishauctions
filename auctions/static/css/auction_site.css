@@ -68,6 +68,65 @@ a.ad:hover {
     z-index: 1060;
   }
 
+/* --- select2 boxes are the same size as every other input ----------------
+   django-autocomplete-light renders select2's *default* theme, whose single-select box is 28px
+   tall with 8px of text padding.  Bootstrap's .form-control next to it is 38px with 12px, so the
+   picker sat short and its text started four pixels to the left of every other field on the form
+   -- and the caret, positioned against a 26px box, floated above the middle of a taller one.
+   Nothing here changes the colours: Darkly's inputs really are white with dark text.
+
+   Prefixed with `body` on purpose.  Three pages load their own copy of select2's stylesheet in
+   {% block extra_js %}, which comes *after* this file, so a rule of equal specificity would lose
+   on exactly those pages.  One element selector is enough to win everywhere without !important. */
+body .select2-container--default .select2-selection--single {
+    height: calc(1.5em + 0.75rem + calc(var(--bs-border-width) * 2));
+    border: var(--bs-border-width) solid #222;
+    border-radius: var(--bs-border-radius);
+}
+
+body .select2-container--default .select2-selection--single .select2-selection__rendered {
+    color: #303030;
+    /* The box less its two borders, so one line of text sits in the middle of it. */
+    line-height: calc(1.5em + 0.75rem);
+    padding-left: 0.75rem;
+    /* Room for the caret, the same gap .form-select leaves for its own. */
+    padding-right: 2.25rem;
+}
+
+body .select2-container--default .select2-selection--single .select2-selection__arrow {
+    height: calc(1.5em + 0.75rem);
+    right: 0.5rem;
+}
+
+body .select2-container--default .select2-selection--single .select2-selection__clear {
+    line-height: calc(1.5em + 0.75rem);
+    margin-right: 0.5rem;
+    color: #6c757d;
+}
+
+body .select2-container--default .select2-selection--multiple {
+    min-height: calc(1.5em + 0.75rem + calc(var(--bs-border-width) * 2));
+    border: var(--bs-border-width) solid #222;
+    border-radius: var(--bs-border-radius);
+    padding-left: 0.375rem;
+}
+
+/* The same focus ring .form-control:focus draws, so tabbing across a form doesn't change shape. */
+body .select2-container--default.select2-container--focus .select2-selection--single,
+body .select2-container--default.select2-container--open .select2-selection--single,
+body .select2-container--default.select2-container--focus .select2-selection--multiple {
+    border-color: #9badbf;
+    box-shadow: 0 0 0 0.25rem rgba(55, 90, 127, 0.25);
+}
+
+/* dal ships `min-width: 20em`, which is wider than a narrow column on a phone: the box then
+   overflowed its container to the right, which is the other half of "the text looks offset".
+   Every picker on the site sets its own width, so capping this at the container costs nothing. */
+body .select2-container {
+    min-width: min(20em, 100%);
+    max-width: 100%;
+}
+
 .modal-backdrop {
     z-index: 1040 !important;
 }

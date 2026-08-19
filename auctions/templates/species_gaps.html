@@ -39,8 +39,10 @@
         <td class="small text-muted">
           {{ gap.verdict }}{% if gap.verdict_detail %} &middot; {{ gap.verdict_detail }}{% endif %}
         </td>
-        <td class="text-end">
-          <a class="btn btn-sm btn-outline-primary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add species</a>
+        <td class="text-end text-nowrap">
+          {% comment %}Naming first: most of these rows are a species the list already holds under a name nobody in the hobby types, and adding a second copy of it is what fills the duplicate table below.{% endcomment %}
+          <a class="btn btn-sm btn-outline-primary" href="{% url 'species_name_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add a name</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">New species</a>
         </td>
       </tr>
       {% empty %}

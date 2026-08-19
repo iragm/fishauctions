@@ -57,9 +57,17 @@ Migration permission error? Use `docker exec -u root -it django ...`
 The trade is where the CSV's plant and shrimp rows come from, because that is who names them:
 Tropica's catalogue for plant cultivars ("Rosanervig", "Monte Carlo", "H'ra"), Florida Aquatic
 Nurseries for the American common names, and The Garden of Eder's stock list for shrimp strains.
-Their hybrids are deliberately **left out** — tibee, tangtai, mischling, ghost bee, "steel" — because
-a cross between two species has no binomial, and filing it under one of its parents would put a
-wrong genus on a label and in a genus BAP rule.
+Their **hybrids are in it too**, in a section of their own — tibee, tangtai, mischling, ghost bee,
+"steel", stardust, calceo, and the fish the hobby crossed itself (flowerhorn, blood parrot, red
+texas, OB and dragon blood peacocks), none of which FishBase has or ever will. A hybrid row is
+written with the **first column empty**: a cross between two species has no binomial, so the
+trade's name goes in `variety` and the loader sets `is_hybrid`. Filing one under either parent
+would put a wrong genus on a label and in a genus BAP rule, so no parentage is kept — see the
+hybrid paragraph below. `family` and `order` are the one exception and may be filled in when both
+parents share one (every tibee is an atyid, every flowerhorn a cichlid); that is what gives the
+row a category, and nothing else reads them. The test for adding one is not "is the
+identification settled" — there is nothing to identify — but "does the hobby agree this is a
+cross", which is why the mbuna-blooded peacocks are in and "strawberry peacock" is not.
 
 FishBase is the **taxonomy** and the CSV is the **vocabulary**. FishBase is an ichthyology
 database: it is authoritative about which species exist and has no reason to know that
@@ -95,8 +103,9 @@ A review question is a **group of spellings**, keyed on the lot name's words min
 "6 male guppies" and "guppies (pair)" one question, and the candidates are what keep "blue dream
 shrimp" and "green dream shrimp" apart — the colours are stop words, so the key alone would merge
 two different cultivars. `a` adds a species without leaving the review (the command-line half of
-`/species/new/`, approved because a person with a shell is not an auction admin), `n` remembers
-"not a species", and a decision covering several spellings asks before applying to all of them.
+`/species/new/`, approved because a person with a shell is not an auction admin; leave the
+scientific name blank and it adds a **cross**), `n` remembers "not a species", and a decision
+covering several spellings asks before applying to all of them.
 
 The writing pass uses `update()` so it can never re-derive a lot's category and move it between the
 BAP, HAP and Culture tracks; `--set-category` opts into that for Uncategorized lots with no
@@ -118,8 +127,45 @@ docker exec django python3 manage.py backfill_lot_species --review --include-unm
 anything, so a full-site pass over tens of thousands of names is opt-in (`--scan 0`) rather than
 the thing that happens while you wait.
 
+### Setting it up on a live site
+
+In order, and every step is safe to re-run. `-it` matters on the review pass and nowhere else: it
+is the only one that reads stdin. Nothing here needs an LLM key — the backfill runs the matcher
+with the model turned off from end to end.
+
 ```bash
+docker exec django python3 manage.py showmigrations auctions | tail -3   # 0395 applied?
+docker exec django python3 manage.py backfill_lot_species --status       # before: what's there
+docker exec django python3 manage.py import_fishbase --check-version     # don't bump mid-rollout
+docker exec django python3 manage.py import_fishbase --only-legacy --dry-run  # what will be folded in
+docker exec django python3 manage.py import_fishbase --dry-run           # ~20 MB down, parse, write nothing
+docker exec django python3 manage.py import_fishbase                     # the real thing, ~1 min
+docker exec django python3 manage.py backfill_lot_species --status       # after: what can now match
+docker exec django python3 manage.py backfill_lot_species --dry-run
+docker exec django python3 manage.py backfill_lot_species                # the certain ones
+docker exec -it django python3 manage.py backfill_lot_species --review --dry-run --limit 500
+docker exec -it django python3 manage.py backfill_lot_species --review --limit 500
+docker exec -it django python3 manage.py backfill_lot_species --review --include-unmatched
 ```
+
+Three of those steps are the ones worth stopping at. **`--check-version`** because bumping
+`FISHBASE_VERSION` swaps the whole species list and is a deliberate edit to `fishbase.py`, not
+something to do while rolling out. **`--only-legacy --dry-run`** because the full import ends by
+folding the site's old hand-typed `Product` rows into the imported ones and *moving lots onto
+them*; `--keep-legacy` skips that pass entirely. And the **category table** the import prints at
+the end (`--only-categories` re-runs just that pass) is the one thing that has to be read rather
+than skimmed: it is every hint against the category it found on *this* site, and the interesting
+mistake is not a hint that matched nothing but a hint that matched something unexpected.
+
+The backfill is three passes and they go in this order because each one is worth less than the
+one before it. `--status` first: it can only be as good as the list, and a run that says the
+curated rows are missing is a run whose plant and shrimp lots cannot match anything. Then the
+automatic pass, which assigns only where the matcher gives exactly one answer. Then `--review`,
+which is a person at a terminal: number to pick, `s` to search the whole list, `a` to add a
+species, a strain or a cross inline, `n` for "not a species", enter to skip, `q` to quit — a decision
+covering several spellings asks before applying to all of them, and every one of them writes a
+`SpeciesSearchCache` row so nothing asks twice. `--include-unmatched` is last because those are
+the names with no candidates at all, where the answer is usually a new species.
 
 A **cultivar** ("Blue Dream", "Halfmoon") is a `Species` row with `variety` set and `parent`
 pointing at the nominal species, carrying the parent's genus and epithet — so breeder points,
@@ -128,6 +174,27 @@ never `scientific_name`, wherever a human reads it. The one rule that reads the 
 than the species is `Club.days_between_same_species_lots`, which blocks BAP points for the same
 species twice inside a window: it matches on the species row itself, so blue and red cherry shrimp
 are two different things to breed and both earn points.
+
+A **hybrid** ("Tibee", "Flowerhorn") is the third shape and the only row on the table with no
+scientific name at all: `is_hybrid` set, the trade's name in `variety`, and `genus`, `species` and
+`parent` all empty — `Species.save()` enforces that, so a genus put on one by hand is cleared
+rather than trusted. It reads as `Hybrid 'Tibee'` everywhere a name is shown, which is the point:
+a BAP class that excludes crosses can only do that if the printed label says which lots are
+crosses. Deliberately **no parentage is tracked** — a cross has no binomial, and filing it under
+one parent would put a wrong genus into a genus BAP rule; what judging needs is *"is this a
+hybrid"*, not *"of what"*. It is otherwise an ordinary row: it earns breeder points, it counts once
+in `days_between_same_species_lots`, and it is added at `/species/new/` with a checkbox — or
+shipped in the curated CSV, which is where the dozen the trade sells by name live.
+
+The flag is a **stored column, not `variety and not parent`**, because `parent__isnull=True`
+already means "nominal species" in four places and one column is cheaper than four filters that
+have to remember a second meaning. The consequences to keep in mind: no `ClubBapGenusOverride` can
+ever match one (it matches on `genus`, which is empty — a club's *Tropheus* rule does not cover a
+Tropheus cross, which is right), `species_categories` has only what the CSV's `family`/`order`
+columns say (nothing at all for one added on the form, where the person picks the category), and
+the **only** route to a hybrid is
+`SpeciesCommonName` — nothing reads the `variety` column, so the form writes the strain name into
+the name table or the cross would sit on the picker unreachable by typing what it is called.
 
 Adding a species is an **admin workflow, not a database edit**: `/admin-dashboard/species-gaps/`
 lists the lot names that keep showing up with no species (the sibling of the command palette's
@@ -157,6 +224,21 @@ lot in one of its auctions). `remember()` refuses to put it in the global name c
 button on the gaps page, or the bulk action in the Django admin — is what makes it everyone's and
 teaches the matcher the lot names it is already on.
 
+Both species pages honour **`?next=`** for everybody, superusers included. The gaps page is the
+fallback and it is superusers only, so an auction admin sent there loses the species and gets a
+permission error; whoever wrote the link knows where the person came from, and the permissions they
+happen to hold do not.
+
+The commoner fix is not a new species at all, and `/species/name/`
+(`SpeciesCommonNameCreateView`) is where it lives: most lot names with no scientific name are one
+of FishBase's 36,000 filed under a name nobody says — *Labidochromis caeruleus* is "Blue streak
+hap" there and "yellow lab" everywhere else. Until this page existed the only way to add a name was
+the Django admin, which auction admins cannot open, so the workflow they were left with was "add a
+second *Labidochromis caeruleus*" — which is what fills the duplicate table. Same gate as
+`/species/new/`, same scoping (`approved=False` for a non-superuser), and it deliberately does
+**not** write to `SpeciesSearchCache`: the name itself is the teaching and it is scoped, where a
+cache row is global.
+
 `Species.club` is filled in only when there is an obvious one (`UserData.only_club`: single-club
 mode, or the user belongs to exactly one) and is often blank, which is why it can never be the
 *only* route — plenty of auctions have no club at all. Pass `club=` to `visible_species` /
@@ -174,10 +256,16 @@ Because sellers write it, it has to be able to be **wrong and recover**, and tha
 `species_matching.record_choice` is for: every lot save reports what happened to the answer this
 name was remembered as. A lot saved with it left alone counts an **accept**, once, on the save that
 created the lot — re-saving a lot to fix its price is not a second vote. A lot it was cleared from
-or changed on counts a **reject**, on any save. One rejection in ten retires the row
-(`SpeciesSearchCache.is_discredited`), so a fresh row nobody has agreed with yet is retired by the
-first person who disagrees — the first save is the one most likely to have been a misclick — and a
-row nine people have left alone survives one.
+or changed on counts a **reject**, on the save that created the lot or on a later save that
+actually moved the species. Both counters count **lots, not saves**, which is what stops one
+seller editing one lot three times from outvoting everybody.
+
+Retiring the row (`SpeciesSearchCache.is_discredited`) takes **both** one rejection in ten *and* at
+least `MIN_REJECTS_TO_RETIRE` (3) of them. The floor is not optional: on a row with no accepts the
+ratio is satisfied by the very first rejection, so a single seller clearing a field because *their*
+lot is a mixed bag used to throw the answer away for the next hundred people. The first save is the
+one most likely to be a misclick, and that is exactly as true of the clearing as of the answer
+being cleared. Three lots is disagreement; one is a Tuesday.
 
 Retiring writes a `SpeciesNameRejection`, and *that* is the part that matters: deleting the cache
 row on its own would send the next lookup back to the same language model with the same shortlist,

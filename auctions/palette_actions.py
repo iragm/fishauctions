@@ -4994,6 +4994,12 @@ NOT_A_SKILL: dict[str, str] = {
         "name ends up on a printed label and in breeder points, which the whole species feature is "
         "written to avoid. The palette navigates to the page instead."
     ),
+    "SpeciesCommonNameCreateView": (
+        "Same reason as SpeciesCreateView, plus one of its own: the decision is which of 36,000 "
+        "species a typed name belongs to, and getting it wrong does not add a bad row, it takes a "
+        "good name away from the species that had it. That is a picker and a page, not a spoken "
+        "line. The palette navigates to the page instead."
+    ),
     "SpeciesSearchCacheForgetView": (
         "One button on the species gaps page, and the decision is the row next to it: this "
         "remembered answer is wrong, throw it away. Naming the row out loud means saying a "

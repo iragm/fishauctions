@@ -108,6 +108,22 @@ class AuctionTOSHTMxTable(tables.Table):
             )
         return value
 
+    def is_club_auction_admin(self, record):
+        """Whether this row runs the auction by way of the club rather than AuctionTOS.is_admin.
+
+        In a club-managed auction the is_admin checkbox is hidden and disabled (AuctionTOSAdminForm):
+        who may run the auction is decided by the club permissions, exactly as Auction.permission_check
+        reads them. Without this the Admin badge is never shown in those auctions.
+
+        The clubmember is already loaded by the membership column, which is only present in this mode.
+        """
+        if not self.is_managed:
+            return False
+        club_member = record.clubmember
+        if not club_member or club_member.is_deleted:
+            return False
+        return bool(club_member.permission_admin or club_member.permission_manage_auctions)
+
     def render_name(self, value, record):
         # as a button, looks awful
         # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
@@ -120,7 +136,13 @@ class AuctionTOSHTMxTable(tables.Table):
         else:
             result += "<i class='bi bi-person-fill-gear me-1'></i>"
         result += f"{value}</a>"
-        if record.is_admin or (record.user and record.auction.created_by.pk == record.user.pk):
+        # created_by is nullable (the account that made the auction can be deleted), and comparing
+        # ids rather than objects keeps this from fetching a user and a creator for every row.
+        if (
+            record.is_admin
+            or (record.user_id and record.auction.created_by_id == record.user_id)
+            or self.is_club_auction_admin(record)
+        ):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
         if record.is_club_member:
             label = record.auction.alternative_split_label.capitalize()
@@ -182,7 +204,7 @@ class AuctionTOSHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_manage_check_in = kwargs.pop("can_manage_check_in", False)
-        is_managed = kwargs.pop("is_managed", False)
+        self.is_managed = is_managed = kwargs.pop("is_managed", False)
         exclude = list(kwargs.pop("exclude", None) or [])
         # The membership column is only meaningful for club-managed/check-in auctions.
         if not is_managed:

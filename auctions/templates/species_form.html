@@ -4,26 +4,20 @@
 {% block content %}
 <h2 class="mb-1">{{ title }}</h2>
 {% comment %}
-  The species list is imported and not meant to be typed, so this page says out loud when it is the
-  right tool: something the hobby sells that FishBase has never described, and cultivars, which no
-  code of nomenclature has a rank for.
+  Says out loud who is going to see this, because that is the question somebody standing at a
+  check-in table is actually asking, and the answer is not "everybody".  What a non-superuser adds
+  here is approved=False -- see Species.approved and species_matching.visible_species.
 {% endcomment %}
-{% comment %}Both links below go to superuser-only pages, and this form is open to any auction admin -- offering them a link that bounces them with a permission error is worse than not offering one.{% endcomment %}
 <p class="text-muted">
-  For something the imported list doesn't have &mdash; an undescribed fish with an L-number, a plant the
-  trade renamed, this year's shrimp colour.
-  {% if request.user.is_superuser %}Check
-  <a href="{% url 'species_gaps' %}">the list of lots with no scientific name</a> first; most gaps are
-  a name the matcher can't connect to a species that is already there.
-  {% else %}Search the picker on the lot form first: most gaps are a name the matcher can't connect
-  to a species that is already there.{% endif %}
+  {% if request.user.is_superuser %}You are creating a new species. It goes into everyone's picker as soon as you save it.{% elif club %}You are creating a new species. This will only be visible to you and the rest of {{ club }} until a site admin approves it.{% else %}You are creating a new species. This will only be visible to you until a site admin approves it.{% endif %}
 </p>
-{% if not request.user.is_superuser %}
+{% comment %}The commoner fix, and the one that doesn't put a second copy of a species on the list: a lot name matching nothing is usually a name the matcher can't connect to a species that is already there.{% endcomment %}
 <div class="alert alert-secondary py-2">
-  What you add here is suggested on your own lots straight away, and goes into everyone else's
-  picker once a site admin has approved it.
+  Most lot names with no scientific name are a species that is already on the list, under a name
+  nobody in the hobby uses &mdash; FishBase files the yellow lab under &ldquo;Blue streak hap&rdquo;.
+  <a href="{% url 'species_name_create' %}?lot_name={{ lot_name|urlencode }}{% if request.GET.next %}&next={{ request.GET.next|urlencode }}{% endif %}">Add a name to a species that is already there</a>
+  instead, if you can find it.
 </div>
-{% endif %}
 {% if lot_name %}
 <div class="alert alert-info py-2">
   Adding this for lots called &ldquo;<strong>{{ lot_name }}</strong>&rdquo;.

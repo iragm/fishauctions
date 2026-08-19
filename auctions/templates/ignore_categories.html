@@ -4,12 +4,14 @@
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
 <link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2.min.css' %}">
-<link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2-bootstrap.min.css' %}">
 <script src="{% static 'js/vendor/select2.min.js' %}"></script>
+{% comment %} The bootstrap theme this used to load is select2's Bootstrap *3* skin, so the box
+was a different height and a different colour from every other control on the page.  The default
+theme is what auction_site.css sizes to match Bootstrap 5, and it is what every other select2 on
+the site renders, so this one is left on it too. {% endcomment %}
 <script>
 $(document).ready(function() {
     $("#category-selection").select2({
-        theme:"bootstrap",
         width: '100%',
         placeholder: "Select categories to hide when viewing lots",
     });

@@ -406,7 +406,8 @@ window.onload = function() {
         </nav>
         {% endif %}
         </span>
-        {% if not hide_tos_banner %}
+        {% comment %} Web chrome only: in the app the terms are accepted during its own onboarding, and a bar fixed over the bottom of every screen covers the native controls. Dropped on the app's User-Agent, like the navbar and the install prompts. {% endcomment %}
+        {% if not hide_tos_banner and not request.is_mobile_app %}
         <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="{% url 'tos' %}">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
           function agreeTos() {

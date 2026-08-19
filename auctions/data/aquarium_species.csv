@@ -5,7 +5,15 @@
 # FishBase does list.  A variety row names its parent in scientific_name and puts the strain in
 # variety; the loader links the two, and the parent has to already exist.
 #
-# There is a second kind of row, at the bottom of the file: a NAMES-ONLY row, for a species
+# A HYBRID row is the one row with no scientific name at all: leave the first column empty, put
+# the name the trade uses in variety, and the loader sets Species.is_hybrid.  It reads as
+# "Hybrid 'Tibee'" everywhere a name is shown, which is the point -- a BAP class that excludes
+# crosses can only do that if the label says which lots are crosses.  No parentage is recorded:
+# a cross has no binomial and filing it under one parent would put a wrong genus in a genus BAP
+# rule.  family and order may be filled in when both parents share one (every tibee is an atyid,
+# every flowerhorn a cichlid); that is what gives the row a category, and nothing else reads it.
+#
+# There is a third kind of row, at the bottom of the file: a NAMES-ONLY row, for a species
 # FishBase already has under a name nobody in the hobby uses.  FishBase files Labidochromis
 # caeruleus under "Blue streak hap", so "yellow lab" matched nothing at all.  Write the scientific
 # name and the common names, leave family/order/kind/habitat blank, and the loader attaches the
@@ -385,11 +393,10 @@ Vesicularia ferriei,,weeping moss|vesicularia ferriei,Hypnaceae,Hypnales,plant,f
 #
 # ------------------------------------------------- shrimp: the strains a breeder sells them ---
 # From The Garden of Eder's list, which is a shrimp breeder's stock list rather than a taxonomy:
-# every row here is a Neocaridina davidi or a Caridina the trade agrees on.  What is deliberately
-# NOT here is the hybrid half of that list -- tibee, tangtai, mischling, ghost bee, "steel",
-# stardust, calceo.  Those are crosses *between* species (tiger x bee, and crosses of crosses):
-# there is no binomial to file them under, and picking one of the two parents would put a wrong
-# genus on a label and in a genus BAP rule.  A club selling one should leave the species blank.
+# every row here is a Neocaridina davidi or a Caridina the trade agrees on.  The hybrid half of
+# that list -- tibee, tangtai, mischling, ghost bee, "steel", stardust, calceo -- is further down,
+# under hybrids: those are crosses *between* species (tiger x bee, and crosses of crosses), so
+# there is no binomial to file them under and they carry no genus at all.
 Neocaridina davidi,Blue Diamond,blue diamond shrimp|blue diamond neocaridina,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Black Diamond,black diamond shrimp|black diamond neocaridina,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Black Rose,black rose shrimp|black rose neocaridina,Atyidae,Decapoda,invert,fresh
@@ -401,6 +408,26 @@ Caridina cantonensis,Snow White,snow white shrimp|golden bee shrimp,Atyidae,Deca
 Caridina mariae,Orange Eye Blue Tiger,oebt|orange eye blue tiger|blue tiger shrimp,Atyidae,Decapoda,invert,fresh
 Caridina pareparensis,,malawa shrimp|malawa|sulawesi malawa,Atyidae,Decapoda,invert,fresh
 Asellus aquaticus,,freshwater isopod|asellus|asellus aquaticus|water louse,Asellidae,Isopoda,invert,fresh
+#
+# ------------------------------------------------- hybrids: the crosses the trade sells by name ---
+# No scientific name, on purpose: each of these is a cross between two species, and the whole
+# reason the hobby has a word for it is that no binomial covers it.  The test for adding one is
+# not "is the identification settled" -- there is nothing to identify -- but "does the hobby agree
+# this is a cross": a fish sold as a line-bred species belongs above with a parent, not here.
+# So the mbuna-blooded peacocks are here and "strawberry peacock" is not, dyed fish are nowhere,
+# and the balloon and long-fin body shapes are cultivars of one species rather than crosses.
+,Tibee,tibee|tibee shrimp|tibees,Atyidae,Decapoda,invert,fresh
+,Tangtai,tangtai|tangtai shrimp|tangtai bee,Atyidae,Decapoda,invert,fresh
+,Mischling,mischling|mischling shrimp|mischlings,Atyidae,Decapoda,invert,fresh
+,Ghost Bee,ghost bee|ghost bee shrimp,Atyidae,Decapoda,invert,fresh
+,Steel,steel shrimp|steel bee shrimp,Atyidae,Decapoda,invert,fresh
+,Stardust,stardust shrimp|stardust,Atyidae,Decapoda,invert,fresh
+,Calceo,calceo shrimp|calceo,Atyidae,Decapoda,invert,fresh
+,Flowerhorn,flowerhorn|flower horn|flowerhorn cichlid|luohan,Cichlidae,Cichliformes,fish,fresh
+,Blood Parrot,blood parrot|blood parrot cichlid|bloodparrot|blood red parrot,Cichlidae,Cichliformes,fish,fresh
+,Red Texas,red texas cichlid|red texas,Cichlidae,Cichliformes,fish,fresh
+,OB Peacock,ob peacock|ob peacocks|orange blotch peacock,Cichlidae,Cichliformes,fish,fresh
+,Dragon Blood Peacock,dragon blood peacock|dragonblood peacock|dragons blood peacock,Cichlidae,Cichliformes,fish,fresh
 #
 # ------------------------------------ names only: what the hobby calls fish FishBase already has ---
 # Rows below add common names to a species another list owns.  Leave family/order/kind/habitat

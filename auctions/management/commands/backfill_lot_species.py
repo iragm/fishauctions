@@ -308,7 +308,11 @@ class Command(BaseCommand):
                 + ", ".join(f"{row['category__name'] or 'no category'} {row['n']}" for row in rows)
             )
         varieties = Species.objects.filter(parent__isnull=False).count()
-        self.stdout.write(f"  {varieties} of those are named strains (Blue Dream, Halfmoon...)")
+        hybrids = Species.objects.filter(is_hybrid=True).count()
+        self.stdout.write(
+            f"  {varieties} of those are named strains (Blue Dream, Halfmoon...) "
+            f"and {hybrids} are crosses (Tibee, Flowerhorn)"
+        )
 
         done = Lot.objects.filter(species__isnull=False, is_deleted=False, auction__use_scientific_name=True).count()
         missing = self.lots.count()
@@ -528,26 +532,31 @@ class Command(BaseCommand):
         return 0
 
     def _add_species(self, group):
-        """Add a species -- or a strain of one -- without leaving the review.
+        """Add a species -- a strain or a cross of one -- without leaving the review.
 
         The command-line half of ``/species/new/``, and it exists for the same reason: the names
         that survive the automatic pass are disproportionately the ones the list is *missing*, and
         a workflow that ends in "go and add it on the website, then start again" ends in the lot
         keeping no species at all.  Everything created here is approved: a person with a shell on
         the server is not an auction admin adding a fish to their own club's picker.
+
+        Leaving the scientific name blank is how a **cross** is added -- a tibee, a flowerhorn.
+        There is no binomial to type, which is the whole reason the hobby named it something; see
+        :attr:`~auctions.models.Species.is_hybrid`.
         """
-        typed = self._ask("    scientific name (Genus species): ")
-        if not typed:
-            return None
+        typed = self._ask("    scientific name (Genus species), or blank for a cross: ")
         genus, epithet = split_scientific_name(typed)
-        variety = self._ask("    strain/cultivar, or blank: ")
+        is_hybrid = not typed
+        variety = self._ask("    what the trade calls the cross: " if is_hybrid else "    strain/cultivar, or blank: ")
+        if is_hybrid and not variety:
+            return None
         parent = None
-        if variety:
+        if variety and not is_hybrid:
             parent = visible_species().filter(genus__iexact=genus, species__iexact=epithet, variety="").first()
             if not parent:
                 self.stdout.write(f"    {genus} {epithet} is not on the list yet — add the plain species first.")
                 return None
-        clash = species_already_named(genus, epithet, variety)
+        clash = species_already_named(genus, epithet, variety, is_hybrid=is_hybrid)
         if clash:
             self.stdout.write(f"    {clash.label} is already on the list.")
             return clash
@@ -563,6 +572,9 @@ class Command(BaseCommand):
             species=epithet,
             variety=variety,
             parent=parent,
+            # save() clears the genus, the epithet and the parent when this is set, so a cross
+            # can never carry one of the two things it was crossed from.
+            is_hybrid=is_hybrid,
             common_name=common_name[:255],
             source="admin",
             # Somebody is adding this because a club sold one, which is better evidence than
@@ -578,6 +590,8 @@ class Command(BaseCommand):
             SpeciesCommonName.objects.create(
                 species=species, name=common_name[:255], language="English", is_preferred=True, source="admin"
             )
-        Species.recompute_trade_ranks(genus=species.genus)
+        # A cross has no genus, and the species tier of the ranking is set by save() anyway.
+        if species.genus:
+            Species.recompute_trade_ranks(genus=species.genus)
         self.stdout.write(self.style.SUCCESS(f"    added {species.label}"))
         return species

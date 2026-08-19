@@ -68,11 +68,17 @@ from .models import (
     UserData,
     UserLabelPrefs,
     VolunteerJob,
+    normalize_species_name,
     sanitize_summernote_html,
 )
 from .services import clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
-from .species_matching import species_already_named, split_scientific_name, visible_species
+from .species_matching import (
+    species_already_named,
+    species_carrying_common_name,
+    split_scientific_name,
+    visible_species,
+)
 from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
@@ -1263,102 +1269,12 @@ class EditLot(forms.ModelForm):
         self.helper.form_class = "form"
         self.helper.form_id = "lot-form"
         self.helper.form_tag = True
-        self.helper.layout = Layout(
-            "auction",
-            Div(
-                # Div(
-                #     "custom_lot_number",
-                #     css_class="col-sm-7",
-                # ),
-                Div(
-                    "quantity",
-                    css_class="col-sm-5",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "lot_name",
-                    css_class="col-sm-7",
-                ),
-                Div(
-                    "species_category",
-                    css_class="col-sm-5",
-                ),
-                Div(
-                    "species",
-                    # Opens in a new tab on purpose: this form is an HTMX modal, and navigating
-                    # away from it would throw away everything else the admin has typed.  The lot
-                    # name goes with it, so the add-species form arrives half filled in, and the
-                    # new species can be attached to every lot called that in one go.
-                    HTML(
-                        f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
-                        f'href="{reverse("species_create")}?lot_name={quote(self.lot.lot_name or "")}'
-                        f'&next={quote(reverse("auction_lot_list", kwargs={"slug": self.auction.slug}))}">'
-                        '<i class="bi bi-plus-lg"></i> New species</a>'
-                    )
-                    if self.auction.use_scientific_name
-                    else HTML(""),
-                    css_class="col-sm-12",
-                ),
-                Div(
-                    "custom_field_1",
-                    css_class="col-sm-9",
-                ),
-                Div(
-                    "custom_checkbox",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "custom_dropdown",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "i_bred_this_fish",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "donation",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "buy_now_price",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "reserve_price",
-                    css_class="col-sm-3",
-                ),
-                Div(
-                    "summernote_description",
-                    css_class="col-sm-12",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "auctiontos_winner",
-                    css_class="col-sm-6",
-                ),
-                Div(
-                    "winning_price",
-                    css_class="col-sm-6",
-                ),
-                css_class="row",
-            ),
-            Div(
-                HTML(
-                    f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
-                ),
-                HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
-                ),
-                HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
-                ),
-                css_class="modal-footer",
-            ),
-        )
+        # Everything an auction has turned off is a HiddenInput by the end of this method, and a
+        # hidden field left in the layout still renders the grid column that wrapped it -- an
+        # empty col-sm-3 is a quarter of a row of nothing.  So the layout is built at the *bottom*
+        # of __init__, once the widgets are settled, and it leaves those fields out; this puts
+        # their inputs back at the end of the form so the values still post.
+        self.helper.render_hidden_fields = True
         # self.fields['species_category'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
         # self.fields["custom_lot_number"].initial = self.lot.custom_lot_number
         self.fields["auction"].initial = self.lot.auction
@@ -1456,18 +1372,122 @@ class EditLot(forms.ModelForm):
         self.fields["i_bred_this_fish"].label = "Breeder points"
         self.fields["i_bred_this_fish"].help_text = ""
 
-        # auctiontos_autocomplete_url = reverse("auctiontos-autocomplete", kwargs={'slug': self.auction.slug})
-        # self.fields['auctiontos_winner'].widget = autocomplete.ModelSelect2(url=auctiontos_autocomplete_url)
-        # self.fields['auctiontos_winner'].widget.choices = self.fields['auctiontos_winner'].choices
-        # #attrs = self.fields['auctiontos_winner'].widget.attrs
-        # subattrs = attrs.setdefault('settings_overrides', {})
-        # subattrs['url'] = "new/"
-        # self.fields['auctiontos_seller'].widget = autocomplete.ModelSelect2(url='/better/') #.attrs.update(url=auctiontos_autocomplete_url)
-        # self.fields['auctiontos_winner'].widget.attrs.update(url=auctiontos_autocomplete_url)
+        self.helper.layout = Layout("auction", *self._layout_rows(post_url))
 
-        # self.fields['auctiontos_winner'].widget = autocomplete.ModelSelect2(url=auctiontos_autocomplete_url, attrs={
-        #     'forward': self.auction.slug,
-        # });
+    def _hidden(self, field_name):
+        """True when the auction has this field turned off.  See ``render_hidden_fields``."""
+        return isinstance(self.fields[field_name].widget, HiddenInput)
+
+    def _column(self, field_name, css_class, *extra):
+        """A grid column for one field, or nothing at all when that field is turned off."""
+        if self._hidden(field_name):
+            return None
+        return Div(field_name, *extra, css_class=css_class)
+
+    @staticmethod
+    def _row(*columns, css_class="row"):
+        """A row of whichever columns survived.  No columns means no row, rather than an empty one."""
+        kept = [column for column in columns if column is not None]
+        return Div(*kept, css_class=css_class) if kept else None
+
+    def _species_block(self):
+        """The category and the scientific name, behind a Change button.
+
+        The two of them together are one decision -- ``Species.category`` answers the category and
+        the server re-derives it on save -- and on a lot that already has the right answer they are
+        two full-width controls the admin scrolls past on the way to the price.  So the modal shows
+        what the lot says now in one line and opens the controls when somebody wants to argue with
+        it, which is the same bargain the seller's own lot form strikes (``refreshSpeciesUI`` in
+        lot_form.html).  Bootstrap's collapse data-api is delegated from the document, so this
+        works in a modal HTMX swapped in long after page load with no javascript of ours.
+        """
+        category = self._column("species_category", "col-sm-5")
+        # The buttons open in a new tab on purpose: this form is an HTMX modal, and navigating away
+        # from it would throw away everything else the admin has typed.  The lot name goes with
+        # them, so both forms arrive half filled in, and the species can be attached to every lot
+        # called that in one go.
+        #
+        # Two buttons because there are two different problems behind an empty picker, and the
+        # commoner one is not a missing species: it is a species that is on the list under a name
+        # nobody types.  Naming that one is first, because adding a second copy of it is the
+        # mistake this pair of buttons exists to head off.
+        lot_list = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+        buttons = HTML(
+            f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
+            f'href="{reverse("species_name_create")}?lot_name={quote(self.lot.lot_name or "")}'
+            f'&next={quote(lot_list)}">'
+            '<i class="bi bi-tag"></i> Name an existing species</a> '
+            f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
+            f'href="{reverse("species_create")}?lot_name={quote(self.lot.lot_name or "")}'
+            f'&next={quote(lot_list)}">'
+            '<i class="bi bi-plus-lg"></i> New species</a>'
+        )
+        species = self._column("species", "col-sm-7", buttons)
+        fields = self._row(category, species)
+        if fields is None:
+            return None
+        summary = []
+        if category is not None:
+            summary.append(f"Category: <strong>{escape(self.lot.species_category or 'Uncategorized')}</strong>")
+        if species is not None:
+            # full_scientific_name, never scientific_name: a strain and a cross are only themselves
+            # under the name the trade uses for them.
+            name = self.lot.species.full_scientific_name if self.lot.species else ""
+            summary.append(f"Scientific name: <strong>{escape(name or 'none')}</strong>")
+        return Div(
+            HTML(
+                '<div class="d-flex flex-wrap align-items-center gap-3 mb-3">'
+                f'<span class="text-muted">{" &middot; ".join(summary)}</span>'
+                '<button class="btn btn-sm btn-outline-secondary" type="button" '
+                'data-bs-toggle="collapse" data-bs-target="#lot-species-fields" '
+                'aria-expanded="false" aria-controls="lot-species-fields">Change</button>'
+                "</div>"
+            ),
+            # Open on a re-render, because the only reason this form comes back bound is that
+            # something failed validation, and an error message inside a collapsed block is an
+            # error message nobody reads.
+            Div(
+                fields,
+                css_class="col-sm-12 collapse" + (" show" if self.is_bound else ""),
+                css_id="lot-species-fields",
+            ),
+            css_class="col-sm-12",
+        )
+
+    def _layout_rows(self, post_url):
+        """The whole form, minus whatever this auction has turned off."""
+        rows = (
+            self._row(self._column("quantity", "col-sm-5")),
+            self._row(
+                self._column("lot_name", "col-sm-12"),
+                self._species_block(),
+                self._column("custom_field_1", "col-sm-9"),
+                self._column("custom_checkbox", "col-sm-3"),
+                self._column("custom_dropdown", "col-sm-3"),
+                self._column("i_bred_this_fish", "col-sm-3"),
+                self._column("donation", "col-sm-3"),
+                self._column("buy_now_price", "col-sm-3"),
+                self._column("reserve_price", "col-sm-3"),
+                self._column("summernote_description", "col-sm-12"),
+            ),
+            self._row(
+                self._column("auctiontos_winner", "col-sm-6"),
+                self._column("winning_price", "col-sm-6"),
+            ),
+            Div(
+                HTML(
+                    f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
+                ),
+                HTML(
+                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+                ),
+                css_class="modal-footer",
+            ),
+        )
+        return [row for row in rows if row is not None]
 
     class Meta:
         model = Lot
@@ -5136,6 +5156,11 @@ class SpeciesAdminForm(forms.ModelForm):
     asked for twice.  And a strain is the same form with a parent picked, which is what keeps
     "Blue Dream" out of the genus column -- see :class:`~auctions.models.Species`.
 
+    A **hybrid** is the third shape and the only one with no scientific name at all: tick the box,
+    name the cross, and leave the rest.  It is a checkbox rather than "a strain with no parent"
+    because a strain with no parent is the commonest way to fill this form in wrong, and the two
+    have to be told apart by something the person actually said.
+
     Everything created here is ``source="admin"``, which is *not* the same as the ``manual`` rows
     left over from the old Product table: those get folded into the imported list by
     ``import_fishbase``, and a row somebody added on purpose last week must not be.
@@ -5164,6 +5189,7 @@ class SpeciesAdminForm(forms.ModelForm):
         model = Species
         fields = [
             "common_name",
+            "is_hybrid",
             "variety",
             "parent",
             "category",
@@ -5179,9 +5205,17 @@ class SpeciesAdminForm(forms.ModelForm):
         self.added_by = added_by
         self.fields["common_name"].label = "Common name"
         self.fields["common_name"].help_text = "What the picker shows in brackets, e.g. Bristlenose pleco."
-        self.fields[
-            "variety"
-        ].help_text = "Only for a strain or cultivar, e.g. Blue Dream. Pick the species it is a strain of below."
+        self.fields["variety"].label = "Strain or hybrid name"
+        self.fields["variety"].help_text = (
+            "For a strain or cultivar, e.g. Blue Dream — pick the species it is a strain of below. "
+            "For a hybrid, the name the trade uses, e.g. Tibee."
+        )
+        self.fields["is_hybrid"].label = "This is a hybrid"
+        self.fields["is_hybrid"].help_text = (
+            "A cross with no accepted scientific name — a tibee shrimp, a flowerhorn. Leave the "
+            "scientific name blank and name the cross above; it shows as <i>Hybrid 'Tibee'</i>, so a "
+            "judge reading the label can see what it is."
+        )
         self.fields["parent"].label = "Strain of"
         self.fields["parent"].required = False
         self.fields["parent"].widget = autocomplete.ModelSelect2(
@@ -5192,7 +5226,9 @@ class SpeciesAdminForm(forms.ModelForm):
         # autocomplete widget is left holding the plain list Django built for the old widget, and
         # re-rendering the form -- which only happens when there is a validation error to show --
         # dies inside dal trying to filter it.
-        self.fields["parent"].queryset = visible_species(added_by).filter(parent__isnull=True)
+        # Nominal species only, and no hybrids: a strain of a strain is not a thing, and a strain
+        # of a cross would inherit a genus the cross deliberately hasn't got.
+        self.fields["parent"].queryset = visible_species(added_by).filter(parent__isnull=True, is_hybrid=False)
         self.fields["parent"].help_text = (
             "Leave blank for an ordinary species. A strain keeps its parent's genus and epithet, so "
             "breeder points and BAP genus rules still see the plain species."
@@ -5220,6 +5256,7 @@ class SpeciesAdminForm(forms.ModelForm):
                 Div("common_name", css_class="col-md-6"),
                 Div("parent", css_class="col-md-6"),
                 Div("variety", css_class="col-md-6"),
+                Div("is_hybrid", css_class="col-md-12"),
                 Div("other_names", css_class="col-md-12"),
                 Div("category", css_class="col-md-6"),
                 Div("breeder_points", css_class="col-md-6"),
@@ -5238,20 +5275,45 @@ class SpeciesAdminForm(forms.ModelForm):
         typed = (cleaned_data.get("scientific_name_input") or "").strip()
         parent = cleaned_data.get("parent")
         variety = (cleaned_data.get("variety") or "").strip()
-        if variety and not parent:
-            self.add_error("parent", "A strain has to say which species it is a strain of.")
-        if parent and not variety:
-            self.add_error("variety", "Give the strain a name, e.g. Blue Dream.")
-        # A strain takes its parent's name; there is nothing to type and nothing to disagree about.
-        if parent:
-            cleaned_data["genus"] = parent.genus
-            cleaned_data["species"] = parent.species
-        elif typed:
-            cleaned_data["genus"], cleaned_data["species"] = split_scientific_name(typed)
+        is_hybrid = bool(cleaned_data.get("is_hybrid"))
+        if is_hybrid:
+            # The whole of a cross's identity is the name the trade gave it.  Anything else on the
+            # form is a contradiction rather than extra detail, so it is an error and not a field
+            # quietly thrown away on save.
+            if parent:
+                self.add_error("parent", "A hybrid is not a strain of one species — that is what makes it a hybrid.")
+            if typed:
+                self.add_error(
+                    "scientific_name_input", "Leave this blank for a hybrid: a cross has no scientific name."
+                )
+            if not variety:
+                self.add_error("variety", "Give the hybrid the name the trade uses for it, e.g. Tibee.")
+                return cleaned_data
+            cleaned_data["genus"] = ""
+            cleaned_data["species"] = ""
         else:
-            self.add_error("scientific_name_input", "Enter a scientific name, or pick a species to add a strain to.")
-            return cleaned_data
-        clash = species_already_named(cleaned_data["genus"], cleaned_data["species"], variety, user=self.added_by)
+            if variety and not parent:
+                self.add_error(
+                    "parent",
+                    "A strain has to say which species it is a strain of.  "
+                    "Tick “this is a hybrid” if it is a cross with no species of its own.",
+                )
+            if parent and not variety:
+                self.add_error("variety", "Give the strain a name, e.g. Blue Dream.")
+            # A strain takes its parent's name; there is nothing to type and nothing to disagree about.
+            if parent:
+                cleaned_data["genus"] = parent.genus
+                cleaned_data["species"] = parent.species
+            elif typed:
+                cleaned_data["genus"], cleaned_data["species"] = split_scientific_name(typed)
+            else:
+                self.add_error(
+                    "scientific_name_input", "Enter a scientific name, or pick a species to add a strain to."
+                )
+                return cleaned_data
+        clash = species_already_named(
+            cleaned_data["genus"], cleaned_data["species"], variety, user=self.added_by, is_hybrid=is_hybrid
+        )
         if clash:
             # Not an error to fix by editing the name -- the answer is to go and use the row that
             # already exists, so say where it is.
@@ -5269,6 +5331,11 @@ class SpeciesAdminForm(forms.ModelForm):
         species = super().save(commit=False)
         species.genus = self.cleaned_data["genus"]
         species.species = self.cleaned_data["species"]
+        # A cross with the common-name box left empty would have no name a person could type: the
+        # picker shows "Hybrid 'Tibee'" and every lookup reads the name table, not the variety
+        # column.  The trade name is the answer to both.
+        if species.is_hybrid and not species.common_name:
+            species.common_name = species.variety[:255]
         species.source = "admin"
         # Somebody is adding this because a club is selling one, which is better evidence than
         # FishBase's column -- see Species.in_aquarium_trade.
@@ -5285,7 +5352,12 @@ class SpeciesAdminForm(forms.ModelForm):
         if commit:
             species.save()
             names = re.split(r"[,\n]+", self.cleaned_data.get("other_names") or "")
+            # A hybrid's strain name is the only name it has, and the matcher reads names out of
+            # SpeciesCommonName -- nothing looks at the variety column.  So it goes in the list
+            # too, or a cross would be on the picker and unreachable by typing what it is called.
             wanted = [species.common_name] + [name.strip() for name in names]
+            if species.is_hybrid and species.variety:
+                wanted.append(species.variety)
             seen = set()
             for index, name in enumerate(wanted):
                 key = (name or "").strip().lower()
@@ -5306,6 +5378,137 @@ class SpeciesAdminForm(forms.ModelForm):
                 )
             Species.recompute_trade_ranks(genus=species.genus)
         return species
+
+
+class SpeciesCommonNameForm(forms.Form):
+    """Teach the site a name for a species that is **already** on the list.
+
+    The other half of :class:`SpeciesAdminForm`, and the commoner of the two jobs.  Most lot names
+    with no scientific name are not a missing species at all -- they are a species the list has
+    had all along, under a name nobody in the hobby uses.  FishBase files *Labidochromis
+    caeruleus* under "Blue streak hap"; the answer to "yellow lab" matching nothing is a name, and
+    adding a second *Labidochromis caeruleus* to get one is how the duplicate table fills up.
+
+    Until this existed the only way to add a name was the Django admin, which auction admins
+    cannot open -- so the workflow they were left with was the one that makes duplicates.
+
+    Everything written here is scoped exactly like a species, and it has to be: a common name is
+    read *ahead* of everything else the matcher does, so an unscoped one would let one club teach
+    every other club a name for the wrong fish.  See
+    :func:`~auctions.species_matching.visible_common_names`.
+    """
+
+    species = forms.ModelChoiceField(
+        queryset=Species.objects.none(),
+        label="Species",
+        help_text="Search by scientific name, or by a name it already answers to.",
+    )
+    names = forms.CharField(
+        label="Names people type",
+        widget=forms.Textarea(attrs={"rows": 2}),
+        help_text="One per line, or separated by commas. Lower case is fine; punctuation is ignored.",
+    )
+    lot_name = forms.CharField(widget=forms.HiddenInput(), required=False)
+    attach_to_lots = forms.BooleanField(
+        required=False,
+        initial=True,
+        label="Set this species on the lots with that name",
+    )
+
+    def __init__(self, *args, lot_name="", lot_count=0, added_by=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.added_by = added_by
+        self.fields["species"].widget = autocomplete.ModelSelect2(
+            url=f"{reverse('species-autocomplete')}?varieties=1",
+            attrs={"data-placeholder": "Search the species list…", "style": "width: 100%"},
+        )
+        # After the widget, not before: re-assigning the queryset is what rebinds widget.choices to
+        # it, and a dal widget left holding the plain list Django built for the old widget dies
+        # inside filter_choices_to_render the moment the form is rendered.  Same trap as
+        # SpeciesAdminForm's "strain of" field.
+        #
+        # The strains and the hybrids too: "blue dream" and "tibee" are exactly the kind of name
+        # this page exists for, and both of those live on a variety row.
+        self.fields["species"].queryset = visible_species(added_by)
+        if lot_name:
+            self.fields["lot_name"].initial = lot_name
+            self.fields["names"].initial = lot_name
+            self.fields["attach_to_lots"].label = (
+                f"Also set this species on the {lot_count} lot{'' if lot_count == 1 else 's'} "
+                f"called \u201c{lot_name}\u201d"
+            )
+        else:
+            self.fields["attach_to_lots"].widget = HiddenInput()
+        add_bootstrap_classes(self)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            Div(
+                Div("species", css_class="col-md-12"),
+                Div("names", css_class="col-md-12"),
+                Div("attach_to_lots", css_class="col-md-12 mt-2"),
+                "lot_name",
+                css_class="row",
+            ),
+            Submit("submit", "Add name", css_class="btn-success mt-2"),
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        species = cleaned_data.get("species")
+        wanted = []
+        seen = set()
+        for name in re.split(r"[,\n]+", cleaned_data.get("names") or ""):
+            name = name.strip()
+            key = name.lower()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            wanted.append(name)
+        if not wanted:
+            self.add_error("names", "Enter at least one name.")
+            return cleaned_data
+        if species is None:
+            return cleaned_data
+        for name in wanted:
+            # One name on two species is the loss of a name rather than the gain of one -- the
+            # matcher answers on it before anything else runs, so a shared name turns a lookup
+            # that used to be unambiguous into a picklist.  Same rule as the club API.
+            clash = species_carrying_common_name(name, user=self.added_by, exclude=species)
+            if clash:
+                self.add_error(
+                    "names",
+                    f"\u201c{name}\u201d is already the name for {clash.label}. "
+                    "Two species with one name means neither of them can be found by it.",
+                )
+        cleaned_data["names"] = wanted
+        return cleaned_data
+
+    def save(self):
+        """Create the names, and return the ones that were really new."""
+        species = self.cleaned_data["species"]
+        # A name added to a species that is already shared has no species approval to ride on, so
+        # it needs one of its own.  A superuser is adding to everybody's list and knows it; an
+        # auction admin gets a name their own club is answered with until somebody approves it,
+        # which is the SpeciesCommonName page in the Django admin.
+        approved = bool(self.added_by and self.added_by.is_superuser)
+        created = []
+        for name in self.cleaned_data["names"]:
+            row, was_created = SpeciesCommonName.objects.get_or_create(
+                species=species,
+                name_normalized=normalize_species_name(name),
+                defaults={
+                    "name": name[:255],
+                    "language": "English",
+                    "source": "admin",
+                    "approved": approved,
+                    "added_by": self.added_by,
+                    "club": self.added_by.userdata.only_club if self.added_by else None,
+                },
+            )
+            if was_created:
+                created.append(row)
+        return created
 
 
 class ClubBapGenusOverrideForm(forms.ModelForm):

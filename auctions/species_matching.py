@@ -451,16 +451,22 @@ def split_scientific_name(typed):
     return parts[0].capitalize()[:100], " ".join(parts[1:]).lower()[:150]
 
 
-def species_already_named(genus, epithet, variety="", user=None, club=None):
+def species_already_named(genus, epithet, variety="", user=None, club=None, is_hybrid=False):
     """The species this name already belongs to, if the caller can see one.  None otherwise.
 
     Scoped to what the caller may see, for both halves of the reason :func:`visible_species`
     exists: pointing somebody at a row they cannot open is no help, and answering "that already
     exists" when what exists is another club's unapproved row leaks it.
+
+    A hybrid has no genus and no epithet, so the strain name carries the whole comparison -- and
+    the flag has to be part of the query, or *Neocaridina davidi* 'Blue Dream' and a hypothetical
+    cross of the same name would be told they are each other.
     """
+    if is_hybrid:
+        return visible_species(user, club).filter(is_hybrid=True, variety__iexact=variety or "").first()
     return (
         visible_species(user, club)
-        .filter(genus__iexact=genus, species__iexact=epithet, variety__iexact=variety or "")
+        .filter(genus__iexact=genus, species__iexact=epithet, variety__iexact=variety or "", is_hybrid=False)
         .first()
     )
 
@@ -1028,7 +1034,7 @@ def rejected_species_ids(normalized):
     return set(SpeciesNameRejection.objects.filter(search_text=normalized).values_list("species_id", flat=True))
 
 
-def record_choice(text, species, *, first_save=False):
+def record_choice(text, species, *, first_save=False, changed=False):
     """Score what a person did with the answer this lot name was remembered as.
 
     This is the counterweight to :func:`remember`, and the reason it exists is that the cache is
@@ -1037,11 +1043,13 @@ def record_choice(text, species, *, first_save=False):
     become the site's answer forever, and the only way back was a superuser noticing it on the gaps
     page.  Now the same forms that write the answer also report what happened to it.
 
-    *first_save* is what keeps the two counters honest against each other.  An **accept** is only
-    counted the first time a lot is saved -- somebody re-saving a lot to fix its price has not
-    re-confirmed the species, and counting it would let a busy club vote a wrong answer permanent.
-    A **rejection** counts on any save, because that is when it happens: the species was already on
-    the lot and somebody took it off or picked a different one.
+    *first_save* and *changed* are what keep the two counters honest against each other, and what
+    makes both of them count **lots** rather than saves.  An **accept** is only counted the first
+    time a lot is saved -- somebody re-saving a lot to fix its price has not re-confirmed the
+    species, and counting it would let a busy club vote a wrong answer permanent.  A **rejection**
+    is counted on the save that created the lot, or on a later save that actually moved the
+    species; re-saving a lot whose species was already cleared is the same non-event, and counting
+    it once per save let one seller editing one lot three times retire an answer by themselves.
 
     Does nothing at all when the name has no remembered answer, which is the common case -- this
     runs on every lot save, so it is one indexed lookup and out.
@@ -1060,6 +1068,10 @@ def record_choice(text, species, *, first_save=False):
         if first_save:
             # F() rather than a read-modify-write: two sellers saving at once should count twice.
             SpeciesSearchCache.objects.filter(pk=row.pk).update(accepts=F("accepts") + 1)
+        return
+    if not (first_save or changed):
+        # The species is not what this name is remembered as, but it was not this save that made
+        # that true -- somebody is editing a price on a lot they fixed a week ago.  Already counted.
         return
     SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
     # Re-read rather than refresh_from_db(): two people can be saving lots with this name at the

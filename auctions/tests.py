@@ -20948,6 +20948,29 @@ class LotBapEligibilityTests(TestCase):
         lot = self._make_lot(lot_name="Mixed bag", species=None, user=self.user, date_end=timezone.now())
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
 
+    def test_two_lots_with_no_species_are_both_judged_on_their_names(self):
+        """No species means no *opinion*, not a match against every other unnamed lot.
+
+        The rule is guarded on ``self.species_id``, so a lot with nothing picked falls straight
+        through to the next check rather than colliding with every other one.  That is why there is
+        no separate setting for it: the club already has ``days_between_same_name_lots`` for the
+        case it actually cares about, and it is the rule that can see these two are different.
+        """
+        self.club.days_between_same_species_lots = 30
+        self.club.days_between_same_name_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots", "days_between_same_name_lots"])
+        self._make_lot(
+            lot_name="Sponge filter",
+            species=None,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Bag of gravel", species=None, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+        same = self._make_lot(lot_name="Sponge filter", species=None, user=self.user, date_end=timezone.now())
+        self.assertEqual(same.unsold_lot_no_bap_reason, "not_long_enough", "the name rule is what catches these")
+
     def test_sold_lot_no_bap_reason_not_sold(self):
         self.club.only_sold_lots = True
         self.club.save(update_fields=["only_sold_lots"])
