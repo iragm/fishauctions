@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% load species_tags %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <h2 class="mb-1">{{ title }}</h2>
@@ -37,5 +36,4 @@
   <a href="/admin/auctions/species/">the species admin</a>.
 </p>
 {% endif %}
-{% fishbase_citation %}
 {% endblock %}

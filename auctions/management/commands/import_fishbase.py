@@ -44,6 +44,7 @@ import re
 import httpx
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import Count
 
 from auctions import aquarium_species
 from auctions.fishbase import DATABASES, DEFAULT_DATABASES, FISHBASE_VERSION, available_versions, parquet_url
@@ -247,6 +248,17 @@ class Command(BaseCommand):
             return
         changed, resolver = assign_categories()
         self.stdout.write(f"  {changed} species categorised")
+        # The whole mapping, not just the failures.  Every site names its categories differently
+        # and the interesting mistake is not a hint that matched nothing -- a club with no Plants
+        # category doesn't sell plants -- it is a hint that matched something *unexpected*, which
+        # is invisible unless the answers are printed.
+        for hint, category in resolver.report():
+            self.stdout.write(f"    {hint:<26} -> {category.name if category else '—'}")
+        counts = {
+            row["category__name"] or "—": row["n"]
+            for row in Species.objects.values("category__name").annotate(n=Count("pk")).order_by("-n")
+        }
+        self.stdout.write("  species per category: " + ", ".join(f"{name} {n}" for name, n in counts.items()))
         if resolver.unmatched_hints:
             # Not an error: a club with no Plants category is a club that doesn't sell plants.
             self.stdout.write(

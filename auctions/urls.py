@@ -185,6 +185,21 @@ urlpatterns = [
         views.SpeciesApproveView.as_view(),
         name="species_approve",
     ),
+    path(
+        "admin-dashboard/species-gaps/allow-again/<int:pk>/",
+        views.SpeciesNameRejectionDeleteView.as_view(),
+        name="species_rejection_delete",
+    ),
+    path(
+        "admin-dashboard/species-gaps/not-a-duplicate/<int:pk>/",
+        views.SpeciesDuplicateDismissView.as_view(),
+        name="species_duplicate_dismiss",
+    ),
+    path(
+        "admin-dashboard/species-gaps/merge/<int:pk>/",
+        views.SpeciesMergeView.as_view(),
+        name="species_merge",
+    ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path(

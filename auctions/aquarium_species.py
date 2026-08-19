@@ -51,6 +51,19 @@ KIND_CATEGORY_HINTS = {
     "culture": "live food",
 }
 
+#: The invertebrate families a club with a Shrimp category means by it.  Plenty of clubs have one
+#: -- cherry shrimp are half the invertebrate lots at a freshwater auction -- and "Snails and other
+#: inverts" is then the wrong shelf for them.  Read only for ``kind=invert`` rows, and falling back
+#: to ``invertebrates`` through :data:`~auctions.species_categories.HINT_FALLBACKS` on a site with
+#: no Shrimp category, so this can never *lose* a shrimp a category it used to have.
+#:
+#: The crayfish (Cambaridae, Parastacidae) are deliberately not here: a category named "Shrimp"
+#: means shrimp, and a club that keeps crayfish somewhere specific has said so in its own list.
+INVERT_FAMILY_HINTS = {
+    "Atyidae": "shrimp",
+    "Palaemonidae": "shrimp",
+}
+
 _HABITAT_FIELDS = {"fresh": "freshwater", "brackish": "brackish", "salt": "saltwater"}
 
 
@@ -136,9 +149,15 @@ def kind_hints(path=DATA_FILE):
     mapping in :mod:`auctions.species_categories` is a fish mapping, and this list adds a new
     plant family every few rows.  Exposed so the category pass can be re-run later -- after a club
     finally adds a Plants category -- without re-importing anything.
+
+    The one place the family gets a say is :data:`INVERT_FAMILY_HINTS`, because "invertebrate" is
+    two shelves at most clubs rather than one.
     """
     return {
-        (row.scientific_name.lower(), row.variety.lower()): KIND_CATEGORY_HINTS[row.kind]
+        (row.scientific_name.lower(), row.variety.lower()): (
+            INVERT_FAMILY_HINTS.get(row.family) if row.kind == "invert" else None
+        )
+        or KIND_CATEGORY_HINTS[row.kind]
         for row in read_rows(path)
         if row.kind in KIND_CATEGORY_HINTS
     }

@@ -294,7 +294,8 @@ class SpeciesMatchSerializer(serializers.ModelSerializer):
     #: taxonomy can follow this instead of guessing from the variety field.
     parent = serializers.SerializerMethodField()
     full_scientific_name = serializers.ReadOnlyField()
-    #: "Genus species 'Strain' (Common name)" -- what a person picks from on the lot form.
+    #: "Genus species 'Strain'" -- what a person picks from on the lot form.  The common name is
+    #: deliberately not repeated into it; it is its own field, and both are here anyway.
     label = serializers.ReadOnlyField()
     category = serializers.SerializerMethodField()
     common_names = serializers.SerializerMethodField()

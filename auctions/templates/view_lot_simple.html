@@ -21,7 +21,8 @@
         {% endif %}
         <div class="col-md-6 offset-md1">
             <h3>{{ lot.lot_name }}</h3>
-            {% if lot.scientific_name %}<div class="text-muted"><i>{{ lot.scientific_name }}</i></div>{% endif %}
+            {% comment %}The other name, whichever one that is -- see Lot.scientific_name_line.{% endcomment %}
+            {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i></div>{% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }}</div>{% endif %}
             {% if lot.auction.use_quantity_field %}<b>Quantity:</b> {{ lot.quantity }}<br>{% endif %}
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> {{ lot.currency_symbol }}{{ lot.reserve_price }}<br>{% endif %}
             {% if lot.buy_now_price %}<b>Buy now:</b> {{ lot.currency_symbol }}{{ lot.buy_now_price }}<br>{% endif %}

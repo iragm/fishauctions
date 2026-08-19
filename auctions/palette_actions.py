@@ -1964,6 +1964,7 @@ _CLUB_BAP_SETTINGS = (
     "points_per_lot",
     "min_quantity",
     "days_between_same_name_lots",
+    "days_between_same_species_lots",
     "points_for_custom_checkbox",
     "only_donation_lots",
     "only_sold_lots",
@@ -5004,6 +5005,22 @@ NOT_A_SKILL: dict[str, str] = {
         "the evidence is the row: what the auction admin typed, which category it landed in, how "
         "many lots are waiting on it. That is a page to read, not a sentence to say -- and getting "
         "it wrong puts a wrong name in every club's picker at once."
+    ),
+    "SpeciesNameRejectionDeleteView": (
+        "The other button on the same row as SpeciesSearchCacheForgetView, and the same problem: "
+        "the thing being named is a normalised lot name paired with a species, and reading it out "
+        "loud is harder than clicking it on the page it is printed on."
+    ),
+    "SpeciesDuplicateDismissView": (
+        "“These two species are not the same” is a judgement about two rows sitting side "
+        "by side -- their sources, their lot counts, which of them a club added last week. The "
+        "evidence is the page; saying one of the names out loud carries none of it."
+    ),
+    "SpeciesMergeView": (
+        "Merging two species rows is irreversible and it decides which name the whole site keeps: "
+        "the lots, the strains and the hobby names all move, and the other row stops existing. "
+        "That is a decision made by reading the pair, with a confirmation dialog, not by saying a "
+        "binomial into a microphone that has to get both halves of it right."
     ),
     "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,

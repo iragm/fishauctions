@@ -2,6 +2,7 @@ import datetime
 import logging
 import re
 from decimal import ROUND_HALF_UP, Decimal
+from urllib.parse import quote
 
 # from django.core.exceptions import ValidationError
 from allauth.account.forms import ResetPasswordForm, SignupForm
@@ -236,7 +237,15 @@ class SpeciesSelect(forms.Select):
 
 
 def configure_species_field(
-    fields, auction, field_name="species", *, always_render=False, searchable=False, can_add=False
+    fields,
+    auction,
+    field_name="species",
+    *,
+    always_render=False,
+    searchable=False,
+    can_add=False,
+    picker=True,
+    dal_for=None,
 ):
     """Set up the scientific-name picker on a lot form, or hide it.
 
@@ -254,6 +263,13 @@ def configure_species_field(
     ``can_add`` offers "add it to the list" when the search finds nothing, and is for forms whose
     every user is an auction admin by construction -- there is no per-user check here, so the
     caller is asserting it.  ``SpeciesCreateView`` enforces the same thing again on the way in.
+
+    ``picker=False`` is the quick-add pages: no control at all, just a hidden input the page fills
+    in from the lot name when the matcher gives exactly one answer, shown to the seller as a line
+    of text under the name.  Somebody adding forty lots at a check-in table is not choosing a
+    binomial forty times, and a dropdown they have to look at for every row is the thing that
+    makes them stop filling it in.  Still a real field: it posts, and the pk in it is validated
+    against the Species table like any other, so nothing here loosens what can be saved.
     """
     field = fields.get(field_name)
     if field is None:
@@ -264,6 +280,33 @@ def configure_species_field(
     if not always_render and (not auction or not auction.use_scientific_name):
         field.widget = HiddenInput()
         field.help_text = ""
+        return
+    if not picker:
+        field.widget = HiddenInput(attrs={"data-species-input": "1"})
+        field.help_text = ""
+        return
+    if dal_for is not None:
+        # One search box over the whole list, and nothing filled in for you.  The seller-facing
+        # forms guess a species from the lot name because the seller is not going to look one up;
+        # the auction admin's lot editor is the opposite situation -- somebody is on this form
+        # *because* a lot has the wrong species or none, and a guess is what they came to overrule.
+        # ``varieties=1`` because a strain ("Blue Dream", "Longfin") is exactly what gets searched
+        # for here.  The query string is why the URL is reversed rather than passed by name: dal
+        # uses a url containing a slash as it stands and reverses anything else.
+        field.widget = autocomplete.ModelSelect2(
+            url=f"{reverse('species-autocomplete')}?varieties=1",
+            attrs={
+                "data-placeholder": "Search every species…",
+                "style": "width: 100%",
+                "data-species-select": "1",
+            },
+        )
+        # Re-assigning the queryset is what rebinds widget.choices to it -- see SpeciesAdminForm,
+        # where leaving it alone made re-rendering the form die inside dal.  The auction's club is
+        # passed as well as the user, so a species another admin at the same club added but nobody
+        # has approved yet is still pickable on that club's lots.
+        field.queryset = visible_species(dal_for, getattr(auction, "club", None))
+        field.help_text = "Search by scientific name, common name or strain.  Leave blank for equipment and mixed lots."
         return
     field.widget = SpeciesSelect(
         attrs={"class": "form-select species-select", "data-species-select": "1"},
@@ -595,7 +638,9 @@ class QuickAddLot(forms.ModelForm):
             self.fields["species_category"].widget = HiddenInput()
         self.fields["species_category"].label = "Category"
         self.fields["species_category"].help_text = ""
-        configure_species_field(self.fields, self.auction)
+        # No picker here: see configure_species_field.  The bulk-add pages fill this in from the
+        # lot name and show what they filled in as text, with a button to clear it.
+        configure_species_field(self.fields, self.auction, picker=False)
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
         else:
@@ -1242,6 +1287,18 @@ class EditLot(forms.ModelForm):
                 ),
                 Div(
                     "species",
+                    # Opens in a new tab on purpose: this form is an HTMX modal, and navigating
+                    # away from it would throw away everything else the admin has typed.  The lot
+                    # name goes with it, so the add-species form arrives half filled in, and the
+                    # new species can be attached to every lot called that in one go.
+                    HTML(
+                        f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
+                        f'href="{reverse("species_create")}?lot_name={quote(self.lot.lot_name or "")}'
+                        f'&next={quote(reverse("auction_lot_list", kwargs={"slug": self.auction.slug}))}">'
+                        '<i class="bi bi-plus-lg"></i> New species</a>'
+                    )
+                    if self.auction.use_scientific_name
+                    else HTML(""),
                     css_class="col-sm-12",
                 ),
                 Div(
@@ -1331,9 +1388,11 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
-        # can_add without a user check: LotAdmin, the only view that renders this form, is
-        # auction admins only, which is exactly the standing SpeciesCreateView asks for.
-        configure_species_field(self.fields, self.auction, searchable=True, can_add=True)
+        # A dal picker, and no guessing: see configure_species_field.  The "New" button beside it
+        # is the way out when the list really is missing the fish -- LotAdmin, the only view that
+        # renders this form, is auction admins only, which is exactly the standing
+        # SpeciesCreateView asks for.
+        configure_species_field(self.fields, self.auction, dal_for=self.user)
         self.fields["species"].initial = self.lot.species
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
         self.fields["buy_now_price"].initial = self.lot.buy_now_price
@@ -3289,6 +3348,15 @@ class CreateLotForm(forms.ModelForm):
     # new_species_scientific_name.help_text = "Enter the Latin name of this species"
     # new_species_category = ModelChoiceField(queryset=Category.objects.all().order_by('name'), required=False,label="Category")
     cloned_from = forms.IntegerField(required=False, widget=forms.HiddenInput())
+    #: Set by refreshSpeciesUI() in lot_form.html when the category picker is actually on screen.
+    #:
+    #: Both pickers start closed, and while the category one is closed whatever it posts is a
+    #: leftover from before the species was chosen -- so ``clean_species_for_auction`` overwrites
+    #: it with the species' own category.  Once somebody has opened the pickers that stops being
+    #: true: what is in the box is what they chose, and deriving over the top of it would revert a
+    #: deliberate answer on save, silently.  Hence one bit saying which of the two situations this
+    #: post is.
+    category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
 
     show_payment_pickup_info = forms.BooleanField(required=False, label="Show payment/pickup info")
     AUCTION_CHOICES = [
@@ -3536,16 +3604,30 @@ class CreateLotForm(forms.ModelForm):
                 ),
                 Div(
                     "lot_name",
+                    # What the lot name was understood as, and the way back to the controls.  Both
+                    # pickers below start hidden and refreshSpeciesUI() in lot_form.html decides
+                    # what this says: the scientific name when one was identified, the category
+                    # when it wasn't.  Rendered here, under the name it is talking about.
+                    HTML(
+                        "<div id='species-summary' class='form-text text-muted mb-3 d-none'>"
+                        "<span id='species-summary-text'></span>"
+                        "<button type='button' id='species-edit' class='btn btn-link btn-sm p-0 ms-1 align-baseline'>"
+                        "Change</button></div>"
+                    ),
                     css_class="col-md-12",
                 ),
                 Div(
                     "species",
-                    # Filled in by setCategoryVisibility() in lot_form.html: once a species is
-                    # picked the category field hides, and this says where the lot landed rather
-                    # than letting the category silently disappear.
-                    HTML("<div id='derived-category' class='form-text text-muted'></div>"),
                     css_class="col-md-12",
                 ),
+                # Directly under the scientific name, and shown and hidden with it: they are two
+                # halves of one question ("what is this?"), and a category picker that appears on
+                # its own halfway down the form reads as an unrelated chore.
+                Div(
+                    "species_category",
+                    css_class="col-md-12",
+                ),
+                "category_shown",
                 Div(
                     "custom_field_1",
                     css_class="col-md-12",
@@ -3585,10 +3667,6 @@ class CreateLotForm(forms.ModelForm):
                 Div(
                     "donation",
                     css_class="col-md-3",
-                ),
-                Div(
-                    "species_category",
-                    css_class="col-md-12",
                 ),
                 css_class="row",
             ),
@@ -3659,7 +3737,9 @@ class CreateLotForm(forms.ModelForm):
         clean_species_for_auction(
             cleaned_data,
             auction if part_of_auction == "True" else None,
-            derive_category=True,
+            # Only when the picker was closed, which is when what it posted is a leftover rather
+            # than an answer.  See category_shown.
+            derive_category=not cleaned_data.get("category_shown"),
             instance=self.instance,
         )
         if part_of_auction == "True":
@@ -4992,6 +5072,7 @@ class ClubBapSettingsForm(forms.ModelForm):
             "points_for_custom_checkbox",
             "min_quantity",
             "days_between_same_name_lots",
+            "days_between_same_species_lots",
             "only_active_members_can_participate",
             "only_donation_lots",
             "only_sold_lots",
@@ -5012,6 +5093,7 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "points_for_custom_checkbox",
                 "min_quantity",
                 "days_between_same_name_lots",
+                "days_between_same_species_lots",
                 "only_active_members_can_participate",
                 "only_donation_lots",
                 "only_sold_lots",

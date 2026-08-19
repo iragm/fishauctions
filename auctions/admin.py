@@ -51,6 +51,7 @@ from .models import (
     SpeakerTopic,
     Species,
     SpeciesCommonName,
+    SpeciesNameRejection,
     SpeciesSearchCache,
     ThermalPrinterProfile,
     UserBan,
@@ -1204,11 +1205,25 @@ class SpeciesAdmin(admin.ModelAdmin):
         "added_by",
         "club",
         "breeder_points",
+        "possible_duplicate",
     )
     # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
     # "approved" first: an unapproved species is suggested to one person and nobody else, so the
-    # queue of them is the one thing on this page anybody has to act on.
-    list_filter = ("approved", "source", "club", "category", "freshwater", "brackish", "saltwater")
+    # queue of them is the one thing on this page anybody has to act on.  possible_duplicate is an
+    # emptiness filter rather than a plain one for the same reason: it is a self-FK, so listing its
+    # values would list 36,000 species in the sidebar.  Merging a pair is deliberately *not* an
+    # action here -- which of the two rows the whole site keeps is a decision that needs the lot
+    # counts and the sources side by side, which is what the species gaps page shows.
+    list_filter = (
+        "approved",
+        ("possible_duplicate", admin.EmptyFieldListFilter),
+        "source",
+        "club",
+        "category",
+        "freshwater",
+        "brackish",
+        "saltwater",
+    )
     actions = ["approve_species"]
 
     @admin.action(description="Approve for every auction")
@@ -1240,11 +1255,30 @@ class SpeciesAdmin(admin.ModelAdmin):
 class SpeciesSearchCacheAdmin(admin.ModelAdmin):
     model = SpeciesSearchCache
     menu_label = "Species name cache"
-    list_display = ("search_text", "species", "source", "created_by", "hits", "createdon")
+    # accepts and rejects are the whole story of whether a remembered answer is any good: a lot
+    # saved with it left alone counts once, a lot it was cleared from counts against it, and one
+    # rejection in ten retires the row -- see species_matching.record_choice.
+    list_display = ("search_text", "species", "source", "created_by", "hits", "accepts", "rejects", "createdon")
     list_filter = ("source",)
     search_fields = ("search_text", "species__scientific_name")
     # Deleting a row here is how you make the site look a name up again -- handy when a bad
     # answer got cached.
+    autocomplete_fields = ("species",)
+
+
+class SpeciesNameRejectionAdmin(admin.ModelAdmin):
+    """The pairings the site has retired.  Deleting a row lets the matcher offer it again.
+
+    The counterpart of the name cache: that table says what a lot name *is*, this one says what
+    enough people have decided it is not.  Both are read before the language model, and this one
+    survives the cache row it came from -- otherwise the model would answer the same question the
+    same way and the wrong answer would be written straight back.
+    """
+
+    model = SpeciesNameRejection
+    menu_label = "Retired species names"
+    list_display = ("search_text", "species", "createdon")
+    search_fields = ("search_text", "species__scientific_name")
     autocomplete_fields = ("species",)
 
 
@@ -1338,6 +1372,7 @@ admin.site.register(Category, CategoryAdmin)
 admin.site.register(Species, SpeciesAdmin)
 admin.site.register(SpeciesCommonName, SpeciesCommonNameAdmin)
 admin.site.register(SpeciesSearchCache, SpeciesSearchCacheAdmin)
+admin.site.register(SpeciesNameRejection, SpeciesNameRejectionAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(LotHistory, ChatAdmin)

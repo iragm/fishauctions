@@ -33,11 +33,19 @@ import re
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .llm import LLMError, get_provider
-from .models import ClubMember, LLMUsage, Species, SpeciesCommonName, SpeciesSearchCache, normalize_species_name
+from .models import (
+    ClubMember,
+    LLMUsage,
+    Species,
+    SpeciesCommonName,
+    SpeciesNameRejection,
+    SpeciesSearchCache,
+    normalize_species_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -533,9 +541,40 @@ def exact_matches(text, user=None, club=None):
         .select_related("species")
         .order_by("-is_preferred", "-species__freshwater", "species__trade_rank")[: MAX_SUGGESTIONS * 3]
     )
+    carried = []
     for common in common_names:
-        found.setdefault(common.species_id, common.species)
+        if common.species_id not in found:
+            carried.append(common.species)
+    # A synonym carried by several species, and nothing stronger to go on: prefer the species whose
+    # *own* designated name says the same thing the typed name does.
+    if not found:
+        carried = _named_after_the_same_thing(normalized, carried)
+    for species in carried:
+        found.setdefault(species.pk, species)
     return list(found.values())[:MAX_SUGGESTIONS]
+
+
+def _named_after_the_same_thing(normalized, candidates):
+    """Narrow a shared common name down to the species that is really called that, if there is one.
+
+    FishBase hands the same synonym to different fish on purpose, and "Peppered cory" is the case
+    that matters: it is listed for *Corydoras paleatus*, which every hobbyist means by it, and also
+    for *Corydoras julii*, whose own name is "Leopard corydoras".  Two candidates is not an answer
+    -- the bulk-add page fills nothing in unless there is exactly one, and the seller is offered a
+    picklist of two fish they cannot tell apart -- so the commonest cory in the hobby was
+    unreachable by the name everybody types.
+
+    The tie-break is the *designated* name, the one name FishBase picks out per species: "Peppered
+    corydoras" shares a word with what was typed and "Leopard corydoras" shares none.  It only
+    ever narrows to a single candidate, and only when nothing better matched at all -- a shared
+    synonym is the weakest evidence :func:`exact_matches` acts on, so refining it cannot cost
+    anything that was already a real answer.
+    """
+    if len(candidates) < 2:
+        return candidates
+    typed = set(keywords(normalized))
+    agreeing = [species for species in candidates if typed & set(keywords(species.common_name_normalized))]
+    return agreeing if len(agreeing) == 1 else candidates
 
 
 def _trade_first(queryset, prefix=""):
@@ -890,12 +929,21 @@ def llm_match(text, user=None, club=None, budget=None):
     words = keywords(text)
     if not words:
         return None, False
-    candidates = _shortlist(words, normalize(text), user=user, club=club)
+    normalized = normalize(text)
+    candidates = _shortlist(words, normalized, user=user, club=club)
+    # Never put a pairing the site has retired back in front of the model.  A rejection is the one
+    # piece of evidence that outlives the cache row it came from (see record_choice), and the model
+    # would otherwise answer the same question the same way and have the answer written straight
+    # back -- which is exactly the loop the counters exist to break.  Filtered here rather than in
+    # _shortlist so that the shortlist stays a pure "what looks relevant" query.
+    vetoed = rejected_species_ids(normalized)
+    if vetoed:
+        candidates = [species for species in candidates if species.pk not in vetoed]
     budget = budget or LLMBudget.for_user(user)
     if not budget.spend():
         logger.info("Species lookup rate limit reached for %s", budget.name)
         return None, False
-    listing = "\n".join(f"{species.pk}: {species.label}" for species in candidates)
+    listing = "\n".join(f"{species.pk}: {species.label_with_common_name}" for species in candidates)
     # Said out loud rather than left as an empty block, so the model reads it as "the list is
     # empty" rather than as a truncated prompt.
     messages = [{"role": "user", "content": f"Lot name: {text}\n\nCandidates:\n{listing or '(none)'}"}]
@@ -911,8 +959,13 @@ def llm_match(text, user=None, club=None, budget=None):
     except (TypeError, ValueError):
         # No id.  It may have named a species instead, which is the shortlist admitting it missed.
         named = _species_named(result.data.get("scientific_name"), user=user, club=club)
+        if named and named.pk in vetoed:
+            return _retired_answer(user, result, text)
         _record_usage(user, result, text, "species" if named else "no_species")
         return named, True
+    if chosen_pk in vetoed:
+        # It named a retired pairing from memory rather than from the list it was given.
+        return _retired_answer(user, result, text)
     # Never trust the id: it has to be one we offered.
     chosen = next((species for species in candidates if species.pk == chosen_pk), None)
     _record_usage(user, result, text, "species" if chosen else "no_species")
@@ -935,10 +988,93 @@ def remember(text, species, source="llm", user=None):
     # visible_species(); what they don't get is to teach the rest of the site a name using it.
     if species is not None and not species.approved:
         return
+    # A pairing the site has already retired is not learned again.  Without this the whole
+    # accept/reject mechanism would be a loop: enough people take the species off the lots called
+    # "sponge filter", the row is retired, and the next person to save one writes it straight back.
+    # A site admin can delete the rejection on the gaps page, which is the way back in.
+    if species is not None and is_rejected(normalized, species):
+        return
     defaults = {"species": species, "source": source}
     if user is not None and getattr(user, "is_authenticated", False):
         defaults["created_by"] = user
     SpeciesSearchCache.objects.update_or_create(search_text=normalized, defaults=defaults)
+
+
+def _retired_answer(user, result, text):
+    """The model named a species this name has been retired from.  Discard it, remember nothing.
+
+    Deliberately not written down as "not a species": that is a claim about the *name*, and all
+    anybody has actually said is that it is not this one species -- see :func:`record_choice`.
+    Returning ``answered=False`` is what keeps it out of the cache.
+    """
+    _record_usage(user, result, text, "no_species")
+    return None, False
+
+
+def is_rejected(normalized, species):
+    """True when this name has already been retired from naming this species.
+
+    Takes an *already normalised* name, because the caller has one in hand.
+    """
+    if species is None or not normalized:
+        return False
+    return SpeciesNameRejection.objects.filter(search_text=normalized, species=species).exists()
+
+
+def rejected_species_ids(normalized):
+    """The species this name has been retired from naming.  A set, usually empty."""
+    if not normalized:
+        return set()
+    return set(SpeciesNameRejection.objects.filter(search_text=normalized).values_list("species_id", flat=True))
+
+
+def record_choice(text, species, *, first_save=False):
+    """Score what a person did with the answer this lot name was remembered as.
+
+    This is the counterweight to :func:`remember`, and the reason it exists is that the cache is
+    written by *sellers*: the bulk-add page remembers the pairing on a row's first save, and the
+    row is then served to every club on the site ahead of the token search.  One misclick used to
+    become the site's answer forever, and the only way back was a superuser noticing it on the gaps
+    page.  Now the same forms that write the answer also report what happened to it.
+
+    *first_save* is what keeps the two counters honest against each other.  An **accept** is only
+    counted the first time a lot is saved -- somebody re-saving a lot to fix its price has not
+    re-confirmed the species, and counting it would let a busy club vote a wrong answer permanent.
+    A **rejection** counts on any save, because that is when it happens: the species was already on
+    the lot and somebody took it off or picked a different one.
+
+    Does nothing at all when the name has no remembered answer, which is the common case -- this
+    runs on every lot save, so it is one indexed lookup and out.
+    """
+    normalized = normalize(text)
+    if not normalized:
+        return
+    row = SpeciesSearchCache.objects.filter(search_text=normalized).first()
+    if row is None or row.species_id is None:
+        # Nothing was remembered, or what was remembered is "this is not a species" -- and a lot
+        # saved with no species is agreement with that, not evidence against it.  Nobody is shown
+        # a negative answer to disagree with, so there is nothing to score.
+        return
+    chosen_pk = getattr(species, "pk", species)
+    if chosen_pk and str(chosen_pk) == str(row.species_id):
+        if first_save:
+            # F() rather than a read-modify-write: two sellers saving at once should count twice.
+            SpeciesSearchCache.objects.filter(pk=row.pk).update(accepts=F("accepts") + 1)
+        return
+    SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
+    # Re-read rather than refresh_from_db(): two people can be saving lots with this name at the
+    # same moment, and the other one may have retired the row already.  A lot save must not fail
+    # because of what somebody else's save did to a cache row.
+    row = SpeciesSearchCache.objects.filter(pk=row.pk).first()
+    if row and row.is_discredited:
+        logger.info(
+            "Retiring remembered species %r -> %s after %s reject(s) and %s accept(s)",
+            row.search_text,
+            row.species,
+            row.rejects,
+            row.accepts,
+        )
+        row.retire()
 
 
 def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None):

@@ -279,8 +279,11 @@ App-only; the deep link is handled natively. {% endcomment %}
                         </div>
                     {% endif %}
                     <h3>{{ lot.lot_name }}</h3>
-                    {% comment %}The scientific name the seller picked.  Italics because that is how a binomial is set, and a cultivar is shown as Genus species 'Strain' -- see Species.full_scientific_name.{% endcomment %}
-                    {% if lot.scientific_name %}<div class="text-muted"><i>{{ lot.scientific_name }}</i></div>{% endif %}
+                    {% comment %}The scientific name the seller picked.  Italics because that is how a binomial is set, and a cultivar is shown as Genus species 'Strain' -- see Species.full_scientific_name.  The "?" is where FishBase's attribution lives: it is asked for wherever their data is used, and this is the one page where a reader is actually reading the name, so it is here rather than under every lot form on the site.{% endcomment %}
+                    {% comment %}Which of the two names goes underneath depends on which one the seller typed up there -- see Lot.scientific_name_line and Lot.common_name_line.  A lot called "Labidochromis caeruleus" gets "Yellow lab" here, not the same two words in italics.{% endcomment %}
+                    {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i> <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
+                    {% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>{% endif %}
+                    {% if lot.scientific_name_line or lot.common_name_line %}<div class="collapse" id="fishbase-citation">{% fishbase_citation %}</div>{% endif %}
                     {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="{% url 'edit_lot' pk=lot.pk %}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
                     {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{% if show_bap_badge %}{% if bap_eligible_reason %}<span class="badge bg-secondary ms-1">Breeder points: {{ bap_eligible_reason_display }}</span>{% else %}<span class="badge bg-success ms-1">Breeder points eligible</span>{% endif %}{% endif %}{% if viewer_has_bap and lot.sold %}{% include "auctions/bap_lot_buttons.html" with default_points=bap_default_points %}{% endif %}{%endif%}
                     {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
@@ -1188,6 +1191,4 @@ function feedback(pk, leave_as, rating, text) {
   };
 </script>
 {% endif %}
-{% comment %}FishBase asks to be cited wherever its data is used, and a scientific name on a lot page is its data doing work for a reader. Only when there is one, so it doesn't sit under every sponge filter on the site.{% endcomment %}
-{% if lot.scientific_name %}{% fishbase_citation %}{% endif %}
 {% endblock %}

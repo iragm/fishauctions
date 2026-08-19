@@ -242,6 +242,7 @@ from .models import (
     SpeakerTag,
     Species,
     SpeciesCommonName,
+    SpeciesNameRejection,
     SpeciesSearchCache,
     SquareSeller,
     UserBan,
@@ -298,6 +299,7 @@ from .species_matching import (
     visible_common_names,
     visible_species,
 )
+from .species_matching import record_choice as record_species_choice
 from .species_matching import remember as remember_species
 from .tables import (
     AuctionHistoryHTMxTable,
@@ -3493,10 +3495,11 @@ class SpeciesSuggestions(APIView):
                         "id": species.pk,
                         "scientific_name": species.full_scientific_name,
                         "common_name": species.common_name,
-                        # The category the lot will get if this species is picked.  The forms hide
-                        # their own category field once a species is chosen, and this is what they
-                        # show instead of just making it vanish.
+                        # The category the lot will get if this species is picked -- by name for
+                        # the line of text the forms show, and by pk so the category picker can be
+                        # set to it rather than left showing whatever the name guesser said.
                         "category": str(species.category) if species.category else "",
+                        "category_id": species.category_id or "",
                         "label": species.label,
                     }
                     for species in matches
@@ -6658,7 +6661,8 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
             for lot in lots:
-                if not lot.pk:
+                lot_is_new = not lot.pk
+                if lot_is_new:
                     new_lot_count += 1
                     # save_new_lot is shared with the command palette's add_lot action so a lot
                     # added by voice lands exactly the same way as one added on this page.
@@ -6669,6 +6673,11 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     if self.tos.user:
                         lot.user = self.tos.user
                     lot.save()
+                # What the seller did with the species this lot name was remembered as.  The same
+                # report the ajax bulk page makes -- this is the other bulk page, and a remembered
+                # answer cleared here is exactly the same evidence.  See record_choice.
+                if self.auction.use_scientific_name and lot.lot_name:
+                    record_species_choice(lot.lot_name, lot.species, first_save=lot_is_new)
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
                 self.auction.create_history(
@@ -6986,13 +6995,6 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                         errors["species"] = "Pick a scientific name from the list"
                     else:
                         lot.species = species
-                        # Remember it only on the row's first save, where the name and the species
-                        # were entered together and the pairing is really what the person meant.
-                        # On a later edit they may well have rewritten the lot name and left the
-                        # old species sitting there, and the cache is global -- one stale row would
-                        # teach every club that "sponge filter" is a guppy.
-                        if is_new:
-                            remember_species(lot_name, species, source="user", user=request.user)
             # No else: with the field switched off there is nothing on the page to post, so an
             # ajax save of any other field would otherwise wipe a species that is already stored.
             # Turning the setting off hides the field; it does not throw the column away.
@@ -7109,6 +7111,24 @@ class SaveLotAjax(APIView, AuctionViewMixin):
 
             # Save the lot - locking is handled in Lot.save() for both standard and seller_dash modes
             lot.save()
+
+            # The species half of the save, and only once the row has really been saved: a row that
+            # bounced on its price is not somebody's answer about what the fish is.
+            if self.auction.use_scientific_name and lot.lot_name:
+                # What the seller did with the answer this name was remembered as: left it alone,
+                # cleared it with the X, or picked something else.  This is the half that was
+                # missing -- the page wrote to a site-wide cache on a first save and never reported
+                # back, so one misclick was the site's answer for good.  Before remember() below,
+                # deliberately: the person teaching the site a pairing must not also be counted as a
+                # second person agreeing with it.  See species_matching.record_choice.
+                record_species_choice(lot.lot_name, lot.species, first_save=is_new)
+                # Remember it only on the row's first save, where the name and the species were
+                # entered together and the pairing is really what the person meant.  On a later edit
+                # they may well have rewritten the lot name and left the old species sitting there,
+                # and the cache is global -- one stale row would teach every club that "sponge
+                # filter" is a guppy.
+                if is_new and lot.species:
+                    remember_species(lot.lot_name, lot.species, source="user", user=request.user)
 
             # Create auction history entry
             if is_new:
@@ -8067,6 +8087,7 @@ class LotValidation(LoginRequiredMixin):
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
         lot.promotion_weight = randint(0, 20)
+        lot_is_new = not lot.pk
         if lot.pk:
             # this is an existing lot
             lot.save()
@@ -8110,6 +8131,12 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
+        # What the seller did with the species the matcher offered for this lot name.  This form
+        # never *writes* to the shared name cache -- only the admin's lot editor and the bulk-add
+        # page do -- but it is one of the places a wrong remembered answer is visibly taken off a
+        # lot, and that is evidence worth keeping.  See species_matching.record_choice.
+        if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
+            record_species_choice(lot.lot_name, lot.species, first_save=lot_is_new)
         return super().form_valid(form)
 
     def get_form_kwargs(self, *args, **kwargs):
@@ -8559,6 +8586,12 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             # is who is doing it: this view is auction admins only, they are correcting a lot on
             # purpose, and the answer is listed and revertible on the species gaps page.  The
             # seller-facing forms deliberately do not do this.
+            if self.auction.use_scientific_name and species_changed and obj.lot_name:
+                # An admin moving a lot off the species it was given is the clearest rejection
+                # there is of whatever the matcher remembered for this name.  Never an *accept*:
+                # this form is only ever a later edit, and re-saving a lot to set its winner is
+                # not somebody confirming the species.  See species_matching.record_choice.
+                record_species_choice(obj.lot_name, species, first_save=False)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner changed
@@ -10812,6 +10845,9 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "auctiontos_winner__pickup_location",
             "species_category",
             "species",
+            # A strain with no common name of its own falls back to its parent's, which the label
+            # prints -- see Lot.common_name_line.  One join rather than a query per label.
+            "species__parent",
             "user",
         )
 
@@ -25098,6 +25134,47 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
             .annotate(lots=Count("lot"))
             .order_by("-id")[:50]
         )
+        # Pairings the site has retired, and the only place they can be undone.  Kept next to the
+        # cache tables because they are the same subject read the other way round: what the matcher
+        # has been told *not* to answer.  See species_matching.record_choice.
+        context["rejections"] = list(SpeciesNameRejection.objects.select_related("species").order_by("-createdon")[:50])
+        # Rows that look like another row.  Both halves of a pair carry the flag, so the listing is
+        # de-duplicated here and the reader sees one line per decision rather than two.  Ordered by
+        # pk so that line is stable from one page load to the next.
+        flagged = list(
+            Species.objects.filter(possible_duplicate__isnull=False)
+            .select_related("possible_duplicate", "category", "added_by", "club")
+            .annotate(lots=Count("lot"))
+            .order_by("pk")[:100]
+        )
+        # One query for the lot counts of the other halves rather than one per row: both sides of
+        # a pair carry the flag, but only the side that came back from the query above is annotated.
+        other_lots = dict(
+            Lot.objects.filter(species__in=[species.possible_duplicate_id for species in flagged])
+            .values_list("species")
+            .annotate(count=Count("pk"))
+        )
+        duplicates = []
+        seen_pairs = set()
+        for species in flagged:
+            other = species.possible_duplicate
+            pair = tuple(sorted((species.pk, other.pk)))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            duplicates.append(
+                {
+                    "species": species,
+                    "other": other,
+                    "other_lots": other_lots.get(other.pk, 0),
+                    "same_scientific_name": bool(
+                        species.scientific_name
+                        and species.scientific_name.lower() == other.scientific_name.lower()
+                        and species.variety.lower() == other.variety.lower()
+                    ),
+                }
+            )
+        context["duplicates"] = duplicates
         context["species_total"] = Species.objects.count()
         context["species_added_here"] = Species.objects.filter(source="admin").count()
         return context
@@ -25120,6 +25197,78 @@ class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
         name = row.search_text
         row.delete()
         messages.success(request, f"Forgot the remembered answer for “{name}”.  It will be looked up again.")
+        return redirect("species_gaps")
+
+
+class SpeciesNameRejectionDeleteView(AdminOnlyViewMixin, View):
+    """Let a name be matched to a species again after the site retired the pairing.
+
+    The escape hatch for :func:`auctions.species_matching.record_choice`.  Enough sellers taking a
+    species off the lots called something retires that pairing for good -- deliberately, because
+    otherwise the language model answers the same question the same way and the answer is written
+    straight back.  "For good" needs a way out, and this is it: usually because the rejections were
+    really about the *lot names* ("blue dream shrimp" cleared by people selling something else) and
+    the pairing was right all along.
+    """
+
+    def post(self, request, pk):
+        row = get_object_or_404(SpeciesNameRejection, pk=pk)
+        name, species = row.search_text, row.species
+        row.delete()
+        messages.success(request, f"“{name}” may be matched to {species.label} again.")
+        return redirect("species_gaps")
+
+
+class SpeciesDuplicateDismissView(AdminOnlyViewMixin, View):
+    """ "These two are not the same species."  Clears the flag on both sides.
+
+    Two species really can share a designated common name -- FishBase gives "Peppered cory" to two
+    different *Corydoras* -- so a flag that could only be resolved by merging would force a wrong
+    answer.  Cleared on both rows, so the pair does not come back on the next save of either.
+    """
+
+    def post(self, request, pk):
+        species = get_object_or_404(Species, pk=pk)
+        other = species.possible_duplicate
+        Species.objects.filter(pk=species.pk).update(possible_duplicate=None)
+        if other:
+            Species.objects.filter(pk=other.pk).update(possible_duplicate=None)
+        messages.success(request, f"{species.label} is not a duplicate.")
+        return redirect("species_gaps")
+
+
+class SpeciesMergeView(AdminOnlyViewMixin, View):
+    """Fold one species row into another.  Superusers only, on purpose.
+
+    A duplicate is almost always a club's hand-added row sitting next to one of FishBase's 36,000,
+    and merging is not reversible: the lots, the strains and the hobby names move, and one of the
+    two rows stops existing.  Which name the whole site keeps is a decision for whoever maintains
+    the list, not for whichever admin happened to add the second row -- which is also why the
+    button lives on the gaps page and not on the lot form.
+
+    ``keep`` is the row that survives; the pk in the URL is the one being folded in.
+    """
+
+    def post(self, request, pk):
+        duplicate = get_object_or_404(Species, pk=pk)
+        keep = get_object_or_404(Species, pk=request.POST.get("keep") or 0)
+        if keep.pk == duplicate.pk:
+            messages.error(request, "A species cannot be merged into itself.")
+            return redirect("species_gaps")
+        # A variety and its own parent are not two copies of one species; merging them would move
+        # the strain's lots onto the nominal species and lose the strain.
+        if keep.parent_id == duplicate.pk or duplicate.parent_id == keep.pk:
+            messages.error(request, "That is a strain and its parent species, not a duplicate.  Nothing was merged.")
+            return redirect("species_gaps")
+        losing_label = duplicate.label
+        moved = keep.merge_duplicate(duplicate)
+        messages.success(
+            request,
+            f"Merged {losing_label} into {keep.label}: "
+            f"{moved.get('lots', 0)} lot(s), {moved.get('common_names', 0)} common name(s), "
+            f"{moved.get('varieties', 0)} strain(s) and {moved.get('remembered_names', 0)} "
+            "remembered name(s) moved.",
+        )
         return redirect("species_gaps")
 
 

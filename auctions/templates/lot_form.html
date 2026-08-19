@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% load species_tags %}
 {% block extra_css %}
 <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
 {% endblock %}
@@ -39,51 +38,104 @@ function setAuction(setting) {
 }
 
 {% comment %}
-  The scientific name picker and the category picker are two views of the same question, so they
-  are shown and hidden together.  The species field is always rendered (see
+  The scientific name picker and the category picker are two views of the same question, and on
+  this form both start *closed*.  What the seller types is a lot name; the answer to "what is
+  this?" is worked out from it, shown as one line of text under the box, and only if they disagree
+  with it do they ever see a control.  The species field is always rendered (see
   configure_species_field in forms.py) because the auction is picked in a dropdown on this very
   form -- JavaScript can only show a field that is already in the page.
 {% endcomment %}
 var auctionUsesCategories = true;
 var auctionUsesScientificName = true;
+{% comment %}Open at load only when the form came back with an error on one of the two fields: hiding the control somebody has to fix is how a form becomes unsubmittable.{% endcomment %}
+var speciesRevealed = {% if form.species.errors or form.species_category.errors %}true{% else %}false{% endif %};
+{% comment %}The category picker is hidden while a species answers for it, so an error on the category itself has to override that or there is nothing on screen to fix.{% endcomment %}
+var categoryHasError = {% if form.species_category.errors %}true{% else %}false{% endif %};
+{% comment %}Set once a lookup has actually run, so "nothing found" can be told apart from "not asked yet" -- the first is worth a line of text offering the picker, the second is not.{% endcomment %}
+var speciesLookedUp = {% if form.instance.pk %}true{% else %}false{% endif %};
 // species pk -> the category that species implies, as the suggestions endpoint reported it.
 var speciesCategories = {};
-{% comment %}Seeded for a lot that already has a species: editing one never calls the suggestions endpoint until the lot name changes, and without this the category field would be hidden with nothing shown in its place.{% endcomment %}
-{% if form.instance.species_id and form.instance.species.category %}speciesCategories["{{ form.instance.species_id }}"] = "{{ form.instance.species.category|escapejs }}";{% endif %}
+var speciesCategoryIds = {};
+{% comment %}Seeded for a lot that already has a species: editing one never calls the suggestions endpoint until the lot name changes, and without this the pair would be out of step until something did.{% endcomment %}
+{% if form.instance.species_id and form.instance.species.category %}speciesCategories["{{ form.instance.species_id }}"] = "{{ form.instance.species.category|escapejs }}";speciesCategoryIds["{{ form.instance.species_id }}"] = "{{ form.instance.species.category_id }}";{% endif %}
 
 function setScientificName(enabled) {
     auctionUsesScientificName = !!enabled;
-    $('#div_id_species').closest('.col-md-12').toggle(auctionUsesScientificName);
-    $('#fishbase-citation').toggle(auctionUsesScientificName);
     if (!auctionUsesScientificName) {
         // Whatever is in there belongs to an auction the user has navigated away from.  The
         // server drops it too (clean_species_for_auction), but leaving a stale value visible in
         // the DOM is how it ends up posted somewhere it doesn't belong.
         $('#id_species').val('');
     }
-    setCategoryVisibility();
+    refreshSpeciesUI();
+}
+
+{% comment %}Point the category picker at the species' own category.  While the pickers are closed the server does this on save (clean_species_for_auction); once they are open the box has to already say what the lot is going to get, or the seller reads a category the lot will not end up in.{% endcomment %}
+function followSpeciesCategory() {
+    var select = document.getElementById('id_species');
+    if (!select || !select.value) return;
+    var categoryId = speciesCategoryIds[select.value];
+    if (categoryId) {
+        $('#id_species_category').val(String(categoryId));
+    }
+}
+
+function chosenSpeciesLabel() {
+    var select = document.getElementById('id_species');
+    if (!select || !select.value || select.selectedIndex < 0) return '';
+    var option = select.options[select.selectedIndex];
+    return option ? option.textContent : '';
+}
+
+{% comment %}The category the picker is currently showing, or '' for one that says nothing.  Uncategorized is where a lot lands when the guesser had no idea, so it is not an answer worth printing at somebody.{% endcomment %}
+function chosenCategoryName() {
+    var name = ($('#id_species_category').find('option:selected').text() || '').trim();
+    if (!name || name === '---------' || name === 'Uncategorized') return '';
+    return name;
 }
 
 {% comment %}
-  The category is derived from the species when there is one.  Species.category comes from the
-  family FishBase records, which is a better answer than the keyword guesser could give, so
-  asking the user as well is asking them to confirm something we already know.  The field is only
-  hidden, never removed: it still posts, it is still what lot search and BAP points read, and it
-  comes straight back for a sponge filter or a mixed bag, where no species can be identified.
+  The one function that decides what is on screen.  Two controls and one line of text, and which
+  of them the user sees comes down to whether the lot name has already answered the question.
 
-  Hidden only when the species actually *answers* the question.  Species.category is mapped from
-  the family onto whatever categories a site's admins happen to have created
-  (species_categories.py), so on a site whose category names it doesn't recognise every species
-  maps to nothing -- and hiding the picker there took the control away and gave nothing back,
-  landing every lot with a species in Uncategorized with no way to fix it.
+  The category answers itself from the species when there is one: Species.category comes from the
+  family FishBase records, which is a better answer than the keyword guesser could give, so while
+  the pickers are closed the seller is not asked to confirm something we already know.  Neither
+  field is ever removed: both still post, they are still what lot search and BAP points read, and
+  they are both there for a sponge filter or a mixed bag, where no species can be identified.
 {% endcomment %}
-function setCategoryVisibility() {
-    var speciesChosen = auctionUsesScientificName && !!$('#id_species').val();
-    // Say where the lot ended up rather than just making the field disappear.  speciesCategories
-    // is filled in by the suggestions endpoint, which knows each species' category.
-    var derived = speciesChosen && auctionUsesCategories ? speciesCategories[$('#id_species').val()] : '';
-    $('#div_id_species_category').closest('.col-md-12').toggle(auctionUsesCategories && !derived);
-    $('#derived-category').text(derived ? 'Category: ' + derived : '');
+function refreshSpeciesUI() {
+    var select = document.getElementById('id_species');
+    var speciesChosen = auctionUsesScientificName && select && !!select.value;
+    $('#div_id_species').closest('.col-md-12').toggle(!!(auctionUsesScientificName && speciesRevealed));
+    // The category is the *fallback* for the scientific name, not a companion to it.  A species
+    // already knows its category -- Species.category comes from the family FishBase records, which
+    // is a better answer than the keyword guesser can give -- so once one is picked the box is not
+    // a question worth asking, and a seller who changed it would have their answer overwritten on
+    // save anyway (clean_species_for_auction).  It comes back the moment the species goes away,
+    // which is the case it is there for: a sponge filter or a mixed bag has no species to ask.
+    var categoryNeeded = auctionUsesCategories && speciesRevealed && !speciesChosen;
+    // Except when it is the field with the error on it: hiding the box somebody has to fix is how
+    // a form becomes unsubmittable.
+    if (categoryHasError) { categoryNeeded = auctionUsesCategories; }
+    $('#div_id_species_category').closest('.col-md-12').toggle(!!categoryNeeded);
+    // Tells the server whether what the category field posts is a person's answer -- see
+    // CreateLotForm.category_shown.  A value rather than a checked state: the field is a
+    // BooleanField behind a HiddenInput, so what it posts is the string in it.
+    $('#id_category_shown').val(categoryNeeded ? '1' : '');
+    var summary = '';
+    if (speciesChosen) {
+        summary = chosenSpeciesLabel();
+    } else if (auctionUsesCategories && chosenCategoryName()) {
+        summary = 'Category: ' + chosenCategoryName();
+    } else if (speciesLookedUp) {
+        // Nothing was worked out, so the line says so rather than vanishing.  Without it the
+        // Change button is not on the page at all, and a lot whose name neither the species list
+        // nor the category guesser recognises -- "sponge filter" -- has no way to be given either.
+        summary = auctionUsesScientificName ? 'No scientific name' : 'No category';
+    }
+    $('#species-summary-text').text(summary);
+    $('#species-summary').toggleClass('d-none', speciesRevealed || !summary);
 }
 
 function setAuctionRequiredFields(val) {
@@ -236,25 +288,25 @@ $(document).ready(function() {
     $('#id_auction').change(function(data) {
         setAuction(true);
     });
+    {% comment %}The keyword guesser, for the category.  Asked whatever the picker is doing, because the picker is usually closed now: its answer is what the summary line shows when no species could be identified.  Never overrules a category that is already set.{% endcomment %}
     $('#id_lot_name').change(function(data) {
-        if (!$('#id_species_category').val()) {
-            if ($('#div_id_species_category').is(':visible')) {
-                $.ajax({
-                type: "POST",
-                beforeSend: function (request) {
-                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-                },
-                url: "{% url 'guess_category' %}",
-                data: {'lot_name': this.value},
-                success : function(result) {
-                    if (result['value'] && result['name'] !== "Uncategorized") {
-                        $('#id_species_category').val(result['value']);
-                        $('#id_species_category_helptext').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
-                    }
+        // Whatever happens next, the question has now been asked of this name.
+        if (this.value.trim()) { speciesLookedUp = true; refreshSpeciesUI(); }
+        if (!auctionUsesCategories || $('#id_species_category').val()) return;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "{% url 'guess_category' %}",
+            data: {'lot_name': this.value},
+            success : function(result) {
+                if (result['value'] && result['name'] !== "Uncategorized") {
+                    $('#id_species_category').val(result['value']);
+                    refreshSpeciesUI();
                 }
-                });
             }
-        }
+        });
     });
 
     {% comment %}
@@ -280,7 +332,6 @@ $(document).ready(function() {
             success: function(response) {
                 if (select.dataset.lastQuery !== response.name) return;
                 var previous = select.value;
-                var previousLabel = previous ? select.options[select.selectedIndex].textContent : '';
                 var choices = response.choices || [];
                 select.innerHTML = '<option value="">No species</option>';
                 choices.forEach(function(choice) {
@@ -289,30 +340,46 @@ $(document).ready(function() {
                     option.textContent = choice.label;
                     select.appendChild(option);
                     speciesCategories[String(choice.id)] = choice.category || '';
+                    speciesCategoryIds[String(choice.id)] = choice.category_id || '';
                 });
+                {% comment %}
+                  The species follows the lot name, the same way it does on the bulk-add pages.
+                  Renaming a lot changes what the lot *is*, so a species worked out from the old
+                  name has no claim on the new one -- and the summary line under the box says what
+                  it is now, so nothing changes silently.  Keeping a stale pick because somebody
+                  once chose it by hand is how "Blue dream shrimp" renamed to "Sponge filter" goes
+                  to the printer as Neocaridina davidi.
+                {% endcomment %}
                 var stillThere = choices.some(function(choice) { return String(choice.id) === previous; });
                 if (previous && stillThere) {
                     select.value = previous;
-                } else if (previous && select.dataset.userChosen) {
-                    // Their pick isn't among the new suggestions. Put it back rather than
-                    // silently resetting a species someone chose by hand.
-                    var kept = document.createElement('option');
-                    kept.value = previous;
-                    kept.textContent = previousLabel;
-                    select.appendChild(kept);
-                    select.value = previous;
-                } else if (!select.dataset.userChosen && choices.length === 1) {
+                } else if (choices.length === 1) {
                     select.value = choices[0].id;
+                } else if (choices.length > 1) {
+                    // The lot name names several species and only the seller knows which.  This
+                    // is the one thing that opens the picker on its own: a question nobody can
+                    // answer for them is worth interrupting them with, and every other answer --
+                    // one species, or none -- is a line of text they can ignore.
+                    speciesRevealed = true;
                 }
-                setCategoryVisibility();
+                speciesLookedUp = true;
+                followSpeciesCategory();
+                refreshSpeciesUI();
             }
         });
     });
     $('#id_species').on('change', function() {
         this.dataset.userChosen = '1';
-        setCategoryVisibility();
+        followSpeciesCategory();
+        refreshSpeciesUI();
     });
-    setCategoryVisibility();
+    $('#id_species_category').on('change', refreshSpeciesUI);
+    $('#species-edit').on('click', function() {
+        speciesRevealed = true;
+        refreshSpeciesUI();
+        $(auctionUsesScientificName ? '#id_species' : '#id_species_category').trigger('focus');
+    });
+    refreshSpeciesUI();
 
 });
 </script>
@@ -373,12 +440,6 @@ $(document).ready(function() {
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
             {% crispy form form.helper %}
-{% comment %}
-  Always rendered, then shown or hidden by setScientificName() along with the picker itself: this
-  form's auction is a dropdown, so whether there is a picker on the page isn't known until the
-  user has chosen one.
-{% endcomment %}
-{% fishbase_citation %}
 <div class="modal fade" id="joinAuction" tabindex="-1" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">

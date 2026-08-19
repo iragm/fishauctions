@@ -70,6 +70,7 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    Species,
     SquareSeller,
     UserBan,
     UserData,
@@ -20208,6 +20209,7 @@ class ClubBapSettingsViewTests(TestCase):
                 "points_for_custom_checkbox": 0,
                 "min_quantity": 3,
                 "days_between_same_name_lots": 0,
+                "days_between_same_species_lots": 0,
                 "only_active_members_can_participate": False,
                 "only_donation_lots": False,
                 "separate_hap": False,
@@ -20228,6 +20230,7 @@ class ClubBapSettingsViewTests(TestCase):
                 "points_for_custom_checkbox": 0,
                 "min_quantity": 5,
                 "days_between_same_name_lots": 0,
+                "days_between_same_species_lots": 0,
                 "only_active_members_can_participate": False,
                 "only_donation_lots": False,
                 "separate_hap": False,
@@ -20852,6 +20855,98 @@ class LotBapEligibilityTests(TestCase):
             date_end=timezone.now(),
         )
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_same_species_rule_blocks_the_same_fish_under_a_different_name(self):
+        """The point of the rule: the name rule cannot see that these are one fish bred twice."""
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        yellow_lab = Species.objects.create(genus="Labidochromis", species="caeruleus", common_name="Yellow lab")
+        self._make_lot(
+            lot_name="Yellow labs",
+            species=yellow_lab,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(
+            lot_name="Labidochromis caeruleus", species=yellow_lab, user=self.user, date_end=timezone.now()
+        )
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_a_different_strain_of_the_same_species_still_earns_points(self):
+        """Blue and red cherry shrimp are two things to breed, and the strains are separate rows."""
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        neocaridina = Species.objects.create(genus="Neocaridina", species="davidi", common_name="Cherry shrimp")
+        blue = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=neocaridina, source="aquarium"
+        )
+        red = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Fire Red", parent=neocaridina, source="aquarium"
+        )
+        self._make_lot(
+            lot_name="Blue dream shrimp",
+            species=blue,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Fire red shrimp", species=red, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_the_same_strain_twice_is_still_blocked(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        neocaridina = Species.objects.create(genus="Neocaridina", species="davidi", common_name="Cherry shrimp")
+        blue = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=neocaridina, source="aquarium"
+        )
+        self._make_lot(
+            lot_name="Blue dream shrimp",
+            species=blue,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Blue dreams", species=blue, user=self.user, date_end=timezone.now())
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_the_same_species_outside_the_window_is_fine(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        prior = self._make_lot(lot_name="Guppies", species=species, user=self.user, bap_points_awarded=5)
+        # update(), not save(): Lot._do_save pulls date_end back to the auction's, which would put
+        # this lot inside the window again and quietly test nothing.
+        Lot.objects.filter(pk=prior.pk).update(date_end=timezone.now() - datetime.timedelta(days=45))
+        lot = self._make_lot(lot_name="Guppies", species=species, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_zero_means_the_species_rule_is_off(self):
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        self._make_lot(
+            lot_name="Guppies",
+            species=species,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Different name", species=species, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_a_lot_with_no_species_is_untouched_by_the_species_rule(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        self._make_lot(
+            lot_name="Guppies",
+            species=species,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Mixed bag", species=None, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
 
     def test_sold_lot_no_bap_reason_not_sold(self):
         self.club.only_sold_lots = True

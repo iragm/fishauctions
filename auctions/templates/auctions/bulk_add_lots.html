@@ -2,7 +2,6 @@
 {% load crispy_forms_tags %}
 {% block title %}Add lots for {{ tos.name }}{% endblock %}
 {% load static %}
-{% load species_tags %}
 
 {% block content %}
   {% include 'auction_ribbon.html' %}
@@ -21,7 +20,6 @@
     <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
     <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
-  {% if auction.use_scientific_name %}{% fishbase_citation %}{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -51,17 +49,12 @@ function cloneMore(selector, type) {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
         $(this).attr('for', newFor);
     });
-    {% comment %}
-      A new row keeps the last row's values on purpose, but not its species: those options were
-      suggested for a different lot name, and data-user-chosen clones as '1', so the "don't
-      silently reset a species someone picked" branch below would hold the wrong species on the
-      new row whenever the new name's suggestions don't happen to include it.
-    {% endcomment %}
-    newElement.find('select[name$="-species"]').each(function() {
-        this.innerHTML = '<option value="">No species</option>';
-        delete this.dataset.userChosen;
+    {% comment %}A new row keeps the last row's values on purpose, but not its species: that was worked out from a different lot name.{% endcomment %}
+    newElement.find('input[name$="-species"]').each(function() {
+        this.value = '';
         delete this.dataset.lastQuery;
     });
+    newElement.find('.species-hint').html('');
     total++;
     $('#id_' + type + '-TOTAL_FORMS').val(total);
     $(selector).after(newElement);
@@ -79,49 +72,64 @@ $(".submit-button").click(function(event){
 });
 {% if auction.use_scientific_name %}
 {% comment %}
-  Same species picker as the auto-saving bulk page, minus the auto-save: this form posts all at
-  once, so filling the dropdown is all there is to do. Options only ever come from the server.
+  Same rule as the auto-saving bulk page: no picker on a bulk row, just a hidden input filled in
+  when the matcher gives exactly one answer, the name shown as text under the lot name, and a
+  button to clear it.  The value only ever comes from the server.
 {% endcomment %}
-$(document).on('change', 'select[name$="-species"]', function() {
-    this.dataset.userChosen = '1';
+function speciesHint(row) {
+    var hint = row.querySelector('.species-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'form-text small species-hint';
+        var lotName = row.querySelector('input[name$="-lot_name"]');
+        (lotName ? lotName.parentNode : row).appendChild(hint);
+    }
+    return hint;
+}
+function showSpecies(row, label) {
+    var hint = speciesHint(row);
+    hint.innerHTML = '';
+    if (!label) return;
+    var name = document.createElement('i');
+    name.textContent = label;
+    hint.appendChild(name);
+    var clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'btn btn-link btn-sm p-0 ms-1 align-baseline species-clear text-muted';
+    clear.title = 'Not this species';
+    clear.setAttribute('aria-label', 'Remove this scientific name');
+    clear.innerHTML = '<i class="bi bi-x-lg"></i>';
+    hint.appendChild(clear);
+}
+$(document).on('click', '.species-clear', function() {
+    var row = this.closest('.lot-form');
+    var input = row.querySelector('input[name$="-species"]');
+    if (input) { input.value = ''; }
+    showSpecies(row, '');
 });
 $(document).on('blur', 'input[name$="-lot_name"]', function() {
     var row = this.closest('.lot-form');
     if (!row) return;
-    var select = row.querySelector('select[name$="-species"]');
-    if (!select) return;
+    var input = row.querySelector('input[name$="-species"]');
+    if (!input) return;
     var name = this.value.trim();
-    if (!name || select.dataset.lastQuery === name) return;
-    select.dataset.lastQuery = name;
+    if (!name || input.dataset.lastQuery === name) return;
+    input.dataset.lastQuery = name;
     $.ajax({
         url: "{% url 'species_suggestions' %}",
         type: 'POST',
         data: {'name': name, 'csrfmiddlewaretoken': '{{ csrf_token }}'},
         success: function(response) {
-            if (select.dataset.lastQuery !== response.name) return;
-            var previous = select.value;
-            var previousLabel = previous ? select.options[select.selectedIndex].textContent : '';
+            if (input.dataset.lastQuery !== response.name) return;
             var choices = response.choices || [];
-            select.innerHTML = '<option value="">No species</option>';
-            choices.forEach(function(choice) {
-                var option = document.createElement('option');
-                option.value = choice.id;
-                option.textContent = choice.label;
-                select.appendChild(option);
-            });
-            var stillThere = choices.some(function(choice) { return String(choice.id) === previous; });
-            if (previous && stillThere) {
-                select.value = previous;
-            } else if (previous && select.dataset.userChosen) {
-                // Their pick isn't among the new suggestions. Put it back rather than
-                // silently resetting a species someone chose by hand.
-                var kept = document.createElement('option');
-                kept.value = previous;
-                kept.textContent = previousLabel;
-                select.appendChild(kept);
-                select.value = previous;
-            } else if (!select.dataset.userChosen && choices.length === 1) {
-                select.value = choices[0].id;
+            // Exactly one, or nothing: a shortlist means the matcher cannot tell two species
+            // apart, and there is nobody being asked to choose on this page.
+            if (choices.length === 1) {
+                input.value = choices[0].id;
+                showSpecies(row, choices[0].scientific_name || choices[0].label);
+            } else {
+                input.value = '';
+                showSpecies(row, '');
             }
         }
     });

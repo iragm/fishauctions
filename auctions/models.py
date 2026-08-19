@@ -965,6 +965,16 @@ class Club(CloudflareImageMixin, models.Model):
         default=0,
         help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
     )
+    days_between_same_species_lots = models.IntegerField(
+        default=0,
+        verbose_name="Days between same species lots",
+        help_text=(
+            "Minimum days between awarding BAP points for lots with the same scientific name. Leave at 0 to "
+            "allow points every time. Stricter than the rule above, because it sees through what the lot was "
+            "called: “Yellow labs” and “Labidochromis caeruleus” are the same fish. A named strain counts as "
+            "its own species, so blue and red cherry shrimp both earn points."
+        ),
+    )
     points_per_lot = models.IntegerField(
         null=True,
         blank=True,
@@ -3228,6 +3238,125 @@ class Species(models.Model):
         "it.  That is how an auction admin gets a missing species onto their own lots at the "
         "check-in table without adding it to the whole site; ticking it here is the approval."
     )
+    possible_duplicate = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text=(
+            "Another row that looks like this one -- same scientific name, or the same common "
+            "name.  Set automatically on save; the pair is listed on the species gaps page for a "
+            "site admin to merge or dismiss."
+        ),
+    )
+
+    #: The two lists that number their own species.  A duplicate inside one of them is impossible
+    #: by construction -- ``unique_together`` on source and SpecCode -- so the scan below is
+    #: skipped for them.  It would otherwise cost two queries times 36,000 on every re-import,
+    #: to answer a question the source already answered.
+    IMPORTED_SOURCES = ("fishbase", "sealifebase")
+
+    def find_possible_duplicate(self):
+        """Another species row that is probably this same species, or None.
+
+        Two signals, and both of them are things a person can see on the gaps page and judge:
+
+        * **The same scientific name**, at the same rank -- variety included, so *Neocaridina
+          davidi* and its thirteen colour strains are not thirteen duplicates of each other.  This
+          is the one that actually happens: an auction admin at a check-in table adds
+          *Cryptocoryne wendtii* because searching for "crypt" found nothing, and the row is
+          already there under a name they didn't type.
+        * **The same designated common name.**  Deliberately the ``common_name`` column and not
+          the synonym table: FishBase hands out "Peppered cory" to two different *Corydoras* on
+          purpose, and flagging every shared synonym would bury the real duplicates under
+          thousands of rows that are all correct.
+
+        Never a *variety* against a plain species, and never across the imported lists -- see
+        :attr:`IMPORTED_SOURCES`.
+        """
+        others = Species.objects.exclude(pk=self.pk)
+        if self.scientific_name:
+            match = others.filter(scientific_name__iexact=self.scientific_name, variety__iexact=self.variety).first()
+            if match:
+                return match
+        if self.common_name_normalized:
+            return others.filter(common_name_normalized=self.common_name_normalized).first()
+        return None
+
+    def flag_possible_duplicate(self):
+        """Point this row and its lookalike at each other, or clear a flag that no longer holds.
+
+        Written with ``update()`` rather than ``save()``, exactly as :class:`AuctionTOS` does it
+        and for the same reason: this runs *from* ``save()``, and assigning the field and saving
+        again is an infinite loop.
+        """
+        duplicate = self.find_possible_duplicate()
+        if duplicate:
+            Species.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
+            Species.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+            # Keep the in-memory row in step with what update() just wrote, or the caller's next
+            # save() writes the stale value straight back over it.
+            self.possible_duplicate = duplicate
+        elif self.possible_duplicate_id:
+            # possible_duplicate_id rather than the object: the row it pointed at may have been
+            # deleted by a merge, and touching the attribute would raise instead of clearing.
+            Species.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+            Species.objects.filter(pk=self.pk).update(possible_duplicate=None)
+            self.possible_duplicate = None
+
+    def merge_duplicate(self, duplicate):
+        """Fold *duplicate* into this row and delete it.  Returns a description of what moved.
+
+        A site admin's call and nobody else's -- the two rows are usually one club's hand-added
+        species and one of FishBase's 36,000, and picking which name the whole site keeps is not a
+        decision to hand to whoever happened to add the second one.
+
+        Everything that points at a species is moved rather than cascaded: the lots keep their
+        scientific name, the strains keep their parent, and the common names the losing row
+        carried are what make the merge worth doing at all -- they are usually the hobby names
+        somebody typed in, and the row they were attached to was the wrong one.
+        """
+        if duplicate.pk == self.pk:
+            return {}
+        moved = {
+            "lots": Lot.objects.filter(species=duplicate).update(species=self),
+            "varieties": Species.objects.filter(parent=duplicate).update(parent=self),
+        }
+        # A name we already carry is not worth moving, and moving it would put the same word on
+        # the species twice.
+        have = set(self.common_names.values_list("name_normalized", flat=True)) | {self.common_name_normalized}
+        keep = [name for name in duplicate.common_names.all() if name.name_normalized not in have]
+        SpeciesCommonName.objects.filter(pk__in=[name.pk for name in keep]).update(species=self)
+        duplicate.common_names.all().delete()
+        moved["common_names"] = len(keep)
+        # The designated common name is a name too, and the losing row's is the only place it
+        # lived.  Kept as a synonym rather than overwriting ours: which of the two is *the* name
+        # is a judgement, and the admin doing the merge picked the row to keep.
+        if duplicate.common_name and duplicate.common_name_normalized not in have:
+            SpeciesCommonName.objects.create(
+                species=self,
+                name=duplicate.common_name[:255],
+                source=duplicate.source if duplicate.source in dict(self.SOURCE_CHOICES) else "manual",
+                approved=self.approved,
+            )
+            moved["common_names"] += 1
+        # Remembered answers follow the species, minus the ones that would collide: search_text is
+        # unique in the cache, and a name that already answers with the row we are keeping needs
+        # no second row saying the same thing.
+        kept_texts = set(SpeciesSearchCache.objects.filter(species=self).values_list("search_text", flat=True))
+        SpeciesSearchCache.objects.filter(species=duplicate, search_text__in=kept_texts).delete()
+        moved["remembered_names"] = SpeciesSearchCache.objects.filter(species=duplicate).update(species=self)
+        rejected_texts = set(SpeciesNameRejection.objects.filter(species=self).values_list("search_text", flat=True))
+        SpeciesNameRejection.objects.filter(species=duplicate, search_text__in=rejected_texts).delete()
+        SpeciesNameRejection.objects.filter(species=duplicate).update(species=self)
+        # Nothing points at either row as a duplicate any more.
+        Species.objects.filter(Q(possible_duplicate=duplicate) | Q(possible_duplicate=self)).update(
+            possible_duplicate=None
+        )
+        self.possible_duplicate = None
+        duplicate.delete()
+        return moved
 
     def save(self, *args, **kwargs):
         self.genus = (self.genus or "").strip()
@@ -3253,6 +3382,11 @@ class Species(models.Model):
         elif self.trade_rank == self.TRADE_RANK_SPECIES:
             self.trade_rank = self.TRADE_RANK_NONE
         super().save(*args, **kwargs)
+        # Everything a person or a club API added, checked against everything already there.  The
+        # two big imports are skipped -- they can't duplicate themselves, and paying two queries a
+        # row for 36,000 rows to find that out is the sort of thing that makes an import time out.
+        if self.source not in self.IMPORTED_SOURCES:
+            self.flag_possible_duplicate()
 
     @property
     def in_aquarium_trade(self):
@@ -3338,7 +3472,28 @@ class Species(models.Model):
 
     @property
     def label(self):
-        """What the user picks from: the scientific name, with the common name for context."""
+        """What the user picks from: the scientific name, and nothing else.
+
+        It used to read "Neocaridina davidi (Cherry shrimp)", and the bracket was noise everywhere
+        it appeared.  The field is *called* "scientific name", it sits directly under a lot name the
+        seller has already written in plain English -- "cherry shrimp x10" -- and the common name in
+        brackets is either that same phrase again or, when FishBase disagrees with the hobby, a
+        second name that makes the reader wonder whether they picked the wrong fish.
+
+        The common name still does its real job, which is matching: every one of them is in
+        :class:`SpeciesCommonName` and searchable.  It is only the display that drops it.  The one
+        reader that still gets it is the language model -- see :attr:`label_with_common_name`.
+        """
+        return self.full_scientific_name or self.common_name
+
+    @property
+    def label_with_common_name(self):
+        """The scientific name with the common name in brackets, for the language model.
+
+        The opposite trade-off from :attr:`label`: a shortlist row is read by a model that is being
+        asked to match a *typed lot name*, and the common name is the half of the row that name is
+        likely to resemble.  Dropping it there would be throwing away the evidence.
+        """
         name = self.full_scientific_name
         if name and self.common_name:
             return f"{name} ({self.common_name})"
@@ -3456,9 +3611,82 @@ class SpeciesSearchCache(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
     hits = models.PositiveIntegerField(default=0)
     hits.help_text = "How many times this cached answer has been served instead of asking again."
+    # What people did with the answer, which is the only evidence there is about whether it is
+    # right.  Before these existed a row was written by one person's first save and then served to
+    # every club forever: one misclick on a bulk-add page taught the whole site that "sponge
+    # filter" is a guppy, and nothing short of a superuser finding it on the gaps page undid it.
+    accepts = models.PositiveIntegerField(default=0)
+    accepts.help_text = (
+        "Lots saved with this answer left alone.  Counted once per lot, on the save that created "
+        "it -- re-saving a lot without touching the species is not new evidence."
+    )
+    rejects = models.PositiveIntegerField(default=0)
+    rejects.help_text = (
+        "Times somebody cleared this answer or picked a different species for a lot with this "
+        "name.  Enough of them retires the row; see is_discredited."
+    )
+
+    #: How much disagreement a remembered answer survives.  One rejection in ten is the line, so a
+    #: row needs nine people to leave it alone for every one who takes it off a lot -- and a fresh
+    #: row nobody has agreed with yet is retired by the first person who disagrees, which is the
+    #: whole point: the first save is the one most likely to have been a misclick.
+    MAX_REJECT_RATIO = 0.1
+
+    @property
+    def is_discredited(self):
+        """True when the rejections have outgrown :attr:`MAX_REJECT_RATIO`.
+
+        Integer arithmetic rather than a division: ``rejects / (accepts + rejects) > 0.1`` is
+        exactly ``9 * rejects > accepts``, and this is read on every lot save.
+        """
+        return self.rejects > 0 and self.rejects * 9 > self.accepts
+
+    def retire(self):
+        """Throw this answer away, and remember that it was thrown away.
+
+        Deleting the row on its own would not be enough, and this is the question that decides the
+        whole design: the next lookup would ask the language model the same question, get the same
+        wrong answer, and write the same row back.  So the pair -- *this name is not that species*
+        -- is kept as a :class:`SpeciesNameRejection`, which is what
+        :func:`~auctions.species_matching.remember` and the model shortlist both consult.
+
+        The name itself is left with no answer rather than with "not a species": it may well match
+        something in the list, and a rejection is evidence about one species, not about the name.
+        """
+        if self.species_id:
+            SpeciesNameRejection.objects.get_or_create(search_text=self.search_text, species_id=self.species_id)
+        self.delete()
 
     def __str__(self):
         return f"{self.search_text} -> {self.species or 'no species'}"
+
+
+class SpeciesNameRejection(models.Model):
+    """ "This lot name is **not** that species" -- the memory that makes a retired answer stay dead.
+
+    :class:`SpeciesSearchCache` is a cache of guesses, and until this table existed a guess could
+    only be added, never withdrawn: deleting a row sent the next lookup back to the same language
+    model with the same shortlist, which produced the same answer and wrote it straight back.  A
+    rejection is the one piece of information that survives that loop.
+
+    Deliberately narrow.  It vetoes a *pair*, not a name and not a species, and it is read only by
+    the two places that make things up -- the cache and the model shortlist.  It never touches
+    :func:`~auctions.species_matching.exact_matches` or the token search, because those answer out
+    of the species list itself, and a handful of people clearing a field must not be able to
+    outvote the list the way a cached guess could.  A site admin can delete one on the gaps page,
+    which is the way back if a name really was rejected in error.
+    """
+
+    search_text = models.CharField(max_length=120, db_index=True)
+    search_text.help_text = "Normalised lot name, the same key SpeciesSearchCache uses."
+    species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="name_rejections")
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.search_text} is not {self.species}"
+
+    class Meta:
+        unique_together = ("search_text", "species")
 
 
 def _slugify_auction_title(value):
@@ -8221,6 +8449,30 @@ class Lot(models.Model):
                 ).exists()
             if prior:
                 return "not_long_enough"
+        # The same rule again, on the species rather than on what the seller typed.  Two lots
+        # called "yellow labs" and "Labidochromis caeruleus" are one fish bred twice, and the name
+        # rule cannot see that; this can, because the scientific name is picked from a list.
+        #
+        # Matched on the species row itself, never on its parent: a strain is a row of its own, so
+        # blue and red cherry shrimp are two different things to breed and both earn points.  That
+        # is the whole reason the strains are rows -- see Species.variety.
+        if club.days_between_same_species_lots > 0 and self.species_id and (seller_user or seller_email):
+            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_species_lots)
+            base_prior = Lot.objects.filter(
+                auction__club=club,
+                species_id=self.species_id,
+                bap_points_awarded__gt=0,
+                date_end__gte=cutoff,
+            ).exclude(pk=self.pk)
+            prior = False
+            if seller_user:
+                prior = base_prior.filter(user=seller_user).exists()
+            if not prior and seller_email:
+                prior = base_prior.filter(
+                    Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
+                ).exists()
+            if prior:
+                return "not_long_enough"
         # HAP/culture categories (plants, snails, live food) are never blocked by quantity minimums.
         ignore_quantity = category_name in ("Aquatic plants", "Live food cultures", "Snails and other inverts")
         if not ignore_quantity and self.quantity < club.min_quantity:
@@ -9101,9 +9353,63 @@ class Lot(models.Model):
         return self.species.full_scientific_name
 
     @property
-    def scientific_name_label(self):
-        """Used for printed labels.  The same rule as everywhere else -- see ``scientific_name``."""
-        return self.scientific_name
+    def lot_name_says_the_species(self):
+        """True when the seller already typed the scientific name into the lot name.
+
+        Plenty of them do -- "Chindongo saulosi F1", "Cryptocoryne wendtii red", "Tropheus duboisi
+        maswa" -- and for those lots every page on the site printed the same words twice, once as
+        the lot name and once again underneath in italics.
+
+        Matched on the *normalised* names, with a space either side, so it is a match on whole words
+        and "Corydoras" does not find itself inside "Corydorases".  A genus-only species row
+        ("Bucephalandra") counts, because for those the genus *is* the scientific name.  The
+        cultivar is not required: somebody who wrote "Neocaridina davidi blue dream" has said the
+        binomial, and repeating it back with the strain quoted differently is not new information.
+        """
+        if not self.scientific_name or not self.lot_name:
+            return False
+        typed = normalize_species_name(self.lot_name)
+        name = normalize_species_name(self.species.scientific_name)
+        if not typed or not name:
+            return False
+        return f" {name} " in f" {typed} "
+
+    @property
+    def scientific_name_line(self):
+        """The scientific name to print *under the lot name*, or "" when it would be a repeat.
+
+        The pair of this and :attr:`common_name_line` is one rule with two halves: show the seller's
+        own words in the big slot, and put the *other* name underneath.  A lot called "Yellow lab"
+        gets *Labidochromis caeruleus* under it, exactly as before; a lot called "Labidochromis
+        caeruleus" gets "Yellow lab" instead of the same two words again.
+
+        Everything that stores or exports the name -- the CSV columns, the API, the lot map -- goes
+        on using :attr:`scientific_name`, which is the data.  These two are the display rule, and
+        the reason it lives on the model rather than in six templates is that the lot page, the
+        printed label and the AR overlay all have to agree about it.
+        """
+        return "" if self.lot_name_says_the_species else self.scientific_name
+
+    @property
+    def common_name_line(self):
+        """The common name to print under the lot name, for a lot named after the species.
+
+        Blank whenever the seller used a common name themselves, which is the point: they have
+        already said what this fish is called, and a *second* common name for the same species --
+        FishBase lists nineteen for the guppy -- reads as a correction rather than as help.
+
+        A cultivar falls back to its parent's name, for the same reason the category does: nobody
+        is going to write a common name for every strain, and "cherry shrimp" is the honest answer
+        for a *Neocaridina davidi* 'Blue Dream' row that hasn't got one of its own.
+        """
+        if not self.scientific_name or not self.lot_name_says_the_species:
+            return ""
+        species = self.species
+        name = species.common_name or (species.parent.common_name if species.parent_id else "")
+        # Nothing gained by printing the common name when it is the words already on the lot.
+        if name and normalize_species_name(name) in normalize_species_name(self.lot_name):
+            return ""
+        return name
 
     @property
     def category_from_species(self):
